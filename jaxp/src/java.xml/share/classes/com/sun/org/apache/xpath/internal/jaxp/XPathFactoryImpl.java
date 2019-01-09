@@ -3,13 +3,14 @@
  * DO NOT REMOVE OR ALTER!
  */
 /*
- * Copyright 1999-2004 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,21 +18,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// $Id: XPathFactoryImpl.java,v 1.2 2005/08/16 22:41:13 jeffsuttor Exp $
 
 package com.sun.org.apache.xpath.internal.jaxp;
 
 import com.sun.org.apache.xalan.internal.XalanConstants;
-import com.sun.org.apache.xpath.internal.res.XPATHErrorResources;
 import com.sun.org.apache.xalan.internal.res.XSLMessages;
-import com.sun.org.apache.xalan.internal.utils.FeatureManager;
-import com.sun.org.apache.xalan.internal.utils.FeaturePropertyBase;
-
+import com.sun.org.apache.xpath.internal.res.XPATHErrorResources;
 import javax.xml.XMLConstants;
 import javax.xml.xpath.XPathFactory;
 import javax.xml.xpath.XPathFactoryConfigurationException;
 import javax.xml.xpath.XPathFunctionResolver;
 import javax.xml.xpath.XPathVariableResolver;
+import jdk.xml.internal.JdkXmlFeatures;
 
 /**
  * The XPathFactory builds XPaths.
@@ -69,7 +67,7 @@ public  class XPathFactoryImpl extends XPathFactory {
 
         private boolean _useServicesMechanism = true;
 
-        private final FeatureManager _featureManager;
+        private final JdkXmlFeatures _featureManager;
 
         public XPathFactoryImpl() {
             this(true);
@@ -80,13 +78,11 @@ public  class XPathFactoryImpl extends XPathFactory {
         }
 
         public XPathFactoryImpl(boolean useServicesMechanism) {
-            _featureManager = new FeatureManager();
             if (System.getSecurityManager() != null) {
                 _isSecureMode = true;
                 _isNotSecureProcessing = false;
-                _featureManager.setValue(FeatureManager.Feature.ORACLE_ENABLE_EXTENSION_FUNCTION,
-                        FeaturePropertyBase.State.FSP, XalanConstants.FEATURE_FALSE);
             }
+            _featureManager = new JdkXmlFeatures(!_isNotSecureProcessing);
             this._useServicesMechanism = useServicesMechanism;
         }
         /**
@@ -189,8 +185,8 @@ public  class XPathFactoryImpl extends XPathFactory {
 
                 _isNotSecureProcessing = !value;
                 if (value && _featureManager != null) {
-                    _featureManager.setValue(FeatureManager.Feature.ORACLE_ENABLE_EXTENSION_FUNCTION,
-                            FeaturePropertyBase.State.FSP, XalanConstants.FEATURE_FALSE);
+                    _featureManager.setFeature(JdkXmlFeatures.XmlFeature.ENABLE_EXTENSION_FUNCTION,
+                            JdkXmlFeatures.State.FSP, false);
                 }
 
                 // all done processing feature
@@ -204,7 +200,7 @@ public  class XPathFactoryImpl extends XPathFactory {
             }
 
             if (_featureManager != null &&
-                    _featureManager.setValue(name, FeaturePropertyBase.State.APIPROPERTY, value)) {
+                    _featureManager.setFeature(name, JdkXmlFeatures.State.APIPROPERTY, value)) {
                 return;
             }
 
@@ -257,11 +253,10 @@ public  class XPathFactoryImpl extends XPathFactory {
                 return _useServicesMechanism;
             }
 
-            /** Check to see if the property is managed by the security manager **/
-            String propertyValue = (_featureManager != null) ?
-                    _featureManager.getValueAsString(name) : null;
-            if (propertyValue != null) {
-                return _featureManager.isFeatureEnabled(name);
+            /** Check to see if the property is managed by the feature manager **/
+            int index = _featureManager.getIndex(name);
+            if (index > -1) {
+                return _featureManager.getFeature(index);
             }
 
             // unknown feature

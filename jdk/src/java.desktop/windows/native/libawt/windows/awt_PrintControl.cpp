@@ -54,6 +54,7 @@ jmethodID AwtPrintControl::getDevmodeID;
 jmethodID AwtPrintControl::setDevmodeID;
 jmethodID AwtPrintControl::getDevnamesID;
 jmethodID AwtPrintControl::setDevnamesID;
+jmethodID AwtPrintControl::getParentWindowID;
 jfieldID  AwtPrintControl::driverDoesMultipleCopiesID;
 jfieldID  AwtPrintControl::driverDoesCollationID;
 jmethodID AwtPrintControl::getWin32MediaID;
@@ -239,6 +240,11 @@ void AwtPrintControl::initIDs(JNIEnv *env, jclass cls)
       env->GetFieldID(cls, "dialogOwnerPeer", "Ljava/awt/peer/ComponentPeer;");
     DASSERT(AwtPrintControl::dialogOwnerPeerID != NULL);
     CHECK_NULL(AwtPrintControl::dialogOwnerPeerID);
+
+    AwtPrintControl::getParentWindowID = env->GetMethodID(cls,
+                                       "getParentWindowID", "()J");
+    DASSERT(AwtPrintControl::getParentWindowID != NULL);
+    CHECK_NULL(AwtPrintControl::getParentWindowID);
 
     AwtPrintControl::getPrintDCID = env->GetMethodID(cls, "getPrintDC", "()J");
     DASSERT(AwtPrintControl::getPrintDCID != NULL);
@@ -770,6 +776,10 @@ BOOL AwtPrintControl::InitPrintDialog(JNIEnv *env,
                                            AwtPrintControl::getMinPageID);
     jint maxPage = env->CallIntMethod(printCtrl,
                                       AwtPrintControl::getMaxPageID);
+
+    jint selectType = env->CallIntMethod(printCtrl,
+                                         AwtPrintControl::getSelectID);
+
     pd.nMaxPage = (maxPage <= (jint)((WORD)-1)) ? (WORD)maxPage : (WORD)-1;
     // In the event that the application displays the dialog before
     // installing a Printable, but sets a page range, then max page will be 1
@@ -779,17 +789,18 @@ BOOL AwtPrintControl::InitPrintDialog(JNIEnv *env,
     // So if we detect this fix up such a problem here.
     if (pd.nMinPage > pd.nFromPage) pd.nMinPage = pd.nFromPage;
     if (pd.nMaxPage < pd.nToPage) pd.nMaxPage = pd.nToPage;
-    if (pd.nFromPage > pd.nMinPage || pd.nToPage < pd.nMaxPage) {
-      pd.Flags |= PD_PAGENUMS;
+    if (selectType != 0 && (pd.nFromPage > pd.nMinPage || pd.nToPage < pd.nMaxPage)) {
+        if (selectType == PD_SELECTION) {
+            pd.Flags |= PD_SELECTION;
+        } else {
+            pd.Flags |= PD_PAGENUMS;
+        }
     }
 
     if (env->CallBooleanMethod(printCtrl,
                                AwtPrintControl::getDestID)) {
       pd.Flags |= PD_PRINTTOFILE;
     }
-
-    jint selectType = env->CallIntMethod(printCtrl,
-                                         AwtPrintControl::getSelectID);
 
     // selectType identifies whether No selection (2D) or
     // SunPageSelection (AWT)
@@ -995,8 +1006,19 @@ BOOL AwtPrintControl::UpdateAttributes(JNIEnv *env,
                 }
             } else {
                 int xRes = devmode->dmPrintQuality;
-                int yRes = (devmode->dmFields & DM_YRESOLUTION) ?
-                  devmode->dmYResolution : devmode->dmPrintQuality;
+
+                /* For some printers, printer quality can specify 1200IQ
+                 * In this case, dmPrintQuality comes out 600 and
+                 * dmYResolution comes out 2, similarly for 2400IQ
+                 * dmPrintQuality comes out 600 and dmYResolution comes out 4
+                 * which is not a valid resolution
+                 * so for IQ setting, we modify y-resolution only when it is
+                 * greater than 10.
+                 */
+                int yRes = (devmode->dmFields & DM_YRESOLUTION) &&
+                           (devmode->dmYResolution > 10) ?
+                           devmode->dmYResolution : devmode->dmPrintQuality;
+
                 env->CallVoidMethod(printCtrl, AwtPrintControl::setResID,
                                     xRes, yRes);
             }
@@ -1116,7 +1138,7 @@ BOOL AwtPrintControl::getDevmode( HANDLE hPrinter,
 
     if (dwRet != IDOK)  {
         /* if failure, cleanup and return failure */
-        GlobalFree(pDevMode);
+        GlobalFree(*pDevMode);
         *pDevMode = NULL;
         return FALSE;
     }

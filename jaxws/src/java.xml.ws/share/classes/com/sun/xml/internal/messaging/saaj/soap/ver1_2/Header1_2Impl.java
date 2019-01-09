@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,8 +29,6 @@
 */
 package com.sun.xml.internal.messaging.saaj.soap.ver1_2;
 
-import java.util.List;
-import java.util.Iterator;
 import java.util.logging.Logger;
 import java.util.logging.Level;
 
@@ -40,10 +38,10 @@ import javax.xml.soap.*;
 import com.sun.xml.internal.messaging.saaj.SOAPExceptionImpl;
 import com.sun.xml.internal.messaging.saaj.soap.SOAPDocument;
 import com.sun.xml.internal.messaging.saaj.soap.SOAPDocumentImpl;
-import com.sun.xml.internal.messaging.saaj.soap.impl.HeaderElementImpl;
 import com.sun.xml.internal.messaging.saaj.soap.impl.HeaderImpl;
 import com.sun.xml.internal.messaging.saaj.soap.name.NameImpl;
 import com.sun.xml.internal.messaging.saaj.util.LogDomainConstants;
+import org.w3c.dom.Element;
 
 
 public class Header1_2Impl extends HeaderImpl {
@@ -57,18 +55,26 @@ public class Header1_2Impl extends HeaderImpl {
         super(ownerDocument, NameImpl.createHeader1_2Name(prefix));
     }
 
+    public Header1_2Impl(SOAPDocumentImpl ownerDoc, Element domElement) {
+        super(ownerDoc, domElement);
+    }
+
+    @Override
     protected NameImpl getNotUnderstoodName() {
         return NameImpl.createNotUnderstood1_2Name(null);
     }
 
+    @Override
     protected NameImpl getUpgradeName() {
         return NameImpl.createUpgrade1_2Name(null);
     }
 
+    @Override
     protected NameImpl getSupportedEnvelopeName() {
         return NameImpl.createSupportedEnvelope1_2Name(null);
     }
 
+    @Override
     public SOAPHeaderElement addNotUnderstoodHeaderElement(final QName sourceName)
         throws SOAPException {
 
@@ -100,6 +106,7 @@ public class Header1_2Impl extends HeaderImpl {
         return notunderstoodHeaderElement;
     }
 
+    @Override
     public SOAPElement addTextNode(String text) throws SOAPException {
         log.log(
             Level.SEVERE,
@@ -108,6 +115,7 @@ public class Header1_2Impl extends HeaderImpl {
         throw new SOAPExceptionImpl("Adding text to SOAP 1.2 Header is not legal");
     }
 
+    @Override
     protected SOAPHeaderElement createHeaderElement(Name name)
         throws SOAPException {
         String uri = name.getURI();
@@ -120,6 +128,7 @@ public class Header1_2Impl extends HeaderImpl {
             name);
     }
 
+    @Override
     protected SOAPHeaderElement createHeaderElement(QName name)
         throws SOAPException {
         String uri = name.getNamespaceURI();
@@ -132,11 +141,13 @@ public class Header1_2Impl extends HeaderImpl {
             name);
     }
 
+    @Override
     public void setEncodingStyle(String encodingStyle) throws SOAPException {
         log.severe("SAAJ0409.ver1_2.no.encodingstyle.in.header");
         throw new SOAPExceptionImpl("encodingStyle attribute cannot appear on Header");
     }
 
+    @Override
     public SOAPElement addAttribute(Name name, String value)
         throws SOAPException {
         if (name.getLocalName().equals("encodingStyle")
@@ -147,6 +158,7 @@ public class Header1_2Impl extends HeaderImpl {
         return super.addAttribute(name, value);
     }
 
+    @Override
     public SOAPElement addAttribute(QName name, String value)
         throws SOAPException {
         if (name.getLocalPart().equals("encodingStyle")

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@
 #include "gc/cms/promotionInfo.hpp"
 #include "gc/shared/blockOffsetTable.hpp"
 #include "gc/shared/space.hpp"
+#include "logging/log.hpp"
 #include "memory/binaryTreeDictionary.hpp"
 #include "memory/freeList.hpp"
 
@@ -74,12 +75,14 @@ class CompactibleFreeListSpace: public CompactibleSpace {
   friend class ConcurrentMarkSweepGeneration;
   friend class CMSCollector;
   // Local alloc buffer for promotion into this space.
-  friend class CFLS_LAB;
+  friend class CompactibleFreeListSpaceLAB;
   // Allow scan_and_* functions to call (private) overrides of the auxiliary functions on this class
   template <typename SpaceType>
   friend void CompactibleSpace::scan_and_adjust_pointers(SpaceType* space);
   template <typename SpaceType>
   friend void CompactibleSpace::scan_and_compact(SpaceType* space);
+  template <typename SpaceType>
+  friend void CompactibleSpace::verify_up_to_first_dead(SpaceType* space);
   template <typename SpaceType>
   friend void CompactibleSpace::scan_and_forward(SpaceType* space, CompactPoint* cp);
 
@@ -99,7 +102,7 @@ class CompactibleFreeListSpace: public CompactibleSpace {
   BlockOffsetArrayNonContigSpace _bt;
 
   CMSCollector* _collector;
-  ConcurrentMarkSweepGeneration* _gen;
+  ConcurrentMarkSweepGeneration* _old_gen;
 
   // Data structures for free blocks (used during allocation/sweeping)
 
@@ -138,15 +141,13 @@ class CompactibleFreeListSpace: public CompactibleSpace {
   // Linear allocation blocks
   LinearAllocBlock _smallLinearAllocBlock;
 
-  FreeBlockDictionary<FreeChunk>::DictionaryChoice _dictionaryChoice;
   AFLBinaryTreeDictionary* _dictionary;    // Pointer to dictionary for large size blocks
 
   // Indexed array for small size blocks
   AdaptiveFreeList<FreeChunk> _indexedFreeList[IndexSetSize];
 
   // Allocation strategy
-  bool       _fitStrategy;        // Use best fit strategy
-  bool       _adaptive_freelists; // Use adaptive freelists
+  bool _fitStrategy;  // Use best fit strategy
 
   // This is an address close to the largest free chunk in the heap.
   // It is currently assumed to be at the end of the heap.  Free
@@ -204,10 +205,6 @@ class CompactibleFreeListSpace: public CompactibleSpace {
   // strategy that attempts to keep the needed number of chunks in each
   // indexed free lists.
   HeapWord* allocate_adaptive_freelists(size_t size);
-  // Allocate from the linear allocation buffers first.  This allocation
-  // strategy assumes maximal coalescing can maintain chunks large enough
-  // to be used as linear allocation buffers.
-  HeapWord* allocate_non_adaptive_freelists(size_t size);
 
   // Gets a chunk from the linear allocation block (LinAB).  If there
   // is not enough space in the LinAB, refills it.
@@ -281,8 +278,8 @@ class CompactibleFreeListSpace: public CompactibleSpace {
   void       verify_objects_initialized() const;
 
   // Statistics reporting helper functions
-  void       reportFreeListStatistics() const;
-  void       reportIndexedFreeListStatistics() const;
+  void       reportFreeListStatistics(const char* title) const;
+  void       reportIndexedFreeListStatistics(outputStream* st) const;
   size_t     maxChunkSizeInIndexedFreeLists() const;
   size_t     numFreeBlocksInIndexedFreeLists() const;
   // Accessor
@@ -318,9 +315,7 @@ class CompactibleFreeListSpace: public CompactibleSpace {
     return adjustObjectSize(size);
   }
 
-  inline size_t obj_size(const HeapWord* addr) const {
-    return adjustObjectSize(oop(addr)->size());
-  }
+  inline size_t obj_size(const HeapWord* addr) const;
 
  protected:
   // Reset the indexed free list to its initial empty condition.
@@ -333,9 +328,7 @@ class CompactibleFreeListSpace: public CompactibleSpace {
 
  public:
   // Constructor
-  CompactibleFreeListSpace(BlockOffsetSharedArray* bs, MemRegion mr,
-                           bool use_adaptive_freelists,
-                           FreeBlockDictionary<FreeChunk>::DictionaryChoice);
+  CompactibleFreeListSpace(BlockOffsetSharedArray* bs, MemRegion mr);
   // Accessors
   bool bestFitFirst() { return _fitStrategy == FreeBlockBestFitFirst; }
   FreeBlockDictionary<FreeChunk>* dictionary() const { return _dictionary; }
@@ -349,13 +342,13 @@ class CompactibleFreeListSpace: public CompactibleSpace {
   // chunk exists, return NULL.
   FreeChunk* find_chunk_at_end();
 
-  bool adaptive_freelists() const { return _adaptive_freelists; }
-
   void set_collector(CMSCollector* collector) { _collector = collector; }
 
   // Support for parallelization of rescan and marking.
   const size_t rescan_task_size()  const { return _rescan_task_size;  }
   const size_t marking_task_size() const { return _marking_task_size; }
+  // Return ergonomic max size for CMSRescanMultiple and CMSConcMarkMultiple.
+  const size_t max_flag_size_for_task_size() const;
   SequentialSubTasksDone* conc_par_seq_tasks() {return &_conc_par_seq_tasks; }
   void initialize_sequential_subtasks_for_rescan(int n_threads);
   void initialize_sequential_subtasks_for_marking(int n_threads,
@@ -460,11 +453,9 @@ class CompactibleFreeListSpace: public CompactibleSpace {
   void save_sweep_limit() {
     _sweep_limit = BlockOffsetArrayUseUnallocatedBlock ?
                    unallocated_block() : end();
-    if (CMSTraceSweeper) {
-      gclog_or_tty->print_cr(">>>>> Saving sweep limit " PTR_FORMAT
-                             "  for space [" PTR_FORMAT "," PTR_FORMAT ") <<<<<<",
-                             p2i(_sweep_limit), p2i(bottom()), p2i(end()));
-    }
+    log_develop_trace(gc, sweep)(">>>>> Saving sweep limit " PTR_FORMAT
+                                 "  for space [" PTR_FORMAT "," PTR_FORMAT ") <<<<<<",
+                                 p2i(_sweep_limit), p2i(bottom()), p2i(end()));
   }
   NOT_PRODUCT(
     void clear_sweep_limit() { _sweep_limit = NULL; }
@@ -535,9 +526,6 @@ class CompactibleFreeListSpace: public CompactibleSpace {
   void      removeFreeChunkFromFreeLists(FreeChunk* chunk);
   void      addChunkAndRepairOffsetTable(HeapWord* chunk, size_t size,
               bool coalesced);
-
-  // Support for decisions regarding concurrent collection policy.
-  bool should_concurrent_collect() const;
 
   // Support for compaction.
   void prepare_for_compaction(CompactPoint* cp);
@@ -676,7 +664,7 @@ class CompactibleFreeListSpace: public CompactibleSpace {
 
 // A parallel-GC-thread-local allocation buffer for allocation into a
 // CompactibleFreeListSpace.
-class CFLS_LAB : public CHeapObj<mtGC> {
+class CompactibleFreeListSpaceLAB : public CHeapObj<mtGC> {
   // The space that this buffer allocates into.
   CompactibleFreeListSpace* _cfls;
 
@@ -700,7 +688,7 @@ public:
   static const int _default_dynamic_old_plab_size = 16;
   static const int _default_static_old_plab_size  = 50;
 
-  CFLS_LAB(CompactibleFreeListSpace* cfls);
+  CompactibleFreeListSpaceLAB(CompactibleFreeListSpace* cfls);
 
   // Allocate and return a block of the given size, or else return NULL.
   HeapWord* alloc(size_t word_sz);

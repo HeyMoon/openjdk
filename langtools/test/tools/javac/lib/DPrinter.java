@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -138,7 +138,7 @@ public class DPrinter {
 
     protected DPrinter(Context context) {
         context.put(DPrinter.class, this);
-        out = context.get(Log.outKey);
+        out = context.get(Log.logKey).getWriter(Log.WriterKind.STDERR);
         trees = JavacTrees.instance(context);
     }
 
@@ -1044,9 +1044,21 @@ public class DPrinter {
             return visitTree(node, null);
         }
 
+        public Void visitHidden(HiddenTree node, Void p) {
+            printList("body", node.getBody());
+            return visitBlockTag(node, null);
+        }
+
         public Void visitIdentifier(IdentifierTree node, Void p) {
             printName("name", node.getName());
             return visitTree(node, null);
+        }
+
+        public Void visitIndex(IndexTree node, Void p) {
+            printString("kind", node.getKind().name());
+            printDocTree("term", node.getSearchTerm());
+            printList("desc", node.getDescription());
+            return visitInlineTag(node, p);
         }
 
         public Void visitInheritDoc(InheritDocTree node, Void p) {
@@ -1070,6 +1082,13 @@ public class DPrinter {
             printString("isTypeParameter", String.valueOf(node.isTypeParameter()));
             printString("kind", node.getKind().name());
             printList("desc", node.getDescription());
+            return visitBlockTag(node, null);
+        }
+
+        public Void visitProvides(ProvidesTree node, Void p) {
+            printString("kind", node.getKind().name());
+            printDocTree("serviceType", node.getServiceType());
+            printList("description", node.getDescription());
             return visitBlockTag(node, null);
         }
 
@@ -1138,6 +1157,13 @@ public class DPrinter {
             printString("name", node.getTagName());
             printList("content", node.getContent());
             return visitInlineTag(node, null);
+        }
+
+        public Void visitUses(UsesTree node, Void p) {
+            printString("kind", node.getKind().name());
+            printDocTree("serviceType", node.getServiceType());
+            printList("description", node.getDescription());
+            return visitBlockTag(node, null);
         }
 
         public Void visitValue(ValueTree node, Void p) {
@@ -1281,6 +1307,11 @@ public class DPrinter {
             printList("argtypes", type.argtypes);
             printType("restype", type.restype, Details.FULL);
             printList("thrown", type.thrown);
+            printType("recvtype", type.recvtype, Details.FULL);
+            return visitType(type, null);
+        }
+
+        public Void visitModuleType(ModuleType type, Void ignore) {
             return visitType(type, null);
         }
 
@@ -1304,7 +1335,7 @@ public class DPrinter {
             for (UndetVar.InferenceBound ib: UndetVar.InferenceBound.values())
                 printList("bounds." + ib, type.getBounds(ib));
             printInt("declaredCount", type.declaredCount);
-            printType("inst", type.inst, Details.SUMMARY);
+            printType("inst", type.getInst(), Details.SUMMARY);
             return visitDelegatedType(type);
         }
 

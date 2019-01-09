@@ -49,7 +49,7 @@ import javax.security.auth.x500.X500Principal;
 
 import sun.security.provider.X509Factory;
 import sun.security.util.*;
-import sun.misc.HexDumpEncoder;
+import sun.security.util.HexDumpEncoder;
 
 /**
  * <p>
@@ -107,7 +107,7 @@ public class X509CRLImpl extends X509CRL implements DerEncoder {
     private Map<X509IssuerSerial,X509CRLEntry> revokedMap = new TreeMap<>();
     private List<X509CRLEntry> revokedList = new LinkedList<>();
     private CRLExtensions    extensions = null;
-    private final static boolean isExplicit = true;
+    private static final boolean isExplicit = true;
     private static final long YR_2050 = 2524636800000L;
 
     private boolean readOnly = false;
@@ -536,13 +536,18 @@ public class X509CRLImpl extends X509CRL implements DerEncoder {
      * @return value of this CRL in a printable form.
      */
     public String toString() {
+        return toStringWithAlgName("" + sigAlgId);
+    }
+
+    // Specifically created for keytool to append a (weak) label to sigAlg
+    public String toStringWithAlgName(String name) {
         StringBuilder sb = new StringBuilder();
         sb.append("X.509 CRL v")
             .append(version+1)
             .append('\n');
         if (sigAlgId != null)
             sb.append("Signature Algorithm: ")
-                .append(sigAlgId)
+                .append(name)
                 .append(", OID=")
                 .append(sigAlgId.getOID())
                 .append('\n');
@@ -762,9 +767,7 @@ public class X509CRLImpl extends X509CRL implements DerEncoder {
     public byte[] getTBSCertList() throws CRLException {
         if (tbsCertList == null)
             throw new CRLException("Uninitialized CRL");
-        byte[] dup = new byte[tbsCertList.length];
-        System.arraycopy(tbsCertList, 0, dup, 0, dup.length);
-        return dup;
+        return tbsCertList.clone();
     }
 
     /**
@@ -775,9 +778,7 @@ public class X509CRLImpl extends X509CRL implements DerEncoder {
     public byte[] getSignature() {
         if (signature == null)
             return null;
-        byte[] dup = new byte[signature.length];
-        System.arraycopy(signature, 0, dup, 0, dup.length);
-        return dup;
+        return signature.clone();
     }
 
     /**
@@ -1286,11 +1287,11 @@ public class X509CRLImpl extends X509CRL implements DerEncoder {
     /**
      * Immutable X.509 Certificate Issuer DN and serial number pair
      */
-    private final static class X509IssuerSerial
+    private static final class X509IssuerSerial
             implements Comparable<X509IssuerSerial> {
         final X500Principal issuer;
         final BigInteger serial;
-        volatile int hashcode = 0;
+        volatile int hashcode;
 
         /**
          * Create an X509IssuerSerial.
@@ -1358,13 +1359,16 @@ public class X509CRLImpl extends X509CRL implements DerEncoder {
          * @return the hash code value
          */
         public int hashCode() {
-            if (hashcode == 0) {
-                int result = 17;
-                result = 37*result + issuer.hashCode();
-                result = 37*result + serial.hashCode();
-                hashcode = result;
+            int h = hashcode;
+            if (h == 0) {
+                h = 17;
+                h = 37*h + issuer.hashCode();
+                h = 37*h + serial.hashCode();
+                if (h != 0) {
+                    hashcode = h;
+                }
             }
-            return hashcode;
+            return h;
         }
 
         @Override

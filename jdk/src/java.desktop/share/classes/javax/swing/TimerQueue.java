@@ -36,7 +36,6 @@ import java.util.concurrent.*;
 import java.util.concurrent.locks.*;
 import java.util.concurrent.atomic.AtomicLong;
 import sun.awt.AppContext;
-import sun.misc.ManagedLocalsThread;
 
 /**
  * Internal class to manage all Timers using one thread.
@@ -94,12 +93,15 @@ class TimerQueue implements Runnable
     void startIfNeeded() {
         if (! running) {
             runningLock.lock();
+            if (running) {
+                return;
+            }
             try {
                 final ThreadGroup threadGroup = AppContext.getAppContext().getThreadGroup();
                 AccessController.doPrivileged((PrivilegedAction<Object>) () -> {
                     String name = "TimerQueue";
-                    Thread timerThread = new ManagedLocalsThread(threadGroup,
-                                                                 this, name);
+                    Thread timerThread =
+                        new Thread(threadGroup, this, name, 0, false);
                     timerThread.setDaemon(true);
                     timerThread.setPriority(Thread.NORM_PRIORITY);
                     timerThread.start();
@@ -166,15 +168,17 @@ class TimerQueue implements Runnable
         try {
             while (running) {
                 try {
-                    Timer timer = queue.take().getTimer();
+                    DelayedTimer runningTimer = queue.take();
+                    Timer timer = runningTimer.getTimer();
                     timer.getLock().lock();
                     try {
                         DelayedTimer delayedTimer = timer.delayedTimer;
-                        if (delayedTimer != null) {
+                        if (delayedTimer == runningTimer) {
                             /*
-                             * Timer is not removed after we get it from
-                             * the queue and before the lock on the timer is
-                             * acquired
+                             * Timer is not removed (delayedTimer != null)
+                             * or not removed and added (runningTimer == delayedTimer)
+                             * after we get it from the queue and before the
+                             * lock on the timer is acquired
                              */
                             timer.post(); // have timer post an event
                             timer.delayedTimer = null;
@@ -262,7 +266,7 @@ class TimerQueue implements Runnable
         }
 
 
-        final public long getDelay(TimeUnit unit) {
+        public final long getDelay(TimeUnit unit) {
             return  unit.convert(time - now(), TimeUnit.NANOSECONDS);
         }
 

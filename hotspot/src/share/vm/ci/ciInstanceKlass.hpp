@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,7 +52,7 @@ private:
   bool                   _has_finalizer;
   bool                   _has_subklass;
   bool                   _has_nonstatic_fields;
-  bool                   _has_default_methods;
+  bool                   _has_nonstatic_concrete_methods;
   bool                   _is_anonymous;
 
   ciFlags                _flags;
@@ -81,7 +81,7 @@ protected:
   ciInstanceKlass(ciSymbol* name, jobject loader, jobject protection_domain);
 
   InstanceKlass* get_instanceKlass() const {
-    return (InstanceKlass*)get_Klass();
+    return InstanceKlass::cast(get_Klass());
   }
 
   oop loader();
@@ -174,10 +174,9 @@ public:
       return 2;
     }
   }
-
-  bool has_default_methods()  {
+  bool has_nonstatic_concrete_methods()  {
     assert(is_loaded(), "must be loaded");
-    return _has_default_methods;
+    return _has_nonstatic_concrete_methods;
   }
 
   bool is_anonymous() {
@@ -259,6 +258,13 @@ public:
       return this;
     }
     return NULL;
+  }
+
+  ciInstanceKlass* host_klass();
+
+  bool can_be_instantiated() {
+    assert(is_loaded(), "must be loaded");
+    return !is_interface() && !is_abstract();
   }
 
   // Dump the current state of this klass for compilation replay.

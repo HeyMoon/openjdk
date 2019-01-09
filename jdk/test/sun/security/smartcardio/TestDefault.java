@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,12 +21,14 @@
  * questions.
  */
 
-/**
+/*
  * @test
- * @bug 6327047
+ * @bug 6327047 8168851
  * @summary verify that TerminalFactory.getDefault() works
  * @author Andreas Sterbenz
+ * @modules java.smartcardio/javax.smartcardio
  * @run main/manual TestDefault
+ * @run main/othervm/manual/java.security.policy==test.policy TestDefault
  */
 
 // This test requires special hardware.
@@ -41,10 +43,12 @@ public class TestDefault {
         TerminalFactory factory = TerminalFactory.getDefault();
         System.out.println("Type: " + factory.getType());
         List<CardTerminal> terminals = factory.terminals().list();
-        System.out.println("Terminals: " + terminals);
         if (terminals.isEmpty()) {
-            throw new Exception("no terminals");
+            System.out.println("Skipping the test: " +
+                    "no card terminals available");
+            return;
         }
+        System.out.println("Terminals: " + terminals);
 
         System.out.println("OK.");
     }

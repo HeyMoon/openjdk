@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,7 +37,6 @@
 #include "runtime/stubCodeGenerator.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "runtime/thread.inline.hpp"
-#include "utilities/top.hpp"
 #ifdef COMPILER2
 #include "opto/runtime.hpp"
 #endif
@@ -64,20 +63,6 @@ static const Register& Lstub_temp = L2;
 
 // -------------------------------------------------------------------------------------------------------------------------
 // Stub Code definitions
-
-static address handle_unsafe_access() {
-  JavaThread* thread = JavaThread::current();
-  address pc  = thread->saved_exception_pc();
-  address npc = thread->saved_exception_npc();
-  // pc is the instruction which we must emulate
-  // doing a no-op is fine:  return garbage from the load
-
-  // request an async exception
-  thread->set_pending_unsafe_access_error();
-
-  // return address of next instruction to execute
-  return npc;
-}
 
 class StubGenerator: public StubCodeGenerator {
  private:
@@ -747,62 +732,6 @@ class StubGenerator: public StubCodeGenerator {
   Label _atomic_add_stub;  // called from other stubs
 
 
-  //------------------------------------------------------------------------------------------------------------------------
-  // The following routine generates a subroutine to throw an asynchronous
-  // UnknownError when an unsafe access gets a fault that could not be
-  // reasonably prevented by the programmer.  (Example: SIGBUS/OBJERR.)
-  //
-  // Arguments :
-  //
-  //      trapping PC:    O7
-  //
-  // Results:
-  //     posts an asynchronous exception, skips the trapping instruction
-  //
-
-  address generate_handler_for_unsafe_access() {
-    StubCodeMark mark(this, "StubRoutines", "handler_for_unsafe_access");
-    address start = __ pc();
-
-    const int preserve_register_words = (64 * 2);
-    Address preserve_addr(FP, (-preserve_register_words * wordSize) + STACK_BIAS);
-
-    Register Lthread = L7_thread_cache;
-    int i;
-
-    __ save_frame(0);
-    __ mov(G1, L1);
-    __ mov(G2, L2);
-    __ mov(G3, L3);
-    __ mov(G4, L4);
-    __ mov(G5, L5);
-    for (i = 0; i < 64; i += 2) {
-      __ stf(FloatRegisterImpl::D, as_FloatRegister(i), preserve_addr, i * wordSize);
-    }
-
-    address entry_point = CAST_FROM_FN_PTR(address, handle_unsafe_access);
-    BLOCK_COMMENT("call handle_unsafe_access");
-    __ call(entry_point, relocInfo::runtime_call_type);
-    __ delayed()->nop();
-
-    __ mov(L1, G1);
-    __ mov(L2, G2);
-    __ mov(L3, G3);
-    __ mov(L4, G4);
-    __ mov(L5, G5);
-    for (i = 0; i < 64; i += 2) {
-      __ ldf(FloatRegisterImpl::D, preserve_addr, as_FloatRegister(i), i * wordSize);
-    }
-
-    __ verify_thread();
-
-    __ jmp(O0, 0);
-    __ delayed()->restore();
-
-    return start;
-  }
-
-
   // Support for uint StubRoutine::Sparc::partial_subtype_check( Klass sub, Klass super );
   // Arguments :
   //
@@ -981,7 +910,7 @@ class StubGenerator: public StubCodeGenerator {
           __ restore();
         }
         break;
-      case BarrierSet::CardTableModRef:
+      case BarrierSet::CardTableForRS:
       case BarrierSet::CardTableExtension:
       case BarrierSet::ModRef:
         break;
@@ -1014,7 +943,7 @@ class StubGenerator: public StubCodeGenerator {
           __ restore();
         }
         break;
-      case BarrierSet::CardTableModRef:
+      case BarrierSet::CardTableForRS:
       case BarrierSet::CardTableExtension:
         {
           CardTableModRefBS* ct = barrier_set_cast<CardTableModRefBS>(bs);
@@ -4910,11 +4839,6 @@ class StubGenerator: public StubCodeGenerator {
       return start;
   }
 
-#define CHUNK_LEN   128          /* 128 x 8B = 1KB */
-#define CHUNK_K1    0x1307a0206  /* reverseBits(pow(x, CHUNK_LEN*8*8*3 - 32) mod P(x)) << 1 */
-#define CHUNK_K2    0x1a0f717c4  /* reverseBits(pow(x, CHUNK_LEN*8*8*2 - 32) mod P(x)) << 1 */
-#define CHUNK_K3    0x0170076fa  /* reverseBits(pow(x, CHUNK_LEN*8*8*1 - 32) mod P(x)) << 1 */
-
   /**
    *  Arguments:
    *
@@ -4939,171 +4863,222 @@ class StubGenerator: public StubCodeGenerator {
     const Register len   = O2;  // number of bytes
     const Register table = O3;  // byteTable
 
-    Label L_crc32c_head, L_crc32c_aligned;
-    Label L_crc32c_parallel, L_crc32c_parallel_loop;
-    Label L_crc32c_serial, L_crc32c_x32_loop, L_crc32c_x8, L_crc32c_x8_loop;
-    Label L_crc32c_done, L_crc32c_tail, L_crc32c_return;
+    __ kernel_crc32c(crc, buf, len, table);
 
-    __ cmp_and_br_short(len, 0, Assembler::lessEqual, Assembler::pn, L_crc32c_return);
+    __ retl();
+    __ delayed()->nop();
 
-    // clear upper 32 bits of crc
-    __ clruwu(crc);
+    return start;
+  }
 
-    __ and3(buf, 7, G4);
-    __ cmp_and_brx_short(G4, 0, Assembler::equal, Assembler::pt, L_crc32c_aligned);
+#define ADLER32_NUM_TEMPS 16
 
-    __ mov(8, G1);
-    __ sub(G1, G4, G4);
+  /**
+   *  Arguments:
+   *
+   * Inputs:
+   *   O0   - int   adler
+   *   O1   - byte* buff
+   *   O2   - int   len
+   *
+   * Output:
+   *   O0   - int adler result
+   */
+  address generate_updateBytesAdler32() {
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "updateBytesAdler32");
+    address start = __ pc();
 
-    // ------ process the misaligned head (7 bytes or less) ------
-    __ BIND(L_crc32c_head);
+    Label L_cleanup_loop, L_cleanup_loop_check;
+    Label L_main_loop_check, L_main_loop, L_inner_loop, L_inner_loop_check;
+    Label L_nmax_check_done;
 
-    // crc = (crc >>> 8) ^ byteTable[(crc ^ b) & 0xFF];
-    __ ldub(buf, 0, G1);
-    __ update_byte_crc32(crc, G1, table);
+    // Aliases
+    Register s1     = O0;
+    Register s2     = O3;
+    Register buff   = O1;
+    Register len    = O2;
+    Register temp[ADLER32_NUM_TEMPS] = {L0, L1, L2, L3, L4, L5, L6, L7, I0, I1, I2, I3, I4, I5, G3, I7};
 
-    __ inc(buf);
-    __ dec(len);
-    __ cmp_and_br_short(len, 0, Assembler::equal, Assembler::pn, L_crc32c_return);
-    __ dec(G4);
-    __ cmp_and_br_short(G4, 0, Assembler::greater, Assembler::pt, L_crc32c_head);
+    // Max number of bytes we can process before having to take the mod
+    // 0x15B0 is 5552 in decimal, the largest n such that 255n(n+1)/2 + (n+1)(BASE-1) <= 2^32-1
+    unsigned long NMAX = 0x15B0;
 
-    // ------ process the 8-byte-aligned body ------
-    __ BIND(L_crc32c_aligned);
+    // Zero-out the upper bits of len
+    __ clruwu(len);
+
+    // Create the mask 0xFFFF
+    __ set64(0x00FFFF, O4, O5); // O5 is the temp register
+
+    // s1 is initialized to the lower 16 bits of adler
+    // s2 is initialized to the upper 16 bits of adler
+    __ srlx(O0, 16, O5); // adler >> 16
+    __ and3(O0, O4, s1); // s1  = (adler & 0xFFFF)
+    __ and3(O5, O4, s2); // s2  = ((adler >> 16) & 0xFFFF)
+
+    // The pipelined loop needs at least 16 elements for 1 iteration
+    // It does check this, but it is more effective to skip to the cleanup loop
+    // Setup the constant for cutoff checking
+    __ mov(15, O4);
+
+    // Check if we are above the cutoff, if not go to the cleanup loop immediately
+    __ cmp_and_br_short(len, O4, Assembler::lessEqualUnsigned, Assembler::pt, L_cleanup_loop_check);
+
+    // Free up some registers for our use
+    for (int i = 0; i < ADLER32_NUM_TEMPS; i++) {
+      __ movxtod(temp[i], as_FloatRegister(2*i));
+    }
+
+    // Loop maintenance stuff is done at the end of the loop, so skip to there
+    __ ba_short(L_main_loop_check);
+
+    __ BIND(L_main_loop);
+
+    // Prologue for inner loop
+    __ ldub(buff, 0, L0);
+    __ dec(O5);
+
+    for (int i = 1; i < 8; i++) {
+      __ ldub(buff, i, temp[i]);
+    }
+
+    __ inc(buff, 8);
+
+    // Inner loop processes 16 elements at a time, might never execute if only 16 elements
+    // to be processed by the outter loop
+    __ ba_short(L_inner_loop_check);
+
+    __ BIND(L_inner_loop);
+
+    for (int i = 0; i < 8; i++) {
+      __ ldub(buff, (2*i), temp[(8+(2*i)) % ADLER32_NUM_TEMPS]);
+      __ add(s1, temp[i], s1);
+      __ ldub(buff, (2*i)+1, temp[(8+(2*i)+1) % ADLER32_NUM_TEMPS]);
+      __ add(s2, s1, s2);
+    }
+
+    // Original temp 0-7 used and new loads to temp 0-7 issued
+    // temp 8-15 ready to be consumed
+    __ add(s1, I0, s1);
+    __ dec(O5);
+    __ add(s2, s1, s2);
+    __ add(s1, I1, s1);
+    __ inc(buff, 16);
+    __ add(s2, s1, s2);
+
+    for (int i = 0; i < 6; i++) {
+      __ add(s1, temp[10+i], s1);
+      __ add(s2, s1, s2);
+    }
+
+    __ BIND(L_inner_loop_check);
     __ nop();
-    __ cmp_and_br_short(len, 8, Assembler::less, Assembler::pn, L_crc32c_tail);
+    __ cmp_and_br_short(O5, 0, Assembler::notEqual, Assembler::pt, L_inner_loop);
 
-    // reverse the byte order of lower 32 bits to big endian, and move to FP side
-    __ movitof_revbytes(crc, F0, G1, G3);
+    // Epilogue
+    for (int i = 0; i < 4; i++) {
+      __ ldub(buff, (2*i), temp[8+(2*i)]);
+      __ add(s1, temp[i], s1);
+      __ ldub(buff, (2*i)+1, temp[8+(2*i)+1]);
+      __ add(s2, s1, s2);
+    }
 
-    __ set(CHUNK_LEN*8*4, G4);
-    __ cmp_and_br_short(len, G4, Assembler::less, Assembler::pt, L_crc32c_serial);
+    __ add(s1, temp[4], s1);
+    __ inc(buff, 8);
 
-    // ------ process four 1KB chunks in parallel ------
-    __ BIND(L_crc32c_parallel);
+    for (int i = 0; i < 11; i++) {
+      __ add(s2, s1, s2);
+      __ add(s1, temp[5+i], s1);
+    }
 
-    __ fzero(FloatRegisterImpl::D, F2);
-    __ fzero(FloatRegisterImpl::D, F4);
-    __ fzero(FloatRegisterImpl::D, F6);
+    __ add(s2, s1, s2);
 
-    __ mov(CHUNK_LEN - 1, G4);
-    __ BIND(L_crc32c_parallel_loop);
-    // schedule ldf's ahead of crc32c's to hide the load-use latency
-    __ ldf(FloatRegisterImpl::D, buf, 0,            F8);
-    __ ldf(FloatRegisterImpl::D, buf, CHUNK_LEN*8,  F10);
-    __ ldf(FloatRegisterImpl::D, buf, CHUNK_LEN*16, F12);
-    __ ldf(FloatRegisterImpl::D, buf, CHUNK_LEN*24, F14);
-    __ crc32c(F0, F8,  F0);
-    __ crc32c(F2, F10, F2);
-    __ crc32c(F4, F12, F4);
-    __ crc32c(F6, F14, F6);
-    __ inc(buf, 8);
-    __ dec(G4);
-    __ cmp_and_br_short(G4, 0, Assembler::greater, Assembler::pt, L_crc32c_parallel_loop);
+    // Take the mod for s1 and s2
+    __ set64(0xFFF1, L0, L1);
+    __ udivx(s1, L0, L1);
+    __ udivx(s2, L0, L2);
+    __ mulx(L0, L1, L1);
+    __ mulx(L0, L2, L2);
+    __ sub(s1, L1, s1);
+    __ sub(s2, L2, s2);
 
-    __ ldf(FloatRegisterImpl::D, buf, 0,            F8);
-    __ ldf(FloatRegisterImpl::D, buf, CHUNK_LEN*8,  F10);
-    __ ldf(FloatRegisterImpl::D, buf, CHUNK_LEN*16, F12);
-    __ crc32c(F0, F8,  F0);
-    __ crc32c(F2, F10, F2);
-    __ crc32c(F4, F12, F4);
+    // Make sure there is something left to process
+    __ BIND(L_main_loop_check);
+    __ set64(NMAX, L0, L1);
+    // k = len < NMAX ? len : NMAX
+    __ cmp_and_br_short(len, L0, Assembler::greaterEqualUnsigned, Assembler::pt, L_nmax_check_done);
+    __ andn(len, 0x0F, L0); // only loop a multiple of 16 times
+    __ BIND(L_nmax_check_done);
+    __ mov(L0, O5);
+    __ sub(len, L0, len); // len -= k
 
-    __ inc(buf, CHUNK_LEN*24);
-    __ ldfl(FloatRegisterImpl::D, buf, G0, F14);  // load in little endian
-    __ inc(buf, 8);
+    __ srlx(O5, 4, O5); // multiplies of 16
+    __ cmp_and_br_short(O5, 0, Assembler::notEqual, Assembler::pt, L_main_loop);
 
-    __ prefetch(buf, 0,            Assembler::severalReads);
-    __ prefetch(buf, CHUNK_LEN*8,  Assembler::severalReads);
-    __ prefetch(buf, CHUNK_LEN*16, Assembler::severalReads);
-    __ prefetch(buf, CHUNK_LEN*24, Assembler::severalReads);
+    // Restore anything we used, take the mod one last time, combine and return
+    // Restore any registers we saved
+    for (int i = 0; i < ADLER32_NUM_TEMPS; i++) {
+      __ movdtox(as_FloatRegister(2*i), temp[i]);
+    }
 
-    // move to INT side, and reverse the byte order of lower 32 bits to little endian
-    __ movftoi_revbytes(F0, O4, G1, G4);
-    __ movftoi_revbytes(F2, O5, G1, G4);
-    __ movftoi_revbytes(F4, G5, G1, G4);
+    // There might be nothing left to process
+    __ ba_short(L_cleanup_loop_check);
 
-    // combine the results of 4 chunks
-    __ set64(CHUNK_K1, G3, G1);
-    __ xmulx(O4, G3, O4);
-    __ set64(CHUNK_K2, G3, G1);
-    __ xmulx(O5, G3, O5);
-    __ set64(CHUNK_K3, G3, G1);
-    __ xmulx(G5, G3, G5);
-
-    __ movdtox(F14, G4);
-    __ xor3(O4, O5, O5);
-    __ xor3(G5, O5, O5);
-    __ xor3(G4, O5, O5);
-
-    // reverse the byte order to big endian, via stack, and move to FP side
-    __ add(SP, -8, G1);
-    __ srlx(G1, 3, G1);
-    __ sllx(G1, 3, G1);
-    __ stx(O5, G1, G0);
-    __ ldfl(FloatRegisterImpl::D, G1, G0, F2);  // load in little endian
-
-    __ crc32c(F6, F2, F0);
-
-    __ set(CHUNK_LEN*8*4, G4);
-    __ sub(len, G4, len);
-    __ cmp_and_br_short(len, G4, Assembler::greaterEqual, Assembler::pt, L_crc32c_parallel);
+    __ BIND(L_cleanup_loop);
+    __ ldub(buff, 0, O4); // load single byte form buffer
+    __ inc(buff); // buff++
+    __ add(s1, O4, s1); // s1 += *buff++;
+    __ dec(len); // len--
+    __ add(s1, s2, s2); // s2 += s1;
+    __ BIND(L_cleanup_loop_check);
     __ nop();
-    __ cmp_and_br_short(len, 0, Assembler::equal, Assembler::pt, L_crc32c_done);
+    __ cmp_and_br_short(len, 0, Assembler::notEqual, Assembler::pt, L_cleanup_loop);
 
-    __ BIND(L_crc32c_serial);
+    // Take the mod one last time
+    __ set64(0xFFF1, O1, O2);
+    __ udivx(s1, O1, O2);
+    __ udivx(s2, O1, O5);
+    __ mulx(O1, O2, O2);
+    __ mulx(O1, O5, O5);
+    __ sub(s1, O2, s1);
+    __ sub(s2, O5, s2);
 
-    __ mov(32, G4);
-    __ cmp_and_br_short(len, G4, Assembler::less, Assembler::pn, L_crc32c_x8);
+    // Combine lower bits and higher bits
+    __ sllx(s2, 16, s2); // s2 = s2 << 16
+    __ or3(s1, s2, s1);  // adler = s2 | s1
+    // Final return value is in O0
+    __ retl();
+    __ delayed()->nop();
 
-    // ------ process 32B chunks ------
-    __ BIND(L_crc32c_x32_loop);
-    __ ldf(FloatRegisterImpl::D, buf, 0, F2);
-    __ inc(buf, 8);
-    __ crc32c(F0, F2, F0);
-    __ ldf(FloatRegisterImpl::D, buf, 0, F2);
-    __ inc(buf, 8);
-    __ crc32c(F0, F2, F0);
-    __ ldf(FloatRegisterImpl::D, buf, 0, F2);
-    __ inc(buf, 8);
-    __ crc32c(F0, F2, F0);
-    __ ldf(FloatRegisterImpl::D, buf, 0, F2);
-    __ inc(buf, 8);
-    __ crc32c(F0, F2, F0);
-    __ dec(len, 32);
-    __ cmp_and_br_short(len, G4, Assembler::greaterEqual, Assembler::pt, L_crc32c_x32_loop);
+    return start;
+  }
 
-    __ BIND(L_crc32c_x8);
-    __ nop();
-    __ cmp_and_br_short(len, 8, Assembler::less, Assembler::pt, L_crc32c_done);
+/**
+   *  Arguments:
+   *
+   * Inputs:
+   *   O0   - int   crc
+   *   O1   - byte* buf
+   *   O2   - int   len
+   *   O3   - int*  table
+   *
+   * Output:
+   *   O0   - int crc result
+   */
+  address generate_updateBytesCRC32() {
+    assert(UseCRC32Intrinsics, "need VIS3 instructions");
 
-    // ------ process 8B chunks ------
-    __ BIND(L_crc32c_x8_loop);
-    __ ldf(FloatRegisterImpl::D, buf, 0, F2);
-    __ inc(buf, 8);
-    __ crc32c(F0, F2, F0);
-    __ dec(len, 8);
-    __ cmp_and_br_short(len, 8, Assembler::greaterEqual, Assembler::pt, L_crc32c_x8_loop);
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "updateBytesCRC32");
+    address start = __ pc();
 
-    __ BIND(L_crc32c_done);
+    const Register crc   = O0; // crc
+    const Register buf   = O1; // source java byte array address
+    const Register len   = O2; // length
+    const Register table = O3; // crc_table address (reuse register)
 
-    // move to INT side, and reverse the byte order of lower 32 bits to little endian
-    __ movftoi_revbytes(F0, crc, G1, G3);
+    __ kernel_crc32(crc, buf, len, table);
 
-    __ cmp_and_br_short(len, 0, Assembler::equal, Assembler::pt, L_crc32c_return);
-
-    // ------ process the misaligned tail (7 bytes or less) ------
-    __ BIND(L_crc32c_tail);
-
-    // crc = (crc >>> 8) ^ byteTable[(crc ^ b) & 0xFF];
-    __ ldub(buf, 0, G1);
-    __ update_byte_crc32(crc, G1, table);
-
-    __ inc(buf);
-    __ dec(len);
-    __ cmp_and_br_short(len, 0, Assembler::greater, Assembler::pt, L_crc32c_tail);
-
-    __ BIND(L_crc32c_return);
-    __ nop();
     __ retl();
     __ delayed()->nop();
 
@@ -5141,7 +5116,24 @@ class StubGenerator: public StubCodeGenerator {
 #endif  // COMPILER2 !=> _LP64
 
     // Build this early so it's available for the interpreter.
-    StubRoutines::_throw_StackOverflowError_entry          = generate_throw_exception("StackOverflowError throw_exception",           CAST_FROM_FN_PTR(address, SharedRuntime::throw_StackOverflowError));
+    StubRoutines::_throw_StackOverflowError_entry =
+            generate_throw_exception("StackOverflowError throw_exception",
+            CAST_FROM_FN_PTR(address, SharedRuntime::throw_StackOverflowError));
+    StubRoutines::_throw_delayed_StackOverflowError_entry =
+            generate_throw_exception("delayed StackOverflowError throw_exception",
+            CAST_FROM_FN_PTR(address, SharedRuntime::throw_delayed_StackOverflowError));
+
+    if (UseCRC32Intrinsics) {
+      // set table address before stub generation which use it
+      StubRoutines::_crc_table_adr = (address)StubRoutines::Sparc::_crc_table;
+      StubRoutines::_updateBytesCRC32 = generate_updateBytesCRC32();
+    }
+
+    if (UseCRC32CIntrinsics) {
+      // set table address before stub generation which use it
+      StubRoutines::_crc32c_table_addr = (address)StubRoutines::Sparc::_crc32c_table;
+      StubRoutines::_updateBytesCRC32C = generate_updateBytesCRC32C();
+    }
   }
 
 
@@ -5155,9 +5147,6 @@ class StubGenerator: public StubCodeGenerator {
     StubRoutines::_throw_AbstractMethodError_entry         = generate_throw_exception("AbstractMethodError throw_exception",          CAST_FROM_FN_PTR(address, SharedRuntime::throw_AbstractMethodError));
     StubRoutines::_throw_IncompatibleClassChangeError_entry= generate_throw_exception("IncompatibleClassChangeError throw_exception", CAST_FROM_FN_PTR(address, SharedRuntime::throw_IncompatibleClassChangeError));
     StubRoutines::_throw_NullPointerException_at_call_entry= generate_throw_exception("NullPointerException at call throw_exception", CAST_FROM_FN_PTR(address, SharedRuntime::throw_NullPointerException_at_call));
-
-    StubRoutines::_handler_for_unsafe_access_entry =
-      generate_handler_for_unsafe_access();
 
     // support for verify_oop (must happen after universe_init)
     StubRoutines::_verify_oop_subroutine_entry     = generate_verify_oop_subroutine();
@@ -5201,10 +5190,9 @@ class StubGenerator: public StubCodeGenerator {
       StubRoutines::_sha512_implCompress   = generate_sha512_implCompress(false, "sha512_implCompress");
       StubRoutines::_sha512_implCompressMB = generate_sha512_implCompress(true,  "sha512_implCompressMB");
     }
-
-    // generate CRC32C intrinsic code
-    if (UseCRC32CIntrinsics) {
-      StubRoutines::_updateBytesCRC32C = generate_updateBytesCRC32C();
+    // generate Adler32 intrinsics code
+    if (UseAdler32Intrinsics) {
+      StubRoutines::_updateBytesAdler32 = generate_updateBytesAdler32();
     }
   }
 

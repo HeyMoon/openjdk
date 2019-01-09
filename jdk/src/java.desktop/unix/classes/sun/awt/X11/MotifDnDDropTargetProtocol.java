@@ -33,7 +33,7 @@ import java.awt.event.MouseEvent;
 
 import java.io.IOException;
 
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 /**
  * XDropTargetProtocol implementation for Motif DnD protocol.
@@ -62,7 +62,7 @@ class MotifDnDDropTargetProtocol extends XDropTargetProtocol {
     /**
      * Creates an instance associated with the specified listener.
      *
-     * @throws NullPointerException if listener is <code>null</code>.
+     * @throws NullPointerException if listener is {@code null}.
      */
     static XDropTargetProtocol createInstance(XDropTargetProtocolListener listener) {
         return new MotifDnDDropTargetProtocol(listener);

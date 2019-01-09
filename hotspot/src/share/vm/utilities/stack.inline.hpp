@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -140,8 +140,13 @@ void Stack<E, F>::free(E* addr, size_t bytes)
   FREE_C_HEAP_ARRAY(char, (char*) addr);
 }
 
+// Stack is used by the GC code and in some hot paths a lot of the Stack
+// code gets inlined. This is generally good, but when too much code has
+// been inlined, no further inlining is allowed by GCC. Therefore we need
+// to prevent parts of the slow path in Stack to be inlined to allow other
+// code to be.
 template <class E, MEMFLAGS F>
-void Stack<E, F>::push_segment()
+NOINLINE void Stack<E, F>::push_segment()
 {
   assert(this->_cur_seg_size == this->_seg_size, "current segment is not full");
   E* next;

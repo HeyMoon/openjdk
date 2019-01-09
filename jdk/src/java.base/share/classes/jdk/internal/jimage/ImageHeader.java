@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,18 +21,26 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
-*/
+ */
 
 package jdk.internal.jimage;
 
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
+import java.util.Objects;
 
+/**
+ * @implNote This class needs to maintain JDK 8 source compatibility.
+ *
+ * It is used internally in the JDK to implement jimage/jrtfs access,
+ * but also compiled and delivered as part of the jrtfs.jar to support access
+ * to the jimage file provided by the shipped JDK by tools running on JDK 8.
+ */
 public final class ImageHeader {
     public static final int MAGIC = 0xCAFEDADA;
-    public static final int BADMAGIC = 0xDADAFECA;
     public static final int MAJOR_VERSION = 1;
     public static final int MINOR_VERSION = 0;
+    private static final int HEADER_SLOTS = 7;
 
     private final int magic;
     private final int majorVersion;
@@ -64,10 +72,17 @@ public final class ImageHeader {
     }
 
     public static int getHeaderSize() {
-       return 7 * 4;
+       return HEADER_SLOTS * 4;
     }
 
     static ImageHeader readFrom(IntBuffer buffer) {
+        Objects.requireNonNull(buffer);
+
+        if (buffer.capacity() != HEADER_SLOTS) {
+            throw new InternalError(
+                "jimage header not the correct size: " + buffer.capacity());
+        }
+
         int magic = buffer.get(0);
         int version = buffer.get(1);
         int majorVersion = version >>> 16;
@@ -82,12 +97,14 @@ public final class ImageHeader {
             resourceCount, tableLength, locationsSize, stringsSize);
     }
 
-    void writeTo(ImageStream stream) {
+    public void writeTo(ImageStream stream) {
+        Objects.requireNonNull(stream);
         stream.ensure(getHeaderSize());
         writeTo(stream.getBuffer());
     }
 
     public void writeTo(ByteBuffer buffer) {
+        Objects.requireNonNull(buffer);
         buffer.putInt(magic);
         buffer.putInt(majorVersion << 16 | minorVersion);
         buffer.putInt(flags);

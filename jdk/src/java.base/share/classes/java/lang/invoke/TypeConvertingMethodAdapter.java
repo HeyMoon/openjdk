@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,7 +38,7 @@ class TypeConvertingMethodAdapter extends MethodVisitor {
         super(Opcodes.ASM5, mv);
     }
 
-    private static final int NUM_WRAPPERS = Wrapper.values().length;
+    private static final int NUM_WRAPPERS = Wrapper.COUNT;
 
     private static final String NAME_OBJECT = "java/lang/Object";
     private static final String WRAPPER_PREFIX = "Ljava/lang/";
@@ -52,7 +52,7 @@ class TypeConvertingMethodAdapter extends MethodVisitor {
     private static final Wrapper[] FROM_WRAPPER_NAME = new Wrapper[16];
 
     // Table of wrappers for primitives, indexed by ASM type sorts
-    private static final Wrapper[] FROM_TYPE_SORT = new Wrapper[16];
+    private static final Wrapper[] FROM_TYPE_SORT = new Wrapper[12];
 
     static {
         for (Wrapper w : Wrapper.values()) {
@@ -63,11 +63,8 @@ class TypeConvertingMethodAdapter extends MethodVisitor {
             }
         }
 
-        for (int i = 0; i < NUM_WRAPPERS; i++) {
-            for (int j = 0; j < NUM_WRAPPERS; j++) {
-                wideningOpcodes[i][j] = Opcodes.NOP;
-            }
-        }
+        // wideningOpcodes[][] will be NOP-initialized by default
+        assert(Opcodes.NOP == 0);
 
         initWidening(LONG,   Opcodes.I2L, BYTE, SHORT, INT, CHAR);
         initWidening(LONG,   Opcodes.F2L, FLOAT);
@@ -131,7 +128,7 @@ class TypeConvertingMethodAdapter extends MethodVisitor {
     }
 
     private static String boxingDescriptor(Wrapper w) {
-        return String.format("(%s)L%s;", w.basicTypeChar(), wrapperName(w));
+        return "(" + w.basicTypeChar() + ")L" + wrapperName(w) + ";";
     }
 
     private static String unboxingDescriptor(Wrapper w) {
@@ -190,10 +187,6 @@ class TypeConvertingMethodAdapter extends MethodVisitor {
         if (!nt.equals(ns) && !nt.equals(NAME_OBJECT)) {
             visitTypeInsn(Opcodes.CHECKCAST, nt);
         }
-    }
-
-    private boolean isPrimitive(Wrapper w) {
-        return w != OBJECT;
     }
 
     private Wrapper toWrapper(String desc) {

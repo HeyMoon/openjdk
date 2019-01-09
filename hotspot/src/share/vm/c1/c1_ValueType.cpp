@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 #include "ci/ciArray.hpp"
 #include "ci/ciInstance.hpp"
 #include "ci/ciNullObject.hpp"
+#include "memory/resourceArea.hpp"
 
 
 // predefined types
@@ -153,7 +154,19 @@ ValueType* as_ValueType(ciConstant value) {
     case T_FLOAT  : return new FloatConstant (value.as_float ());
     case T_DOUBLE : return new DoubleConstant(value.as_double());
     case T_ARRAY  : // fall through (ciConstant doesn't have an array accessor)
-    case T_OBJECT : return new ObjectConstant(value.as_object());
+    case T_OBJECT : {
+      // TODO: Common the code with GraphBuilder::load_constant?
+      ciObject* obj = value.as_object();
+      if (obj->is_null_object())
+        return objectNull;
+      if (obj->is_loaded()) {
+        if (obj->is_array())
+          return new ArrayConstant(obj->as_array());
+        else if (obj->is_instance())
+          return new InstanceConstant(obj->as_instance());
+      }
+      return new ObjectConstant(obj);
+    }
   }
   ShouldNotReachHere();
   return illegalType;

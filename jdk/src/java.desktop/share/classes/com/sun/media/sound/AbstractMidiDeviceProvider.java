@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,9 +25,10 @@
 
 package com.sun.media.sound;
 
+import java.util.Objects;
+
 import javax.sound.midi.MidiDevice;
 import javax.sound.midi.spi.MidiDeviceProvider;
-
 
 /**
  * Super class for MIDI input or output device provider.
@@ -50,7 +51,6 @@ public abstract class AbstractMidiDeviceProvider extends MidiDeviceProvider {
         // $$fb number of MIDI devices may change with time
         // also for memory's sake, do not initialize the arrays here
     }
-
 
     final synchronized void readDeviceInfos() {
         Info[] infos = getInfoCache();
@@ -127,7 +127,8 @@ public abstract class AbstractMidiDeviceProvider extends MidiDeviceProvider {
     }
 
     @Override
-    public final MidiDevice getDevice(MidiDevice.Info info) {
+    public final MidiDevice getDevice(final MidiDevice.Info info) {
+        Objects.requireNonNull(info);
         if (info instanceof Info) {
             readDeviceInfos();
             MidiDevice[] devices = getDeviceCache();
@@ -145,10 +146,6 @@ public abstract class AbstractMidiDeviceProvider extends MidiDeviceProvider {
         }
         throw MidiUtils.unsupportedDevice(info);
     }
-
-
-    // INNER CLASSES
-
 
     /**
      * Info class for MidiDevices.  Adds an index value for
@@ -179,9 +176,6 @@ public abstract class AbstractMidiDeviceProvider extends MidiDeviceProvider {
         }
 
     } // class Info
-
-
-    // ABSTRACT METHODS
 
     abstract int getNumDevices();
     abstract MidiDevice[] getDeviceCache();

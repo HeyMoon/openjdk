@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,19 +25,42 @@
  * @test
  * @bug 6460501 6236036 6500694 6490770
  * @summary Repeated failed timed waits shouldn't leak memory
+ * @library /lib/testlibrary/
  * @author Martin Buchholz
  */
 
-// Note: this file is now out of sync with the jsr166 CVS repository due to the fix for 7092140
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
-import java.util.*;
-import java.util.regex.*;
-import java.util.concurrent.*;
-import java.util.concurrent.locks.*;
-import static java.util.concurrent.TimeUnit.*;
-import java.io.*;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.io.Reader;
+import java.lang.ref.WeakReference;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import jdk.testlibrary.Utils;
 
 public class TimedAcquireLeak {
+    static final long LONG_DELAY_MS = Utils.adjustTimeout(10_000);
+
     static String javahome() {
         String jh = System.getProperty("java.home");
         return (jh.endsWith("jre")) ? jh.substring(0, jh.length() - 4) : jh;
@@ -96,18 +119,34 @@ public class TimedAcquireLeak {
                                   Callable<T> callable) throws Throwable {
         p.getInputStream().read();
         T result = callable.call();
-        OutputStream os = p.getOutputStream();
-        os.write((byte)'\n'); os.flush();
+        sendByte(p.getOutputStream());
         return result;
+    }
+
+    /** No guarantees, but effective in practice. */
+    private static void forceFullGc() {
+        CountDownLatch finalizeDone = new CountDownLatch(1);
+        WeakReference<?> ref = new WeakReference<Object>(new Object() {
+            protected void finalize() { finalizeDone.countDown(); }});
+        try {
+            for (int i = 0; i < 10; i++) {
+                System.gc();
+                if (finalizeDone.await(1L, SECONDS) && ref.get() == null) {
+                    System.runFinalization(); // try to pick up stragglers
+                    return;
+                }
+            }
+        } catch (InterruptedException unexpected) {
+            throw new AssertionError("unexpected InterruptedException");
+        }
+        throw new AssertionError("failed to do a \"full\" gc");
     }
 
     // To be called exactly twice by the child process
     public static void rendezvousChild() {
         try {
-            for (int i = 0; i < 100; i++) {
-                System.gc(); System.runFinalization(); Thread.sleep(50);
-            }
-            System.out.write((byte)'\n'); System.out.flush();
+            forceFullGc();
+            sendByte(System.out);
             System.in.read();
         } catch (Throwable t) { throw new Error(t); }
     }
@@ -118,11 +157,17 @@ public class TimedAcquireLeak {
         return matcher.group(group);
     }
 
+    /** It's all about sending a message! */
+    static void sendByte(OutputStream s) throws IOException {
+        s.write('!');
+        s.flush();
+    }
+
     static int objectsInUse(final Process child,
                             final String childPid,
                             final String className) {
         final String regex =
-            "(?m)^ *[0-9]+: +([0-9]+) +[0-9]+ +\\Q"+className+"\\E$";
+            "(?m)^ *[0-9]+: +([0-9]+) +[0-9]+ +\\Q"+className+"\\E(?:$| )";
         final Callable<Integer> objectsInUse =
             new Callable<Integer>() { public Integer call() {
                 Integer i = Integer.parseInt(
@@ -147,14 +192,17 @@ public class TimedAcquireLeak {
         final String childClassName = Job.class.getName();
         final String classToCheckForLeaks = Job.classToCheckForLeaks();
         final String uniqueID =
-            String.valueOf(new Random().nextInt(Integer.MAX_VALUE));
+            String.valueOf(ThreadLocalRandom.current().nextInt(Integer.MAX_VALUE));
 
         final String[] jobCmd = {
             java, "-Xmx8m", "-XX:+UsePerfData",
-            "-classpath", System.getProperty("test.classes", "."),
+            "-classpath", System.getProperty("test.class.path"),
             childClassName, uniqueID
         };
         final Process p = new ProcessBuilder(jobCmd).start();
+        // Ensure subprocess jvm has started, so that jps can find it
+        p.getInputStream().read();
+        sendByte(p.getOutputStream());
 
         final String childPid =
             match(commandOutputOf(jps, "-m"),
@@ -167,10 +215,19 @@ public class TimedAcquireLeak {
         failed += p.exitValue();
 
         // Check that no objects were leaked.
+        //
+        // TODO: This test is very brittle, depending on current JDK
+        // implementation, and needing occasional adjustment.
         System.out.printf("%d -> %d%n", n0, n1);
-        check(Math.abs(n1 - n0) < 2); // Almost always n0 == n1
-        check(n1 < 20);
+        // Almost always n0 == n1
+        // Maximum jitter observed in practice is 10 -> 17
+        check(Math.abs(n1 - n0) < 10);
+        check(n1 < 25);
         drainers.shutdown();
+        if (!drainers.awaitTermination(LONG_DELAY_MS, MILLISECONDS)) {
+            drainers.shutdownNow(); // last resort
+            throw new AssertionError("thread pool did not terminate");
+        }
     }
 
     //----------------------------------------------------------------
@@ -187,6 +244,10 @@ public class TimedAcquireLeak {
         }
 
         public static void main(String[] args) throws Throwable {
+            // Synchronize with parent process, so that jps can find us
+            sendByte(System.out);
+            System.in.read();
+
             final ReentrantLock lock = new ReentrantLock();
             lock.lock();
 
@@ -198,7 +259,7 @@ public class TimedAcquireLeak {
                 = rwlock.writeLock();
             rwlock.writeLock().lock();
 
-            final BlockingQueue<Object> q = new LinkedBlockingQueue<Object>();
+            final BlockingQueue<Object> q = new LinkedBlockingQueue<>();
             final Semaphore fairSem = new Semaphore(0, true);
             final Semaphore unfairSem = new Semaphore(0, false);
             //final int threads =
@@ -214,7 +275,7 @@ public class TimedAcquireLeak {
             for (int i = 0; i < threads; i++)
                 new Thread() { public void run() {
                     try {
-                        final Random rnd = new Random();
+                        final ThreadLocalRandom rnd = ThreadLocalRandom.current();
                         for (int j = 0; j < iterations; j++) {
                             if (j == iterations/10 || j == iterations - 1) {
                                 cb.await(); // Quiesce

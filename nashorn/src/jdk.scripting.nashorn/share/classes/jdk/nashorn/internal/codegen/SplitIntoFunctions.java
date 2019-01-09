@@ -47,7 +47,6 @@ import jdk.nashorn.internal.ir.ContinueNode;
 import jdk.nashorn.internal.ir.Expression;
 import jdk.nashorn.internal.ir.ExpressionStatement;
 import jdk.nashorn.internal.ir.FunctionNode;
-import jdk.nashorn.internal.ir.FunctionNode.CompilationState;
 import jdk.nashorn.internal.ir.GetSplitState;
 import jdk.nashorn.internal.ir.IdentNode;
 import jdk.nashorn.internal.ir.IfNode;
@@ -103,7 +102,7 @@ final class SplitIntoFunctions extends NodeVisitor<BlockLexicalContext> {
         super(new BlockLexicalContext() {
             @Override
             protected Block afterSetStatements(final Block block) {
-                for(Statement stmt: block.getStatements()) {
+                for(final Statement stmt: block.getStatements()) {
                     assert !(stmt instanceof SplitNode);
                 }
                 return block;
@@ -146,7 +145,7 @@ final class SplitIntoFunctions extends NodeVisitor<BlockLexicalContext> {
         final FunctionState fnState = getCurrentFunctionState();
 
         final String name = splitNode.getName();
-        Block body = splitNode.getBody();
+        final Block body = splitNode.getBody();
         final int firstLineNumber = body.getFirstStatementLineNumber();
         final long token = body.getToken();
         final int finish = body.getFinish();
@@ -168,6 +167,7 @@ final class SplitIntoFunctions extends NodeVisitor<BlockLexicalContext> {
                 createIdent(name),
                 originalFn.getName() + "$" + name,
                 isProgram ? Collections.singletonList(createReturnParamIdent()) : Collections.<IdentNode>emptyList(),
+                null,
                 FunctionNode.Kind.NORMAL,
                 // We only need IS_SPLIT conservatively, in case it contains any array units so that we force
                 // the :callee's existence, to force :scope to never be in a slot lower than 2. This is actually
@@ -176,11 +176,11 @@ final class SplitIntoFunctions extends NodeVisitor<BlockLexicalContext> {
                 // we still use IS_SPLIT as the criteria in CompilationPhase.SERIALIZE_SPLIT_PHASE.
                 FunctionNode.IS_ANONYMOUS | FunctionNode.USES_ANCESTOR_SCOPE | FunctionNode.IS_SPLIT,
                 body,
-                CompilationState.INITIALIZED,
-                null
+                null,
+                originalFn.getModule(),
+                originalFn.getDebugFlags()
         )
-        .setCompileUnit(lc, splitNode.getCompileUnit())
-        .copyCompilationState(lc, originalFn);
+        .setCompileUnit(lc, splitNode.getCompileUnit());
 
         // Call the function:
         //     either "(function () { ... }).call(this)"

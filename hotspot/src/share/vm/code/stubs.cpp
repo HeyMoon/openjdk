@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -67,7 +67,7 @@ StubQueue::StubQueue(StubInterface* stub_interface, int buffer_size,
   intptr_t size = round_to(buffer_size, 2*BytesPerWord);
   BufferBlob* blob = BufferBlob::create(name, size);
   if( blob == NULL) {
-    vm_exit_out_of_memory(size, OOM_MALLOC_ERROR, err_msg("CodeCache: no room for %s", name));
+    vm_exit_out_of_memory(size, OOM_MALLOC_ERROR, "CodeCache: no room for %s", name);
   }
   _stub_interface  = stub_interface;
   _buffer_size     = blob->content_size();
@@ -262,16 +262,3 @@ void StubQueue::print() {
   }
 }
 
-// Fixup for pregenerated code
-void StubQueue::fix_buffer(address buffer, address queue_end, address buffer_end, int number_of_stubs) {
-  const int extra_bytes = CodeEntryAlignment;
-  _stub_buffer = buffer;
-  _queue_begin = 0;
-  _queue_end = queue_end - buffer;
-  _number_of_stubs = number_of_stubs;
-  int size = buffer_end - buffer;
-  // Note: _buffer_limit must differ from _queue_end in the iteration loops
-  // => add extra space at the end (preserving alignment for asserts) if needed
-  if (buffer_end == queue_end) size += extra_bytes;
-  _buffer_limit = _buffer_size = size;
-}

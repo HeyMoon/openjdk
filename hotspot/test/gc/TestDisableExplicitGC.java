@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,10 +25,12 @@
  * @test TestDisableExplicitGC
  * @requires vm.opt.DisableExplicitGC == null
  * @summary Verify GC behavior with DisableExplicitGC flag.
- * @library /testlibrary
- * @run main/othervm                             -XX:+PrintGCDetails TestDisableExplicitGC
- * @run main/othervm/fail -XX:+DisableExplicitGC -XX:+PrintGCDetails TestDisableExplicitGC
- * @run main/othervm      -XX:-DisableExplicitGC -XX:+PrintGCDetails TestDisableExplicitGC
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
+ * @modules jdk.management/com.sun.management.internal
+ * @run main/othervm                             -Xlog:gc=debug TestDisableExplicitGC
+ * @run main/othervm/fail -XX:+DisableExplicitGC -Xlog:gc=debug TestDisableExplicitGC
+ * @run main/othervm      -XX:-DisableExplicitGC -Xlog:gc=debug TestDisableExplicitGC
  */
 import java.lang.management.GarbageCollectorMXBean;
 import java.util.List;

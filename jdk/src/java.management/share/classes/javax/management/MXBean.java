@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -93,7 +93,8 @@ import javax.management.openmbean.TabularType;
       Standard MBean concept.  Here is how a managed object might be
       represented as a Standard MBean, and as an MXBean:</p>
 
-    <table border="1" cellpadding="5" summary="Standard Bean vs. MXBean">
+    <table class="plain">
+    <caption style="display:none">Standard Bean vs. MXBean</caption>
       <tr>
         <th>Standard MBean</th><th>MXBean</th>
       </tr>
@@ -133,7 +134,8 @@ public interface MemoryPool<b>MXBean</b> {
 
     <p>So, we might define <code>MemoryUsage</code> like this:</p>
 
-    <table border="1" cellpadding="5" summary="Standard Bean vs. MXBean">
+    <table class="plain">
+    <caption style="display:none">Standard Bean vs. MXBean</caption>
       <tr>
         <th>Standard MBean</th><th>MXBean</th>
       </tr>
@@ -153,7 +155,7 @@ public class MemoryUsage <b>implements Serializable</b> {
         <td><pre>
 public class MemoryUsage {
     // standard JavaBean conventions with getters
-    <b>&#64;ConstructorProperties({"init", "used", "committed", "max"})</b>
+    <b>&#64;ConstructorParameters({"init", "used", "committed", "max"})</b>
     public MemoryUsage(long init, long used,
                        long committed, long max) {...}
     long getInit() {...}
@@ -168,8 +170,8 @@ public class MemoryUsage {
     <p>The definitions are the same in the two cases, except
       that with the MXBean, <code>MemoryUsage</code> no longer needs to
       be marked <code>Serializable</code> (though it can be).  On
-      the other hand, we have added a {@code @ConstructorProperties} annotation
-      to link the constructor parameters to the corresponding getters.
+      the other hand, we have added a {@link ConstructorParameters &#64;ConstructorParameters}
+      annotation to link the constructor parameters to the corresponding getters.
       We will see more about this below.</p>
 
     <p><code>MemoryUsage</code> is a <em>model-specific class</em>.
@@ -195,7 +197,8 @@ public class MemoryUsage {
     <p>This becomes clearer if we compare what the clients of the two
       models might look like:</p>
 
-    <table border="1" cellpadding="5" summary="Standard Bean vs. MXBean">
+    <table class="plain">
+    <caption style="display:none">Standard Bean vs. MXBean</caption>
       <tr>
         <th>Standard MBean</th><th>MXBean</th>
       </tr>
@@ -232,7 +235,8 @@ String name = (String)
       managed objects when you know the model beforehand, regardless
       of whether you are using Standard MBeans or MXBeans:</p>
 
-    <table border="1" cellpadding="5" summary="Standard Bean vs. MXBean">
+    <table class="plain">
+    <caption style="display:none">Standard Bean vs. MXBean</caption>
       <tr>
         <th>Standard MBean</th><th>MXBean</th>
       </tr>
@@ -265,7 +269,8 @@ long used = usage.getUsed();
     <p>Implementing the MemoryPool object works similarly for both
       Standard MBeans and MXBeans.</p>
 
-    <table border="1" cellpadding="5" summary="Standard Bean vs. MXBean">
+    <table class="plain">
+    <caption style="display:none">Standard Bean vs. MXBean</caption>
       <tr>
         <th>Standard MBean</th><th>MXBean</th>
       </tr>
@@ -292,7 +297,8 @@ public class MemoryPool
     <p>Registering the MBean in the MBean Server works in the same way
       in both cases:</p>
 
-    <table border="1" cellpadding="5" summary="Standard Bean vs. MXBean">
+    <table class="plain">
+    <caption style="display:none">Standard Bean vs. MXBean</caption>
       <tr>
         <th>Standard MBean</th><th>MXBean</th>
       </tr>
@@ -478,13 +484,14 @@ public class MemoryPool
 
     <p>The following table summarizes the type mapping rules.</p>
 
-    <table border="1" cellpadding="5" summary="Type Mapping Rules">
+    <table class="striped">
+    <caption style="display:none">Type Mapping Rules</caption>
       <tr>
         <th>Java type <em>J</em></th>
         <th><em>opentype(J)</em></th>
         <th><em>opendata(J)</em></th>
       </tr>
-      <tbody valign="top">
+      <tbody style="vertical-align:top">
         <tr>
           <td>{@code int}, {@code boolean}, etc<br>
             (the 8 primitive Java types)</td>
@@ -850,18 +857,24 @@ public interface ModuleMXBean {
         <em>J</em>.</p></li>
 
       <li><p>Otherwise, if <em>J</em> has at least one public
-        constructor with a {@link java.beans.ConstructorProperties
-        ConstructorProperties} annotation, then one
-        of those constructors (not necessarily always the same one)
-        will be called to reconstruct an instance of <em>J</em>.
+        constructor with either {@link javax.management.ConstructorParameters
+        &#64;javax.management.ConstructorParameters} or
+        {@code @java.beans.ConstructoProperties} annotation, then one of those
+        constructors (not necessarily always the same one) will be called to
+        reconstruct an instance of <em>J</em>.
+        If a constructor is annotated with both
+        {@code @javax.management.ConstructorParameters} and
+        {@code @java.beans.ConstructorProperties},
+        {@code @javax.management.ConstructorParameters} will be used and
+        {@code @java.beans.ConstructorProperties} will be ignored.
         Every such annotation must list as many strings as the
         constructor has parameters; each string must name a property
         corresponding to a getter of <em>J</em>; and the type of this
         getter must be the same as the corresponding constructor
         parameter.  It is not an error for there to be getters that
-        are not mentioned in the {@code ConstructorProperties} annotation
-        (these may correspond to information that is not needed to
-        reconstruct the object).</p>
+        are not mentioned in the {@code @ConstructorParameters} or
+        {@code @ConstructorProperties} annotations (these may correspond to
+        information that is not needed to reconstruct the object).</p>
 
         <p>An instance of <em>J</em> is reconstructed by calling a
         constructor with the appropriate reconstructed items from the
@@ -871,9 +884,10 @@ public interface ModuleMXBean {
         CompositeData} might come from an earlier version of
         <em>J</em> where not all the items were present.  A
         constructor is <em>applicable</em> if all the properties named
-        in its {@code ConstructorProperties} annotation are present as items
-        in the {@code CompositeData}.  If no constructor is
-        applicable, then the attempt to reconstruct <em>J</em> fails.</p>
+        in its {@code @ConstructorParameters} or {@code @ConstructorProperties}
+        annotation are present as items in the {@code CompositeData}.
+        If no constructor is applicable, then the attempt to reconstruct
+        <em>J</em> fails.</p>
 
         <p>For any possible combination of properties, it must be the
         case that either (a) there are no applicable constructors, or
@@ -909,13 +923,14 @@ public interface ModuleMXBean {
       <li><p>Otherwise, <em>J</em> is not reconstructible.</p></li>
     </ol>
 
-    <p>Rule 2 is not applicable to subset Profiles of Java SE that do not
-    include the {@code java.beans} package. When targeting a runtime that does
-    not include the {@code java.beans} package, and where there is a mismatch
-    between the compile-time and runtime environment whereby <em>J</em> is
-    compiled with a public constructor and the {@code ConstructorProperties}
-    annotation, then <em>J</em> is not reconstructible unless another rule
-    applies.</p>
+    <p>Rule 2 is not applicable when {@code java.beans.ConstructorProperties}
+    is not visible (e.g. when the java.desktop module is not readable or when
+    the runtime image does not contain the java.desktop module). When
+    targeting a runtime that does not include the {@code java.beans} package,
+    and where there is a mismatch between the compile-time and runtime
+    environment whereby <em>J</em> is compiled with a public constructor
+    and the {@code ConstructorProperties} annotation, then <em>J</em> is
+    not reconstructible unless another rule applies.</p>
 
     <p>Here are examples showing different ways to code a type {@code
       NamedNumber} that consists of an {@code int} and a {@code
@@ -957,14 +972,14 @@ public class NamedNumber {
         </blockquote>
       </li>
 
-      <li>Public constructor with <code>&#64;ConstructorProperties</code> annotation:
+      <li>Public constructor with <code>&#64;ConstructorParameters</code> annotation:
 
         <blockquote>
           <pre>
 public class NamedNumber {
     public int getNumber() {return number;}
     public String getName() {return name;}
-    <b>&#64;ConstructorProperties({"number", "name"})
+    <b>&#64;ConstructorParameters({"number", "name"})
     public NamedNumber(int number, String name)</b> {
         this.number = number;
         this.name = name;

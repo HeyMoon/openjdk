@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -57,10 +57,12 @@ public class T6403466 extends AbstractProcessor {
             Iterable<? extends JavaFileObject> files =
                 fm.getJavaFileObjectsFromFiles(Arrays.asList(new File(testSrcDir, self + ".java")));
 
-            Iterable<String> options = Arrays.asList("-processorpath", testClassDir,
-                                                     "-processor", self,
-                                                     "-s", ".",
-                                                     "-d", ".");
+            Iterable<String> options = Arrays.asList(
+                "--add-exports", "jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+                "--processor-path", testClassDir,
+                "-processor", self,
+                "-s", ".",
+                "-d", ".");
             JavacTask task = tool.getTask(out, fm, null, options, null, files);
 
             VerifyingTaskListener vtl = new VerifyingTaskListener(new File(testSrcDir, self + ".out"));

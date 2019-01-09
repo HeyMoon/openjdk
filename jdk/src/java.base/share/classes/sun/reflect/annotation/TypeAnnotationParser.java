@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,11 +32,11 @@ import java.nio.BufferUnderflowException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import sun.misc.JavaLangAccess;
-import sun.reflect.ConstantPool;
+import jdk.internal.misc.SharedSecrets;
+import jdk.internal.misc.JavaLangAccess;
+import jdk.internal.reflect.ConstantPool;
 import static sun.reflect.annotation.TypeAnnotation.*;
 
 /**
@@ -66,9 +66,8 @@ public final class TypeAnnotationParser {
             Type type,
             TypeAnnotationTarget filter) {
         TypeAnnotation[] tas = parseTypeAnnotations(rawAnnotations,
-                                                    cp,
-                                                    decl,
-                                                    container);
+                cp, decl, container);
+
         List<TypeAnnotation> l = new ArrayList<>(tas.length);
         for (TypeAnnotation t : tas) {
             TypeAnnotationTargetInfo ti = t.getTargetInfo();
@@ -77,10 +76,10 @@ public final class TypeAnnotationParser {
         }
         TypeAnnotation[] typeAnnotations = l.toArray(EMPTY_TYPE_ANNOTATION_ARRAY);
         return AnnotatedTypeFactory.buildAnnotatedType(type,
-                                                       LocationInfo.BASE_LOCATION,
-                                                       typeAnnotations,
-                                                       typeAnnotations,
-                                                       decl);
+                AnnotatedTypeFactory.nestingForType(type, LocationInfo.BASE_LOCATION),
+                typeAnnotations,
+                typeAnnotations,
+                decl);
     }
 
     /**
@@ -109,9 +108,8 @@ public final class TypeAnnotationParser {
         ArrayList[] l = new ArrayList[size]; // array of ArrayList<TypeAnnotation>
 
         TypeAnnotation[] tas = parseTypeAnnotations(rawAnnotations,
-                                                    cp,
-                                                    decl,
-                                                    container);
+                cp, decl, container);
+
         for (TypeAnnotation t : tas) {
             TypeAnnotationTargetInfo ti = t.getTargetInfo();
             if (ti.getTarget() == filter) {
@@ -125,9 +123,30 @@ public final class TypeAnnotationParser {
                 tmp.add(t);
             }
         }
+        // If a constructor has a mandated outer this, that parameter
+        // has no annotations and the annotations to parameter mapping
+        // should be offset by 1.
+        boolean offset = false;
+        if (decl instanceof Constructor) {
+            Constructor<?> ctor = (Constructor<?>) decl;
+            Class<?> declaringClass = ctor.getDeclaringClass();
+            if (!declaringClass.isEnum() &&
+                (declaringClass.isMemberClass() &&
+                 (declaringClass.getModifiers() & Modifier.STATIC) == 0) ) {
+                offset = true;
+            }
+        }
         for (int i = 0; i < size; i++) {
-            @SuppressWarnings("unchecked")
-            ArrayList<TypeAnnotation> list = l[i];
+            ArrayList<TypeAnnotation> list;
+            if (offset) {
+                @SuppressWarnings("unchecked")
+                ArrayList<TypeAnnotation> tmp = (i == 0) ? null : l[i - 1];
+                list = tmp;
+            } else {
+                @SuppressWarnings("unchecked")
+                ArrayList<TypeAnnotation> tmp = l[i];
+                list = tmp;
+            }
             TypeAnnotation[] typeAnnotations;
             if (list != null) {
                 typeAnnotations = list.toArray(new TypeAnnotation[list.size()]);
@@ -135,10 +154,10 @@ public final class TypeAnnotationParser {
                 typeAnnotations = EMPTY_TYPE_ANNOTATION_ARRAY;
             }
             result[i] = AnnotatedTypeFactory.buildAnnotatedType(types[i],
-                                                                LocationInfo.BASE_LOCATION,
-                                                                typeAnnotations,
-                                                                typeAnnotations,
-                                                                decl);
+                    AnnotatedTypeFactory.nestingForType(types[i], LocationInfo.BASE_LOCATION),
+                    typeAnnotations,
+                    typeAnnotations,
+                    decl);
 
         }
         return result;
@@ -277,7 +296,7 @@ public final class TypeAnnotationParser {
                     }
                 }
                 res[i] = AnnotatedTypeFactory.buildAnnotatedType(bounds[i],
-                        loc,
+                        AnnotatedTypeFactory.nestingForType(bounds[i], loc),
                         l.toArray(EMPTY_TYPE_ANNOTATION_ARRAY),
                         candidates.toArray(EMPTY_TYPE_ANNOTATION_ARRAY),
                         (AnnotatedElement)decl);
@@ -309,7 +328,7 @@ public final class TypeAnnotationParser {
     static TypeAnnotation[] parseAllTypeAnnotations(AnnotatedElement decl) {
         Class<?> container;
         byte[] rawBytes;
-        JavaLangAccess javaLangAccess = sun.misc.SharedSecrets.getJavaLangAccess();
+        JavaLangAccess javaLangAccess = SharedSecrets.getJavaLangAccess();
         if (decl instanceof Class) {
             container = (Class<?>)decl;
             rawBytes = javaLangAccess.getRawClassTypeAnnotations(container);
@@ -353,11 +372,14 @@ public final class TypeAnnotationParser {
             new LinkedHashMap<>();
         for (TypeAnnotation t : typeAnnos) {
             Annotation a = t.getAnnotation();
-            Class<? extends Annotation> klass = a.annotationType();
-            AnnotationType type = AnnotationType.getInstance(klass);
-            if (type.retention() == RetentionPolicy.RUNTIME)
-                if (result.put(klass, a) != null)
+            if (a != null) {
+                Class<? extends Annotation> klass = a.annotationType();
+                AnnotationType type = AnnotationType.getInstance(klass);
+                if (type.retention() == RetentionPolicy.RUNTIME &&
+                    result.put(klass, a) != null) {
                     throw new AnnotationFormatError("Duplicate annotation for class: "+klass+": " + a);
+                }
+            }
         }
         return result;
     }

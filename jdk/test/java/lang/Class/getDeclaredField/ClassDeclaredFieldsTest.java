@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *          set accessible if the right permission is granted; this test
  *          also verifies that Class.classLoader final private field is
  *          hidden from reflection access.
+ * @modules java.base/java.lang:open
  * @run main/othervm ClassDeclaredFieldsTest UNSECURE
  * @run main/othervm ClassDeclaredFieldsTest SECURE
  *
@@ -135,7 +136,7 @@ public class ClassDeclaredFieldsTest {
     }
 
     // A Helper class to build a set of permissions.
-    final static class PermissionsBuilder {
+    static final class PermissionsBuilder {
         final Permissions perms;
         public PermissionsBuilder() {
             this(new Permissions());

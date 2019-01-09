@@ -37,7 +37,7 @@ import com.apple.laf.AquaUtils.RecyclableSingleton;
 import com.apple.laf.AquaUtils.RecyclableSingletonFromDefaultConstructor;
 
 public class AquaKeyBindings {
-    static final RecyclableSingleton<AquaKeyBindings> instance = new RecyclableSingletonFromDefaultConstructor<AquaKeyBindings>(AquaKeyBindings.class);
+    private static final RecyclableSingleton<AquaKeyBindings> instance = new RecyclableSingletonFromDefaultConstructor<AquaKeyBindings>(AquaKeyBindings.class);
     static AquaKeyBindings instance() {
         return instance.get();
     }
@@ -529,7 +529,7 @@ public class AquaKeyBindings {
 
     // extracted and adapted from DefaultEditorKit in 1.6
     @SuppressWarnings("serial") // Superclass is not serializable across versions
-    static abstract class DeleteWordAction extends TextAction {
+    abstract static class DeleteWordAction extends TextAction {
         public DeleteWordAction(final String name) { super(name); }
 
         public void actionPerformed(final ActionEvent e) {

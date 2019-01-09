@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,6 +36,9 @@ import javax.tools.ToolProvider;
 import com.sun.tools.classfile.ClassFile;
 import com.sun.tools.classfile.ConstantPoolException;
 
+import toolbox.JavacTask;
+import toolbox.ToolBox;
+
 /**
  * Base class for class file attribute tests.
  * Contains methods for compiling generated sources in memory,
@@ -44,6 +47,7 @@ import com.sun.tools.classfile.ConstantPoolException;
 public class TestBase {
 
     public static final String LINE_SEPARATOR = System.lineSeparator();
+    public static final boolean isDumpOfSourceEnabled = Boolean.getBoolean("dump.src");
 
     private <S> InMemoryFileManager compile(
             List<String> options,
@@ -176,7 +180,9 @@ public class TestBase {
      * @throws ConstantPoolException if constant pool error occurs
      */
     public ClassFile readClassFile(File file) throws IOException, ConstantPoolException {
-        return readClassFile(new FileInputStream(file));
+        try (InputStream is = new FileInputStream(file)) {
+            return readClassFile(is);
+        }
     }
 
     public void assertEquals(Object actual, Object expected, String message) {
@@ -212,6 +218,14 @@ public class TestBase {
     public void writeToFile(Path path, String source) throws IOException {
         try (BufferedWriter writer = Files.newBufferedWriter(path)) {
             writer.write(source);
+        }
+    }
+
+    public void writeToFileIfEnabled(Path path, String source) throws IOException {
+        if (isDumpOfSourceEnabled) {
+            writeToFile(path, source);
+        } else {
+            System.err.println("Source dumping disabled. To enable, run the test with '-Ddump.src=true'");
         }
     }
 

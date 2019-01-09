@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,9 +43,8 @@ import java.security.PublicKey;
 
 import java.security.*;
 import java.security.interfaces.*;
-import java.security.spec.RSAPrivateCrtKeySpec;
-import java.security.spec.RSAPublicKeySpec;
-import java.security.spec.InvalidKeySpecException;
+import java.security.spec.*;
+
 import sun.nio.ch.DirectBuffer;
 import java.nio.ByteBuffer;
 
@@ -60,7 +59,7 @@ import java.nio.ByteBuffer;
  *   . SHA384withRSA
  *   . SHA512withRSA
  *
- * @since 1.9
+ * @since 9
  */
 class NativeRSASignature extends SignatureSpi {
 
@@ -192,25 +191,32 @@ class NativeRSASignature extends SignatureSpi {
         int newSigLength = sigLength;
         // Need to check RSA key length whenever a new private key is set
         if (privateKey != key) {
-            if (privateKey instanceof RSAPrivateCrtKey) {
-                RSAPrivateCrtKey rsaPrivKey = (RSAPrivateCrtKey) privateKey;
-                BigInteger mod = rsaPrivKey.getModulus();
-                newSigLength = checkRSAKeyLength(mod);
-                try {
+            if (!(privateKey instanceof RSAPrivateKey)) {
+                throw new InvalidKeyException("RSAPrivateKey required. " +
+                    "Received: " + privateKey.getClass().getName());
+            }
+            RSAPrivateKey rsaPrivKey = (RSAPrivateKey) privateKey;
+            BigInteger mod = rsaPrivKey.getModulus();
+            newSigLength = checkRSAKeyLength(mod);
+            BigInteger pe = rsaPrivKey.getPrivateExponent();
+            try {
+                if (rsaPrivKey instanceof RSAPrivateCrtKey) {
+                    RSAPrivateCrtKey rsaPrivCrtKey = (RSAPrivateCrtKey) rsaPrivKey;
                     newKey = (NativeKey) keyFactory.engineGeneratePrivate
                         (new RSAPrivateCrtKeySpec(mod,
-                                                  rsaPrivKey.getPublicExponent(),
-                                                  rsaPrivKey.getPrivateExponent(),
-                                                  rsaPrivKey.getPrimeP(),
-                                                  rsaPrivKey.getPrimeQ(),
-                                                  rsaPrivKey.getPrimeExponentP(),
-                                                  rsaPrivKey.getPrimeExponentQ(),
-                                                  rsaPrivKey.getCrtCoefficient()));
-                } catch (InvalidKeySpecException ikse) {
-                    throw new InvalidKeyException(ikse);
+                                                  rsaPrivCrtKey.getPublicExponent(),
+                                                  pe,
+                                                  rsaPrivCrtKey.getPrimeP(),
+                                                  rsaPrivCrtKey.getPrimeQ(),
+                                                  rsaPrivCrtKey.getPrimeExponentP(),
+                                                  rsaPrivCrtKey.getPrimeExponentQ(),
+                                                  rsaPrivCrtKey.getCrtCoefficient()));
+                } else {
+                    newKey = (NativeKey) keyFactory.engineGeneratePrivate
+                           (new RSAPrivateKeySpec(mod, pe));
                 }
-            } else {
-                throw new InvalidKeyException("RSAPrivateCrtKey required");
+            } catch (InvalidKeySpecException ikse) {
+                throw new InvalidKeyException(ikse);
             }
         }
         init(true, newKey, newSigLength);
@@ -237,7 +243,8 @@ class NativeRSASignature extends SignatureSpi {
                     throw new InvalidKeyException(ikse);
                 }
             } else {
-                throw new InvalidKeyException("RSAPublicKey required");
+                throw new InvalidKeyException("RSAPublicKey required. " +
+                    "Received: " + publicKey.getClass().getName());
             }
         }
         init(false, newKey, newSigLength);
@@ -251,26 +258,38 @@ class NativeRSASignature extends SignatureSpi {
 
     @Override
     protected synchronized byte[] engineSign() throws SignatureException {
-        byte[] sig = new byte[sigLength];
-        int rv = doFinal(sig, 0, sigLength);
-        if (rv < 0) {
-            throw new SignatureException(new UcryptoException(-rv));
+        try {
+            byte[] sig = new byte[sigLength];
+            int rv = doFinal(sig, 0, sigLength);
+            if (rv < 0) {
+                throw new SignatureException(new UcryptoException(-rv));
+            }
+            return sig;
+        } finally {
+            // doFinal should already be called, no need to cancel
+            reset(false);
         }
-        return sig;
     }
 
     @Override
     protected synchronized int engineSign(byte[] outbuf, int offset, int len)
         throws SignatureException {
-        if (outbuf == null || (offset < 0) || (outbuf.length < (offset + sigLength))
-            || (len < sigLength)) {
-            throw new SignatureException("Invalid output buffer");
+        boolean doCancel = true;
+        try {
+            if (outbuf == null || (offset < 0) || (outbuf.length < (offset + sigLength))
+                || (len < sigLength)) {
+                throw new SignatureException("Invalid output buffer. offset: " +
+                    offset + ". len: " + len + ". sigLength: " + sigLength);
+            }
+            int rv = doFinal(outbuf, offset, sigLength);
+            doCancel = false;
+            if (rv < 0) {
+                throw new SignatureException(new UcryptoException(-rv));
+            }
+            return sigLength;
+        } finally {
+            reset(doCancel);
         }
-        int rv = doFinal(outbuf, offset, sigLength);
-        if (rv < 0) {
-            throw new SignatureException(new UcryptoException(-rv));
-        }
-        return sigLength;
     }
 
     @Override
@@ -321,18 +340,25 @@ class NativeRSASignature extends SignatureSpi {
     @Override
     protected synchronized boolean engineVerify(byte[] sigBytes, int sigOfs, int sigLen)
         throws SignatureException {
-        if (sigBytes == null || (sigOfs < 0) || (sigBytes.length < (sigOfs + this.sigLength))
-            || (sigLen < this.sigLength)) {
-            throw new SignatureException("Invalid signature buffer");
-        }
+        boolean doCancel = true;
+        try {
+            if (sigBytes == null || (sigOfs < 0) || (sigBytes.length < (sigOfs + this.sigLength))
+                || (sigLen != this.sigLength)) {
+                throw new SignatureException("Invalid signature length: got " +
+                    sigLen + " but was expecting " + this.sigLength);
+            }
 
-        int rv = doFinal(sigBytes, sigOfs, sigLen);
-        if (rv == 0) {
-            return true;
-        } else {
-            UcryptoProvider.debug("Signature: " + mech + " verification error " +
+            int rv = doFinal(sigBytes, sigOfs, sigLen);
+            doCancel = false;
+            if (rv == 0) {
+                return true;
+            } else {
+                UcryptoProvider.debug("Signature: " + mech + " verification error " +
                              new UcryptoException(-rv).getMessage());
-            return false;
+                return false;
+            }
+        } finally {
+            reset(doCancel);
         }
     }
 
@@ -353,20 +379,20 @@ class NativeRSASignature extends SignatureSpi {
 
     /**
      * calls ucrypto_sign_update(...) or ucrypto_verify_update(...)
-     * @returns an error status code (0 means SUCCESS)
+     * @return an error status code (0 means SUCCESS)
      */
     private native static int nativeUpdate(long pContext, boolean sign,
                                            byte[] in, int inOfs, int inLen);
     /**
      * calls ucrypto_sign_update(...) or ucrypto_verify_update(...)
-     * @returns an error status code (0 means SUCCESS)
+     * @return an error status code (0 means SUCCESS)
      */
     private native static int nativeUpdate(long pContext, boolean sign,
                                            long pIn, int inLen);
 
     /**
      * calls ucrypto_sign_final(...) or ucrypto_verify_final(...)
-     * @returns the length of signature bytes or verification status.
+     * @return the length of signature bytes or verification status.
      * If negative, it indicates an error status code
      */
     private native static int nativeFinal(long pContext, boolean sign,
@@ -400,7 +426,8 @@ class NativeRSASignature extends SignatureSpi {
     // returns 0 (success) or negative (ucrypto error occurred)
     private int update(byte[] in, int inOfs, int inLen) {
         if (inOfs < 0 || inOfs + inLen > in.length) {
-            throw new ArrayIndexOutOfBoundsException();
+            throw new ArrayIndexOutOfBoundsException("inOfs :" + inOfs +
+                ". inLen: " + inLen + ". in.length: " + in.length);
         }
         ensureInitialized();
         int k = nativeUpdate(pCtxt.id, sign, in, inOfs, inLen);
@@ -422,13 +449,9 @@ class NativeRSASignature extends SignatureSpi {
 
     // returns 0 (success) or negative (ucrypto error occurred)
     private int doFinal(byte[] sigBytes, int sigOfs, int sigLen) {
-        try {
-            ensureInitialized();
-            int k = nativeFinal(pCtxt.id, sign, sigBytes, sigOfs, sigLen);
-            return k;
-        } finally {
-            reset(false);
-        }
+        ensureInitialized();
+        int k = nativeFinal(pCtxt.id, sign, sigBytes, sigOfs, sigLen);
+        return k;
     }
 
     // check and return RSA key size in number of bytes
@@ -437,7 +460,8 @@ class NativeRSASignature extends SignatureSpi {
         int maxDataSize = keySize - PKCS1PADDING_LEN;
         if (maxDataSize < encodedLen) {
             throw new InvalidKeyException
-                ("Key is too short for this signature algorithm");
+                ("Key is too short for this signature algorithm. maxDataSize: " +
+                    maxDataSize + ". encodedLen: " + encodedLen);
         }
         return keySize;
     }

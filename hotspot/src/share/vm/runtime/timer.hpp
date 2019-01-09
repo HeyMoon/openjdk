@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,6 +37,7 @@ class elapsedTimer VALUE_OBJ_CLASS_SPEC {
   bool  _active;
  public:
   elapsedTimer()             { _active = false; reset(); }
+  elapsedTimer(jlong time, jlong timeUnitsPerSecond);
   void add(elapsedTimer t);
   void start();
   void stop();
@@ -69,38 +70,6 @@ class TimeStamp VALUE_OBJ_CLASS_SPEC {
   jlong ticks() const { return _counter; }
   // ticks elapsed since last update
   jlong ticks_since_update() const;
-};
-
-// TraceTime is used for tracing the execution time of a block
-// Usage:
-//  { TraceTime t("block time")
-//    some_code();
-//  }
-//
-
-class TraceTime: public StackObj {
- private:
-  bool          _active;    // do timing
-  bool          _verbose;   // report every timing
-  elapsedTimer  _t;         // timer
-  elapsedTimer* _accum;     // accumulator
- public:
-  // Constructors
-  TraceTime(const char* title,
-            bool doit = true);
-  TraceTime(const char* title,
-            elapsedTimer* accumulator,
-            bool doit = true,
-            bool verbose = false);
-  ~TraceTime();
-
-  // Accessors
-  void set_verbose(bool verbose)  { _verbose = verbose; }
-  bool verbose() const            { return _verbose;    }
-
-  // Activation
-  void suspend()  { if (_active) _t.stop();  }
-  void resume()   { if (_active) _t.start(); }
 };
 
 class TraceCPUTime: public StackObj {

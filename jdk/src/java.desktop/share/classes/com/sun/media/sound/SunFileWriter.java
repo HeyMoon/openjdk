@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,18 +25,12 @@
 
 package com.sun.media.sound;
 
-import java.io.File;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.IOException;
 import java.io.DataInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 
 import javax.sound.sampled.AudioFileFormat;
-import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.spi.AudioFileWriter;
-
-
-
 
 /**
  * Abstract File Writer class.
@@ -45,16 +39,13 @@ import javax.sound.sampled.spi.AudioFileWriter;
  */
 abstract class SunFileWriter extends AudioFileWriter {
 
-
     // buffer size for write
     protected static final int bufferSize = 16384;
 
     // buffer size for temporary input streams
     protected static final int bisBufferSize = 4096;
 
-
     final AudioFileFormat.Type types[];
-
 
     /**
      * Constructs a new SunParser object.
@@ -63,34 +54,21 @@ abstract class SunFileWriter extends AudioFileWriter {
         this.types = types;
     }
 
-
-
     // METHODS TO IMPLEMENT AudioFileWriter
 
-    // new, 10.27.99
-
+    @Override
     public final AudioFileFormat.Type[] getAudioFileTypes(){
         AudioFileFormat.Type[] localArray = new AudioFileFormat.Type[types.length];
         System.arraycopy(types, 0, localArray, 0, types.length);
         return localArray;
     }
 
-
-    public abstract AudioFileFormat.Type[] getAudioFileTypes(AudioInputStream stream);
-
-    public abstract int write(AudioInputStream stream, AudioFileFormat.Type fileType, OutputStream out) throws IOException;
-
-    public abstract int write(AudioInputStream stream, AudioFileFormat.Type fileType, File out) throws IOException;
-
-
     // HELPER METHODS
-
 
     /**
      * rllong
      * Protected helper method to read 64 bits and changing the order of
      * each bytes.
-     * @param DataInputStream
      * @return 32 bits swapped value.
      * @exception IOException
      */
@@ -114,7 +92,6 @@ abstract class SunFileWriter extends AudioFileWriter {
     /**
      * big2little
      * Protected helper method to swap the order of bytes in a 32 bit int
-     * @param int
      * @return 32 bits swapped value
      */
     final int big2little(int i) {
@@ -134,7 +111,6 @@ abstract class SunFileWriter extends AudioFileWriter {
     /**
      * rlshort
      * Protected helper method to read 16 bits value. Swap high with low byte.
-     * @param DataInputStream
      * @return the swapped value.
      * @exception IOException
      */
@@ -156,7 +132,6 @@ abstract class SunFileWriter extends AudioFileWriter {
     /**
      * big2little
      * Protected helper method to swap the order of bytes in a 16 bit short
-     * @param int
      * @return 16 bits swapped value
      */
     final short big2littleShort(short i) {
@@ -227,6 +202,5 @@ abstract class SunFileWriter extends AudioFileWriter {
         public boolean markSupported() {
             return in.markSupported();
         }
-
     }
 }

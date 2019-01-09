@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@
 #include "gc/shared/collectedHeap.inline.hpp"
 #include "interpreter/interpreter.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "memory/universe.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/symbol.hpp"
@@ -41,8 +42,6 @@
 #include "runtime/thread.inline.hpp"
 #include "runtime/vframe.hpp"
 #include "utilities/macros.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 // Static fields of FlatProfiler
 int               FlatProfiler::received_gc_ticks   = 0;
@@ -186,7 +185,7 @@ void PCRecorder::print() {
   if (counters == NULL) return;
 
   tty->cr();
-  tty->print_cr("Printing compiled methods with PC buckets having more than %d ticks", ProfilerPCTickThreshold);
+  tty->print_cr("Printing compiled methods with PC buckets having more than " INTX_FORMAT " ticks", ProfilerPCTickThreshold);
   tty->print_cr("===================================================================");
   tty->cr();
 
@@ -539,11 +538,12 @@ class adapterNode : public ProfilerNode {
 
 class runtimeStubNode : public ProfilerNode {
  private:
-   const CodeBlob* _stub;
+  const RuntimeStub* _stub;
   const char* _symbol;     // The name of the nearest VM symbol when ProfileVM is on. Points to a unique string.
  public:
-   runtimeStubNode(const CodeBlob* stub, const char* name, TickPosition where) : ProfilerNode(), _stub(stub),  _symbol(name) {
+   runtimeStubNode(const CodeBlob* stub, const char* name, TickPosition where) : ProfilerNode(), _stub(NULL),  _symbol(name) {
      assert(stub->is_runtime_stub(), "wrong code blob");
+     _stub = (RuntimeStub*) stub;
      update(where);
    }
 
@@ -551,7 +551,7 @@ class runtimeStubNode : public ProfilerNode {
 
   bool runtimeStub_match(const CodeBlob* stub, const char* name) const {
     assert(stub->is_runtime_stub(), "wrong code blob");
-    return ((RuntimeStub*)_stub)->entry_point() == ((RuntimeStub*)stub)->entry_point() &&
+    return _stub->entry_point() == ((RuntimeStub*)stub)->entry_point() &&
             (_symbol == name);
   }
 
@@ -572,7 +572,7 @@ class runtimeStubNode : public ProfilerNode {
   }
 
   void print_method_on(outputStream* st) {
-    st->print("%s", ((RuntimeStub*)_stub)->name());
+    st->print("%s", _stub->name());
     print_symbol_on(st);
   }
 
@@ -589,18 +589,18 @@ class unknown_compiledNode : public ProfilerNode {
  public:
    unknown_compiledNode(const CodeBlob* cb, TickPosition where) : ProfilerNode() {
      if ( cb->is_buffer_blob() )
-       _name = ((BufferBlob*)cb)->name();
+       _name = ((const BufferBlob*)cb)->name();
      else
-       _name = ((SingletonBlob*)cb)->name();
+       _name = ((const SingletonBlob*)cb)->name();
      update(where);
   }
   bool is_compiled()    const { return true; }
 
   bool unknown_compiled_match(const CodeBlob* cb) const {
      if ( cb->is_buffer_blob() )
-       return !strcmp(((BufferBlob*)cb)->name(), _name);
+       return !strcmp(((const BufferBlob*)cb)->name(), _name);
      else
-       return !strcmp(((SingletonBlob*)cb)->name(), _name);
+       return !strcmp(((const SingletonBlob*)cb)->name(), _name);
   }
 
   Method* method()         { return NULL; }
@@ -838,8 +838,7 @@ void FlatProfiler::record_vm_tick() {
     vm_thread_profiler->inc_thread_ticks();
 
     // Get a snapshot of a current VMThread pc (and leave it running!)
-    // The call may fail if, for instance the VM thread is interrupted while
-    // holding the Interrupt_lock or for other reasons.
+    // The call may fail in some circumstances
     epc = os::get_thread_pc(VMThread::vm_thread());
     if(epc.pc() != NULL) {
       if (os::dll_address_to_function_name(epc.pc(), buf, sizeof(buf), NULL)) {
@@ -995,16 +994,15 @@ void ThreadProfiler::record_compiled_tick(JavaThread* thread, frame fr, TickPosi
 
   CodeBlob* cb = fr.cb();
 
-// For runtime stubs, record as native rather than as compiled
-   if (cb->is_runtime_stub()) {
-        RegisterMap map(thread, false);
-        fr = fr.sender(&map);
-        cb = fr.cb();
-        localwhere = tp_native;
-  }
-  Method* method = (cb->is_nmethod()) ? ((nmethod *)cb)->method() :
-                                          (Method*)NULL;
+  // For runtime stubs, record as native rather than as compiled
+  if (cb->is_runtime_stub()) {
+    RegisterMap map(thread, false);
+    fr = fr.sender(&map);
+    cb = fr.cb();
+    localwhere = tp_native;
+ }
 
+  Method* method = cb->is_compiled() ? cb->as_compiled_method()->method() : (Method*) NULL;
   if (method == NULL) {
     if (cb->is_runtime_stub())
       runtime_stub_update(cb, name, localwhere);
@@ -1494,7 +1492,7 @@ void ThreadProfiler::print(const char* thread_name) {
   }
 
   if (WizardMode) {
-    tty->print_cr("Node area used: %dKb", (area_top - area_bottom) / 1024);
+    tty->print_cr("Node area used: " INTX_FORMAT " Kb", (area_top - area_bottom) / 1024);
   }
   reset();
 }

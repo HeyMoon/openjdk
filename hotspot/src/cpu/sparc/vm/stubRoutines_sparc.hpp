@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,7 +41,7 @@ static bool returns_to_call_stub(address return_pc)   {
 enum /* platform_dependent_constants */ {
   // %%%%%%%% May be able to shrink this a lot
   code_size1 = 20000,           // simply increase if too small (assembler will crash if too small)
-  code_size2 = 24000            // simply increase if too small (assembler will crash if too small)
+  code_size2 = 27000            // simply increase if too small (assembler will crash if too small)
 };
 
 class Sparc {
@@ -53,6 +53,10 @@ class Sparc {
   static address _flush_callers_register_windows_entry;
 
   static address _partial_subtype_check;
+  // masks and table for CRC32
+  static uint64_t _crc_by128_masks[];
+  static juint    _crc_table[];
+  static juint    _crc32c_table[];
 
  public:
   // test assembler stop routine by setting registers
@@ -65,6 +69,8 @@ class Sparc {
   static intptr_t* (*flush_callers_register_windows_func())() { return CAST_TO_FN_PTR(intptr_t* (*)(void), _flush_callers_register_windows_entry); }
 
   static address partial_subtype_check()                  { return _partial_subtype_check; }
+
+  static address crc_by128_masks_addr()  { return (address)_crc_by128_masks; }
 };
 
 #endif // CPU_SPARC_VM_STUBROUTINES_SPARC_HPP

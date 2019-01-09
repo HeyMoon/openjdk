@@ -34,6 +34,9 @@
  */
 
 package java.util.concurrent;
+
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.concurrent.locks.LockSupport;
 
 /**
@@ -68,9 +71,6 @@ public class FutureTask<V> implements RunnableFuture<V> {
      * cancellation races. Sync control in the current design relies
      * on a "state" field updated via CAS to track completion, along
      * with a simple Treiber stack to hold waiting threads.
-     *
-     * Style note: As usual, we bypass overhead of using
-     * AtomicXFieldUpdaters and instead directly use Unsafe intrinsics.
      */
 
     /**
@@ -162,9 +162,8 @@ public class FutureTask<V> implements RunnableFuture<V> {
     }
 
     public boolean cancel(boolean mayInterruptIfRunning) {
-        if (!(state == NEW &&
-              U.compareAndSwapInt(this, STATE, NEW,
-                  mayInterruptIfRunning ? INTERRUPTING : CANCELLED)))
+        if (!(state == NEW && STATE.compareAndSet
+              (this, NEW, mayInterruptIfRunning ? INTERRUPTING : CANCELLED)))
             return false;
         try {    // in case call to interrupt throws exception
             if (mayInterruptIfRunning) {
@@ -173,7 +172,7 @@ public class FutureTask<V> implements RunnableFuture<V> {
                     if (t != null)
                         t.interrupt();
                 } finally { // final state
-                    U.putOrderedInt(this, STATE, INTERRUPTED);
+                    STATE.setRelease(this, INTERRUPTED);
                 }
             }
         } finally {
@@ -227,9 +226,9 @@ public class FutureTask<V> implements RunnableFuture<V> {
      * @param v the value
      */
     protected void set(V v) {
-        if (U.compareAndSwapInt(this, STATE, NEW, COMPLETING)) {
+        if (STATE.compareAndSet(this, NEW, COMPLETING)) {
             outcome = v;
-            U.putOrderedInt(this, STATE, NORMAL); // final state
+            STATE.setRelease(this, NORMAL); // final state
             finishCompletion();
         }
     }
@@ -245,16 +244,16 @@ public class FutureTask<V> implements RunnableFuture<V> {
      * @param t the cause of failure
      */
     protected void setException(Throwable t) {
-        if (U.compareAndSwapInt(this, STATE, NEW, COMPLETING)) {
+        if (STATE.compareAndSet(this, NEW, COMPLETING)) {
             outcome = t;
-            U.putOrderedInt(this, STATE, EXCEPTIONAL); // final state
+            STATE.setRelease(this, EXCEPTIONAL); // final state
             finishCompletion();
         }
     }
 
     public void run() {
         if (state != NEW ||
-            !U.compareAndSwapObject(this, RUNNER, null, Thread.currentThread()))
+            !RUNNER.compareAndSet(this, null, Thread.currentThread()))
             return;
         try {
             Callable<V> c = callable;
@@ -295,7 +294,7 @@ public class FutureTask<V> implements RunnableFuture<V> {
      */
     protected boolean runAndReset() {
         if (state != NEW ||
-            !U.compareAndSwapObject(this, RUNNER, null, Thread.currentThread()))
+            !RUNNER.compareAndSet(this, null, Thread.currentThread()))
             return false;
         boolean ran = false;
         int s = state;
@@ -362,7 +361,7 @@ public class FutureTask<V> implements RunnableFuture<V> {
     private void finishCompletion() {
         // assert state > COMPLETING;
         for (WaitNode q; (q = waiters) != null;) {
-            if (U.compareAndSwapObject(this, WAITERS, q, null)) {
+            if (WAITERS.weakCompareAndSet(this, q, null)) {
                 for (;;) {
                     Thread t = q.thread;
                     if (t != null) {
@@ -395,7 +394,7 @@ public class FutureTask<V> implements RunnableFuture<V> {
         throws InterruptedException {
         // The code below is very delicate, to achieve these goals:
         // - call nanoTime exactly once for each call to park
-        // - if nanos <= 0, return promptly without allocation or nanoTime
+        // - if nanos <= 0L, return promptly without allocation or nanoTime
         // - if nanos == Long.MIN_VALUE, don't underflow
         // - if nanos == Long.MAX_VALUE, and nanoTime is non-monotonic
         //   and we suffer a spurious wakeup, we will do no worse than
@@ -404,27 +403,27 @@ public class FutureTask<V> implements RunnableFuture<V> {
         WaitNode q = null;
         boolean queued = false;
         for (;;) {
-            if (Thread.interrupted()) {
-                removeWaiter(q);
-                throw new InterruptedException();
-            }
-
             int s = state;
             if (s > COMPLETING) {
                 if (q != null)
                     q.thread = null;
                 return s;
             }
-            else if (s == COMPLETING) // cannot time out yet
+            else if (s == COMPLETING)
+                // We may have already promised (via isDone) that we are done
+                // so never return empty-handed or throw InterruptedException
                 Thread.yield();
+            else if (Thread.interrupted()) {
+                removeWaiter(q);
+                throw new InterruptedException();
+            }
             else if (q == null) {
                 if (timed && nanos <= 0L)
                     return s;
                 q = new WaitNode();
             }
             else if (!queued)
-                queued = U.compareAndSwapObject(this, WAITERS,
-                                                q.next = waiters, q);
+                queued = WAITERS.weakCompareAndSet(this, q.next = waiters, q);
             else if (timed) {
                 final long parkNanos;
                 if (startTime == 0L) { // first time
@@ -440,7 +439,9 @@ public class FutureTask<V> implements RunnableFuture<V> {
                     }
                     parkNanos = nanos - elapsed;
                 }
-                LockSupport.parkNanos(this, parkNanos);
+                // nanoTime may be slow; recheck before parking
+                if (state < COMPLETING)
+                    LockSupport.parkNanos(this, parkNanos);
             }
             else
                 LockSupport.park(this);
@@ -471,7 +472,7 @@ public class FutureTask<V> implements RunnableFuture<V> {
                         if (pred.thread == null) // check for race
                             continue retry;
                     }
-                    else if (!U.compareAndSwapObject(this, WAITERS, q, s))
+                    else if (!WAITERS.compareAndSet(this, q, s))
                         continue retry;
                 }
                 break;
@@ -479,21 +480,23 @@ public class FutureTask<V> implements RunnableFuture<V> {
         }
     }
 
-    // Unsafe mechanics
-    private static final sun.misc.Unsafe U;
-    private static final long STATE;
-    private static final long RUNNER;
-    private static final long WAITERS;
+    // VarHandle mechanics
+    private static final VarHandle STATE;
+    private static final VarHandle RUNNER;
+    private static final VarHandle WAITERS;
     static {
         try {
-            U = sun.misc.Unsafe.getUnsafe();
-            Class<?> k = FutureTask.class;
-            STATE   = U.objectFieldOffset(k.getDeclaredField("state"));
-            RUNNER  = U.objectFieldOffset(k.getDeclaredField("runner"));
-            WAITERS = U.objectFieldOffset(k.getDeclaredField("waiters"));
-        } catch (Exception e) {
+            MethodHandles.Lookup l = MethodHandles.lookup();
+            STATE = l.findVarHandle(FutureTask.class, "state", int.class);
+            RUNNER = l.findVarHandle(FutureTask.class, "runner", Thread.class);
+            WAITERS = l.findVarHandle(FutureTask.class, "waiters", WaitNode.class);
+        } catch (ReflectiveOperationException e) {
             throw new Error(e);
         }
+
+        // Reduce the risk of rare disastrous classloading in first call to
+        // LockSupport.park: https://bugs.openjdk.java.net/browse/JDK-8074773
+        Class<?> ensureLoaded = LockSupport.class;
     }
 
 }

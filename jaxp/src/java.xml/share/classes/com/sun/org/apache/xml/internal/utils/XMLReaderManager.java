@@ -1,13 +1,13 @@
 /*
- * reserved comment block
- * DO NOT REMOVE OR ALTER!
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright 1999-2004 The Apache Software Foundation.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,9 +17,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * $Id: XMLReaderManager.java,v 1.2.4.1 2005/09/15 08:16:02 suresh_emailid Exp $
- */
+
 package com.sun.org.apache.xml.internal.utils;
 
 import com.sun.org.apache.xalan.internal.XalanConstants;
@@ -27,13 +25,16 @@ import com.sun.org.apache.xalan.internal.utils.FactoryImpl;
 import com.sun.org.apache.xalan.internal.utils.SecuritySupport;
 import com.sun.org.apache.xalan.internal.utils.XMLSecurityManager;
 import java.util.HashMap;
-
 import javax.xml.XMLConstants;
+import javax.xml.catalog.CatalogFeatures;
 import javax.xml.parsers.FactoryConfigurationError;
 import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.parsers.SAXParserFactory;
+import jdk.xml.internal.JdkXmlFeatures;
+import jdk.xml.internal.JdkXmlUtils;
 import org.xml.sax.SAXException;
 import org.xml.sax.SAXNotRecognizedException;
+import org.xml.sax.SAXNotSupportedException;
 import org.xml.sax.XMLReader;
 import org.xml.sax.helpers.XMLReaderFactory;
 
@@ -41,6 +42,7 @@ import org.xml.sax.helpers.XMLReaderFactory;
  * Creates XMLReader objects and caches them for re-use.
  * This class follows the singleton pattern.
  */
+@SuppressWarnings("deprecation") //org.xml.sax.helpers.XMLReaderFactory
 public class XMLReaderManager {
 
     private static final String NAMESPACES_FEATURE =
@@ -58,12 +60,12 @@ public class XMLReaderManager {
     /**
      * Cache of XMLReader objects
      */
-    private ThreadLocal m_readers;
+    private ThreadLocal<XMLReader> m_readers;
 
     /**
      * Keeps track of whether an XMLReader object is in use.
      */
-    private HashMap m_inUse;
+    private HashMap<XMLReader, Boolean> m_inUse;
 
     private boolean m_useServicesMechanism = true;
 
@@ -74,6 +76,12 @@ public class XMLReaderManager {
     private String _accessExternalDTD = XalanConstants.EXTERNAL_ACCESS_DEFAULT;
 
     private XMLSecurityManager _xmlSecurityManager;
+
+    //Catalog Feature
+    private boolean _useCatalog;
+    private CatalogFeatures _catalogFeatures;
+
+    private int _cdataChunkSize;
 
     /**
      * Hidden constructor
@@ -101,17 +109,17 @@ public class XMLReaderManager {
         if (m_readers == null) {
             // When the m_readers.get() method is called for the first time
             // on a thread, a new XMLReader will automatically be created.
-            m_readers = new ThreadLocal();
+            m_readers = new ThreadLocal<>();
         }
 
         if (m_inUse == null) {
-            m_inUse = new HashMap();
+            m_inUse = new HashMap<>();
         }
 
         // If the cached reader for this thread is in use, construct a new
         // one; otherwise, return the cached reader unless it isn't an
         // instance of the class set in the 'org.xml.sax.driver' property
-        reader = (XMLReader) m_readers.get();
+        reader = m_readers.get();
         boolean threadHasReader = (reader != null);
         String factory = SecuritySupport.getSystemProperty(property);
         if (threadHasReader && m_inUse.get(reader) != Boolean.TRUE &&
@@ -128,10 +136,10 @@ public class XMLReaderManager {
                     try {
                         reader.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, _secureProcessing);
                     } catch (SAXNotRecognizedException e) {
-                        System.err.println("Warning:  " + reader.getClass().getName() + ": "
-                                + e.getMessage());
+                        XMLSecurityManager.printWarning(reader.getClass().getName(),
+                                XMLConstants.FEATURE_SECURE_PROCESSING, e);
                     }
-                } catch (Exception e) {
+                } catch (SAXException e) {
                    try {
                         // If unable to create an instance, let's try to use
                         // the XMLReader from JAXP
@@ -156,8 +164,7 @@ public class XMLReaderManager {
                 throw new SAXException(ex);
             } catch (FactoryConfigurationError ex1) {
                 throw new SAXException(ex1.toString());
-            } catch (NoSuchMethodError ex2) {
-            } catch (AbstractMethodError ame) {
+            } catch (NoSuchMethodError | AbstractMethodError ex2) {
             }
 
             // Cache the XMLReader if this is the first time we've created
@@ -168,29 +175,47 @@ public class XMLReaderManager {
             }
         }
 
-        try {
-            //reader is cached, but this property might have been reset
-            reader.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, _accessExternalDTD);
-        } catch (SAXException se) {
-            System.err.println("Warning:  " + reader.getClass().getName() + ": "
-                        + se.getMessage());
-        }
+        //reader is cached, but this property might have been reset
+        JdkXmlUtils.setXMLReaderPropertyIfSupport(reader, XMLConstants.ACCESS_EXTERNAL_DTD,
+                _accessExternalDTD, true);
 
+        JdkXmlUtils.setXMLReaderPropertyIfSupport(reader, JdkXmlUtils.CDATA_CHUNK_SIZE,
+                _cdataChunkSize, false);
+
+        String lastProperty = "";
         try {
             if (_xmlSecurityManager != null) {
                 for (XMLSecurityManager.Limit limit : XMLSecurityManager.Limit.values()) {
-                    reader.setProperty(limit.apiProperty(),
+                    lastProperty = limit.apiProperty();
+                    reader.setProperty(lastProperty,
                             _xmlSecurityManager.getLimitValueAsString(limit));
                 }
                 if (_xmlSecurityManager.printEntityCountInfo()) {
+                    lastProperty = XalanConstants.JDK_ENTITY_COUNT_INFO;
                     reader.setProperty(XalanConstants.JDK_ENTITY_COUNT_INFO, XalanConstants.JDK_YES);
                 }
             }
         } catch (SAXException se) {
-            System.err.println("Warning:  " + reader.getClass().getName() + ": "
-                        + se.getMessage());
+            XMLSecurityManager.printWarning(reader.getClass().getName(), lastProperty, se);
         }
 
+        boolean supportCatalog = true;
+        try {
+            reader.setFeature(JdkXmlUtils.USE_CATALOG, _useCatalog);
+        }
+        catch (SAXNotRecognizedException | SAXNotSupportedException e) {
+            supportCatalog = false;
+        }
+
+        if (supportCatalog && _useCatalog && _catalogFeatures != null) {
+            try {
+                for (CatalogFeatures.Feature f : CatalogFeatures.Feature.values()) {
+                    reader.setProperty(f.getPropertyName(), _catalogFeatures.get(f));
+                }
+            } catch (SAXNotRecognizedException e) {
+                //shall not happen for internal settings
+            }
+        }
         return reader;
     }
 
@@ -227,6 +252,8 @@ public class XMLReaderManager {
     public void setFeature(String name, boolean value) {
         if (name.equals(XMLConstants.FEATURE_SECURE_PROCESSING)) {
             _secureProcessing = value;
+        } else if (XMLConstants.USE_CATALOG.equals(name)) {
+            _useCatalog = value;
         }
     }
 
@@ -250,6 +277,10 @@ public class XMLReaderManager {
             _accessExternalDTD = (String)value;
         } else if (name.equals(XalanConstants.SECURITY_MANAGER)) {
             _xmlSecurityManager = (XMLSecurityManager)value;
+        } else if (JdkXmlFeatures.CATALOG_FEATURES.equals(name)) {
+            _catalogFeatures = (CatalogFeatures)value;
+        } else if (JdkXmlUtils.CDATA_CHUNK_SIZE.equals(name)) {
+            _cdataChunkSize = JdkXmlUtils.getValue(value, _cdataChunkSize);
         }
     }
 }

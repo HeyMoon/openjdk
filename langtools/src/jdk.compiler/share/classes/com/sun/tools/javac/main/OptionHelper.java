@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,9 +25,11 @@
 
 package com.sun.tools.javac.main;
 
+import java.nio.file.Path;
+
+import com.sun.tools.javac.util.JCDiagnostic;
 import com.sun.tools.javac.util.Log;
 import com.sun.tools.javac.util.Log.PrefixKind;
-import java.io.File;
 
 /**
  * Helper object to be used by {@link Option#process}, providing access to
@@ -41,29 +43,58 @@ import java.io.File;
 
 public abstract class OptionHelper {
 
-    /** Get the current value of an option. */
+    /**
+     * Get the current value of an option.
+     * @param option the option
+     * @return the value of the option
+     */
     public abstract String get(Option option);
 
-    /** Set the value of an option. */
+    /**
+     * Set the value of an option.
+     * @param name the primary name of the option
+     * @param value the value for the option
+     */
     public abstract void put(String name, String value);
 
-    /** Remove any prior value for an option. */
+    /**
+     * Remove any prior value for an option.
+     * @param name the primary name of the option
+     */
     public abstract void remove(String name);
 
-    /** Handle a file manager option. */
+    /**
+     * Handle a file manager option.
+     * @param option the option
+     * @param value the value for the option
+     * @return true if the option was handled successfully, and false otherwise
+     */
     public abstract boolean handleFileManagerOption(Option option, String value);
 
-    /** Get access to the Log for the compilation. */
+    /**
+     * Get access to the Log for the compilation.
+     * @return the log
+     */
     public abstract Log getLog();
 
-    /** Get the name of the tool, such as "javac", to be used in info like -help. */
+    /**
+     * Get the name of the tool, such as "javac", to be used in info like -help.
+     * @return the name of the tool
+     */
     public abstract String getOwnName();
 
-    /** Report an error. */
-    abstract void error(String key, Object... args);
+    /**
+     * Returns a new InvalidValueException, with a localized detail message.
+     * @param key the resource key for the message
+     * @param args the arguments, if any, for the resource string
+     * @return the InvalidValueException
+     */
+    Option.InvalidValueException newInvalidValueException(String key, Object... args) {
+        return new Option.InvalidValueException(getLog().localize(PrefixKind.JAVAC, key, args));
+    }
 
     /** Record a file to be compiled. */
-    abstract void addFile(File f);
+    abstract void addFile(Path p);
 
     /** Record the name of a class for annotation processing. */
     abstract void addClassName(String s);
@@ -107,13 +138,8 @@ public abstract class OptionHelper {
         }
 
         @Override
-        void error(String key, Object... args) {
-            throw new IllegalArgumentException(log.localize(PrefixKind.JAVAC, key, args));
-        }
-
-        @Override
-        public void addFile(File f) {
-            throw new IllegalArgumentException(f.getPath());
+        public void addFile(Path p) {
+            throw new IllegalArgumentException(p.toString());
         }
 
         @Override

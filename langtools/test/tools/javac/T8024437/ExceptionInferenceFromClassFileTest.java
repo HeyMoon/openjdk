@@ -1,12 +1,10 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -29,14 +27,17 @@
  * @summary Inferring the exception thrown by a lambda: sometimes fails to compile
  * @library /tools/lib
  * @modules jdk.compiler/com.sun.tools.javac.api
- *          jdk.compiler/com.sun.tools.javac.file
  *          jdk.compiler/com.sun.tools.javac.main
- * @build ToolBox
+ *          jdk.jdeps/com.sun.tools.javap
+ * @build toolbox.ToolBox toolbox.JavacTask
  * @run main ExceptionInferenceFromClassFileTest
  */
 
 import java.nio.file.Files;
 import java.nio.file.Paths;
+
+import toolbox.JavacTask;
+import toolbox.ToolBox;
 
 public class ExceptionInferenceFromClassFileTest {
 
@@ -62,12 +63,12 @@ public class ExceptionInferenceFromClassFileTest {
         ToolBox tb = new ToolBox();
         tb.createDirectories("out");
 
-        tb.new JavacTask()
+        new JavacTask(tb)
                 .outdir("out")
                 .sources(ABSrc)
                 .run();
 
-        tb.new JavacTask()
+        new JavacTask(tb)
                 .outdir("out")
                 .classpath("out")
                 .sources(CSrc)

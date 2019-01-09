@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -54,7 +54,7 @@ import java.util.stream.Stream;
  * Each ProcessHandle identifies and allows control of a process in the native
  * system. ProcessHandles are returned from the factory methods {@link #current()},
  * {@link #of(long)},
- * {@link #children}, {@link #allChildren}, {@link #parent()} and
+ * {@link #children}, {@link #descendants}, {@link #parent()} and
  * {@link #allProcesses()}.
  * <p>
  * The {@link Process} instances created by {@link ProcessBuilder} can be queried
@@ -89,7 +89,7 @@ import java.util.stream.Stream;
  * {@link #compareTo(ProcessHandle) compareTo} methods to compare ProcessHandles.
  *
  * @see Process
- * @since 1.9
+ * @since 9
  */
 public interface ProcessHandle extends Comparable<ProcessHandle> {
 
@@ -104,7 +104,7 @@ public interface ProcessHandle extends Comparable<ProcessHandle> {
      * @throws UnsupportedOperationException if the implementation
      *         does not support this operation
      */
-    long getPid();
+    long pid();
 
     /**
      * Returns an {@code Optional<ProcessHandle>} for an existing native process.
@@ -149,33 +149,36 @@ public interface ProcessHandle extends Comparable<ProcessHandle> {
 
     /**
      * Returns a snapshot of the current direct children of the process.
-     * A process that is {@link #isAlive not alive} has zero children.
+     * The {@link #parent} of a direct child process is the process.
+     * Typically, a process that is {@link #isAlive not alive} has no children.
      * <p>
      * <em>Note that processes are created and terminate asynchronously.
      * There is no guarantee that a process is {@link #isAlive alive}.
      * </em>
      *
-     * @return a Stream of ProcessHandles for processes that are direct children
-     *         of the process
+     * @return a sequential Stream of ProcessHandles for processes that are
+     *         direct children of the process
      * @throws SecurityException if a security manager has been installed and
      *         it denies RuntimePermission("manageProcess")
      */
     Stream<ProcessHandle> children();
 
     /**
-     * Returns a snapshot of the current direct and indirect children of the process.
-     * A process that is {@link #isAlive not alive} has zero children.
+     * Returns a snapshot of the descendants of the process.
+     * The descendants of a process are the children of the process
+     * plus the descendants of those children, recursively.
+     * Typically, a process that is {@link #isAlive not alive} has no children.
      * <p>
      * <em>Note that processes are created and terminate asynchronously.
      * There is no guarantee that a process is {@link #isAlive alive}.
      * </em>
      *
-     * @return a Stream of ProcessHandles for processes that are direct and
-     *         indirect children of the process
+     * @return a sequential Stream of ProcessHandles for processes that
+     *         are descendants of the process
      * @throws SecurityException if a security manager has been installed and
      *         it denies RuntimePermission("manageProcess")
      */
-    Stream<ProcessHandle> allChildren();
+    Stream<ProcessHandle> descendants();
 
     /**
      * Returns a snapshot of all processes visible to the current process.
@@ -198,9 +201,8 @@ public interface ProcessHandle extends Comparable<ProcessHandle> {
     /**
      * Returns a snapshot of information about the process.
      *
-     * <p> An {@code Info} instance has various accessor methods that return
-     * information about the process, if the process is alive and the
-     * information is available.
+     * <p> A {@link ProcessHandle.Info} instance has accessor methods that return
+     * information about the process if it is available.
      *
      * @return a snapshot of information about the process, always non-null
      */
@@ -213,7 +215,7 @@ public interface ProcessHandle extends Comparable<ProcessHandle> {
      * by the operating system privileges of the process making the request.
      * The return types are {@code Optional<T>} allowing explicit tests
      * and actions if the value is available.
-     * @since 1.9
+     * @since 9
      */
     public interface Info {
         /**
@@ -225,7 +227,33 @@ public interface ProcessHandle extends Comparable<ProcessHandle> {
         public Optional<String> command();
 
         /**
+         * Returns the command line of the process.
+         * <p>
+         * If {@link #command command()} and  {@link #arguments arguments()} return
+         * non-empty optionals, this is simply a convenience method which concatenates
+         * the values of the two functions separated by spaces. Otherwise it will return a
+         * best-effort, platform dependent representation of the command line.
+         *
+         * @apiNote Note that the returned executable pathname and the
+         *          arguments may be truncated on some platforms due to system
+         *          limitations.
+         *          <p>
+         *          The executable pathname may contain only the
+         *          name of the executable without the full path information.
+         *          It is undecideable whether white space separates different
+         *          arguments or is part of a single argument.
+         *
+         * @return an {@code Optional<String>} of the command line
+         *         of the process
+         */
+        public Optional<String> commandLine();
+
+        /**
          * Returns an array of Strings of the arguments of the process.
+         *
+         * @apiNote On some platforms, native applications are free to change
+         *          the arguments array after startup and this method may only
+         *          show the changed values.
          *
          * @return an {@code Optional<String[]>} of the arguments of the process
          */
@@ -259,7 +287,7 @@ public interface ProcessHandle extends Comparable<ProcessHandle> {
      * The {@link java.util.concurrent.CompletableFuture} provides the ability
      * to trigger dependent functions or actions that may be run synchronously
      * or asynchronously upon process termination.
-     * When the process terminates the CompletableFuture is
+     * When the process has terminated the CompletableFuture is
      * {@link java.util.concurrent.CompletableFuture#complete completed} regardless
      * of the exit status of the process.
      * The {@code onExit} method can be called multiple times to invoke
@@ -271,9 +299,9 @@ public interface ProcessHandle extends Comparable<ProcessHandle> {
      * {@link java.util.concurrent.Future#get() wait} for it to terminate.
      * {@link java.util.concurrent.Future#cancel(boolean) Cancelling}
      * the CompleteableFuture does not affect the Process.
-     * <p>
-     * If the process is {@link #isAlive not alive} the {@link CompletableFuture}
-     * returned has been {@link java.util.concurrent.CompletableFuture#complete completed}.
+     * @apiNote
+     * The process may be observed to have terminated with {@link #isAlive}
+     * before the ComputableFuture is completed and dependent actions are invoked.
      *
      * @return a new {@code CompletableFuture<ProcessHandle>} for the ProcessHandle
      *
@@ -355,7 +383,7 @@ public interface ProcessHandle extends Comparable<ProcessHandle> {
     /**
      * Returns a hash code value for this ProcessHandle.
      * The hashcode value follows the general contract for {@link Object#hashCode()}.
-     * The value is a function of the {@link #getPid getPid()} value and
+     * The value is a function of the {@link #pid pid()} value and
      * may be a function of additional information to uniquely identify the process.
      * If two ProcessHandles are equal according to the {@link #equals(Object) equals}
      * method, then calling the hashCode method on each of the two objects

@@ -28,8 +28,8 @@ package jdk.internal;
 import java.lang.annotation.*;
 
 /**
- * The {@code @HotSpotIntrinsicCandidate} annotation is specific to the Oracle Java
- * HotSpot Virtual Machine implementation and indicates that an annotated method
+ * The {@code @HotSpotIntrinsicCandidate} annotation is specific to the
+ * HotSpot Virtual Machine. It indicates that an annotated method
  * may be (but is not guaranteed to be) intrinsified by the HotSpot VM. A method
  * is intrinsified if the HotSpot VM replaces the annotated method with hand-written
  * assembly and/or hand-written compiler IR -- a compiler intrinsic -- to improve
@@ -117,7 +117,7 @@ import java.lang.annotation.*;
  * and that (2) for all methods of that class annotated with
  * {@code @HotSpotIntrinsicCandidate} there is an intrinsic in the list.
  *
- * @since 1.9
+ * @since 9
  */
 @Target({ElementType.METHOD, ElementType.CONSTRUCTOR})
 @Retention(RetentionPolicy.RUNTIME)

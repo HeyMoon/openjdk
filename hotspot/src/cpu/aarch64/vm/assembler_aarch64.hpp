@@ -135,14 +135,9 @@ REGISTER_DECLARATION(Register, rlocals,   r24);
 // bytecode pointer
 REGISTER_DECLARATION(Register, rbcp,      r22);
 // Dispatch table base
-REGISTER_DECLARATION(Register, rdispatch,      r21);
+REGISTER_DECLARATION(Register, rdispatch, r21);
 // Java stack pointer
 REGISTER_DECLARATION(Register, esp,      r20);
-
-// TODO : x86 uses rbp to save SP in method handle code
-// we may need to do the same with fp
-// JSR 292 fixed register usages:
-//REGISTER_DECLARATION(Register, r_mh_SP_save, r29);
 
 #define assert_cond(ARG1) assert(ARG1, #ARG1)
 
@@ -551,6 +546,7 @@ class Address VALUE_OBJ_CLASS_SPEC {
         size = 0; break;
       default:
         ShouldNotReachHere();
+        size = 0;  // unreachable
       }
     } else {
       size = i->get(31, 31);
@@ -852,7 +848,7 @@ public:
   // architecture.  In debug mode we shrink it in order to test
   // trampolines, but not so small that branches in the interpreter
   // are out of range.
-  static const unsigned long branch_range = NOT_DEBUG(128 * M) DEBUG_ONLY(2 * M);
+  static const unsigned long branch_range = INCLUDE_JVMCI ? 128 * M : NOT_DEBUG(128 * M) DEBUG_ONLY(2 * M);
 
   static bool reachable_from_branch_at(address branch, address target) {
     return uabs(target - branch) < branch_range;
@@ -976,7 +972,7 @@ public:
 
   // System
   void system(int op0, int op1, int CRn, int CRm, int op2,
-              Register rt = (Register)0b11111)
+              Register rt = dummy_reg)
   {
     starti;
     f(0b11010101000, 31, 21);
@@ -1036,12 +1032,28 @@ public:
     system(0b00, 0b011, 0b00011, SY, 0b110);
   }
 
-  void dc(Register Rt) {
-    system(0b01, 0b011, 0b0111, 0b1011, 0b001, Rt);
+  void sys(int op1, int CRn, int CRm, int op2,
+           Register rt = (Register)0b11111) {
+    system(0b01, op1, CRn, CRm, op2, rt);
   }
 
-  void ic(Register Rt) {
-    system(0b01, 0b011, 0b0111, 0b0101, 0b001, Rt);
+  // Only implement operations accessible from EL0 or higher, i.e.,
+  //            op1    CRn    CRm    op2
+  // IC IVAU     3      7      5      1
+  // DC CVAC     3      7      10     1
+  // DC CVAU     3      7      11     1
+  // DC CIVAC    3      7      14     1
+  // DC ZVA      3      7      4      1
+  // So only deal with the CRm field.
+  enum icache_maintenance {IVAU = 0b0101};
+  enum dcache_maintenance {CVAC = 0b1010, CVAU = 0b1011, CIVAC = 0b1110, ZVA = 0b100};
+
+  void dc(dcache_maintenance cm, Register Rt) {
+    sys(0b011, 0b0111, cm, 0b001, Rt);
+  }
+
+  void ic(icache_maintenance cm, Register Rt) {
+    sys(0b011, 0b0111, cm, 0b001, Rt);
   }
 
   // A more convenient access to dmb for our purposes
@@ -1086,7 +1098,7 @@ public:
 
 #define INSN(NAME, opc)                         \
   void NAME() {                 \
-    branch_reg((Register)0b11111, opc);         \
+    branch_reg(dummy_reg, opc);         \
   }
 
   INSN(eret, 0b0100);
@@ -1098,31 +1110,46 @@ public:
   enum operand_size { byte, halfword, word, xword };
 
   void load_store_exclusive(Register Rs, Register Rt1, Register Rt2,
-    Register Rn, enum operand_size sz, int op, int o0) {
+    Register Rn, enum operand_size sz, int op, bool ordered) {
     starti;
     f(sz, 31, 30), f(0b001000, 29, 24), f(op, 23, 21);
-    rf(Rs, 16), f(o0, 15), rf(Rt2, 10), rf(Rn, 5), rf(Rt1, 0);
+    rf(Rs, 16), f(ordered, 15), rf(Rt2, 10), rf(Rn, 5), rf(Rt1, 0);
+  }
+
+  void load_exclusive(Register dst, Register addr,
+                      enum operand_size sz, bool ordered) {
+    load_store_exclusive(dummy_reg, dst, dummy_reg, addr,
+                         sz, 0b010, ordered);
+  }
+
+  void store_exclusive(Register status, Register new_val, Register addr,
+                       enum operand_size sz, bool ordered) {
+    load_store_exclusive(status, new_val, dummy_reg, addr,
+                         sz, 0b000, ordered);
   }
 
 #define INSN4(NAME, sz, op, o0) /* Four registers */                    \
   void NAME(Register Rs, Register Rt1, Register Rt2, Register Rn) {     \
+    guarantee(Rs != Rn && Rs != Rt1 && Rs != Rt2, "unpredictable instruction"); \
     load_store_exclusive(Rs, Rt1, Rt2, Rn, sz, op, o0);                 \
   }
 
 #define INSN3(NAME, sz, op, o0) /* Three registers */                   \
   void NAME(Register Rs, Register Rt, Register Rn) {                    \
-    load_store_exclusive(Rs, Rt, (Register)0b11111, Rn, sz, op, o0);    \
+    guarantee(Rs != Rn && Rs != Rt, "unpredictable instruction");       \
+    load_store_exclusive(Rs, Rt, dummy_reg, Rn, sz, op, o0); \
   }
 
 #define INSN2(NAME, sz, op, o0) /* Two registers */                     \
   void NAME(Register Rt, Register Rn) {                                 \
-    load_store_exclusive((Register)0b11111, Rt, (Register)0b11111,      \
+    load_store_exclusive(dummy_reg, Rt, dummy_reg, \
                          Rn, sz, op, o0);                               \
   }
 
 #define INSN_FOO(NAME, sz, op, o0) /* Three registers, encoded differently */ \
   void NAME(Register Rt1, Register Rt2, Register Rn) {                  \
-    load_store_exclusive((Register)0b11111, Rt1, Rt2, Rn, sz, op, o0);  \
+    guarantee(Rt1 != Rt2, "unpredictable instruction");                 \
+    load_store_exclusive(dummy_reg, Rt1, Rt2, Rn, sz, op, o0);          \
   }
 
   // bytes
@@ -1170,6 +1197,78 @@ public:
 #undef INSN4
 #undef INSN_FOO
 
+  // 8.1 Compare and swap extensions
+  void lse_cas(Register Rs, Register Rt, Register Rn,
+                        enum operand_size sz, bool a, bool r, bool not_pair) {
+    starti;
+    if (! not_pair) { // Pair
+      assert(sz == word || sz == xword, "invalid size");
+      /* The size bit is in bit 30, not 31 */
+      sz = (operand_size)(sz == word ? 0b00:0b01);
+    }
+    f(sz, 31, 30), f(0b001000, 29, 24), f(1, 23), f(a, 22), f(1, 21);
+    rf(Rs, 16), f(r, 15), f(0b11111, 14, 10), rf(Rn, 5), rf(Rt, 0);
+  }
+
+  // CAS
+#define INSN(NAME, a, r)                                                \
+  void NAME(operand_size sz, Register Rs, Register Rt, Register Rn) {   \
+    assert(Rs != Rn && Rs != Rt, "unpredictable instruction");          \
+    lse_cas(Rs, Rt, Rn, sz, a, r, true);                                \
+  }
+  INSN(cas,    false, false)
+  INSN(casa,   true,  false)
+  INSN(casl,   false, true)
+  INSN(casal,  true,  true)
+#undef INSN
+
+  // CASP
+#define INSN(NAME, a, r)                                                \
+  void NAME(operand_size sz, Register Rs, Register Rs1,                 \
+            Register Rt, Register Rt1, Register Rn) {                   \
+    assert((Rs->encoding() & 1) == 0 && (Rt->encoding() & 1) == 0 &&    \
+           Rs->successor() == Rs1 && Rt->successor() == Rt1 &&          \
+           Rs != Rn && Rs1 != Rn && Rs != Rt, "invalid registers");     \
+    lse_cas(Rs, Rt, Rn, sz, a, r, false);                               \
+  }
+  INSN(casp,    false, false)
+  INSN(caspa,   true,  false)
+  INSN(caspl,   false, true)
+  INSN(caspal,  true,  true)
+#undef INSN
+
+  // 8.1 Atomic operations
+  void lse_atomic(Register Rs, Register Rt, Register Rn,
+                  enum operand_size sz, int op1, int op2, bool a, bool r) {
+    starti;
+    f(sz, 31, 30), f(0b111000, 29, 24), f(a, 23), f(r, 22), f(1, 21);
+    rf(Rs, 16), f(op1, 15), f(op2, 14, 12), f(0, 11, 10), rf(Rn, 5), zrf(Rt, 0);
+  }
+
+#define INSN(NAME, NAME_A, NAME_L, NAME_AL, op1, op2)                   \
+  void NAME(operand_size sz, Register Rs, Register Rt, Register Rn) {   \
+    lse_atomic(Rs, Rt, Rn, sz, op1, op2, false, false);                 \
+  }                                                                     \
+  void NAME_A(operand_size sz, Register Rs, Register Rt, Register Rn) { \
+    lse_atomic(Rs, Rt, Rn, sz, op1, op2, true, false);                  \
+  }                                                                     \
+  void NAME_L(operand_size sz, Register Rs, Register Rt, Register Rn) { \
+    lse_atomic(Rs, Rt, Rn, sz, op1, op2, false, true);                  \
+  }                                                                     \
+  void NAME_AL(operand_size sz, Register Rs, Register Rt, Register Rn) {\
+    lse_atomic(Rs, Rt, Rn, sz, op1, op2, true, true);                   \
+  }
+  INSN(ldadd,  ldadda,  ldaddl,  ldaddal,  0, 0b000);
+  INSN(ldbic,  ldbica,  ldbicl,  ldbical,  0, 0b001);
+  INSN(ldeor,  ldeora,  ldeorl,  ldeoral,  0, 0b010);
+  INSN(ldorr,  ldorra,  ldorrl,  ldorral,  0, 0b011);
+  INSN(ldsmax, ldsmaxa, ldsmaxl, ldsmaxal, 0, 0b100);
+  INSN(ldsmin, ldsmina, ldsminl, ldsminal, 0, 0b101);
+  INSN(ldumax, ldumaxa, ldumaxl, ldumaxal, 0, 0b110);
+  INSN(ldumin, ldumina, lduminl, lduminal, 0, 0b111);
+  INSN(swp,    swpa,    swpl,    swpal,    1, 0b000);
+#undef INSN
+
   // Load register (literal)
 #define INSN(NAME, opc, V)                                              \
   void NAME(Register Rt, address dest) {                                \
@@ -1207,7 +1306,7 @@ public:
 
   INSN(ldrs, 0b00, 1);
   INSN(ldrd, 0b01, 1);
-  INSN(ldrq, 0x10, 1);
+  INSN(ldrq, 0b10, 1);
 
 #undef INSN
 
@@ -1894,7 +1993,7 @@ public:
  public:
 
   enum SIMD_Arrangement {
-       T8B, T16B, T4H, T8H, T2S, T4S, T1D, T2D
+       T8B, T16B, T4H, T8H, T2S, T4S, T1D, T2D, T1Q
   };
 
   enum SIMD_RegVariant {
@@ -2038,6 +2137,8 @@ public:
   INSN(addv, 0, 0b100001);
   INSN(subv, 1, 0b100001);
   INSN(mulv, 0, 0b100111);
+  INSN(mlav, 0, 0b100101);
+  INSN(mlsv, 1, 0b100101);
   INSN(sshl, 0, 0b010001);
   INSN(ushl, 1, 0b010001);
 
@@ -2160,18 +2261,18 @@ public:
     rf(Vn, 5), rf(Rd, 0);
   }
 
-#define INSN(NAME, opc, opc2) \
-  void NAME(FloatRegister Vd, SIMD_Arrangement T, FloatRegister Vn, int shift){         \
-    starti;                                                                             \
-    /* The encodings for the immh:immb fields (bits 22:16) are                          \
-     *   0001 xxx       8B/16B, shift = xxx                                             \
-     *   001x xxx       4H/8H,  shift = xxxx                                            \
-     *   01xx xxx       2S/4S,  shift = xxxxx                                           \
-     *   1xxx xxx       1D/2D,  shift = xxxxxx (1D is RESERVED)                         \
-     */                                                                                 \
-    assert((1 << ((T>>1)+3)) > shift, "Invalid Shift value");                           \
-    f(0, 31), f(T & 1, 30), f(opc, 29), f(0b011110, 28, 23),                            \
-    f((1 << ((T>>1)+3))|shift, 22, 16); f(opc2, 15, 10), rf(Vn, 5), rf(Vd, 0);          \
+#define INSN(NAME, opc, opc2)                                           \
+  void NAME(FloatRegister Vd, SIMD_Arrangement T, FloatRegister Vn, int shift){ \
+    starti;                                                             \
+    /* The encodings for the immh:immb fields (bits 22:16) are          \
+     *   0001 xxx       8B/16B, shift = xxx                             \
+     *   001x xxx       4H/8H,  shift = xxxx                            \
+     *   01xx xxx       2S/4S,  shift = xxxxx                           \
+     *   1xxx xxx       1D/2D,  shift = xxxxxx (1D is RESERVED)         \
+     */                                                                 \
+    assert((1 << ((T>>1)+3)) > shift, "Invalid Shift value");           \
+    f(0, 31), f(T & 1, 30), f(opc, 29), f(0b011110, 28, 23),            \
+    f((1 << ((T>>1)+3))|shift, 22, 16); f(opc2, 15, 10), rf(Vn, 5), rf(Vd, 0); \
   }
 
   INSN(shl,  0, 0b010101);
@@ -2223,14 +2324,16 @@ public:
     f(0b001111, 15, 10), rf(Vn, 5), rf(Xd, 0);
   }
 
-  // We do not handle the 1Q arrangement.
   void pmull(FloatRegister Vd, SIMD_Arrangement Ta, FloatRegister Vn, FloatRegister Vm, SIMD_Arrangement Tb) {
     starti;
-    assert(Ta == T8H && (Tb == T8B || Tb == T16B), "Invalid Size specifier");
-    f(0, 31), f(Tb & 1, 30), f(0b001110001, 29, 21), rf(Vm, 16), f(0b111000, 15, 10);
-    rf(Vn, 5), rf(Vd, 0);
+    assert((Ta == T1Q && (Tb == T1D || Tb == T2D)) ||
+           (Ta == T8H && (Tb == T8B || Tb == T16B)), "Invalid Size specifier");
+    int size = (Ta == T1Q) ? 0b11 : 0b00;
+    f(0, 31), f(Tb & 1, 30), f(0b001110, 29, 24), f(size, 23, 22);
+    f(1, 21), rf(Vm, 16), f(0b111000, 15, 10), rf(Vn, 5), rf(Vd, 0);
   }
   void pmull2(FloatRegister Vd, SIMD_Arrangement Ta, FloatRegister Vn, FloatRegister Vm, SIMD_Arrangement Tb) {
+    assert(Tb == T2D || Tb == T16B, "pmull2 assumes T2D or T16B as the second size specifier");
     pmull(Vd, Ta, Vn, Vm, Tb);
   }
 
@@ -2241,15 +2344,6 @@ public:
     assert(size_b < 3 && size_b == size_a - 1, "Invalid size specifier");
     f(0, 31), f(Tb & 1, 30), f(0b101110, 29, 24), f(size_b, 23, 22);
     f(0b100001010010, 21, 10), rf(Vn, 5), rf(Vd, 0);
-  }
-
-  void rev32(FloatRegister Vd, SIMD_Arrangement T, FloatRegister Vn)
-  {
-    starti;
-    assert(T <= T8H, "must be one of T8B, T16B, T4H, T8H");
-    f(0, 31), f((int)T & 1, 30), f(0b101110, 29, 24);
-    f(T <= T16B ? 0b00 : 0b01, 23, 22), f(0b100000000010, 21, 10);
-    rf(Vn, 5), rf(Vd, 0);
   }
 
   void dup(FloatRegister Vd, SIMD_Arrangement T, Register Xs)
@@ -2268,6 +2362,24 @@ public:
     f(((1 << (T >> 1)) | (index << ((T >> 1) + 1))), 20, 16);
     f(0b000001, 15, 10), rf(Vn, 5), rf(Vd, 0);
   }
+
+  // AdvSIMD ZIP/UZP/TRN
+#define INSN(NAME, opcode)                                              \
+  void NAME(FloatRegister Vd, SIMD_Arrangement T, FloatRegister Vn, FloatRegister Vm) { \
+    starti;                                                             \
+    f(0, 31), f(0b001110, 29, 24), f(0, 21), f(0b001110, 15, 10);       \
+    rf(Vm, 16), rf(Vn, 5), rf(Vd, 0);                                   \
+    f(T & 1, 30), f(T >> 1, 23, 22);                                    \
+  }
+
+  INSN(uzp1, 0b001);
+  INSN(trn1, 0b010);
+  INSN(zip1, 0b011);
+  INSN(uzp2, 0b101);
+  INSN(trn2, 0b110);
+  INSN(zip2, 0b111);
+
+#undef INSN
 
   // CRC32 instructions
 #define INSN(NAME, c, sf, sz)                                             \
@@ -2288,6 +2400,73 @@ public:
 
 #undef INSN
 
+  // Table vector lookup
+#define INSN(NAME, op)                                                  \
+  void NAME(FloatRegister Vd, SIMD_Arrangement T, FloatRegister Vn, unsigned registers, FloatRegister Vm) { \
+    starti;                                                             \
+    assert(T == T8B || T == T16B, "invalid arrangement");               \
+    assert(0 < registers && registers <= 4, "invalid number of registers"); \
+    f(0, 31), f((int)T & 1, 30), f(0b001110000, 29, 21), rf(Vm, 16), f(0, 15); \
+    f(registers - 1, 14, 13), f(op, 12),f(0b00, 11, 10), rf(Vn, 5), rf(Vd, 0); \
+  }
+
+  INSN(tbl, 0);
+  INSN(tbx, 1);
+
+#undef INSN
+
+  // AdvSIMD two-reg misc
+#define INSN(NAME, U, opcode)                                                       \
+  void NAME(FloatRegister Vd, SIMD_Arrangement T, FloatRegister Vn) {               \
+       starti;                                                                      \
+       assert((ASSERTION), MSG);                                                    \
+       f(0, 31), f((int)T & 1, 30), f(U, 29), f(0b01110, 28, 24);                   \
+       f((int)(T >> 1), 23, 22), f(0b10000, 21, 17), f(opcode, 16, 12);             \
+       f(0b10, 11, 10), rf(Vn, 5), rf(Vd, 0);                                       \
+ }
+
+#define MSG "invalid arrangement"
+
+#define ASSERTION (T == T2S || T == T4S || T == T2D)
+  INSN(fsqrt, 1, 0b11111);
+  INSN(fabs,  0, 0b01111);
+  INSN(fneg,  1, 0b01111);
+#undef ASSERTION
+
+#define ASSERTION (T == T8B || T == T16B || T == T4H || T == T8H || T == T2S || T == T4S)
+  INSN(rev64, 0, 0b00000);
+#undef ASSERTION
+
+#define ASSERTION (T == T8B || T == T16B || T == T4H || T == T8H)
+  INSN(rev32, 1, 0b00000);
+private:
+  INSN(_rbit, 1, 0b00101);
+public:
+
+#undef ASSERTION
+
+#define ASSERTION (T == T8B || T == T16B)
+  INSN(rev16, 0, 0b00001);
+  // RBIT only allows T8B and T16B but encodes them oddly.  Argh...
+  void rbit(FloatRegister Vd, SIMD_Arrangement T, FloatRegister Vn) {
+    assert((ASSERTION), MSG);
+    _rbit(Vd, SIMD_Arrangement(T & 1 | 0b010), Vn);
+  }
+#undef ASSERTION
+
+#undef MSG
+
+#undef INSN
+
+void ext(FloatRegister Vd, SIMD_Arrangement T, FloatRegister Vn, FloatRegister Vm, int index)
+  {
+    starti;
+    assert(T == T8B || T == T16B, "invalid arrangement");
+    assert((T == T8B && index <= 0b0111) || (T == T16B && index <= 0b1111), "Invalid index value");
+    f(0, 31), f((int)T & 1, 30), f(0b101110000, 29, 21);
+    rf(Vm, 16), f(0, 15), f(index, 14, 11);
+    f(0, 10), rf(Vn, 5), rf(Vd, 0);
+  }
 
 /* Simulator extensions to the ISA
 

@@ -76,7 +76,7 @@ import java.util.NoSuchElementException;
  *     BufferedReader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8);
  * </pre>
  *
- * <a name="interop"></a><h2>Interoperability</h2>
+ * <a id="interop"></a><h2>Interoperability</h2>
  * <p> Paths associated with the default {@link
  * java.nio.file.spi.FileSystemProvider provider} are generally interoperable
  * with the {@link java.io.File java.io.File} class. Paths created by other
@@ -150,7 +150,7 @@ public interface Path
      * #normalize normalize} method, to eliminate redundant names, for cases where
      * <em>shell-like</em> navigation is required.
      *
-     * <p> If this path has one or more elements, and no root component, then
+     * <p> If this path has more than one element, and no root component, then
      * this method is equivalent to evaluating the expression:
      * <blockquote><pre>
      * subpath(0,&nbsp;getNameCount()-1);
@@ -480,7 +480,8 @@ public interface Path
      * <p> For any two {@link #normalize normalized} paths <i>p</i> and
      * <i>q</i>, where <i>q</i> does not have a root component,
      * <blockquote>
-     *   <i>p</i><tt>.relativize(</tt><i>p</i><tt>.resolve(</tt><i>q</i><tt>)).equals(</tt><i>q</i><tt>)</tt>
+     *   <i>p</i>{@code .relativize(}<i>p</i>
+     *   {@code .resolve(}<i>q</i>{@code )).equals(}<i>q</i>{@code )}
      * </blockquote>
      *
      * <p> When symbolic links are supported, then whether the resulting path,
@@ -525,9 +526,9 @@ public interface Path
      * <p> The default provider provides a similar <em>round-trip</em> guarantee
      * to the {@link java.io.File} class. For a given {@code Path} <i>p</i> it
      * is guaranteed that
-     * <blockquote><tt>
-     * {@link Paths#get(URI) Paths.get}(</tt><i>p</i><tt>.toUri()).equals(</tt><i>p</i>
-     * <tt>.{@link #toAbsolutePath() toAbsolutePath}())</tt>
+     * <blockquote>
+     * {@link Paths#get(URI) Paths.get}{@code (}<i>p</i>{@code .toUri()).equals(}<i>p</i>
+     * {@code .}{@link #toAbsolutePath() toAbsolutePath}{@code ())}
      * </blockquote>
      * so long as the original {@code Path}, the {@code URI}, and the new {@code
      * Path} are all created in (possibly different invocations of) the same

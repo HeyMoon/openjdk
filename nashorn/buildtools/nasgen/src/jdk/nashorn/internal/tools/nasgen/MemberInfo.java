@@ -26,12 +26,14 @@ package jdk.nashorn.internal.tools.nasgen;
 
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.OBJECT_ARRAY_DESC;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.OBJECT_DESC;
-import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTOBJECT_DESC;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.OBJ_PKG;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.RUNTIME_PKG;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTS_PKG;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.STRING_DESC;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.TYPE_SYMBOL;
+
 import jdk.internal.org.objectweb.asm.Opcodes;
 import jdk.internal.org.objectweb.asm.Type;
-import jdk.nashorn.internal.objects.annotations.Where;
-import jdk.nashorn.internal.runtime.ScriptObject;
 
 /**
  * Details about a Java method or field annotated with any of the field/method
@@ -108,6 +110,8 @@ public final class MemberInfo implements Cloneable {
 
     private boolean isOptimistic;
 
+    private boolean convertsNumericArgs;
+
     /**
      * @return the kind
      */
@@ -166,6 +170,23 @@ public final class MemberInfo implements Cloneable {
      */
     public void setIsOptimistic(final boolean isOptimistic) {
         this.isOptimistic = isOptimistic;
+    }
+
+    /**
+     * Check if this function converts arguments for numeric parameters to numbers
+     * so it's safe to pass booleans as 0 and 1
+     * @return true if it is safe to convert arguments to numbers
+     */
+    public boolean convertsNumericArgs() {
+        return convertsNumericArgs;
+    }
+
+    /**
+     * Tag this as a function that converts arguments for numeric params to numbers
+     * @param convertsNumericArgs if true args can be safely converted to numbers
+     */
+    public void setConvertsNumericArgs(final boolean convertsNumericArgs) {
+        this.convertsNumericArgs = convertsNumericArgs;
     }
 
     /**
@@ -458,6 +479,40 @@ public final class MemberInfo implements Cloneable {
         }
     }
 
+    /**
+     * Returns if the given (internal) name of a class represents a ScriptObject subtype.
+     */
+    public static boolean isScriptObject(final String name) {
+        // very crude check for ScriptObject subtype!
+        if (name.startsWith(OBJ_PKG + "Native") ||
+            name.equals(OBJ_PKG + "Global") ||
+            name.equals(OBJ_PKG + "ArrayBufferView")) {
+            return true;
+        }
+
+        if (name.startsWith(RUNTIME_PKG)) {
+            final String simpleName = name.substring(name.lastIndexOf('/') + 1);
+            switch (simpleName) {
+                case "ScriptObject":
+                case "ScriptFunction":
+                case "NativeJavaPackage":
+                case "Scope":
+                    return true;
+            }
+        }
+
+        if (name.startsWith(SCRIPTS_PKG)) {
+            final String simpleName = name.substring(name.lastIndexOf('/') + 1);
+            switch (simpleName) {
+                case "JD":
+                case "JO":
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
     private static boolean isValidJSType(final Type type) {
         return isJSPrimitiveType(type) || isJSObjectType(type);
     }
@@ -466,11 +521,10 @@ public final class MemberInfo implements Cloneable {
         switch (type.getSort()) {
             case Type.BOOLEAN:
             case Type.INT:
-            case Type.LONG:
             case Type.DOUBLE:
                 return true;
             default:
-                return false;
+                return type != TYPE_SYMBOL;
         }
     }
 
@@ -487,20 +541,11 @@ public final class MemberInfo implements Cloneable {
     }
 
     private static boolean isScriptObject(final Type type) {
-        if (type.getDescriptor().equals(SCRIPTOBJECT_DESC)) {
-            return true;
+        if (type.getSort() != Type.OBJECT) {
+            return false;
         }
 
-        if (type.getSort() == Type.OBJECT) {
-            try {
-                final Class<?> clazz = Class.forName(type.getClassName(), false, MY_LOADER);
-                return ScriptObject.class.isAssignableFrom(clazz);
-            } catch (final ClassNotFoundException cnfe) {
-                return false;
-            }
-        }
-
-        return false;
+        return isScriptObject(type.getInternalName());
     }
 
     private void error(final String msg) {
@@ -543,5 +588,26 @@ public final class MemberInfo implements Cloneable {
      */
     void setArity(final int arity) {
         this.arity = arity;
+    }
+
+    String getDocumentationKey(final String objName) {
+        if (kind == Kind.FUNCTION) {
+            final StringBuilder buf = new StringBuilder(objName);
+            switch (where) {
+                case CONSTRUCTOR:
+                    break;
+                case PROTOTYPE:
+                    buf.append(".prototype");
+                    break;
+                case INSTANCE:
+                    buf.append(".this");
+                    break;
+            }
+            buf.append('.');
+            buf.append(name);
+            return buf.toString();
+        }
+
+        return null;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,9 +26,9 @@
  * @bug 8006582 8008658
  * @summary javac should generate method parameters correctly.
  * @modules jdk.jdeps/com.sun.tools.classfile
- * @build Tester
+ * @build MethodParametersTester ClassFileVisitor ReflectionVisitor
  * @compile -parameters LocalClassTest.java
- * @run main Tester LocalClassTest LocalClassTest.out
+ * @run main MethodParametersTester LocalClassTest LocalClassTest.out
  */
 
 class LocalClassTest {
@@ -44,6 +44,16 @@ class LocalClassTest {
             public void foo(int m, int nm) {}
         }
         new LocalClassTest().foo();
+    }
+
+    void test(final int i) {
+        class CapturingLocal {
+            CapturingLocal(final int j) {
+               this(new Object() { void test() { int x = i; } });
+            }
+            CapturingLocal(Object o) { }
+        }
+        new CapturingLocal(i) { };
     }
 }
 

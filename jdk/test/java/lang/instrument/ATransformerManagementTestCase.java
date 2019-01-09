@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,6 @@
 
 import java.io.*;
 import java.lang.instrument.*;
-
 import java.security.ProtectionDomain;
 import java.util.*;
 
@@ -291,7 +290,27 @@ ATransformerManagementTestCase
             // The transform testing is triggered by redefine, ignore others
             if (classBeingRedefined != null) checkInTransformer(MyClassFileTransformer.this);
 
-            return super.transform(    loader,
+            return super.transform(     loader,
+                                        className,
+                                        classBeingRedefined,
+                                        protectionDomain,
+                                        classfileBuffer);
+        }
+
+        public byte[]
+        transform(
+            Module module,
+            ClassLoader loader,
+            String className,
+            Class<?> classBeingRedefined,
+            ProtectionDomain    protectionDomain,
+            byte[] classfileBuffer) {
+
+            // The transform testing is triggered by redefine, ignore others
+            if (classBeingRedefined != null) checkInTransformer(MyClassFileTransformer.this);
+
+            return super.transform(     module,
+                                        loader,
                                         className,
                                         classBeingRedefined,
                                         protectionDomain,

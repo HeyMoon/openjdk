@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,8 +33,8 @@ import java.util.Map;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
 import java.util.logging.LoggingPermission;
-import sun.misc.JavaAWTAccess;
-import sun.misc.SharedSecrets;
+import jdk.internal.misc.JavaAWTAccess;
+import jdk.internal.misc.SharedSecrets;
 
 /*
  * @test
@@ -42,7 +42,8 @@ import sun.misc.SharedSecrets;
  * @summary  NPE when using Logger.getAnonymousLogger or
  *           LogManager.getLogManager().getLogger
  *
- * @modules java.base/sun.misc
+ * @modules java.base/jdk.internal.misc
+ *          java.logging
  * @run main/othervm -Dtest.security=off TestAppletLoggerContext LoadingApplet
  * @run main/othervm -Dtest.security=on TestAppletLoggerContext  LoadingApplet
  * @run main/othervm -Dtest.security=off TestAppletLoggerContext LoadingMain
@@ -116,7 +117,7 @@ public class TestAppletLoggerContext {
             public Object getAppletContext() { return active ? exc : null; }
         }
 
-        final static JavaAWTAccessStub javaAwtAccess = new JavaAWTAccessStub();
+        static final JavaAWTAccessStub javaAwtAccess = new JavaAWTAccessStub();
         public static void init() {
             SharedSecrets.setJavaAWTAccess(javaAwtAccess);
             if (System.getProperty("test.security", "on").equals("on")) {

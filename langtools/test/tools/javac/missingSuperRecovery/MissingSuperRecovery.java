@@ -4,8 +4,8 @@
  * @summary Check for proper error recovery when superclass of extended
  * class is no longer available during a subsequent compilation.
  * @author maddox
- *
- * @compile/fail/ref=MissingSuperRecovery.out -XDdiags=%b:%l:%_%m MissingSuperRecovery.java
+ * @build impl
+ * @compile/fail/ref=MissingSuperRecovery.out --diags:layout=%b:%l:%_%m MissingSuperRecovery.java
  */
 
 // Requires "golden" class file 'impl.class', which contains

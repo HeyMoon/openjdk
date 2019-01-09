@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,7 @@
 #define SHARE_VM_MEMORY_RESOURCEAREA_HPP
 
 #include "memory/allocation.hpp"
-#include "runtime/thread.inline.hpp"
+#include "runtime/thread.hpp"
 
 // The resource area holds temporary data structures in the VM.
 // The actual allocation areas are thread local. Typical usage:
@@ -121,7 +121,7 @@ protected:
     debug_only(_area->_nesting++;)
     assert( _area->_nesting > 0, "must stack allocate RMs" );
 #ifdef ASSERT
-    Thread* thread = ThreadLocalStorage::thread();
+    Thread* thread = Thread::current_or_null();
     if (thread != NULL) {
       _thread = thread;
       _previous_resource_mark = thread->current_resource_mark();

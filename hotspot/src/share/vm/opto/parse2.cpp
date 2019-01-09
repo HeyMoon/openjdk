@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@
 #include "classfile/vmSymbols.hpp"
 #include "compiler/compileLog.hpp"
 #include "interpreter/linkResolver.hpp"
+#include "memory/resourceArea.hpp"
 #include "memory/universe.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "opto/addnode.hpp"
@@ -44,8 +45,10 @@
 #include "runtime/deoptimization.hpp"
 #include "runtime/sharedRuntime.hpp"
 
+#ifndef PRODUCT
 extern int explicit_null_checks_inserted,
            explicit_null_checks_elided;
+#endif
 
 //---------------------------------array_load----------------------------------
 void Parse::array_load(BasicType elem_type) {
@@ -61,11 +64,15 @@ void Parse::array_load(BasicType elem_type) {
 
 //--------------------------------array_store----------------------------------
 void Parse::array_store(BasicType elem_type) {
-  Node* adr = array_addressing(elem_type, 1);
+  const Type* elem = Type::TOP;
+  Node* adr = array_addressing(elem_type, 1, &elem);
   if (stopped())  return;     // guaranteed null or range check
   Node* val = pop();
   dec_sp(2);                  // Pop array and index
   const TypeAryPtr* adr_type = TypeAryPtr::get_array_body_type(elem_type);
+  if (elem == TypeInt::BOOL) {
+    elem_type = T_BOOLEAN;
+  }
   store_to_memory(control(), adr, val, elem_type, adr_type, StoreNode::release_if_reference(elem_type));
 }
 
@@ -136,8 +143,16 @@ Node* Parse::array_addressing(BasicType type, int vals, const Type* *result2) {
       BoolTest::mask btest = BoolTest::lt;
       tst = _gvn.transform( new BoolNode(chk, btest) );
     }
+    RangeCheckNode* rc = new RangeCheckNode(control(), tst, PROB_MAX, COUNT_UNKNOWN);
+    _gvn.set_type(rc, rc->Value(&_gvn));
+    if (!tst->is_Con()) {
+      record_for_igvn(rc);
+    }
+    set_control(_gvn.transform(new IfTrueNode(rc)));
     // Branch to failure if out of bounds
-    { BuildCutout unless(this, tst, PROB_MAX);
+    {
+      PreserveJVMState pjvms(this);
+      set_control(_gvn.transform(new IfFalseNode(rc)));
       if (C->allow_range_check_smearing()) {
         // Do not use builtin_throw, since range checks are sometimes
         // made more stringent by an optimistic transformation.
@@ -158,7 +173,9 @@ Node* Parse::array_addressing(BasicType type, int vals, const Type* *result2) {
   // Check for always knowing you are throwing a range-check exception
   if (stopped())  return top();
 
-  Node* ptr = array_element_address(ary, idx, type, sizetype);
+  // Make array address computation control dependent to prevent it
+  // from floating above the range check during loop optimizations.
+  Node* ptr = array_element_address(ary, idx, type, sizetype, control());
 
   if (result2 != NULL)  *result2 = elemtype;
 
@@ -458,12 +475,14 @@ bool Parse::create_jump_tables(Node* key_val, SwitchRange* lo, SwitchRange* hi) 
   // of all possible ranges for a switch statement
   // The key_val input must be converted to a pointer offset and scaled.
   // Compare Parse::array_addressing above.
-#ifdef _LP64
+
   // Clean the 32-bit int into a real 64-bit offset.
   // Otherwise, the jint value 0 might turn into an offset of 0x0800000000.
-  const TypeLong* lkeytype = TypeLong::make(CONST64(0), num_cases-1, Type::WidenMin);
-  key_val       = _gvn.transform( new ConvI2LNode(key_val, lkeytype) );
-#endif
+  const TypeInt* ikeytype = TypeInt::make(0, num_cases, Type::WidenMin);
+  // Make I2L conversion control dependent to prevent it from
+  // floating above the range check during loop optimizations.
+  key_val = C->conv_I2X_index(&_gvn, key_val, ikeytype, control());
+
   // Shift the value by wordsize so we have an index into the table, rather
   // than a switch value
   Node *shiftWord = _gvn.MakeConX(wordSize);
@@ -807,6 +826,9 @@ float Parse::dynamic_branch_prediction(float &cnt, BoolTest::mask btest, Node* t
     ciMethodData* methodData = method()->method_data();
     if (!methodData->is_mature())  return PROB_UNKNOWN;
     ciProfileData* data = methodData->bci_to_data(bci());
+    if (data == NULL) {
+      return PROB_UNKNOWN;
+    }
     if (!data->is_JumpData())  return PROB_UNKNOWN;
 
     // get taken and not taken values
@@ -898,8 +920,8 @@ float Parse::branch_prediction(float& cnt,
         // of the OSR-ed method, and we want to deopt to gather more stats.
         // If you have ANY counts, then this loop is simply 'cold' relative
         // to the OSR loop.
-        if (data->as_BranchData()->taken() +
-            data->as_BranchData()->not_taken() == 0 ) {
+        if (data == NULL ||
+            (data->as_BranchData()->taken() +  data->as_BranchData()->not_taken() == 0)) {
           // This is the only way to return PROB_UNKNOWN:
           return PROB_UNKNOWN;
         }
@@ -940,13 +962,11 @@ bool Parse::seems_stable_comparison() const {
 //-------------------------------repush_if_args--------------------------------
 // Push arguments of an "if" bytecode back onto the stack by adjusting _sp.
 inline int Parse::repush_if_args() {
-#ifndef PRODUCT
   if (PrintOpto && WizardMode) {
     tty->print("defending against excessive implicit null exceptions on %s @%d in ",
                Bytecodes::name(iter().cur_bc()), iter().cur_bci());
     method()->print_name(); tty->cr();
   }
-#endif
   int bc_depth = - Bytecodes::depth(iter().cur_bc());
   assert(bc_depth == 1 || bc_depth == 2, "only two kinds of branches");
   DEBUG_ONLY(sync_jvms());   // argument(n) requires a synced jvms
@@ -967,10 +987,9 @@ void Parse::do_ifnull(BoolTest::mask btest, Node *c) {
   float prob = branch_prediction(cnt, btest, target_bci, c);
   if (prob == PROB_UNKNOWN) {
     // (An earlier version of do_ifnull omitted this trap for OSR methods.)
-#ifndef PRODUCT
-    if (PrintOpto && Verbose)
-      tty->print_cr("Never-taken edge stops compilation at bci %d",bci());
-#endif
+    if (PrintOpto && Verbose) {
+      tty->print_cr("Never-taken edge stops compilation at bci %d", bci());
+    }
     repush_if_args(); // to gather stats on loop
     // We need to mark this branch as taken so that if we recompile we will
     // see that it is possible. In the tiered system the interpreter doesn't
@@ -988,7 +1007,7 @@ void Parse::do_ifnull(BoolTest::mask btest, Node *c) {
     return;
   }
 
-  explicit_null_checks_inserted++;
+  NOT_PRODUCT(explicit_null_checks_inserted++);
 
   // Generate real control flow
   Node   *tst = _gvn.transform( new BoolNode( c, btest ) );
@@ -1004,7 +1023,7 @@ void Parse::do_ifnull(BoolTest::mask btest, Node *c) {
     set_control(iftrue);
 
     if (stopped()) {            // Path is dead?
-      explicit_null_checks_elided++;
+      NOT_PRODUCT(explicit_null_checks_elided++);
       if (C->eliminate_boxing()) {
         // Mark the successor block as parsed
         branch_block->next_path_num();
@@ -1024,7 +1043,7 @@ void Parse::do_ifnull(BoolTest::mask btest, Node *c) {
   set_control(iffalse);
 
   if (stopped()) {              // Path is dead?
-    explicit_null_checks_elided++;
+    NOT_PRODUCT(explicit_null_checks_elided++);
     if (C->eliminate_boxing()) {
       // Mark the successor block as parsed
       next_block->next_path_num();
@@ -1049,10 +1068,9 @@ void Parse::do_if(BoolTest::mask btest, Node* c) {
   float untaken_prob = 1.0 - prob;
 
   if (prob == PROB_UNKNOWN) {
-#ifndef PRODUCT
-    if (PrintOpto && Verbose)
-      tty->print_cr("Never-taken edge stops compilation at bci %d",bci());
-#endif
+    if (PrintOpto && Verbose) {
+      tty->print_cr("Never-taken edge stops compilation at bci %d", bci());
+    }
     repush_if_args(); // to gather stats on loop
     // We need to mark this branch as taken so that if we recompile we will
     // see that it is possible. In the tiered system the interpreter doesn't
@@ -1478,8 +1496,10 @@ void Parse::do_one_bytecode() {
       }
       assert(constant.basic_type() != T_OBJECT || constant.as_object()->is_instance(),
              "must be java_mirror of klass");
-      bool pushed = push_constant(constant, true);
-      guarantee(pushed, "must be possible to push this constant");
+      const Type* con_type = Type::make_from_constant(constant);
+      if (con_type != NULL) {
+        push_node(con_type->basic_type(), makecon(con_type));
+      }
     }
 
     break;
@@ -2376,13 +2396,13 @@ void Parse::do_one_bytecode() {
   }
 
 #ifndef PRODUCT
-  IdealGraphPrinter *printer = IdealGraphPrinter::printer();
-  if (printer && printer->should_print(_method)) {
+  IdealGraphPrinter *printer = C->printer();
+  if (printer && printer->should_print(1)) {
     char buffer[256];
     sprintf(buffer, "Bytecode %d: %s", bci(), Bytecodes::name(bc()));
     bool old = printer->traverse_outs();
     printer->set_traverse_outs(true);
-    printer->print_method(C, buffer, 4);
+    printer->print_method(buffer, 4);
     printer->set_traverse_outs(old);
   }
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,20 +24,30 @@
 /**
  * @test
  * @bug 4225317 6969651
- * @modules jdk.jartool/sun.tools.jar
+ * @modules jdk.jartool
  * @summary Check extracted files have date as per those in the .jar file
  */
 
 import java.io.File;
 import java.io.PrintWriter;
 import java.nio.file.attribute.FileTime;
-import sun.tools.jar.Main;
+import java.util.Date;
+import java.util.TimeZone;
+import java.util.spi.ToolProvider;
 
 public class JarEntryTime {
+    static final ToolProvider JAR_TOOL = ToolProvider.findFirst("jar")
+        .orElseThrow(() ->
+            new RuntimeException("jar tool not found")
+        );
+
 
     // ZipEntry's mod date has 2 seconds precision: give extra time to
     // allow for e.g. rounding/truncation and networked/samba drives.
     static final long PRECISION = 10000L;
+
+    static final TimeZone TZ = TimeZone.getDefault();
+    static final boolean DST = TZ.inDaylightTime(new Date());
 
     static boolean cleanup(File dir) throws Throwable {
         boolean rc = true;
@@ -75,11 +85,13 @@ public class JarEntryTime {
         File dirOuter = new File("outer");
         File dirInner = new File(dirOuter, "inner");
         File jarFile = new File("JarEntryTime.jar");
+        File testFile = new File("JarEntryTimeTest.txt");
 
         // Remove any leftovers from prior run
         cleanup(dirInner);
         cleanup(dirOuter);
         jarFile.delete();
+        testFile.delete();
 
         /* Create a directory structure
          * outer/
@@ -107,10 +119,8 @@ public class JarEntryTime {
         check(fileInner.setLastModified(earlier));
 
         // Make a jar file from that directory structure
-        Main jartool = new Main(System.out, System.err, "jar");
-        check(jartool.run(new String[] {
-                "cf",
-                jarFile.getName(), dirOuter.getName() } ));
+        check(JAR_TOOL.run(System.out, System.err,
+                           "cf", jarFile.getName(), dirOuter.getName()) == 0);
         check(jarFile.exists());
 
         check(cleanup(dirInner));
@@ -129,28 +139,64 @@ public class JarEntryTime {
         check(cleanup(dirInner));
         check(cleanup(dirOuter));
 
+        try (PrintWriter pw = new PrintWriter(testFile)) {
+            pw.println("hello, world");
+        }
+        final long start = testFile.lastModified();
+
         // Extract and check the last modified values are the current times.
-        // See sun.tools.jar.Main
         extractJar(jarFile, true);
+
+        try (PrintWriter pw = new PrintWriter(testFile)) {
+            pw.println("hello, world");
+        }
+        final long end = testFile.lastModified();
+
         check(dirOuter.exists());
         check(dirInner.exists());
         check(fileInner.exists());
-        checkFileTime(dirOuter.lastModified(), now);
-        checkFileTime(dirInner.lastModified(), now);
-        checkFileTime(fileInner.lastModified(), now);
+        checkFileTime(start, dirOuter.lastModified(), end);
+        checkFileTime(start, dirInner.lastModified(), end);
+        checkFileTime(start, fileInner.lastModified(), end);
 
         check(cleanup(dirInner));
         check(cleanup(dirOuter));
 
         check(jarFile.delete());
+        check(testFile.delete());
     }
 
     static void checkFileTime(long now, long original) {
+        if (isTimeSettingChanged()) {
+            return;
+        }
+
         if (Math.abs(now - original) > PRECISION) {
             System.out.format("Extracted to %s, expected to be close to %s%n",
                 FileTime.fromMillis(now), FileTime.fromMillis(original));
             fail();
         }
+    }
+
+    static void checkFileTime(long start, long now, long end) {
+        if (isTimeSettingChanged()) {
+            return;
+        }
+
+        if (now < start || now > end) {
+            System.out.format("Extracted to %s, "
+                              + "expected to be after %s and before %s%n",
+                              FileTime.fromMillis(now),
+                              FileTime.fromMillis(start),
+                              FileTime.fromMillis(end));
+            fail();
+        }
+    }
+
+    private static boolean isTimeSettingChanged() {
+        TimeZone currentTZ = TimeZone.getDefault();
+        boolean currentDST = currentTZ.inDaylightTime(new Date());
+        return (!currentTZ.equals(TZ) || currentDST != DST);
     }
 
     //--------------------- Infrastructure ---------------------------

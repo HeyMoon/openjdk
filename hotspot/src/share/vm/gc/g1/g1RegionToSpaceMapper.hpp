@@ -29,6 +29,8 @@
 #include "memory/allocation.hpp"
 #include "utilities/debug.hpp"
 
+class WorkGang;
+
 class G1MappingChangedListener VALUE_OBJ_CLASS_SPEC {
  public:
   // Fired after commit of the memory, i.e. the memory this listener is registered
@@ -49,9 +51,9 @@ class G1RegionToSpaceMapper : public CHeapObj<mtGC> {
 
   size_t _region_granularity;
   // Mapping management
-  BitMap _commit_map;
+  CHeapBitMap _commit_map;
 
-  G1RegionToSpaceMapper(ReservedSpace rs, size_t used_size, size_t page_size, size_t region_granularity, MemoryType type);
+  G1RegionToSpaceMapper(ReservedSpace rs, size_t used_size, size_t page_size, size_t region_granularity, size_t commit_factor, MemoryType type);
 
   void fire_on_commit(uint start_idx, size_t num_regions, bool zero_filled);
  public:
@@ -62,15 +64,13 @@ class G1RegionToSpaceMapper : public CHeapObj<mtGC> {
 
   void set_mapping_changed_listener(G1MappingChangedListener* listener) { _listener = listener; }
 
-  virtual ~G1RegionToSpaceMapper() {
-    _commit_map.resize(0, /* in_resource_area */ false);
-  }
+  virtual ~G1RegionToSpaceMapper() {}
 
   bool is_committed(uintptr_t idx) const {
     return _commit_map.at(idx);
   }
 
-  virtual void commit_regions(uint start_idx, size_t num_regions = 1) = 0;
+  virtual void commit_regions(uint start_idx, size_t num_regions = 1, WorkGang* pretouch_workers = NULL) = 0;
   virtual void uncommit_regions(uint start_idx, size_t num_regions = 1) = 0;
 
   // Creates an appropriate G1RegionToSpaceMapper for the given parameters.
@@ -89,4 +89,4 @@ class G1RegionToSpaceMapper : public CHeapObj<mtGC> {
                                               MemoryType type);
 };
 
-#endif /* SHARE_VM_GC_G1_G1REGIONTOSPACEMAPPER_HPP */
+#endif // SHARE_VM_GC_G1_G1REGIONTOSPACEMAPPER_HPP

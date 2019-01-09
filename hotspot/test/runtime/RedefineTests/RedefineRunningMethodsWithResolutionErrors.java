@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,12 +25,13 @@
  * @test
  * @bug 8076110
  * @summary Redefine running methods that have cached resolution errors
- * @library /testlibrary
- * @modules java.instrument
- *          java.base/jdk.internal.org.objectweb.asm
- * @build RedefineClassHelper
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
+ * @modules java.base/jdk.internal.org.objectweb.asm
+ *          java.instrument
+ *          jdk.jartool/sun.tools.jar
  * @run main RedefineClassHelper
- * @run main/othervm -javaagent:redefineagent.jar -XX:TraceRedefineClasses=0x600 RedefineRunningMethodsWithResolutionErrors
+ * @run main/othervm -javaagent:redefineagent.jar -Xlog:redefine+class+iklass+add=trace,redefine+class+iklass+purge=trace RedefineRunningMethodsWithResolutionErrors
  */
 
 import jdk.internal.org.objectweb.asm.ClassWriter;

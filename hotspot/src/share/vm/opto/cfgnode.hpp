@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -91,8 +91,8 @@ public:
   virtual uint hash() const { return NO_HASH; }  // CFG nodes do not hash
   virtual bool depends_only_on_test() const { return false; }
   virtual const Type *bottom_type() const { return Type::CONTROL; }
-  virtual const Type *Value( PhaseTransform *phase ) const;
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual const Type* Value(PhaseGVN* phase) const;
+  virtual Node* Identity(PhaseGVN* phase);
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
   virtual const RegMask &out_RegMask() const;
   bool try_clean_mem_phi(PhaseGVN *phase);
@@ -119,6 +119,9 @@ class JProjNode : public ProjNode {
 // input in slot 0.
 class PhiNode : public TypeNode {
   const TypePtr* const _adr_type; // non-null only for Type::MEMORY nodes.
+  // The following fields are only used for data PhiNodes to indicate
+  // that the PhiNode represents the value of a known instance field.
+        int _inst_mem_id; // Instance memory id (node index of the memory Phi)
   const int _inst_id;     // Instance id of the memory slice.
   const int _inst_index;  // Alias index of the instance memory slice.
   // Array elements references have the same alias_idx but different offset.
@@ -138,11 +141,13 @@ public:
   };
 
   PhiNode( Node *r, const Type *t, const TypePtr* at = NULL,
+           const int imid = -1,
            const int iid = TypeOopPtr::InstanceTop,
            const int iidx = Compile::AliasIdxTop,
            const int ioffs = Type::OffsetTop )
     : TypeNode(t,r->req()),
       _adr_type(at),
+      _inst_mem_id(imid),
       _inst_id(iid),
       _inst_index(iidx),
       _inst_offset(ioffs)
@@ -175,7 +180,14 @@ public:
 
   // Determine a unique non-trivial input, if any.
   // Ignore casts if it helps.  Return NULL on failure.
-  Node* unique_input(PhaseTransform *phase);
+  Node* unique_input(PhaseTransform *phase, bool uncast);
+  Node* unique_input(PhaseTransform *phase) {
+    Node* uin = unique_input(phase, false);
+    if (uin == NULL) {
+      uin = unique_input(phase, true);
+    }
+    return uin;
+  }
 
   // Check for a simple dead loop.
   enum LoopSafety { Safe = 0, Unsafe, UnsafeLoop };
@@ -187,23 +199,27 @@ public:
   virtual bool pinned() const { return in(0) != 0; }
   virtual const TypePtr *adr_type() const { verify_adr_type(true); return _adr_type; }
 
+  void  set_inst_mem_id(int inst_mem_id) { _inst_mem_id = inst_mem_id; }
+  const int inst_mem_id() const { return _inst_mem_id; }
   const int inst_id()     const { return _inst_id; }
   const int inst_index()  const { return _inst_index; }
   const int inst_offset() const { return _inst_offset; }
-  bool is_same_inst_field(const Type* tp, int id, int index, int offset) {
+  bool is_same_inst_field(const Type* tp, int mem_id, int id, int index, int offset) {
     return type()->basic_type() == tp->basic_type() &&
+           inst_mem_id() == mem_id &&
            inst_id()     == id     &&
            inst_index()  == index  &&
            inst_offset() == offset &&
            type()->higher_equal(tp);
   }
 
-  virtual const Type *Value( PhaseTransform *phase ) const;
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual const Type* Value(PhaseGVN* phase) const;
+  virtual Node* Identity(PhaseGVN* phase);
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
   virtual const RegMask &out_RegMask() const;
   virtual const RegMask &in_RegMask(uint) const;
 #ifndef PRODUCT
+  virtual void related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const;
   virtual void dump_spec(outputStream *st) const;
 #endif
 #ifdef ASSERT
@@ -226,9 +242,13 @@ public:
   virtual const Node *is_block_proj() const { return this; }
   virtual bool depends_only_on_test() const { return false; }
   virtual const Type *bottom_type() const { return Type::CONTROL; }
-  virtual const Type *Value( PhaseTransform *phase ) const;
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual const Type* Value(PhaseGVN* phase) const;
+  virtual Node* Identity(PhaseGVN* phase);
   virtual const RegMask &out_RegMask() const;
+
+#ifndef PRODUCT
+  virtual void related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const;
+#endif
 };
 
 //------------------------------CProjNode--------------------------------------
@@ -265,20 +285,12 @@ class IfNode : public MultiBranchNode {
   virtual uint size_of() const { return sizeof(*this); }
 
 private:
-  ProjNode* range_check_trap_proj(int& flip, Node*& l, Node*& r);
-  ProjNode* range_check_trap_proj() {
-    int flip_test = 0;
-    Node* l = NULL;
-    Node* r = NULL;
-    return range_check_trap_proj(flip_test, l, r);
-  }
-
   // Helper methods for fold_compares
   bool cmpi_folds(PhaseIterGVN* igvn);
   bool is_ctrl_folds(Node* ctrl, PhaseIterGVN* igvn);
   bool has_shared_region(ProjNode* proj, ProjNode*& success, ProjNode*& fail);
   bool has_only_uncommon_traps(ProjNode* proj, ProjNode*& success, ProjNode*& fail, PhaseIterGVN* igvn);
-  static void merge_uncommon_traps(ProjNode* proj, ProjNode* success, ProjNode* fail, PhaseIterGVN* igvn);
+  Node* merge_uncommon_traps(ProjNode* proj, ProjNode* success, ProjNode* fail, PhaseIterGVN* igvn);
   static void improve_address_types(Node* l, Node* r, ProjNode* fail, PhaseIterGVN* igvn);
   bool is_cmp_with_loadrange(ProjNode* proj);
   bool is_null_check(ProjNode* proj, PhaseIterGVN* igvn);
@@ -286,6 +298,12 @@ private:
   void reroute_side_effect_free_unc(ProjNode* proj, ProjNode* dom_proj, PhaseIterGVN* igvn);
   ProjNode* uncommon_trap_proj(CallStaticJavaNode*& call) const;
   bool fold_compares_helper(ProjNode* proj, ProjNode* success, ProjNode* fail, PhaseIterGVN* igvn);
+
+protected:
+  ProjNode* range_check_trap_proj(int& flip, Node*& l, Node*& r);
+  Node* Ideal_common(PhaseGVN *phase, bool can_reshape);
+  Node* dominated_by(Node* prev_dom, PhaseIterGVN* igvn);
+  Node* search_identical(int dist);
 
 public:
 
@@ -367,11 +385,9 @@ public:
   virtual bool pinned() const { return true; }
   virtual const Type *bottom_type() const { return TypeTuple::IFBOTH; }
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual int required_outcnt() const { return 2; }
   virtual const RegMask &out_RegMask() const;
-  void dominated_by(Node* prev_dom, PhaseIterGVN* igvn);
-  int is_range_check(Node* &range, Node* &index, jint &offset);
   Node* fold_compares(PhaseIterGVN* phase);
   static Node* up_one_dom(Node* curr, bool linear_only = false);
 
@@ -382,17 +398,37 @@ public:
 
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const;
+  virtual void related(GrowableArray <Node *> *in_rel, GrowableArray <Node *> *out_rel, bool compact) const;
 #endif
+};
+
+class RangeCheckNode : public IfNode {
+private:
+  int is_range_check(Node* &range, Node* &index, jint &offset);
+
+public:
+  RangeCheckNode(Node* control, Node *b, float p, float fcnt)
+    : IfNode(control, b, p, fcnt) {
+    init_class_id(Class_RangeCheck);
+  }
+
+  virtual int Opcode() const;
+  virtual Node* Ideal(PhaseGVN *phase, bool can_reshape);
 };
 
 class IfProjNode : public CProjNode {
 public:
   IfProjNode(IfNode *ifnode, uint idx) : CProjNode(ifnode,idx) {}
-  virtual Node *Identity(PhaseTransform *phase);
+  virtual Node* Identity(PhaseGVN* phase);
 
 protected:
   // Type of If input when this branch is always taken
   virtual bool always_taken(const TypeTuple* t) const = 0;
+
+#ifndef PRODUCT
+public:
+  virtual void related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const;
+#endif
 };
 
 class IfTrueNode : public IfProjNode {
@@ -437,7 +473,7 @@ public:
     init_req(1, idx);
   }
   virtual int Opcode() const;
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
   virtual const Type *bottom_type() const;
   virtual bool pinned() const { return true; }
@@ -455,6 +491,9 @@ public:
   virtual int   Opcode() const;
   virtual const RegMask& out_RegMask() const;
   virtual const Node* is_block_proj() const { return this; }
+#ifndef PRODUCT
+  virtual void related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const;
+#endif
 };
 
 class JumpProjNode : public JProjNode {
@@ -479,6 +518,8 @@ class JumpProjNode : public JProjNode {
   uint proj_no()     const { return _proj_no; }
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const;
+  virtual void dump_compact_spec(outputStream *st) const;
+  virtual void related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const;
 #endif
 };
 
@@ -492,7 +533,7 @@ public:
     init_class_id(Class_Catch);
   }
   virtual int Opcode() const;
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
 };
 
 // CatchProjNode controls which exception handler is targetted after a call.
@@ -520,7 +561,7 @@ public:
   }
 
   virtual int Opcode() const;
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual Node* Identity(PhaseGVN* phase);
   virtual const Type *bottom_type() const { return Type::CONTROL; }
   int  handler_bci() const        { return _handler_bci; }
   bool is_handler_proj() const    { return _handler_bci >= 0; }
@@ -539,7 +580,7 @@ public:
     init_req(1, i_o);
   }
   virtual int Opcode() const;
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual Node* Identity(PhaseGVN* phase);
   virtual bool pinned() const { return true; }
   uint match_edge(uint idx) const { return 0; }
   virtual uint ideal_reg() const { return Op_RegP; }
@@ -555,7 +596,7 @@ public:
   virtual int Opcode() const;
   virtual bool pinned() const { return true; };
   virtual const Type *bottom_type() const { return TypeTuple::IFBOTH; }
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
   virtual int required_outcnt() const { return 2; }
   virtual void emit(CodeBuffer &cbuf, PhaseRegAlloc *ra_) const { }

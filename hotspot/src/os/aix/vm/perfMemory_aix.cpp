@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2001, 2014, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2013 SAP AG. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@
 #include "oops/oop.inline.hpp"
 #include "os_aix.inline.hpp"
 #include "runtime/handles.inline.hpp"
+#include "runtime/os.hpp"
 #include "runtime/perfMemory.hpp"
 #include "services/memTracker.hpp"
 #include "utilities/exceptions.hpp"
@@ -101,7 +102,7 @@ static void save_memory_to_file(char* addr, size_t size) {
   if (result == OS_ERR) {
     if (PrintMiscellaneous && Verbose) {
       warning("Could not create Perfdata save file: %s: %s\n",
-              destfile, strerror(errno));
+              destfile, os::strerror(errno));
     }
   } else {
     int fd = result;
@@ -112,7 +113,7 @@ static void save_memory_to_file(char* addr, size_t size) {
       if (result == OS_ERR) {
         if (PrintMiscellaneous && Verbose) {
           warning("Could not write Perfdata save file: %s: %s\n",
-                  destfile, strerror(errno));
+                  destfile, os::strerror(errno));
         }
         break;
       }
@@ -121,10 +122,10 @@ static void save_memory_to_file(char* addr, size_t size) {
       addr += result;
     }
 
-    RESTARTABLE(::close(fd), result);
+    result = ::close(fd);
     if (PrintMiscellaneous && Verbose) {
       if (result == OS_ERR) {
-        warning("Could not close %s: %s\n", destfile, strerror(errno));
+        warning("Could not close %s: %s\n", destfile, os::strerror(errno));
       }
     }
   }
@@ -201,6 +202,7 @@ static pid_t filename_to_pid(const char* filename) {
 // the backing store files. Returns true if the directory is considered
 // a secure location. Returns false if the statbuf is a symbolic link or
 // if an error occurred.
+//
 static bool is_statbuf_secure(struct stat *statp) {
   if (S_ISLNK(statp->st_mode) || !S_ISDIR(statp->st_mode)) {
     // The path represents a link or some non-directory file type,
@@ -209,15 +211,18 @@ static bool is_statbuf_secure(struct stat *statp) {
     return false;
   }
   // We have an existing directory, check if the permissions are safe.
+  //
   if ((statp->st_mode & (S_IWGRP|S_IWOTH)) != 0) {
     // The directory is open for writing and could be subjected
     // to a symlink or a hard link attack. Declare it insecure.
+    //
     return false;
   }
-  // See if the uid of the directory matches the effective uid of the process.
-  //
-  if (statp->st_uid != geteuid()) {
+  // If user is not root then see if the uid of the directory matches the effective uid of the process.
+  uid_t euid = geteuid();
+  if ((euid != 0) && (statp->st_uid != euid)) {
     // The directory was not created by this user, declare it insecure.
+    //
     return false;
   }
   return true;
@@ -228,6 +233,7 @@ static bool is_statbuf_secure(struct stat *statp) {
 // the backing store files. Returns true if the directory exists
 // and is considered a secure location. Returns false if the path
 // is a symbolic link or if an error occurred.
+//
 static bool is_directory_secure(const char* path) {
   struct stat statbuf;
   int result = 0;
@@ -294,10 +300,13 @@ static int open_o_nofollow_impl(const char* path, int oflag, mode_t mode, bool u
   bool create;
   int error;
   int fd;
+  int result;
 
   create = false;
 
-  if (lstat(path, &orig_st) != 0) {
+  RESTARTABLE(::lstat(path, &orig_st), result);
+
+  if (result == OS_ERR) {
     if (errno == ENOENT && (oflag & O_CREAT) != 0) {
       // File doesn't exist, but_we want to create it, add O_EXCL flag
       // to make sure no-one creates it (or a symlink) before us
@@ -311,7 +320,7 @@ static int open_o_nofollow_impl(const char* path, int oflag, mode_t mode, bool u
       return OS_ERR;
     }
   } else {
-    // Lstat success, check if existing file is a link.
+    // lstat success, check if existing file is a link.
     if ((orig_st.st_mode & S_IFMT) == S_IFLNK)  {
       // File is a symlink.
       errno = ELOOP;
@@ -320,9 +329,9 @@ static int open_o_nofollow_impl(const char* path, int oflag, mode_t mode, bool u
   }
 
   if (use_mode == true) {
-    fd = open(path, oflag, mode);
+    RESTARTABLE(::open(path, oflag, mode), fd);
   } else {
-    fd = open(path, oflag);
+    RESTARTABLE(::open(path, oflag), fd);
   }
 
   if (fd == OS_ERR) {
@@ -331,7 +340,8 @@ static int open_o_nofollow_impl(const char* path, int oflag, mode_t mode, bool u
 
   // Can't do inode checks on before/after if we created the file.
   if (create == false) {
-    if (fstat(fd, &new_st) != 0) {
+    RESTARTABLE(::fstat(fd, &new_st), result);
+    if (result == OS_ERR) {
       // Keep errno from fstat, in case close also fails.
       error = errno;
       ::close(fd);
@@ -379,7 +389,7 @@ static DIR *open_directory_secure(const char* dirname) {
   RESTARTABLE(::open(dirname, O_RDONLY|O_NOFOLLOW), result);
 #else
   // workaround (jdk6 coding)
-  RESTARTABLE(::open_o_nofollow(dirname, O_RDONLY), result);
+  result = open_o_nofollow(dirname, O_RDONLY);
 #endif
 
   if (result == OS_ERR) {
@@ -388,7 +398,7 @@ static DIR *open_directory_secure(const char* dirname) {
       if (errno == ELOOP) {
         warning("directory %s is a symlink and is not secure\n", dirname);
       } else {
-        warning("could not open directory %s: %s\n", dirname, strerror(errno));
+        warning("could not open directory %s: %s\n", dirname, os::strerror(errno));
       }
     }
     return dirp;
@@ -454,13 +464,27 @@ static DIR *open_directory_secure_cwd(const char* dirname, int *saved_cwd_fd) {
     *saved_cwd_fd = result;
   }
 
-  // Set the current directory to dirname by using the fd of the directory.
+  // Set the current directory to dirname by using the fd of the directory and
+  // handle errors, otherwise shared memory files will be created in cwd.
   result = fchdir(fd);
-
-  return dirp;
+  if (result == OS_ERR) {
+    if (PrintMiscellaneous && Verbose) {
+      warning("could not change to directory %s", dirname);
+    }
+    if (*saved_cwd_fd != -1) {
+      ::close(*saved_cwd_fd);
+      *saved_cwd_fd = -1;
+    }
+    // Close the directory.
+    os::closedir(dirp);
+    return NULL;
+  } else {
+    return dirp;
+  }
 }
 
 // Close the directory and restore the current working directory.
+//
 static void close_directory_secure_cwd(DIR* dirp, int saved_cwd_fd) {
 
   int result;
@@ -484,7 +508,7 @@ static bool is_file_secure(int fd, const char *filename) {
   RESTARTABLE(::fstat(fd, &statbuf), result);
   if (result == OS_ERR) {
     if (PrintMiscellaneous && Verbose) {
-      warning("fstat failed on %s: %s\n", filename, strerror(errno));
+      warning("fstat failed on %s: %s\n", filename, os::strerror(errno));
     }
     return false;
   }
@@ -513,7 +537,6 @@ static char* get_user_name(uid_t uid) {
 
   char* pwbuf = NEW_C_HEAP_ARRAY(char, bufsize, mtInternal);
 
-  // POSIX interface to getpwuid_r is used on LINUX
   struct passwd* p;
   int result = getpwuid_r(uid, &pwent, pwbuf, (size_t)bufsize, &p);
 
@@ -521,7 +544,7 @@ static char* get_user_name(uid_t uid) {
     if (PrintMiscellaneous && Verbose) {
       if (result != 0) {
         warning("Could not retrieve passwd entry: %s\n",
-                strerror(result));
+                os::strerror(result));
       }
       else if (p == NULL) {
         // this check is added to protect against an observed problem
@@ -535,7 +558,7 @@ static char* get_user_name(uid_t uid) {
         // Bug Id 89052 was opened with RedHat.
         //
         warning("Could not retrieve passwd entry: %s\n",
-                strerror(errno));
+                os::strerror(errno));
       }
       else {
         warning("Could not determine user name: %s\n",
@@ -571,7 +594,7 @@ static char* get_user_name_slow(int vmid, TRAPS) {
                   "Process not found");
     }
     else /* EPERM */ {
-      THROW_MSG_0(vmSymbols::java_io_IOException(), strerror(errno));
+      THROW_MSG_0(vmSymbols::java_io_IOException(), os::strerror(errno));
     }
   }
 
@@ -724,7 +747,7 @@ static void remove_file(const char* path) {
   if (PrintMiscellaneous && Verbose && result == OS_ERR) {
     if (errno != ENOENT) {
       warning("Could not unlink shared memory backing"
-              " store file %s : %s\n", path, strerror(errno));
+              " store file %s : %s\n", path, os::strerror(errno));
     }
   }
 }
@@ -827,7 +850,7 @@ static bool make_user_tmp_dir(const char* dirname) {
       //
       if (PrintMiscellaneous && Verbose) {
         warning("could not create directory %s: %s\n",
-                dirname, strerror(errno));
+                dirname, os::strerror(errno));
       }
       return false;
     }
@@ -870,7 +893,7 @@ static int create_sharedmem_resources(const char* dirname, const char* filename,
   RESTARTABLE(::open(filename, O_RDWR|O_CREAT|O_NOFOLLOW, S_IREAD|S_IWRITE), result);
 #else
   // workaround function (jdk6 code)
-  RESTARTABLE(::open_o_nofollow(filename, O_RDWR|O_CREAT, S_IREAD|S_IWRITE), result);
+  result = open_o_nofollow(filename, O_RDWR|O_CREAT, S_IREAD|S_IWRITE);
 #endif
 
   if (result == OS_ERR) {
@@ -878,7 +901,7 @@ static int create_sharedmem_resources(const char* dirname, const char* filename,
       if (errno == ELOOP) {
         warning("file %s is a symlink and is not secure\n", filename);
       } else {
-        warning("could not create file %s: %s\n", filename, strerror(errno));
+        warning("could not create file %s: %s\n", filename, os::strerror(errno));
       }
     }
     // Close the directory and reset the current working directory.
@@ -902,7 +925,7 @@ static int create_sharedmem_resources(const char* dirname, const char* filename,
   RESTARTABLE(::ftruncate(fd, (off_t)0), result);
   if (result == OS_ERR) {
     if (PrintMiscellaneous && Verbose) {
-      warning("could not truncate shared memory file: %s\n", strerror(errno));
+      warning("could not truncate shared memory file: %s\n", os::strerror(errno));
     }
     ::close(fd);
     return -1;
@@ -911,9 +934,9 @@ static int create_sharedmem_resources(const char* dirname, const char* filename,
   RESTARTABLE(::ftruncate(fd, (off_t)size), result);
   if (result == OS_ERR) {
     if (PrintMiscellaneous && Verbose) {
-      warning("could not set shared memory file size: %s\n", strerror(errno));
+      warning("could not set shared memory file size: %s\n", os::strerror(errno));
     }
-    RESTARTABLE(::close(fd), result);
+    ::close(fd);
     return -1;
   }
 
@@ -928,25 +951,24 @@ static int open_sharedmem_file(const char* filename, int oflags, TRAPS) {
 
   // open the file
   int result;
-  // No O_NOFOLLOW defined at buildtime, and it is not documented for open;
-  // so provide a workaround in this case
+  // provide a workaround in case no O_NOFOLLOW is defined at buildtime
 #ifdef O_NOFOLLOW
   RESTARTABLE(::open(filename, oflags), result);
 #else
-  RESTARTABLE(::open_o_nofollow(filename, oflags), result);
+  result = open_o_nofollow(filename, oflags);
 #endif
-
   if (result == OS_ERR) {
     if (errno == ENOENT) {
-      THROW_MSG_0(vmSymbols::java_lang_IllegalArgumentException(),
-                  "Process not found");
+      THROW_MSG_(vmSymbols::java_lang_IllegalArgumentException(),
+                 "Process not found", OS_ERR);
     }
     else if (errno == EACCES) {
-      THROW_MSG_0(vmSymbols::java_lang_IllegalArgumentException(),
-                  "Permission denied");
+      THROW_MSG_(vmSymbols::java_lang_IllegalArgumentException(),
+                 "Permission denied", OS_ERR);
     }
     else {
-      THROW_MSG_0(vmSymbols::java_io_IOException(), strerror(errno));
+      THROW_MSG_(vmSymbols::java_io_IOException(),
+                 os::strerror(errno), OS_ERR);
     }
   }
   int fd = result;
@@ -964,7 +986,7 @@ static int open_sharedmem_file(const char* filename, int oflags, TRAPS) {
 // memory region on success or NULL on failure. A return value of
 // NULL will ultimately disable the shared memory feature.
 //
-// On Solaris and Linux, the name space for shared memory objects
+// On AIX, the name space for shared memory objects
 // is the file system name space.
 //
 // A monitoring application attaching to a JVM does not need to know
@@ -989,7 +1011,7 @@ static char* mmap_create_shared(size_t size) {
   char* dirname = get_user_tmp_dir(user_name);
   char* filename = get_sharedmem_filename(dirname, vmid);
 
-  // Get the short filename.
+  // get the short filename.
   char* short_filename = strrchr(filename, '/');
   if (short_filename == NULL) {
     short_filename = filename;
@@ -1015,14 +1037,12 @@ static char* mmap_create_shared(size_t size) {
 
   mapAddress = (char*)::mmap((char*)0, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
 
-  // attempt to close the file - restart it if it was interrupted,
-  // but ignore other failures
-  RESTARTABLE(::close(fd), result);
+  result = ::close(fd);
   assert(result != OS_ERR, "could not close file");
 
   if (mapAddress == MAP_FAILED) {
     if (PrintMiscellaneous && Verbose) {
-      warning("mmap failed -  %s\n", strerror(errno));
+      warning("mmap failed -  %s\n", os::strerror(errno));
     }
     remove_file(filename);
     FREE_C_HEAP_ARRAY(char, filename);
@@ -1090,7 +1110,7 @@ static size_t sharedmem_filesize(int fd, TRAPS) {
   RESTARTABLE(::fstat(fd, &statbuf), result);
   if (result == OS_ERR) {
     if (PrintMiscellaneous && Verbose) {
-      warning("fstat failed: %s\n", strerror(errno));
+      warning("fstat failed: %s\n", os::strerror(errno));
     }
     THROW_MSG_0(vmSymbols::java_io_IOException(),
                 "Could not determine PerfMemory size");
@@ -1124,7 +1144,6 @@ static void mmap_attach_shared(const char* user, int vmid, PerfMemory::PerfMemor
   // constructs for the file and the shared memory mapping.
   if (mode == PerfMemory::PERF_MODE_RO) {
     mmap_prot = PROT_READ;
-
   // No O_NOFOLLOW defined at buildtime, and it is not documented for open.
 #ifdef O_NOFOLLOW
     file_flags = O_RDONLY | O_NOFOLLOW;
@@ -1187,32 +1206,39 @@ static void mmap_attach_shared(const char* user, int vmid, PerfMemory::PerfMemor
   FREE_C_HEAP_ARRAY(char, filename);
 
   // open the shared memory file for the give vmid
-  fd = open_sharedmem_file(rfilename, file_flags, CHECK);
-  assert(fd != OS_ERR, "unexpected value");
+  fd = open_sharedmem_file(rfilename, file_flags, THREAD);
+
+  if (fd == OS_ERR) {
+    return;
+  }
+
+  if (HAS_PENDING_EXCEPTION) {
+    ::close(fd);
+    return;
+  }
 
   if (*sizep == 0) {
     size = sharedmem_filesize(fd, CHECK);
-    assert(size != 0, "unexpected size");
   } else {
     size = *sizep;
   }
 
+  assert(size > 0, "unexpected size <= 0");
+
   mapAddress = (char*)::mmap((char*)0, size, mmap_prot, MAP_SHARED, fd, 0);
 
-  // attempt to close the file - restart if it gets interrupted,
-  // but ignore other failures
-  RESTARTABLE(::close(fd), result);
+  result = ::close(fd);
   assert(result != OS_ERR, "could not close file");
 
   if (mapAddress == MAP_FAILED) {
     if (PrintMiscellaneous && Verbose) {
-      warning("mmap failed: %s\n", strerror(errno));
+      warning("mmap failed: %s\n", os::strerror(errno));
     }
     THROW_MSG(vmSymbols::java_lang_OutOfMemoryError(),
               "Could not map PerfMemory");
   }
 
-  // It does not go through os api, the operation has to record from here.
+  // it does not go through os api, the operation has to record from here.
   MemTracker::record_virtual_memory_reserve((address)mapAddress, size, CURRENT_PC, mtInternal);
 
   *addr = mapAddress;
@@ -1220,7 +1246,7 @@ static void mmap_attach_shared(const char* user, int vmid, PerfMemory::PerfMemor
 
   if (PerfTraceMemOps) {
     tty->print("mapped " SIZE_FORMAT " bytes for vmid %d at "
-               INTPTR_FORMAT "\n", size, vmid, (void*)mapAddress);
+               INTPTR_FORMAT "\n", size, vmid, p2i((void*)mapAddress));
   }
 }
 

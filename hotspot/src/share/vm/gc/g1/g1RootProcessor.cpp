@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,71 +24,23 @@
 
 #include "precompiled.hpp"
 
+#include "aot/aotLoader.hpp"
 #include "classfile/stringTable.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "code/codeCache.hpp"
 #include "gc/g1/bufferingOopClosure.hpp"
+#include "gc/g1/g1CodeBlobClosure.hpp"
 #include "gc/g1/g1CollectedHeap.inline.hpp"
-#include "gc/g1/g1CollectorPolicy.hpp"
 #include "gc/g1/g1CollectorState.hpp"
 #include "gc/g1/g1GCPhaseTimes.hpp"
-#include "gc/g1/g1RemSet.inline.hpp"
+#include "gc/g1/g1Policy.hpp"
+#include "gc/g1/g1RootClosures.hpp"
 #include "gc/g1/g1RootProcessor.hpp"
+#include "gc/g1/heapRegion.inline.hpp"
 #include "memory/allocation.inline.hpp"
 #include "runtime/fprofiler.hpp"
 #include "runtime/mutex.hpp"
 #include "services/management.hpp"
-
-class G1CodeBlobClosure : public CodeBlobClosure {
-  class HeapRegionGatheringOopClosure : public OopClosure {
-    G1CollectedHeap* _g1h;
-    OopClosure* _work;
-    nmethod* _nm;
-
-    template <typename T>
-    void do_oop_work(T* p) {
-      _work->do_oop(p);
-      T oop_or_narrowoop = oopDesc::load_heap_oop(p);
-      if (!oopDesc::is_null(oop_or_narrowoop)) {
-        oop o = oopDesc::decode_heap_oop_not_null(oop_or_narrowoop);
-        HeapRegion* hr = _g1h->heap_region_containing_raw(o);
-        assert(!_g1h->obj_in_cs(o) || hr->rem_set()->strong_code_roots_list_contains(_nm), "if o still in CS then evacuation failed and nm must already be in the remset");
-        hr->add_strong_code_root(_nm);
-      }
-    }
-
-  public:
-    HeapRegionGatheringOopClosure(OopClosure* oc) : _g1h(G1CollectedHeap::heap()), _work(oc), _nm(NULL) {}
-
-    void do_oop(oop* o) {
-      do_oop_work(o);
-    }
-
-    void do_oop(narrowOop* o) {
-      do_oop_work(o);
-    }
-
-    void set_nm(nmethod* nm) {
-      _nm = nm;
-    }
-  };
-
-  HeapRegionGatheringOopClosure _oc;
-public:
-  G1CodeBlobClosure(OopClosure* oc) : _oc(oc) {}
-
-  void do_code_blob(CodeBlob* cb) {
-    nmethod* nm = cb->as_nmethod_or_null();
-    if (nm != NULL) {
-      if (!nm->test_set_oops_do_mark()) {
-        _oc.set_nm(nm);
-        nm->oops_do(&_oc);
-        nm->fix_oop_relocations();
-      }
-    }
-  }
-};
-
 
 void G1RootProcessor::worker_has_discovered_all_strong_classes() {
   assert(ClassUnloadingWithConcurrentMark, "Currently only needed when doing G1 Class Unloading");
@@ -114,59 +66,39 @@ void G1RootProcessor::wait_until_all_strong_classes_discovered() {
 
 G1RootProcessor::G1RootProcessor(G1CollectedHeap* g1h, uint n_workers) :
     _g1h(g1h),
-    _process_strong_tasks(new SubTasksDone(G1RP_PS_NumElements)),
+    _process_strong_tasks(G1RP_PS_NumElements),
     _srs(n_workers),
     _lock(Mutex::leaf, "G1 Root Scanning barrier lock", false, Monitor::_safepoint_check_never),
     _n_workers_discovered_strong_classes(0) {}
 
-void G1RootProcessor::evacuate_roots(OopClosure* scan_non_heap_roots,
-                                     OopClosure* scan_non_heap_weak_roots,
-                                     CLDClosure* scan_strong_clds,
-                                     CLDClosure* scan_weak_clds,
-                                     bool trace_metadata,
-                                     uint worker_i) {
-  // First scan the shared roots.
+void G1RootProcessor::evacuate_roots(G1EvacuationRootClosures* closures, uint worker_i) {
   double ext_roots_start = os::elapsedTime();
   G1GCPhaseTimes* phase_times = _g1h->g1_policy()->phase_times();
 
-  BufferingOopClosure buf_scan_non_heap_roots(scan_non_heap_roots);
-  BufferingOopClosure buf_scan_non_heap_weak_roots(scan_non_heap_weak_roots);
-
-  OopClosure* const weak_roots = &buf_scan_non_heap_weak_roots;
-  OopClosure* const strong_roots = &buf_scan_non_heap_roots;
-
-  // CodeBlobClosures are not interoperable with BufferingOopClosures
-  G1CodeBlobClosure root_code_blobs(scan_non_heap_roots);
-
-  process_java_roots(strong_roots,
-                     trace_metadata ? scan_strong_clds : NULL,
-                     scan_strong_clds,
-                     trace_metadata ? NULL : scan_weak_clds,
-                     &root_code_blobs,
-                     phase_times,
-                     worker_i);
+  process_java_roots(closures, phase_times, worker_i);
 
   // This is the point where this worker thread will not find more strong CLDs/nmethods.
   // Report this so G1 can synchronize the strong and weak CLDs/nmethods processing.
-  if (trace_metadata) {
+  if (closures->trace_metadata()) {
     worker_has_discovered_all_strong_classes();
   }
 
-  process_vm_roots(strong_roots, weak_roots, phase_times, worker_i);
+  process_vm_roots(closures, phase_times, worker_i);
+  process_string_table_roots(closures, phase_times, worker_i);
 
   {
     // Now the CM ref_processor roots.
     G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::CMRefRoots, worker_i);
-    if (!_process_strong_tasks->is_task_claimed(G1RP_PS_refProcessor_oops_do)) {
+    if (!_process_strong_tasks.is_task_claimed(G1RP_PS_refProcessor_oops_do)) {
       // We need to treat the discovered reference lists of the
       // concurrent mark ref processor as roots and keep entries
       // (which are added by the marking threads) on them live
       // until they can be processed at the end of marking.
-      _g1h->ref_processor_cm()->weak_oops_do(&buf_scan_non_heap_roots);
+      _g1h->ref_processor_cm()->weak_oops_do(closures->strong_oops());
     }
   }
 
-  if (trace_metadata) {
+  if (closures->trace_metadata()) {
     {
       G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::WaitForStrongCLD, worker_i);
       // Barrier to make sure all workers passed
@@ -176,18 +108,18 @@ void G1RootProcessor::evacuate_roots(OopClosure* scan_non_heap_roots,
 
     // Now take the complement of the strong CLDs.
     G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::WeakCLDRoots, worker_i);
-    ClassLoaderDataGraph::roots_cld_do(NULL, scan_weak_clds);
+    assert(closures->second_pass_weak_clds() != NULL, "Should be non-null if we are tracing metadata.");
+    ClassLoaderDataGraph::roots_cld_do(NULL, closures->second_pass_weak_clds());
   } else {
     phase_times->record_time_secs(G1GCPhaseTimes::WaitForStrongCLD, worker_i, 0.0);
     phase_times->record_time_secs(G1GCPhaseTimes::WeakCLDRoots, worker_i, 0.0);
+    assert(closures->second_pass_weak_clds() == NULL, "Should be null if not tracing metadata.");
   }
 
   // Finish up any enqueued closure apps (attributed as object copy time).
-  buf_scan_non_heap_roots.done();
-  buf_scan_non_heap_weak_roots.done();
+  closures->flush();
 
-  double obj_copy_time_sec = buf_scan_non_heap_roots.closure_app_seconds()
-      + buf_scan_non_heap_weak_roots.closure_app_seconds();
+  double obj_copy_time_sec = closures->closure_app_seconds();
 
   phase_times->record_time_secs(G1GCPhaseTimes::ObjCopy, worker_i, obj_copy_time_sec);
 
@@ -200,132 +132,198 @@ void G1RootProcessor::evacuate_roots(OopClosure* scan_non_heap_roots,
   // as implicitly live).
   {
     G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::SATBFiltering, worker_i);
-    if (!_process_strong_tasks->is_task_claimed(G1RP_PS_filter_satb_buffers) && _g1h->collector_state()->mark_in_progress()) {
+    if (!_process_strong_tasks.is_task_claimed(G1RP_PS_filter_satb_buffers) && _g1h->collector_state()->mark_in_progress()) {
       JavaThread::satb_mark_queue_set().filter_thread_buffers();
     }
   }
 
-  _process_strong_tasks->all_tasks_completed(n_workers());
+  _process_strong_tasks.all_tasks_completed(n_workers());
 }
+
+// Adaptor to pass the closures to the strong roots in the VM.
+class StrongRootsClosures : public G1RootClosures {
+  OopClosure* _roots;
+  CLDClosure* _clds;
+  CodeBlobClosure* _blobs;
+public:
+  StrongRootsClosures(OopClosure* roots, CLDClosure* clds, CodeBlobClosure* blobs) :
+      _roots(roots), _clds(clds), _blobs(blobs) {}
+
+  OopClosure* weak_oops()   { return NULL; }
+  OopClosure* strong_oops() { return _roots; }
+
+  CLDClosure* weak_clds()        { return NULL; }
+  CLDClosure* strong_clds()      { return _clds; }
+
+  CodeBlobClosure* strong_codeblobs() { return _blobs; }
+};
 
 void G1RootProcessor::process_strong_roots(OopClosure* oops,
                                            CLDClosure* clds,
                                            CodeBlobClosure* blobs) {
+  StrongRootsClosures closures(oops, clds, blobs);
 
-  process_java_roots(oops, clds, clds, NULL, blobs, NULL, 0);
-  process_vm_roots(oops, NULL, NULL, 0);
+  process_java_roots(&closures, NULL, 0);
+  process_vm_roots(&closures, NULL, 0);
 
-  _process_strong_tasks->all_tasks_completed(n_workers());
+  _process_strong_tasks.all_tasks_completed(n_workers());
+}
+
+// Adaptor to pass the closures to all the roots in the VM.
+class AllRootsClosures : public G1RootClosures {
+  OopClosure* _roots;
+  CLDClosure* _clds;
+public:
+  AllRootsClosures(OopClosure* roots, CLDClosure* clds) :
+      _roots(roots), _clds(clds) {}
+
+  OopClosure* weak_oops() { return _roots; }
+  OopClosure* strong_oops() { return _roots; }
+
+  // By returning the same CLDClosure for both weak and strong CLDs we ensure
+  // that a single walk of the CLDG will invoke the closure on all CLDs i the
+  // system.
+  CLDClosure* weak_clds() { return _clds; }
+  CLDClosure* strong_clds() { return _clds; }
+
+  // We don't want to visit code blobs more than once, so we return NULL for the
+  // strong case and walk the entire code cache as a separate step.
+  CodeBlobClosure* strong_codeblobs() { return NULL; }
+};
+
+void G1RootProcessor::process_all_roots(OopClosure* oops,
+                                        CLDClosure* clds,
+                                        CodeBlobClosure* blobs,
+                                        bool process_string_table) {
+  AllRootsClosures closures(oops, clds);
+
+  process_java_roots(&closures, NULL, 0);
+  process_vm_roots(&closures, NULL, 0);
+
+  if (process_string_table) {
+    process_string_table_roots(&closures, NULL, 0);
+  }
+  process_code_cache_roots(blobs, NULL, 0);
+
+  _process_strong_tasks.all_tasks_completed(n_workers());
 }
 
 void G1RootProcessor::process_all_roots(OopClosure* oops,
                                         CLDClosure* clds,
                                         CodeBlobClosure* blobs) {
-
-  process_java_roots(oops, NULL, clds, clds, NULL, NULL, 0);
-  process_vm_roots(oops, oops, NULL, 0);
-
-  if (!_process_strong_tasks->is_task_claimed(G1RP_PS_CodeCache_oops_do)) {
-    CodeCache::blobs_do(blobs);
-  }
-
-  _process_strong_tasks->all_tasks_completed(n_workers());
+  process_all_roots(oops, clds, blobs, true);
 }
 
-void G1RootProcessor::process_java_roots(OopClosure* strong_roots,
-                                         CLDClosure* thread_stack_clds,
-                                         CLDClosure* strong_clds,
-                                         CLDClosure* weak_clds,
-                                         CodeBlobClosure* strong_code,
+void G1RootProcessor::process_all_roots_no_string_table(OopClosure* oops,
+                                                        CLDClosure* clds,
+                                                        CodeBlobClosure* blobs) {
+  assert(!ClassUnloading, "Should only be used when class unloading is disabled");
+  process_all_roots(oops, clds, blobs, false);
+}
+
+void G1RootProcessor::process_java_roots(G1RootClosures* closures,
                                          G1GCPhaseTimes* phase_times,
                                          uint worker_i) {
-  assert(thread_stack_clds == NULL || weak_clds == NULL, "There is overlap between those, only one may be set");
   // Iterating over the CLDG and the Threads are done early to allow us to
   // first process the strong CLDs and nmethods and then, after a barrier,
   // let the thread process the weak CLDs and nmethods.
   {
     G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::CLDGRoots, worker_i);
-    if (!_process_strong_tasks->is_task_claimed(G1RP_PS_ClassLoaderDataGraph_oops_do)) {
-      ClassLoaderDataGraph::roots_cld_do(strong_clds, weak_clds);
+    if (!_process_strong_tasks.is_task_claimed(G1RP_PS_ClassLoaderDataGraph_oops_do)) {
+      ClassLoaderDataGraph::roots_cld_do(closures->strong_clds(), closures->weak_clds());
     }
   }
 
   {
     G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::ThreadRoots, worker_i);
     bool is_par = n_workers() > 1;
-    Threads::possibly_parallel_oops_do(is_par, strong_roots, thread_stack_clds, strong_code);
+    Threads::possibly_parallel_oops_do(is_par,
+                                       closures->strong_oops(),
+                                       closures->strong_codeblobs());
   }
 }
 
-void G1RootProcessor::process_vm_roots(OopClosure* strong_roots,
-                                       OopClosure* weak_roots,
+void G1RootProcessor::process_vm_roots(G1RootClosures* closures,
                                        G1GCPhaseTimes* phase_times,
                                        uint worker_i) {
+  OopClosure* strong_roots = closures->strong_oops();
+  OopClosure* weak_roots = closures->weak_oops();
+
   {
     G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::UniverseRoots, worker_i);
-    if (!_process_strong_tasks->is_task_claimed(G1RP_PS_Universe_oops_do)) {
+    if (!_process_strong_tasks.is_task_claimed(G1RP_PS_Universe_oops_do)) {
       Universe::oops_do(strong_roots);
     }
   }
 
   {
     G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::JNIRoots, worker_i);
-    if (!_process_strong_tasks->is_task_claimed(G1RP_PS_JNIHandles_oops_do)) {
+    if (!_process_strong_tasks.is_task_claimed(G1RP_PS_JNIHandles_oops_do)) {
       JNIHandles::oops_do(strong_roots);
     }
   }
 
   {
     G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::ObjectSynchronizerRoots, worker_i);
-    if (!_process_strong_tasks-> is_task_claimed(G1RP_PS_ObjectSynchronizer_oops_do)) {
+    if (!_process_strong_tasks.is_task_claimed(G1RP_PS_ObjectSynchronizer_oops_do)) {
       ObjectSynchronizer::oops_do(strong_roots);
     }
   }
 
   {
     G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::FlatProfilerRoots, worker_i);
-    if (!_process_strong_tasks->is_task_claimed(G1RP_PS_FlatProfiler_oops_do)) {
+    if (!_process_strong_tasks.is_task_claimed(G1RP_PS_FlatProfiler_oops_do)) {
       FlatProfiler::oops_do(strong_roots);
     }
   }
 
   {
     G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::ManagementRoots, worker_i);
-    if (!_process_strong_tasks->is_task_claimed(G1RP_PS_Management_oops_do)) {
+    if (!_process_strong_tasks.is_task_claimed(G1RP_PS_Management_oops_do)) {
       Management::oops_do(strong_roots);
     }
   }
 
   {
     G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::JVMTIRoots, worker_i);
-    if (!_process_strong_tasks->is_task_claimed(G1RP_PS_jvmti_oops_do)) {
+    if (!_process_strong_tasks.is_task_claimed(G1RP_PS_jvmti_oops_do)) {
       JvmtiExport::oops_do(strong_roots);
     }
   }
 
-  {
-    G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::SystemDictionaryRoots, worker_i);
-    if (!_process_strong_tasks->is_task_claimed(G1RP_PS_SystemDictionary_oops_do)) {
-      SystemDictionary::roots_oops_do(strong_roots, weak_roots);
+#if INCLUDE_AOT
+  if (UseAOT) {
+    G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::AOTCodeRoots, worker_i);
+    if (!_process_strong_tasks.is_task_claimed(G1RP_PS_aot_oops_do)) {
+        AOTLoader::oops_do(strong_roots);
     }
   }
+#endif
 
   {
-    G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::StringTableRoots, worker_i);
-    // All threads execute the following. A specific chunk of buckets
-    // from the StringTable are the individual tasks.
-    if (weak_roots != NULL) {
-      StringTable::possibly_parallel_oops_do(weak_roots);
+    G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::SystemDictionaryRoots, worker_i);
+    if (!_process_strong_tasks.is_task_claimed(G1RP_PS_SystemDictionary_oops_do)) {
+      SystemDictionary::roots_oops_do(strong_roots, weak_roots);
     }
   }
 }
 
-void G1RootProcessor::scan_remembered_sets(G1ParPushHeapRSClosure* scan_rs,
-                                           OopClosure* scan_non_heap_weak_roots,
-                                           uint worker_i) {
-  G1CodeBlobClosure scavenge_cs_nmethods(scan_non_heap_weak_roots);
+void G1RootProcessor::process_string_table_roots(G1RootClosures* closures,
+                                                 G1GCPhaseTimes* phase_times,
+                                                 uint worker_i) {
+  assert(closures->weak_oops() != NULL, "Should only be called when all roots are processed");
+  G1GCParPhaseTimesTracker x(phase_times, G1GCPhaseTimes::StringTableRoots, worker_i);
+  // All threads execute the following. A specific chunk of buckets
+  // from the StringTable are the individual tasks.
+  StringTable::possibly_parallel_oops_do(closures->weak_oops());
+}
 
-  _g1h->g1_rem_set()->oops_into_collection_set_do(scan_rs, &scavenge_cs_nmethods, worker_i);
+void G1RootProcessor::process_code_cache_roots(CodeBlobClosure* code_closure,
+                                               G1GCPhaseTimes* phase_times,
+                                               uint worker_i) {
+  if (!_process_strong_tasks.is_task_claimed(G1RP_PS_CodeCache_oops_do)) {
+    CodeCache::blobs_do(code_closure);
+  }
 }
 
 uint G1RootProcessor::n_workers() const {

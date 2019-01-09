@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,12 +25,14 @@
  * @test
  * @bug 8024927
  * @summary Testing address of compressed class pointer space as best as possible.
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.Platform;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 
 public class CompressedClassPointers {
 
@@ -39,7 +41,7 @@ public class CompressedClassPointers {
             "-XX:+UnlockDiagnosticVMOptions",
             "-XX:SharedBaseAddress=8g",
             "-Xmx128m",
-            "-XX:+PrintCompressedOopsMode",
+            "-Xlog:gc+metaspace=trace",
             "-XX:+VerifyBeforeGC", "-version");
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
         output.shouldContain("Narrow klass base: 0x0000000000000000");
@@ -51,7 +53,7 @@ public class CompressedClassPointers {
             "-XX:+UnlockDiagnosticVMOptions",
             "-XX:CompressedClassSpaceSize=3g",
             "-Xmx128m",
-            "-XX:+PrintCompressedOopsMode",
+            "-Xlog:gc+metaspace=trace",
             "-XX:+VerifyBeforeGC", "-version");
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
         output.shouldContain("Narrow klass base: 0x0000000000000000, Narrow klass shift: 3");
@@ -62,7 +64,8 @@ public class CompressedClassPointers {
         ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(
             "-XX:+UnlockDiagnosticVMOptions",
             "-Xmx30g",
-            "-XX:+PrintCompressedOopsMode",
+            "-XX:-UseAOT", // AOT explicitly set klass shift to 3.
+            "-Xlog:gc+metaspace=trace",
             "-XX:+VerifyBeforeGC", "-version");
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
         output.shouldNotContain("Narrow klass base: 0x0000000000000000");
@@ -75,7 +78,7 @@ public class CompressedClassPointers {
             "-XX:+UnlockDiagnosticVMOptions",
             "-Xmx128m",
             "-XX:+UseLargePages",
-            "-XX:+PrintCompressedOopsMode",
+            "-Xlog:gc+metaspace=trace",
             "-XX:+VerifyBeforeGC", "-version");
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
         output.shouldContain("Narrow klass base:");
@@ -85,8 +88,7 @@ public class CompressedClassPointers {
     public static void heapBaseMinAddressTest() throws Exception {
         ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(
             "-XX:HeapBaseMinAddress=1m",
-            "-XX:+UnlockDiagnosticVMOptions",
-            "-XX:+PrintCompressedOopsMode",
+            "-Xlog:gc+heap+coops=debug",
             "-version");
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
         output.shouldContain("HeapBaseMinAddress must be at least");

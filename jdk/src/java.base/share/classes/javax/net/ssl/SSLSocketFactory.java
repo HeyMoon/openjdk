@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -51,9 +51,9 @@ public abstract class SSLSocketFactory extends SocketFactory
     static final boolean DEBUG;
 
     static {
-        String s = java.security.AccessController.doPrivileged(
-            new GetPropertyAction("javax.net.debug", "")).toLowerCase(
-                                                            Locale.ENGLISH);
+        String s = GetPropertyAction.privilegedGetProperty("javax.net.debug", "")
+                .toLowerCase(Locale.ENGLISH);
+
         DEBUG = s.contains("all") || s.contains("ssl");
     }
 
@@ -106,6 +106,7 @@ public abstract class SSLSocketFactory extends SocketFactory
                         }
                     }
                     log("class " + clsName + " is loaded");
+                    @SuppressWarnings("deprecation")
                     SSLSocketFactory fac = (SSLSocketFactory)cls.newInstance();
                     log("instantiated an instance of class " + clsName);
                     theFactory = fac;
@@ -147,6 +148,13 @@ public abstract class SSLSocketFactory extends SocketFactory
      * will use one of these cipher suites.  The minimum quality of service
      * for these defaults requires confidentiality protection and server
      * authentication (that is, no anonymous cipher suites).
+     * <P>
+     * The returned array includes cipher suites from the list of standard
+     * cipher suite names in the <a href=
+     * "{@docRoot}/../specs/security/standard-names.html#jsse-cipher-suite-names">
+     * JSSE Cipher Suite Names</a> section of the Java Cryptography
+     * Architecture Standard Algorithm Name Documentation, and may also
+     * include other cipher suites that the provider supports.
      *
      * @see #getSupportedCipherSuites()
      * @return array of the cipher suites enabled by default
@@ -159,6 +167,13 @@ public abstract class SSLSocketFactory extends SocketFactory
      * be enabled by default, since this list may include cipher suites which
      * do not meet quality of service requirements for those defaults.  Such
      * cipher suites are useful in specialized applications.
+     * <P>
+     * The returned array includes cipher suites from the list of standard
+     * cipher suite names in the <a href=
+     * "{@docRoot}/../specs/security/standard-names.html#jsse-cipher-suite-names">
+     * JSSE Cipher Suite Names</a> section of the Java Cryptography
+     * Architecture Standard Algorithm Name Documentation, and may also
+     * include other cipher suites that the provider supports.
      *
      * @see #getDefaultCipherSuites()
      * @return an array of cipher suite names

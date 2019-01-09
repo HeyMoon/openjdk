@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,6 +40,7 @@ import javax.accessibility.*;
 import java.lang.ref.*;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
+import javax.swing.text.html.parser.ParserDelegator;
 
 /**
  * The Swing JEditorPane text component supports different kinds
@@ -610,11 +611,7 @@ public class HTMLEditorKit extends StyledEditorKit implements Accessible {
      */
     protected Parser getParser() {
         if (defaultParser == null) {
-            try {
-                Class<?> c = Class.forName("javax.swing.text.html.parser.ParserDelegator");
-                defaultParser = (Parser) c.newInstance();
-            } catch (Throwable e) {
-            }
+            defaultParser = new ParserDelegator();
         }
         return defaultParser;
     }
@@ -686,6 +683,7 @@ public class HTMLEditorKit extends StyledEditorKit implements Accessible {
          * @param e the mouse event
          * @see MouseListener#mouseClicked
          */
+        @SuppressWarnings("deprecation")
         public void mouseClicked(MouseEvent e) {
             JEditorPane editor = (JEditorPane) e.getSource();
 
@@ -704,6 +702,7 @@ public class HTMLEditorKit extends StyledEditorKit implements Accessible {
         }
 
         // track the moving of the mouse.
+        @SuppressWarnings("deprecation")
         public void mouseMoved(MouseEvent e) {
             JEditorPane editor = (JEditorPane) e.getSource();
             if (!editor.isEnabled()) {
@@ -776,6 +775,7 @@ public class HTMLEditorKit extends StyledEditorKit implements Accessible {
          * Returns a string anchor if the passed in element has a
          * USEMAP that contains the passed in location.
          */
+        @SuppressWarnings("deprecation")
         private String getMapHREF(JEditorPane html, HTMLDocument hdoc,
                                   Element elem, AttributeSet attr, int offset,
                                   int x, int y) {
@@ -816,6 +816,7 @@ public class HTMLEditorKit extends StyledEditorKit implements Accessible {
          * the location <code>x</code>, <code>y</code>. <code>offset</code>
          * gives the offset into the Document to check for.
          */
+        @SuppressWarnings("deprecation")
         private boolean doesElementContainLocation(JEditorPane editor,
                                                    Element e, int offset,
                                                    int x, int y) {
@@ -987,7 +988,7 @@ public class HTMLEditorKit extends StyledEditorKit implements Accessible {
      * providing a different parser while reusing some of the
      * implementation provided by this editor kit.
      */
-    public static abstract class Parser {
+    public abstract static class Parser {
         /**
          * Parse the given stream and drive the given callback
          * with the results of the parse.  This method should
@@ -1117,10 +1118,17 @@ public class HTMLEditorKit extends StyledEditorKit implements Accessible {
      * table describes what this factory will build by
      * default.
      *
-     * <table summary="Describes the tag and view created by this factory by default">
+     * <table class="striped">
+     * <caption>Describes the tag and view created by this factory by default
+     * </caption>
+     * <thead>
      * <tr>
-     * <th align=left>Tag<th align=left>View created
-     * </tr><tr>
+     * <th>Tag
+     * <th>View created
+     * </tr>
+     * </thead>
+     * <tbody>
+     * <tr>
      * <td>HTML.Tag.CONTENT<td>InlineView
      * </tr><tr>
      * <td>HTML.Tag.IMPLIED<td>javax.swing.text.html.ParagraphView
@@ -1191,6 +1199,7 @@ public class HTMLEditorKit extends StyledEditorKit implements Accessible {
      * </tr><tr>
      * <td>HTML.Tag.FRAME<td>FrameView
      * </tr>
+     * </tbody>
      * </table>
      */
     public static class HTMLFactory implements ViewFactory {
@@ -1564,7 +1573,7 @@ public class HTMLEditorKit extends StyledEditorKit implements Accessible {
      * methods may have inconsistent behavior, or return the wrong thing.
      */
     @SuppressWarnings("serial") // Superclass is not serializable across versions
-    public static abstract class HTMLTextAction extends StyledTextAction {
+    public abstract static class HTMLTextAction extends StyledTextAction {
 
         /**
          * Creates a new HTMLTextAction from a string action name.
@@ -2009,7 +2018,7 @@ public class HTMLEditorKit extends StyledEditorKit implements Accessible {
     /*
      * Returns the object in an AttributeSet matching a key
      */
-    static private Object getAttrValue(AttributeSet attr, HTML.Attribute key) {
+    private static Object getAttrValue(AttributeSet attr, HTML.Attribute key) {
         Enumeration<?> names = attr.getAttributeNames();
         while (names.hasMoreElements()) {
             Object nextKey = names.nextElement();

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,8 +25,8 @@
 package java.net;
 
 import java.io.IOException;
-import sun.misc.SharedSecrets;
-import sun.misc.JavaIOFileDescriptorAccess;
+import jdk.internal.misc.SharedSecrets;
+import jdk.internal.misc.JavaIOFileDescriptorAccess;
 
 /**
  * This class defines the plain DatagramSocketImpl that is used on
@@ -167,6 +167,11 @@ class DualStackPlainDatagramSocketImpl extends AbstractPlainDatagramSocketImpl
 
         int optionValue = 0;
 
+        // SO_REUSEPORT is not supported on Windows.
+        if (opt == SO_REUSEPORT) {
+            throw new UnsupportedOperationException("unsupported option");
+        }
+
         switch(opt) {
             case IP_TOS :
             case SO_RCVBUF :
@@ -200,6 +205,9 @@ class DualStackPlainDatagramSocketImpl extends AbstractPlainDatagramSocketImpl
         }
         if (opt == SO_REUSEADDR && reuseAddressEmulated)
             return isReuseAddress;
+        // SO_REUSEPORT is not supported on Windows.
+        if (opt == SO_REUSEPORT)
+            throw new UnsupportedOperationException("unsupported option");
 
         int value = socketGetIntOption(nativefd, opt);
         Object returnValue = null;
@@ -212,7 +220,7 @@ class DualStackPlainDatagramSocketImpl extends AbstractPlainDatagramSocketImpl
             case IP_TOS :
             case SO_RCVBUF :
             case SO_SNDBUF :
-                returnValue = new Integer(value);
+                returnValue = Integer.valueOf(value);
                 break;
             default: /* shouldn't get here */
                 throw new SocketException("Option not supported");
@@ -292,4 +300,6 @@ class DualStackPlainDatagramSocketImpl extends AbstractPlainDatagramSocketImpl
         int optionValue) throws SocketException;
 
     private static native int socketGetIntOption(int fd, int cmd) throws SocketException;
+
+    native int dataAvailable();
 }

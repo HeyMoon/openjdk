@@ -19,17 +19,16 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
-package rtm;
+package compiler.testlibrary.rtm;
+
+import jdk.test.lib.Asserts;
+import sun.hotspot.WhiteBox;
 
 import java.util.Objects;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
-
-import jdk.test.lib.Asserts;
-import sun.hotspot.WhiteBox;
 
 /**
  * Base class for different transactional execution abortion

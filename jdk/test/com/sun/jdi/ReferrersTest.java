@@ -22,15 +22,14 @@
  */
 
 /**
- *  @test
- *  @bug 5089849
- *  @summary Add support for backtracking reference graph.
- *  @author jjh
+ * @test
+ * @bug 5089849
+ * @summary Add support for backtracking reference graph.
+ * @author jjh
  *
- *  @modules jdk.jdi
- *  @run build TestScaffold VMConnection TargetListener TargetAdapter
- *  @run compile -g ReferrersTest.java
- *  @run driver ReferrersTest
+ * @run build TestScaffold VMConnection TargetListener TargetAdapter
+ * @run compile -g ReferrersTest.java
+ * @run driver ReferrersTest
  */
 
 /*
@@ -446,7 +445,7 @@ public class ReferrersTest extends TestScaffold {
         if (rt instanceof ClassType) {
             ClassType ct = (ClassType)rt;
             String name = ct.name();
-            if (name.equals("sun.misc.SoftCache$ValueCell")) {
+            if (name.equals("sun.awt.SoftCache$ValueCell")) {
                 return;
             }
             if (name.equals("java.lang.ref.Finalizer")) {

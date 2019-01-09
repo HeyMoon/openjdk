@@ -83,6 +83,7 @@ public class TrueTypeFont extends FileFont {
     public static final int GPOSTag = 0x47504F53; // 'GPOS'
     public static final int GSUBTag = 0x47535542; // 'GSUB'
     public static final int mortTag = 0x6D6F7274; // 'mort'
+    public static final int morxTag = 0x6D6F7278; // 'morx'
 
     /* -- Tags for non-standard tables */
     public static final int fdscTag = 0x66647363; // 'fdsc' - gxFont descriptor
@@ -98,6 +99,10 @@ public class TrueTypeFont extends FileFont {
     public static final int ottoTag = 0x4f54544f; // 'otto' - OpenType font
 
     /* -- ID's used in the 'name' table */
+    public static final int MAC_PLATFORM_ID = 1;
+    public static final int MACROMAN_SPECIFIC_ID = 0;
+    public static final int MACROMAN_ENGLISH_LANG = 0;
+
     public static final int MS_PLATFORM_ID = 3;
     /* MS locale id for US English is the "default" */
     public static final short ENGLISH_LOCALE_ID = 0x0409; // 1033 decimal
@@ -175,24 +180,34 @@ public class TrueTypeFont extends FileFont {
     private String localeFamilyName;
     private String localeFullName;
 
+    public TrueTypeFont(String platname, Object nativeNames, int fIndex,
+                 boolean javaRasterizer)
+        throws FontFormatException
+    {
+        this(platname, nativeNames, fIndex, javaRasterizer, true);
+    }
+
     /**
      * - does basic verification of the file
      * - reads the header table for this font (within a collection)
      * - reads the names (full, family).
      * - determines the style of the font.
      * - initializes the CMAP
-     * @throws FontFormatException - if the font can't be opened
+     * @throws FontFormatException if the font can't be opened
      * or fails verification,  or there's no usable cmap
      */
     public TrueTypeFont(String platname, Object nativeNames, int fIndex,
-                 boolean javaRasterizer)
+                 boolean javaRasterizer, boolean useFilePool)
         throws FontFormatException {
         super(platname, nativeNames);
         useJavaRasterizer = javaRasterizer;
         fontRank = Font2D.TTF_RANK;
         try {
-            verify();
+            verify(useFilePool);
             init(fIndex);
+            if (!useFilePool) {
+               close();
+            }
         } catch (Throwable t) {
             close();
             if (t instanceof FontFormatException) {
@@ -279,6 +294,10 @@ public class TrueTypeFont extends FileFont {
     }
 
 
+    private synchronized FileChannel open() throws FontFormatException {
+        return open(true);
+     }
+
     /* This is intended to be called, and the returned value used,
      * from within a block synchronized on this font object.
      * ie the channel returned may be nulled out at any time by "close()"
@@ -286,7 +305,8 @@ public class TrueTypeFont extends FileFont {
      * Deadlock warning: FontManager.addToPool(..) acquires a global lock,
      * which means nested locks may be in effect.
      */
-    private synchronized FileChannel open() throws FontFormatException {
+    private synchronized FileChannel open(boolean usePool)
+                                     throws FontFormatException {
         if (disposerRecord.channel == null) {
             if (FontUtilities.isLogging()) {
                 FontUtilities.getLogger().info("open TTF: " + platName);
@@ -305,9 +325,11 @@ public class TrueTypeFont extends FileFont {
                 });
                 disposerRecord.channel = raf.getChannel();
                 fileSize = (int)disposerRecord.channel.size();
-                FontManager fm = FontManagerFactory.getInstance();
-                if (fm instanceof SunFontManager) {
-                    ((SunFontManager) fm).addToPool(this);
+                if (usePool) {
+                    FontManager fm = FontManagerFactory.getInstance();
+                    if (fm instanceof SunFontManager) {
+                        ((SunFontManager) fm).addToPool(this);
+                    }
                 }
             } catch (NullPointerException e) {
                 close();
@@ -491,8 +513,8 @@ public class TrueTypeFont extends FileFont {
         }
     }
 
-    private void verify() throws FontFormatException {
-        open();
+    private void verify(boolean usePool) throws FontFormatException {
+        open(usePool);
     }
 
     /* sizes, in bytes, of TT/TTC header records */
@@ -874,8 +896,8 @@ public class TrueTypeFont extends FileFont {
         }
     }
 
-    /* NB: is it better to move declaration to Font2D? */
-    long getLayoutTableCache() {
+    @Override
+    protected long getLayoutTableCache() {
         try {
           return getScaler().getLayoutTableCache();
         } catch(FontScalerException fe) {
@@ -884,7 +906,7 @@ public class TrueTypeFont extends FileFont {
     }
 
     @Override
-    byte[] getTableBytes(int tag) {
+    protected byte[] getTableBytes(int tag) {
         ByteBuffer buffer = getTableBuffer(tag);
         if (buffer == null) {
             return null;
@@ -1090,7 +1112,12 @@ public class TrueTypeFont extends FileFont {
         metrics[offset+3] = ulSize * pointSize;
     }
 
-    private String makeString(byte[] bytes, int len, short encoding) {
+    private String makeString(byte[] bytes, int len,
+                             short platformID, short encoding) {
+
+        if (platformID == MAC_PLATFORM_ID) {
+            encoding = -1; // hack so we can re-use the code below.
+        }
 
         /* Check for fonts using encodings 2->6 is just for
          * some old DBCS fonts, apparently mostly on Solaris.
@@ -1112,6 +1139,7 @@ public class TrueTypeFont extends FileFont {
 
         String charset;
         switch (encoding) {
+            case -1: charset = "US-ASCII";break;
             case 1:  charset = "UTF-16";  break; // most common case first.
             case 0:  charset = "UTF-16";  break; // symbol uses this
             case 2:  charset = "SJIS";    break;
@@ -1157,7 +1185,8 @@ public class TrueTypeFont extends FileFont {
 
             for (int i=0; i<numRecords; i++) {
                 short platformID = sbuffer.get();
-                if (platformID != MS_PLATFORM_ID) {
+                if (platformID != MS_PLATFORM_ID &&
+                    platformID != MAC_PLATFORM_ID) {
                     sbuffer.position(sbuffer.position()+5);
                     continue; // skip over this record.
                 }
@@ -1167,6 +1196,14 @@ public class TrueTypeFont extends FileFont {
                 int nameLen    = ((int) sbuffer.get()) & 0xffff;
                 int namePtr    = (((int) sbuffer.get()) & 0xffff) + stringPtr;
                 String tmpName = null;
+
+                // only want MacRoman encoding and English name on Mac.
+                if ((platformID == MAC_PLATFORM_ID) &&
+                    (encodingID != MACROMAN_SPECIFIC_ID ||
+                     langID != MACROMAN_ENGLISH_LANG)) {
+                    continue;
+                }
+
                 switch (nameID) {
 
                 case FAMILY_NAME_ID:
@@ -1178,7 +1215,7 @@ public class TrueTypeFont extends FileFont {
                     {
                         buffer.position(namePtr);
                         buffer.get(name, 0, nameLen);
-                        tmpName = makeString(name, nameLen, encodingID);
+                        tmpName = makeString(name, nameLen, platformID, encodingID);
                         if (familyName == null || langID == ENGLISH_LOCALE_ID){
                             familyName = tmpName;
                         }
@@ -1211,7 +1248,7 @@ public class TrueTypeFont extends FileFont {
                     {
                         buffer.position(namePtr);
                         buffer.get(name, 0, nameLen);
-                        tmpName = makeString(name, nameLen, encodingID);
+                        tmpName = makeString(name, nameLen, platformID, encodingID);
 
                         if (fullName == null || langID == ENGLISH_LOCALE_ID) {
                             fullName = tmpName;
@@ -1272,7 +1309,7 @@ public class TrueTypeFont extends FileFont {
                      || langID == findLocaleID)) {
                     buffer.position(namePtr);
                     buffer.get(name, 0, nameLen);
-                    foundName = makeString(name, nameLen, encodingID);
+                    foundName = makeString(name, nameLen, platformID, encodingID);
                     if (langID == findLocaleID) {
                         return foundName;
                     }
@@ -1609,7 +1646,7 @@ public class TrueTypeFont extends FileFont {
                 if (nameID == requestedID) {
                     buffer.position(namePtr);
                     buffer.get(name, 0, nameLen);
-                    names.add(makeString(name, nameLen, encodingID));
+                    names.add(makeString(name, nameLen, platformID, encodingID));
                 }
             }
         }

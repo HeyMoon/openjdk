@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,16 +28,18 @@
 #include "gc/parallel/cardTableExtension.hpp"
 #include "gc/parallel/gcTaskManager.hpp"
 #include "gc/parallel/generationSizer.hpp"
+#include "gc/parallel/objectStartArray.inline.hpp"
 #include "gc/parallel/parallelScavengeHeap.inline.hpp"
 #include "gc/parallel/psAdaptiveSizePolicy.hpp"
 #include "gc/parallel/psMarkSweep.hpp"
-#include "gc/parallel/psParallelCompact.hpp"
+#include "gc/parallel/psParallelCompact.inline.hpp"
 #include "gc/parallel/psPromotionManager.hpp"
 #include "gc/parallel/psScavenge.hpp"
 #include "gc/parallel/vmPSOperations.hpp"
 #include "gc/shared/gcHeapSummary.hpp"
 #include "gc/shared/gcLocker.inline.hpp"
 #include "gc/shared/gcWhen.hpp"
+#include "logging/log.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/java.hpp"
@@ -58,8 +60,10 @@ jint ParallelScavengeHeap::initialize() {
 
   ReservedSpace heap_rs = Universe::reserve_heap(heap_size, _collector_policy->heap_alignment());
 
-  os::trace_page_sizes("ps main", _collector_policy->min_heap_byte_size(),
-                       heap_size, generation_alignment(),
+  os::trace_page_sizes("Heap",
+                       _collector_policy->min_heap_byte_size(),
+                       heap_size,
+                       generation_alignment(),
                        heap_rs.base(),
                        heap_rs.size());
 
@@ -249,7 +253,7 @@ HeapWord* ParallelScavengeHeap::mem_allocate(
       }
 
       // Failed to allocate without a gc.
-      if (GC_locker::is_active_and_needs_gc()) {
+      if (GCLocker::is_active_and_needs_gc()) {
         // If this thread is not in a jni critical section, we stall
         // the requestor until the critical section has cleared and
         // GC allowed. When the critical section clears, a GC is
@@ -259,7 +263,7 @@ HeapWord* ParallelScavengeHeap::mem_allocate(
         JavaThread* jthr = JavaThread::current();
         if (!jthr->in_critical()) {
           MutexUnlocker mul(Heap_lock);
-          GC_locker::stall_until_clear();
+          GCLocker::stall_until_clear();
           gclocker_stalled_count += 1;
           continue;
         } else {
@@ -307,10 +311,7 @@ HeapWord* ParallelScavengeHeap::mem_allocate(
         if (limit_exceeded && softrefs_clear) {
           *gc_overhead_limit_was_exceeded = true;
           size_policy()->set_gc_overhead_limit_exceeded(false);
-          if (PrintGCDetails && Verbose) {
-            gclog_or_tty->print_cr("ParallelScavengeHeap::mem_allocate: "
-              "return NULL because gc_overhead_limit_exceeded is set");
-          }
+          log_trace(gc)("ParallelScavengeHeap::mem_allocate: return NULL because gc_overhead_limit_exceeded is set");
           if (op.result() != NULL) {
             CollectedHeap::fill_with_object(op.result(), size);
           }
@@ -326,8 +327,8 @@ HeapWord* ParallelScavengeHeap::mem_allocate(
     loop_count++;
     if ((result == NULL) && (QueuedAllocationWarningCount > 0) &&
         (loop_count % QueuedAllocationWarningCount == 0)) {
-      warning("ParallelScavengeHeap::mem_allocate retries %d times \n\t"
-              " size=" SIZE_FORMAT, loop_count, size);
+      log_warning(gc)("ParallelScavengeHeap::mem_allocate retries %d times", loop_count);
+      log_warning(gc)("\tsize=" SIZE_FORMAT, size);
     }
   }
 
@@ -352,7 +353,7 @@ ParallelScavengeHeap::death_march_check(HeapWord* const addr, size_t size) {
 }
 
 HeapWord* ParallelScavengeHeap::mem_allocate_old_gen(size_t size) {
-  if (!should_alloc_in_eden(size) || GC_locker::is_active_and_needs_gc()) {
+  if (!should_alloc_in_eden(size) || GCLocker::is_active_and_needs_gc()) {
     // Size is too big for eden, or gc is locked out.
     return old_gen()->allocate(size);
   }
@@ -584,32 +585,14 @@ void ParallelScavengeHeap::print_tracing_info() const {
 }
 
 
-void ParallelScavengeHeap::verify(bool silent, VerifyOption option /* ignored */) {
+void ParallelScavengeHeap::verify(VerifyOption option /* ignored */) {
   // Why do we need the total_collections()-filter below?
   if (total_collections() > 0) {
-    if (!silent) {
-      gclog_or_tty->print("tenured ");
-    }
+    log_debug(gc, verify)("Tenured");
     old_gen()->verify();
 
-    if (!silent) {
-      gclog_or_tty->print("eden ");
-    }
+    log_debug(gc, verify)("Eden");
     young_gen()->verify();
-  }
-}
-
-void ParallelScavengeHeap::print_heap_change(size_t prev_used) {
-  if (PrintGCDetails && Verbose) {
-    gclog_or_tty->print(" "  SIZE_FORMAT
-                        "->" SIZE_FORMAT
-                        "("  SIZE_FORMAT ")",
-                        prev_used, used(), capacity());
-  } else {
-    gclog_or_tty->print(" "  SIZE_FORMAT "K"
-                        "->" SIZE_FORMAT "K"
-                        "("  SIZE_FORMAT "K)",
-                        prev_used / K, used() / K, capacity() / K);
   }
 }
 

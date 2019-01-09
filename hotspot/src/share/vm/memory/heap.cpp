@@ -47,7 +47,10 @@ CodeHeap::CodeHeap(const char* name, const int code_blob_type)
   _freelist_segments            = 0;
   _freelist_length              = 0;
   _max_allocated_capacity       = 0;
-  _was_full                     = false;
+  _blob_count                   = 0;
+  _nmethod_count                = 0;
+  _adapter_count                = 0;
+  _full_count                   = 0;
 }
 
 
@@ -146,6 +149,10 @@ bool CodeHeap::expand_by(size_t size) {
   // expand _memory space
   size_t dm = align_to_page_size(_memory.committed_size() + size) - _memory.committed_size();
   if (dm > 0) {
+    // Use at least the available uncommitted space if 'size' is larger
+    if (_memory.uncommitted_size() != 0 && dm > _memory.uncommitted_size()) {
+      dm = _memory.uncommitted_size();
+    }
     char* base = _memory.low() + _memory.committed_size();
     if (!_memory.expand_by(dm)) return false;
     on_code_mapping(base, dm);
@@ -183,8 +190,13 @@ void* CodeHeap::allocate(size_t instance_size) {
   if (block != NULL) {
     assert(block->length() >= number_of_segments && block->length() < number_of_segments + CodeCacheMinBlockLength, "sanity check");
     assert(!block->free(), "must be marked free");
+    guarantee((char*) block >= _memory.low_boundary() && (char*) block < _memory.high(),
+              "The newly allocated block " INTPTR_FORMAT " is not within the heap "
+              "starting with "  INTPTR_FORMAT " and ending with "  INTPTR_FORMAT,
+              p2i(block), p2i(_memory.low_boundary()), p2i(_memory.high()));
     DEBUG_ONLY(memset((void*)block->allocated_space(), badCodeHeapNewVal, instance_size));
     _max_allocated_capacity = MAX2(_max_allocated_capacity, allocated_capacity());
+    _blob_count++;
     return block->allocated_space();
   }
 
@@ -196,8 +208,13 @@ void* CodeHeap::allocate(size_t instance_size) {
     HeapBlock* b =  block_at(_next_segment);
     b->initialize(number_of_segments);
     _next_segment += number_of_segments;
+    guarantee((char*) b >= _memory.low_boundary() && (char*) block < _memory.high(),
+              "The newly allocated block " INTPTR_FORMAT " is not within the heap "
+              "starting with "  INTPTR_FORMAT " and ending with " INTPTR_FORMAT,
+              p2i(b), p2i(_memory.low_boundary()), p2i(_memory.high()));
     DEBUG_ONLY(memset((void *)b->allocated_space(), badCodeHeapNewVal, instance_size));
     _max_allocated_capacity = MAX2(_max_allocated_capacity, allocated_capacity());
+    _blob_count++;
     return b->allocated_space();
   } else {
     return NULL;
@@ -210,6 +227,10 @@ void CodeHeap::deallocate(void* p) {
   // Find start of HeapBlock
   HeapBlock* b = (((HeapBlock *)p) - 1);
   assert(b->allocated_space() == p, "sanity check");
+  guarantee((char*) b >= _memory.low_boundary() && (char*) b < _memory.high(),
+            "The block to be deallocated " INTPTR_FORMAT " is not within the heap "
+            "starting with "  INTPTR_FORMAT " and ending with " INTPTR_FORMAT,
+            p2i(b), p2i(_memory.low_boundary()), p2i(_memory.high()));
   DEBUG_ONLY(memset((void *)b->allocated_space(), badCodeHeapFreeVal,
              segments_to_size(b->length()) - sizeof(HeapBlock)));
   add_to_freelist(b);
@@ -266,6 +287,13 @@ void* CodeHeap::find_start(void* p) const {
   return h->allocated_space();
 }
 
+CodeBlob* CodeHeap::find_blob_unsafe(void* start) const {
+  CodeBlob* result = (CodeBlob*)CodeHeap::find_start(start);
+  if (result != NULL && result->blob_contains((address)start)) {
+    return result;
+  }
+  return NULL;
+}
 
 size_t CodeHeap::alignment_unit() const {
   // this will be a power of two

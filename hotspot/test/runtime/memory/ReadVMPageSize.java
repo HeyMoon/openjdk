@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,13 +24,13 @@
 /*
  * @test
  * @summary Using WhiteBox to get VM page size
- * @library /testlibrary /../../test/lib
- * @build ReadVMPageSize
+ * @modules java.base/jdk.internal.misc
+ * @library /test/lib
+ * @build sun.hotspot.WhiteBox
  * @run main ClassFileInstaller sun.hotspot.WhiteBox
  * @run main/othervm  -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI  ReadVMPageSize
  */
 
-import jdk.test.lib.*;
 import sun.hotspot.WhiteBox;
 
 public class ReadVMPageSize {

@@ -30,7 +30,6 @@ import java.io.FilePermission;
 import java.awt.Color;
 import java.awt.Dialog;
 import java.awt.Frame;
-import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsEnvironment;
@@ -39,7 +38,6 @@ import java.awt.KeyboardFocusManager;
 import java.awt.Rectangle;
 import java.awt.Shape;
 import java.awt.geom.AffineTransform;
-import java.awt.geom.Area;
 import java.awt.geom.Point2D;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
@@ -55,7 +53,6 @@ import java.awt.Window;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Enumeration;
 import java.util.Locale;
 import sun.awt.image.ByteInterleavedRaster;
 
@@ -74,7 +71,6 @@ import javax.print.attribute.HashPrintRequestAttributeSet;
 import javax.print.attribute.PrintRequestAttributeSet;
 import javax.print.attribute.ResolutionSyntax;
 import javax.print.attribute.Size2DSyntax;
-import javax.print.attribute.standard.Chromaticity;
 import javax.print.attribute.standard.Copies;
 import javax.print.attribute.standard.Destination;
 import javax.print.attribute.standard.DialogTypeSelection;
@@ -95,11 +91,6 @@ import javax.print.attribute.standard.PrinterIsAcceptingJobs;
 import javax.print.attribute.standard.RequestingUserName;
 import javax.print.attribute.standard.SheetCollate;
 import javax.print.attribute.standard.Sides;
-
-import sun.print.PageableDoc;
-import sun.print.ServiceDialog;
-import sun.print.SunPrinterJobService;
-import sun.print.SunPageSelection;
 
 /**
  * A class which rasterizes a printer job.
@@ -335,67 +326,67 @@ public abstract class RasterPrinterJob extends PrinterJob {
      * Returns the resolution in dots per inch across the width
      * of the page.
      */
-    abstract protected double getXRes();
+    protected abstract double getXRes();
 
     /**
      * Returns the resolution in dots per inch down the height
      * of the page.
      */
-    abstract protected double getYRes();
+    protected abstract double getYRes();
 
     /**
      * Must be obtained from the current printer.
      * Value is in device pixels.
      * Not adjusted for orientation of the paper.
      */
-    abstract protected double getPhysicalPrintableX(Paper p);
+    protected abstract double getPhysicalPrintableX(Paper p);
 
     /**
      * Must be obtained from the current printer.
      * Value is in device pixels.
      * Not adjusted for orientation of the paper.
      */
-    abstract protected double getPhysicalPrintableY(Paper p);
+    protected abstract double getPhysicalPrintableY(Paper p);
 
     /**
      * Must be obtained from the current printer.
      * Value is in device pixels.
      * Not adjusted for orientation of the paper.
      */
-    abstract protected double getPhysicalPrintableWidth(Paper p);
+    protected abstract double getPhysicalPrintableWidth(Paper p);
 
     /**
      * Must be obtained from the current printer.
      * Value is in device pixels.
      * Not adjusted for orientation of the paper.
      */
-    abstract protected double getPhysicalPrintableHeight(Paper p);
+    protected abstract double getPhysicalPrintableHeight(Paper p);
 
     /**
      * Must be obtained from the current printer.
      * Value is in device pixels.
      * Not adjusted for orientation of the paper.
      */
-    abstract protected double getPhysicalPageWidth(Paper p);
+    protected abstract double getPhysicalPageWidth(Paper p);
 
     /**
      * Must be obtained from the current printer.
      * Value is in device pixels.
      * Not adjusted for orientation of the paper.
      */
-    abstract protected double getPhysicalPageHeight(Paper p);
+    protected abstract double getPhysicalPageHeight(Paper p);
 
     /**
      * Begin a new page.
      */
-    abstract protected void startPage(PageFormat format, Printable painter,
+    protected abstract void startPage(PageFormat format, Printable painter,
                                       int index, boolean paperChanged)
         throws PrinterException;
 
     /**
      * End a page.
      */
-    abstract protected void endPage(PageFormat format, Printable painter,
+    protected abstract void endPage(PageFormat format, Printable painter,
                                     int index)
         throws PrinterException;
 
@@ -406,7 +397,7 @@ public abstract class RasterPrinterJob extends PrinterJob {
      * page. The width and height of the band is
      * specified by the caller.
      */
-    abstract protected void printBand(byte[] data, int x, int y,
+    protected abstract void printBand(byte[] data, int x, int y,
                                       int width, int height)
         throws PrinterException;
 
@@ -431,7 +422,7 @@ public abstract class RasterPrinterJob extends PrinterJob {
 
     /*
      * A convenience method which returns the default service
-     * for 2D <code>PrinterJob</code>s.
+     * for 2D {@code PrinterJob}s.
      * May return null if there is no suitable default (although there
      * may still be 2D services available).
      * @return default 2D print service, or null.
@@ -495,9 +486,9 @@ public abstract class RasterPrinterJob extends PrinterJob {
     /**
      * Associate this PrinterJob with a new PrintService.
      *
-     * Throws <code>PrinterException</code> if the specified service
-     * cannot support the <code>Pageable</code> and
-     * <code>Printable</code> interfaces necessary to support 2D printing.
+     * Throws {@code PrinterException} if the specified service
+     * cannot support the {@code Pageable} and
+     * {@code Printable} interfaces necessary to support 2D printing.
      * @param service print service which supports 2D printing.
      *
      * @throws PrinterException if the specified service does not support
@@ -683,7 +674,21 @@ public abstract class RasterPrinterJob extends PrinterJob {
         float iw = (float)(page.getPaper().getImageableWidth()/DPI);
         float iy = (float)(page.getPaper().getImageableY()/DPI);
         float ih = (float)(page.getPaper().getImageableHeight()/DPI);
-        if (ix < 0) ix = 0f; if (iy < 0) iy = 0f;
+
+        if (ix < 0) ix = 0; if (iy < 0) iy = 0;
+        if (iw <= 0) iw = (float)(page.getPaper().getWidth()/DPI) - (ix*2);
+
+        // If iw is still negative, it means ix is too large to print
+        // anything inside printable area if we have to leave the same margin
+        // in the right side of paper so we go back to default mpa values
+        if (iw < 0) iw = 0;
+
+        if (ih <= 0) ih = (float)(page.getPaper().getHeight()/DPI) - (iy*2);
+
+        // If ih is still negative, it means iy is too large to print
+        // anything inside printable area if we have to leave the same margin
+        // in the bottom side of paper so we go back to default mpa values
+        if (ih < 0) ih = 0;
         try {
             pageAttributes.add(new MediaPrintableArea(ix, iy, iw, ih,
                                                   MediaPrintableArea.INCH));
@@ -694,17 +699,17 @@ public abstract class RasterPrinterJob extends PrinterJob {
    /**
      * Display a dialog to the user allowing the modification of a
      * PageFormat instance.
-     * The <code>page</code> argument is used to initialize controls
+     * The {@code page} argument is used to initialize controls
      * in the page setup dialog.
      * If the user cancels the dialog, then the method returns the
-     * original <code>page</code> object unmodified.
+     * original {@code page} object unmodified.
      * If the user okays the dialog then the method returns a new
      * PageFormat object with the indicated changes.
-     * In either case the original <code>page</code> object will
+     * In either case the original {@code page} object will
      * not be modified.
      * @param     page    the default PageFormat presented to the user
      *                    for modification
-     * @return    the original <code>page</code> object if the dialog
+     * @return    the original {@code page} object if the dialog
      *            is cancelled, or a new PageFormat object containing
      *            the format indicated by the user if the dialog is
      *            acknowledged
@@ -740,7 +745,19 @@ public abstract class RasterPrinterJob extends PrinterJob {
         }
         updatePageAttributes(service, page);
 
-        PageFormat newPage = pageDialog(attributes);
+        PageFormat newPage = null;
+        DialogTypeSelection dts =
+            (DialogTypeSelection)attributes.get(DialogTypeSelection.class);
+        if (dts == DialogTypeSelection.NATIVE) {
+            // Remove DialogTypeSelection.NATIVE to prevent infinite loop in
+            // RasterPrinterJob.
+            attributes.remove(DialogTypeSelection.class);
+            newPage = pageDialog(attributes);
+            // restore attribute
+            attributes.add(DialogTypeSelection.NATIVE);
+        } else {
+            newPage = pageDialog(attributes);
+        }
 
         if (newPage == null) {
             return page;
@@ -766,18 +783,30 @@ public abstract class RasterPrinterJob extends PrinterJob {
         // Check for native, note that default dialog is COMMON.
         if (dlg == DialogTypeSelection.NATIVE) {
             PrintService pservice = getPrintService();
-            PageFormat page = pageDialog(attributeToPageFormat(pservice,
-                                                               attributes));
+            PageFormat pageFrmAttrib = attributeToPageFormat(pservice,
+                                                             attributes);
+            setParentWindowID(attributes);
+            PageFormat page = pageDialog(pageFrmAttrib);
+            clearParentWindowID();
+
+            // If user cancels the dialog, pageDialog() will return the original
+            // page object and as per spec, we should return null in that case.
+            if (page == pageFrmAttrib) {
+                return null;
+            }
             updateAttributesWithPageFormat(pservice, page, attributes);
             return page;
         }
 
-        final GraphicsConfiguration gc =
-            GraphicsEnvironment.getLocalGraphicsEnvironment().
-            getDefaultScreenDevice().getDefaultConfiguration();
-        Rectangle bounds = gc.getBounds();
-        int x = bounds.x+bounds.width/3;
-        int y = bounds.y+bounds.height/3;
+        GraphicsConfiguration grCfg = null;
+        Window w = KeyboardFocusManager.getCurrentKeyboardFocusManager().getActiveWindow();
+        if (w != null) {
+            grCfg = w.getGraphicsConfiguration();
+        } else {
+            grCfg = GraphicsEnvironment.getLocalGraphicsEnvironment().
+                        getDefaultScreenDevice().getDefaultConfiguration();
+        }
+        final GraphicsConfiguration gc = grCfg;
 
         PrintService service = java.security.AccessController.doPrivileged(
                                new java.security.PrivilegedAction<PrintService>() {
@@ -795,9 +824,50 @@ public abstract class RasterPrinterJob extends PrinterJob {
             return null;
         }
 
-        ServiceDialog pageDialog = new ServiceDialog(gc, x, y, service,
-                                       DocFlavor.SERVICE_FORMATTED.PAGEABLE,
-                                       attributes, (Frame)null);
+        // we position the dialog a little beyond the upper-left corner of the window
+        // which is consistent with the NATIVE page dialog
+        Rectangle gcBounds = gc.getBounds();
+        int x = gcBounds.x+50;
+        int y = gcBounds.y+50;
+        ServiceDialog pageDialog;
+        if (onTop != null) {
+            attributes.add(onTop);
+        }
+        if (w instanceof Frame) {
+            pageDialog = new ServiceDialog(gc, x, y, service,
+                                           DocFlavor.SERVICE_FORMATTED.PAGEABLE,
+                                           attributes,(Frame)w);
+        } else {
+            pageDialog = new ServiceDialog(gc, x, y, service,
+                                           DocFlavor.SERVICE_FORMATTED.PAGEABLE,
+                                           attributes, (Dialog)w);
+        }
+
+        Rectangle dlgBounds = pageDialog.getBounds();
+
+        // if portion of dialog is not within the gc boundary
+        if (!gcBounds.contains(dlgBounds)) {
+            // check if dialog exceed window bounds at left or bottom
+            // Then position the dialog by moving it by the amount it exceeds
+            // the window bounds
+            // If it results in dialog moving beyond the window bounds at top/left
+            // then position it at window top/left
+            if (dlgBounds.x + dlgBounds.width > gcBounds.x + gcBounds.width) {
+                if ((gcBounds.x + gcBounds.width - dlgBounds.width) > gcBounds.x) {
+                    x = (gcBounds.x + gcBounds.width) - dlgBounds.width;
+                } else {
+                    x = gcBounds.x;
+                }
+            }
+            if (dlgBounds.y + dlgBounds.height > gcBounds.y + gcBounds.height) {
+                if ((gcBounds.y + gcBounds.height - dlgBounds.height) > gcBounds.y) {
+                    y = (gcBounds.y + gcBounds.height) - dlgBounds.height;
+                } else {
+                    y = gcBounds.y;
+                }
+            }
+            pageDialog.setBounds(x, y, dlgBounds.width, dlgBounds.height);
+        }
         pageDialog.show();
 
         if (pageDialog.getStatus() == ServiceDialog.APPROVE) {
@@ -859,7 +929,9 @@ public abstract class RasterPrinterJob extends PrinterJob {
 
             }
 
+            setParentWindowID(attributes);
             boolean ret = printDialog();
+            clearParentWindowID();
             this.attributes = attributes;
             return ret;
 
@@ -874,9 +946,23 @@ public abstract class RasterPrinterJob extends PrinterJob {
          * We raise privilege when we put up the dialog, to avoid
          * the "warning applet window" banner.
          */
-        final GraphicsConfiguration gc =
-            GraphicsEnvironment.getLocalGraphicsEnvironment().
-            getDefaultScreenDevice().getDefaultConfiguration();
+        GraphicsConfiguration grCfg = null;
+        Window w = KeyboardFocusManager.getCurrentKeyboardFocusManager().getActiveWindow();
+        if (w != null) {
+            grCfg = w.getGraphicsConfiguration();
+             /* Add DialogOwner attribute to set the owner of this print dialog
+              * only if it is not set already
+              * (it might be set in java.awt.PrintJob.printDialog)
+              */
+            if (attributes.get(DialogOwner.class) == null) {
+                attributes.add(w instanceof Frame ? new DialogOwner((Frame)w) :
+                                                    new DialogOwner((Dialog)w));
+            }
+        } else {
+            grCfg = GraphicsEnvironment.getLocalGraphicsEnvironment().
+                        getDefaultScreenDevice().getDefaultConfiguration();
+        }
+        final GraphicsConfiguration gc = grCfg;
 
         PrintService service = java.security.AccessController.doPrivileged(
                                new java.security.PrivilegedAction<PrintService>() {
@@ -921,13 +1007,18 @@ public abstract class RasterPrinterJob extends PrinterJob {
             }
         }
 
-        Rectangle bounds = gc.getBounds();
-        int x = bounds.x+bounds.width/3;
-        int y = bounds.y+bounds.height/3;
+        // we position the dialog a little beyond the upper-left corner of the window
+        // which is consistent with the NATIVE print dialog
+        int x = 50;
+        int y = 50;
         PrintService newService;
         // temporarily add an attribute pointing back to this job.
         PrinterJobWrapper jobWrapper = new PrinterJobWrapper(this);
         attributes.add(jobWrapper);
+        PageRanges pgRng = (PageRanges)attributes.get(PageRanges.class);
+        if (pgRng == null && mDocument.getNumberOfPages() > 1) {
+            attributes.add(new PageRanges(1, mDocument.getNumberOfPages()));
+        }
         try {
             newService =
             ServiceUI.printDialog(gc, x, y,
@@ -941,6 +1032,7 @@ public abstract class RasterPrinterJob extends PrinterJob {
                                   attributes);
         }
         attributes.remove(PrinterJobWrapper.class);
+        attributes.remove(DialogOwner.class);
 
         if (newService == null) {
             return false;
@@ -964,8 +1056,8 @@ public abstract class RasterPrinterJob extends PrinterJob {
    /**
      * Presents the user a dialog for changing properties of the
      * print job interactively.
-     * @returns false if the user cancels the dialog and
-     *          true otherwise.
+     * @return false if the user cancels the dialog and
+     *         true otherwise.
      * @exception HeadlessException if GraphicsEnvironment.isHeadless()
      * returns true.
      * @see java.awt.GraphicsEnvironment#isHeadless
@@ -1153,6 +1245,7 @@ public abstract class RasterPrinterJob extends PrinterJob {
         pageRangesAttr =  (PageRanges)attributes.get(PageRanges.class);
         if (!isSupportedValue(pageRangesAttr, attributes)) {
             pageRangesAttr = null;
+            setPageRange(-1, -1);
         } else {
             if ((SunPageSelection)attributes.get(SunPageSelection.class)
                      == SunPageSelection.RANGE) {
@@ -1328,6 +1421,8 @@ public abstract class RasterPrinterJob extends PrinterJob {
         Doc doc = new PageableDoc(getPageable());
         if (attributes == null) {
             attributes = new HashPrintRequestAttributeSet();
+            attributes.add(new Copies(getCopies()));
+            attributes.add(new JobName(getJobName(), null));
         }
         try {
             job.print(doc, attributes);
@@ -1392,6 +1487,22 @@ public abstract class RasterPrinterJob extends PrinterJob {
         if ((psvc.getAttribute(PrinterIsAcceptingJobs.class)) ==
                          PrinterIsAcceptingJobs.NOT_ACCEPTING_JOBS) {
             throw new PrinterException("Printer is not accepting job.");
+        }
+
+        /*
+         * Check the default job-sheet value on underlying platform. If IPP
+         * reports job-sheets=none, then honour that and modify noJobSheet since
+         * by default, noJobSheet is false which mean jdk will print banner page.
+         * This is because if "attributes" is null (if user directly calls print()
+         * without specifying any attributes and without showing printdialog) then
+         * setAttribute will return without changing noJobSheet value.
+         * Also, we do this before setAttributes() call so as to allow the user
+         * to override this via explicitly adding JobSheets attributes to
+         * PrintRequestAttributeSet while calling print(attributes)
+         */
+        JobSheets js = (JobSheets)psvc.getDefaultAttributeValue(JobSheets.class);
+        if (js != null && js.equals(JobSheets.NONE)) {
+            noJobSheet = true;
         }
 
         if ((psvc instanceof SunPrinterJobService) &&
@@ -1551,6 +1662,9 @@ public abstract class RasterPrinterJob extends PrinterJob {
              (!f.isFile() || !f.canWrite())) ||
             ((pFile != null) &&
              (!pFile.exists() || (pFile.exists() && !pFile.canWrite())))) {
+            if (f.exists()) {
+                f.delete();
+            }
             throw new PrinterException("Cannot write to file:"+
                                        dest);
         }
@@ -2331,14 +2445,14 @@ public abstract class RasterPrinterJob extends PrinterJob {
 
     /**
      * Examine the metrics captured by the
-     * <code>PeekGraphics</code> instance and
+     * {@code PeekGraphics} instance and
      * if capable of directly converting this
      * print job to the printer's control language
      * or the native OS's graphics primitives, then
-     * return a <code>PathGraphics</code> to perform
+     * return a {@code PathGraphics} to perform
      * that conversion. If there is not an object
      * capable of the conversion then return
-     * <code>null</code>. Returning <code>null</code>
+     * {@code null}. Returning {@code null}
      * causes the print job to be rasterized.
      */
     protected Graphics2D createPathGraphics(PeekGraphics graphics,
@@ -2353,11 +2467,11 @@ public abstract class RasterPrinterJob extends PrinterJob {
     /**
      * Create and return an object that will
      * gather and hold metrics about the print
-     * job. This method is passed a <code>Graphics2D</code>
+     * job. This method is passed a {@code Graphics2D}
      * object that can be used as a proxy for the
      * object gathering the print job matrics. The
      * method is also supplied with the instance
-     * controlling the print job, <code>printerJob</code>.
+     * controlling the print job, {@code printerJob}.
      */
     protected PeekGraphics createPeekGraphics(Graphics2D graphics,
                                               PrinterJob printerJob) {
@@ -2431,6 +2545,28 @@ public abstract class RasterPrinterJob extends PrinterJob {
             return s; // no need to make a new String.
         } else {
             return new String(out_chars, 0, pos);
+        }
+    }
+
+    private DialogOnTop onTop = null;
+
+    private long parentWindowID = 0L;
+
+    /* Called from native code */
+    private long getParentWindowID() {
+        return parentWindowID;
+    }
+
+    private void clearParentWindowID() {
+        parentWindowID = 0L;
+        onTop = null;
+    }
+
+    private void setParentWindowID(PrintRequestAttributeSet attrs) {
+        parentWindowID = 0L;
+        onTop = (DialogOnTop)attrs.get(DialogOnTop.class);
+        if (onTop != null) {
+            parentWindowID = onTop.getID();
         }
     }
 }

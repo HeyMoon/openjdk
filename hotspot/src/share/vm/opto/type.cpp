@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,8 +41,6 @@
 #include "opto/opcodes.hpp"
 #include "opto/type.hpp"
 
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
-
 // Portions of code courtesy of Clifford Click
 
 // Optimization - Graph Style
@@ -69,7 +67,7 @@ Type::TypeInfo Type::_type_info[Type::lastype] = {
   { Bad,             T_ILLEGAL,    "vectorx:",      false, 0,                    relocInfo::none          },  // VectorX
   { Bad,             T_ILLEGAL,    "vectory:",      false, 0,                    relocInfo::none          },  // VectorY
   { Bad,             T_ILLEGAL,    "vectorz:",      false, 0,                    relocInfo::none          },  // VectorZ
-#elif defined(PPC64)
+#elif defined(PPC64) || defined(S390)
   { Bad,             T_ILLEGAL,    "vectors:",      false, 0,                    relocInfo::none          },  // VectorS
   { Bad,             T_ILLEGAL,    "vectord:",      false, Op_RegL,              relocInfo::none          },  // VectorD
   { Bad,             T_ILLEGAL,    "vectorx:",      false, 0,                    relocInfo::none          },  // VectorX
@@ -152,6 +150,33 @@ BasicType Type::array_element_basic_type() const {
   return bt;
 }
 
+// For two instance arrays of same dimension, return the base element types.
+// Otherwise or if the arrays have different dimensions, return NULL.
+void Type::get_arrays_base_elements(const Type *a1, const Type *a2,
+                                    const TypeInstPtr **e1, const TypeInstPtr **e2) {
+
+  if (e1) *e1 = NULL;
+  if (e2) *e2 = NULL;
+  const TypeAryPtr* a1tap = (a1 == NULL) ? NULL : a1->isa_aryptr();
+  const TypeAryPtr* a2tap = (a2 == NULL) ? NULL : a2->isa_aryptr();
+
+  if (a1tap != NULL && a2tap != NULL) {
+    // Handle multidimensional arrays
+    const TypePtr* a1tp = a1tap->elem()->make_ptr();
+    const TypePtr* a2tp = a2tap->elem()->make_ptr();
+    while (a1tp && a1tp->isa_aryptr() && a2tp && a2tp->isa_aryptr()) {
+      a1tap = a1tp->is_aryptr();
+      a2tap = a2tp->is_aryptr();
+      a1tp = a1tap->elem()->make_ptr();
+      a2tp = a2tap->elem()->make_ptr();
+    }
+    if (a1tp && a1tp->isa_instptr() && a2tp && a2tp->isa_instptr()) {
+      if (e1) *e1 = a1tp->is_instptr();
+      if (e2) *e2 = a2tp->is_instptr();
+    }
+  }
+}
+
 //---------------------------get_typeflow_type---------------------------------
 // Import a type produced by ciTypeFlow.
 const Type* Type::get_typeflow_type(ciType* type) {
@@ -200,36 +225,160 @@ const Type* Type::get_typeflow_type(ciType* type) {
 
 
 //-----------------------make_from_constant------------------------------------
-const Type* Type::make_from_constant(ciConstant constant,
-                                     bool require_constant, bool is_autobox_cache) {
+const Type* Type::make_from_constant(ciConstant constant, bool require_constant,
+                                     int stable_dimension, bool is_narrow_oop,
+                                     bool is_autobox_cache) {
   switch (constant.basic_type()) {
-  case T_BOOLEAN:  return TypeInt::make(constant.as_boolean());
-  case T_CHAR:     return TypeInt::make(constant.as_char());
-  case T_BYTE:     return TypeInt::make(constant.as_byte());
-  case T_SHORT:    return TypeInt::make(constant.as_short());
-  case T_INT:      return TypeInt::make(constant.as_int());
-  case T_LONG:     return TypeLong::make(constant.as_long());
-  case T_FLOAT:    return TypeF::make(constant.as_float());
-  case T_DOUBLE:   return TypeD::make(constant.as_double());
-  case T_ARRAY:
-  case T_OBJECT:
-    {
-      // cases:
-      //   can_be_constant    = (oop not scavengable || ScavengeRootsInCode != 0)
-      //   should_be_constant = (oop not scavengable || ScavengeRootsInCode >= 2)
-      // An oop is not scavengable if it is in the perm gen.
-      ciObject* oop_constant = constant.as_object();
-      if (oop_constant->is_null_object()) {
-        return Type::get_zero_type(T_OBJECT);
-      } else if (require_constant || oop_constant->should_be_constant()) {
-        return TypeOopPtr::make_from_constant(oop_constant, require_constant, is_autobox_cache);
+    case T_BOOLEAN:  return TypeInt::make(constant.as_boolean());
+    case T_CHAR:     return TypeInt::make(constant.as_char());
+    case T_BYTE:     return TypeInt::make(constant.as_byte());
+    case T_SHORT:    return TypeInt::make(constant.as_short());
+    case T_INT:      return TypeInt::make(constant.as_int());
+    case T_LONG:     return TypeLong::make(constant.as_long());
+    case T_FLOAT:    return TypeF::make(constant.as_float());
+    case T_DOUBLE:   return TypeD::make(constant.as_double());
+    case T_ARRAY:
+    case T_OBJECT: {
+        // cases:
+        //   can_be_constant    = (oop not scavengable || ScavengeRootsInCode != 0)
+        //   should_be_constant = (oop not scavengable || ScavengeRootsInCode >= 2)
+        // An oop is not scavengable if it is in the perm gen.
+        const Type* con_type = NULL;
+        ciObject* oop_constant = constant.as_object();
+        if (oop_constant->is_null_object()) {
+          con_type = Type::get_zero_type(T_OBJECT);
+        } else if (require_constant || oop_constant->should_be_constant()) {
+          con_type = TypeOopPtr::make_from_constant(oop_constant, require_constant);
+          if (con_type != NULL) {
+            if (Compile::current()->eliminate_boxing() && is_autobox_cache) {
+              con_type = con_type->is_aryptr()->cast_to_autobox_cache(true);
+            }
+            if (stable_dimension > 0) {
+              assert(FoldStableValues, "sanity");
+              assert(!con_type->is_zero_type(), "default value for stable field");
+              con_type = con_type->is_aryptr()->cast_to_stable(true, stable_dimension);
+            }
+          }
+        }
+        if (is_narrow_oop) {
+          con_type = con_type->make_narrowoop();
+        }
+        return con_type;
       }
-    }
+    case T_ILLEGAL:
+      // Invalid ciConstant returned due to OutOfMemoryError in the CI
+      assert(Compile::current()->env()->failing(), "otherwise should not see this");
+      return NULL;
   }
   // Fall through to failure
   return NULL;
 }
 
+static ciConstant check_mismatched_access(ciConstant con, BasicType loadbt, bool is_unsigned) {
+  BasicType conbt = con.basic_type();
+  switch (conbt) {
+    case T_BOOLEAN: conbt = T_BYTE;   break;
+    case T_ARRAY:   conbt = T_OBJECT; break;
+  }
+  switch (loadbt) {
+    case T_BOOLEAN:   loadbt = T_BYTE;   break;
+    case T_NARROWOOP: loadbt = T_OBJECT; break;
+    case T_ARRAY:     loadbt = T_OBJECT; break;
+    case T_ADDRESS:   loadbt = T_OBJECT; break;
+  }
+  if (conbt == loadbt) {
+    if (is_unsigned && conbt == T_BYTE) {
+      // LoadB (T_BYTE) with a small mask (<=8-bit) is converted to LoadUB (T_BYTE).
+      return ciConstant(T_INT, con.as_int() & 0xFF);
+    } else {
+      return con;
+    }
+  }
+  if (conbt == T_SHORT && loadbt == T_CHAR) {
+    // LoadS (T_SHORT) with a small mask (<=16-bit) is converted to LoadUS (T_CHAR).
+    return ciConstant(T_INT, con.as_int() & 0xFFFF);
+  }
+  return ciConstant(); // T_ILLEGAL
+}
+
+// Try to constant-fold a stable array element.
+const Type* Type::make_constant_from_array_element(ciArray* array, int off, int stable_dimension,
+                                                   BasicType loadbt, bool is_unsigned_load) {
+  // Decode the results of GraphKit::array_element_address.
+  ciConstant element_value = array->element_value_by_offset(off);
+  if (element_value.basic_type() == T_ILLEGAL) {
+    return NULL; // wrong offset
+  }
+  ciConstant con = check_mismatched_access(element_value, loadbt, is_unsigned_load);
+
+  assert(con.basic_type() != T_ILLEGAL, "elembt=%s; loadbt=%s; unsigned=%d",
+         type2name(element_value.basic_type()), type2name(loadbt), is_unsigned_load);
+
+  if (con.is_valid() &&          // not a mismatched access
+      !con.is_null_or_zero()) {  // not a default value
+    bool is_narrow_oop = (loadbt == T_NARROWOOP);
+    return Type::make_from_constant(con, /*require_constant=*/true, stable_dimension, is_narrow_oop, /*is_autobox_cache=*/false);
+  }
+  return NULL;
+}
+
+const Type* Type::make_constant_from_field(ciInstance* holder, int off, bool is_unsigned_load, BasicType loadbt) {
+  ciField* field;
+  ciType* type = holder->java_mirror_type();
+  if (type != NULL && type->is_instance_klass() && off >= InstanceMirrorKlass::offset_of_static_fields()) {
+    // Static field
+    field = type->as_instance_klass()->get_field_by_offset(off, /*is_static=*/true);
+  } else {
+    // Instance field
+    field = holder->klass()->as_instance_klass()->get_field_by_offset(off, /*is_static=*/false);
+  }
+  if (field == NULL) {
+    return NULL; // Wrong offset
+  }
+  return Type::make_constant_from_field(field, holder, loadbt, is_unsigned_load);
+}
+
+const Type* Type::make_constant_from_field(ciField* field, ciInstance* holder,
+                                           BasicType loadbt, bool is_unsigned_load) {
+  if (!field->is_constant()) {
+    return NULL; // Non-constant field
+  }
+  ciConstant field_value;
+  if (field->is_static()) {
+    // final static field
+    field_value = field->constant_value();
+  } else if (holder != NULL) {
+    // final or stable non-static field
+    // Treat final non-static fields of trusted classes (classes in
+    // java.lang.invoke and sun.invoke packages and subpackages) as
+    // compile time constants.
+    field_value = field->constant_value_of(holder);
+  }
+  if (!field_value.is_valid()) {
+    return NULL; // Not a constant
+  }
+
+  ciConstant con = check_mismatched_access(field_value, loadbt, is_unsigned_load);
+
+  assert(con.is_valid(), "elembt=%s; loadbt=%s; unsigned=%d",
+         type2name(field_value.basic_type()), type2name(loadbt), is_unsigned_load);
+
+  bool is_stable_array = FoldStableValues && field->is_stable() && field->type()->is_array_klass();
+  int stable_dimension = (is_stable_array ? field->type()->as_array_klass()->dimension() : 0);
+  bool is_narrow_oop = (loadbt == T_NARROWOOP);
+
+  const Type* con_type = make_from_constant(con, /*require_constant=*/ true,
+                                            stable_dimension, is_narrow_oop,
+                                            field->is_autobox_cache());
+  if (con_type != NULL && field->is_call_site_target()) {
+    ciCallSite* call_site = holder->as_call_site();
+    if (!call_site->is_constant_call_site()) {
+      ciMethodHandle* target = con.as_object()->as_method_handle();
+      Compile::current()->dependencies()->assert_call_site_target_value(call_site, target);
+    }
+  }
+  return con_type;
+}
 
 //------------------------------make-------------------------------------------
 // Create a simple Type, with default empty symbol sets.  Then hashcons it
@@ -866,6 +1015,13 @@ void Type::dump_on(outputStream *st) const {
     st->print(" [narrowklass]");
   }
 }
+
+//-----------------------------------------------------------------------------
+const char* Type::str(const Type* t) {
+  stringStream ss;
+  t->dump_on(&ss);
+  return ss.as_string();
+}
 #endif
 
 //------------------------------singleton--------------------------------------
@@ -1303,8 +1459,8 @@ const Type *TypeInt::narrow( const Type *old ) const {
 
   // The new type narrows the old type, so look for a "death march".
   // See comments on PhaseTransform::saturate.
-  juint nrange = _hi - _lo;
-  juint orange = ohi - olo;
+  juint nrange = (juint)_hi - _lo;
+  juint orange = (juint)ohi - olo;
   if (nrange < max_juint - 1 && nrange > (orange >> 1) + (SMALLINT*2)) {
     // Use the new type only if the range shrinks a lot.
     // We do not want the optimizer computing 2^31 point by point.
@@ -1337,7 +1493,7 @@ bool TypeInt::eq( const Type *t ) const {
 //------------------------------hash-------------------------------------------
 // Type-specific hashing function.
 int TypeInt::hash(void) const {
-  return _lo+_hi+_widen+(int)Type::Int;
+  return java_add(java_add(_lo, _hi), java_add(_widen, (int)Type::Int));
 }
 
 //------------------------------is_finite--------------------------------------
@@ -1518,7 +1674,7 @@ const Type *TypeLong::widen( const Type *old, const Type* limit ) const {
         // If neither endpoint is extremal yet, push out the endpoint
         // which is closer to its respective limit.
         if (_lo >= 0 ||                 // easy common case
-            (julong)(_lo - min) >= (julong)(max - _hi)) {
+            ((julong)_lo - min) >= ((julong)max - _hi)) {
           // Try to widen to an unsigned range type of 32/63 bits:
           if (max >= max_juint && _hi < max_juint)
             return make(_lo, max_juint, WidenMax);
@@ -1753,13 +1909,15 @@ const TypeTuple *TypeTuple::make_domain(ciInstanceKlass* recv, ciSignature* sig)
       break;
     case T_OBJECT:
     case T_ARRAY:
-    case T_BOOLEAN:
-    case T_CHAR:
     case T_FLOAT:
-    case T_BYTE:
-    case T_SHORT:
     case T_INT:
       field_array[pos++] = get_const_type(type);
+      break;
+    case T_BOOLEAN:
+    case T_CHAR:
+    case T_BYTE:
+    case T_SHORT:
+      field_array[pos++] = TypeInt::INT;
       break;
     default:
       ShouldNotReachHere();
@@ -1989,7 +2147,11 @@ const TypePtr* TypePtr::with_inline_depth(int depth) const {
 bool TypeAry::interface_vs_oop(const Type *t) const {
   const TypeAry* t_ary = t->is_ary();
   if (t_ary) {
-    return _elem->interface_vs_oop(t_ary->_elem);
+    const TypePtr* this_ptr = _elem->make_ptr(); // In case we have narrow_oops
+    const TypePtr*    t_ptr = t_ary->_elem->make_ptr();
+    if(this_ptr != NULL && t_ptr != NULL) {
+      return this_ptr->interface_vs_oop(t_ptr);
+    }
   }
   return false;
 }
@@ -2333,7 +2495,7 @@ bool TypePtr::eq( const Type *t ) const {
 //------------------------------hash-------------------------------------------
 // Type-specific hashing function.
 int TypePtr::hash(void) const {
-  return _ptr + _offset + hash_speculative() + _inline_depth;
+  return java_add(java_add(_ptr, _offset), java_add( hash_speculative(), _inline_depth));
 ;
 }
 
@@ -2742,7 +2904,7 @@ int TypeRawPtr::hash(void) const {
 #ifndef PRODUCT
 void TypeRawPtr::dump2( Dict &d, uint depth, outputStream *st ) const {
   if( _ptr == Constant )
-    st->print(INTPTR_FORMAT, _bits);
+    st->print(INTPTR_FORMAT, p2i(_bits));
   else
     st->print("rawptr:%s", ptr_msg[_ptr]);
 }
@@ -3009,9 +3171,7 @@ const TypeOopPtr* TypeOopPtr::make_from_klass_common(ciKlass *klass, bool klass_
 
 //------------------------------make_from_constant-----------------------------
 // Make a java pointer from an oop constant
-const TypeOopPtr* TypeOopPtr::make_from_constant(ciObject* o,
-                                                 bool require_constant,
-                                                 bool is_autobox_cache) {
+const TypeOopPtr* TypeOopPtr::make_from_constant(ciObject* o, bool require_constant) {
   assert(!o->is_null_object(), "null object not yet handled here.");
   ciKlass* klass = o->klass();
   if (klass->is_instance_klass()) {
@@ -3026,10 +3186,6 @@ const TypeOopPtr* TypeOopPtr::make_from_constant(ciObject* o,
     // Element is an object array. Recursively call ourself.
     const TypeOopPtr *etype =
       TypeOopPtr::make_from_klass_raw(klass->as_obj_array_klass()->element_klass());
-    if (is_autobox_cache) {
-      // The pointers in the autobox arrays are always non-null.
-      etype = etype->cast_to_ptr_type(TypePtr::NotNull)->is_oopptr();
-    }
     const TypeAry* arr0 = TypeAry::make(etype, TypeInt::make(o->as_array()->length()));
     // We used to pass NotNull in here, asserting that the sub-arrays
     // are all not-null.  This is not true in generally, as code can
@@ -3039,7 +3195,7 @@ const TypeOopPtr* TypeOopPtr::make_from_constant(ciObject* o,
     } else if (!o->should_be_constant()) {
       return TypeAryPtr::make(TypePtr::NotNull, arr0, klass, true, 0);
     }
-    const TypeAryPtr* arr = TypeAryPtr::make(TypePtr::Constant, o, arr0, klass, true, 0, InstanceBot, NULL, InlineDepthBottom, is_autobox_cache);
+    const TypeAryPtr* arr = TypeAryPtr::make(TypePtr::Constant, o, arr0, klass, true, 0);
     return arr;
   } else if (klass->is_type_array_klass()) {
     // Element is an typeArray
@@ -3100,8 +3256,17 @@ const Type *TypeOopPtr::filter_helper(const Type *kills, bool include_speculativ
     // be 'I' or 'j/l/O'.  Thus we'll pick 'j/l/O'.  If this then flows
     // into a Phi which "knows" it's an Interface type we'll have to
     // uplift the type.
-    if (!empty() && ktip != NULL && ktip->is_loaded() && ktip->klass()->is_interface())
-      return kills;             // Uplift to interface
+    if (!empty()) {
+      if (ktip != NULL && ktip->is_loaded() && ktip->klass()->is_interface()) {
+        return kills;           // Uplift to interface
+      }
+      // Also check for evil cases of 'this' being a class array
+      // and 'kills' expecting an array of interfaces.
+      Type::get_arrays_base_elements(ft, kills, NULL, &ktip);
+      if (ktip != NULL && ktip->is_loaded() && ktip->klass()->is_interface()) {
+        return kills;           // Uplift to array of interface
+      }
+    }
 
     return Type::TOP;           // Canonical empty value
   }
@@ -3140,10 +3305,8 @@ bool TypeOopPtr::eq( const Type *t ) const {
 // Type-specific hashing function.
 int TypeOopPtr::hash(void) const {
   return
-    (const_oop() ? const_oop()->hash() : 0) +
-    _klass_is_exact +
-    _instance_id +
-    TypePtr::hash();
+    java_add(java_add(const_oop() ? const_oop()->hash() : 0, _klass_is_exact),
+             java_add(_instance_id, TypePtr::hash()));
 }
 
 //------------------------------dump2------------------------------------------
@@ -3151,7 +3314,7 @@ int TypeOopPtr::hash(void) const {
 void TypeOopPtr::dump2( Dict &d, uint depth, outputStream *st ) const {
   st->print("oopptr:%s", ptr_msg[_ptr]);
   if( _klass_is_exact ) st->print(":exact");
-  if( const_oop() ) st->print(INTPTR_FORMAT, const_oop());
+  if( const_oop() ) st->print(INTPTR_FORMAT, p2i(const_oop()));
   switch( _offset ) {
   case OffsetTop: st->print("+top"); break;
   case OffsetBot: st->print("+any"); break;
@@ -3322,7 +3485,7 @@ const Type* TypeInstPtr::get_const_boxed_value() const {
     case T_LONG:     return TypeLong::make(constant.as_long());
     default:         break;
   }
-  fatal(err_msg_res("Invalid boxed value type '%s'", type2name(bt)));
+  fatal("Invalid boxed value type '%s'", type2name(bt));
   return NULL;
 }
 
@@ -3750,7 +3913,7 @@ bool TypeInstPtr::eq( const Type *t ) const {
 //------------------------------hash-------------------------------------------
 // Type-specific hashing function.
 int TypeInstPtr::hash(void) const {
-  int hash = klass()->hash() + TypeOopPtr::hash();
+  int hash = java_add(klass()->hash(), TypeOopPtr::hash());
   return hash;
 }
 
@@ -3940,7 +4103,6 @@ const TypeAryPtr* TypeAryPtr::cast_to_size(const TypeInt* new_size) const {
   return make(ptr(), const_oop(), new_ary, klass(), klass_is_exact(), _offset, _instance_id, _speculative, _inline_depth);
 }
 
-
 //------------------------------cast_to_stable---------------------------------
 const TypeAryPtr* TypeAryPtr::cast_to_stable(bool stable, int stable_dimension) const {
   if (stable_dimension <= 0 || (stable_dimension == 1 && stable == this->is_stable()))
@@ -3967,6 +4129,18 @@ int TypeAryPtr::stable_dimension() const {
   if (elem_ptr != NULL && elem_ptr->isa_aryptr())
     dim += elem_ptr->is_aryptr()->stable_dimension();
   return dim;
+}
+
+//----------------------cast_to_autobox_cache-----------------------------------
+const TypeAryPtr* TypeAryPtr::cast_to_autobox_cache(bool cache) const {
+  if (is_autobox_cache() == cache)  return this;
+  const TypeOopPtr* etype = elem()->make_oopptr();
+  if (etype == NULL)  return this;
+  // The pointers in the autobox arrays are always non-null.
+  TypePtr::PTR ptr_type = cache ? TypePtr::NotNull : TypePtr::AnyNull;
+  etype = etype->cast_to_ptr_type(TypePtr::NotNull)->is_oopptr();
+  const TypeAry* new_ary = TypeAry::make(etype, size(), is_stable());
+  return make(ptr(), const_oop(), new_ary, klass(), klass_is_exact(), _offset, _instance_id, _speculative, _inline_depth, cache);
 }
 
 //------------------------------eq---------------------------------------------
@@ -4455,7 +4629,7 @@ int TypeMetadataPtr::hash(void) const {
 // TRUE if Type is a singleton type, FALSE otherwise.   Singletons are simple
 // constants
 bool TypeMetadataPtr::singleton(void) const {
-  // detune optimizer to not generate constant metadta + constant offset as a constant!
+  // detune optimizer to not generate constant metadata + constant offset as a constant!
   // TopPTR, Null, AnyNull, Constant are all singletons
   return (_offset == 0) && !below_centerline(_ptr);
 }
@@ -4588,7 +4762,7 @@ const Type *TypeMetadataPtr::xdual() const {
 #ifndef PRODUCT
 void TypeMetadataPtr::dump2( Dict &d, uint depth, outputStream *st ) const {
   st->print("metadataptr:%s", ptr_msg[_ptr]);
-  if( metadata() ) st->print(INTPTR_FORMAT, metadata());
+  if( metadata() ) st->print(INTPTR_FORMAT, p2i(metadata()));
   switch( _offset ) {
   case OffsetTop: st->print("+top"); break;
   case OffsetBot: st->print("+any"); break;
@@ -4657,7 +4831,7 @@ bool TypeKlassPtr::eq( const Type *t ) const {
 //------------------------------hash-------------------------------------------
 // Type-specific hashing function.
 int TypeKlassPtr::hash(void) const {
-  return klass()->hash() + TypePtr::hash();
+  return java_add(klass()->hash(), TypePtr::hash());
 }
 
 //------------------------------singleton--------------------------------------
@@ -4986,7 +5160,7 @@ void TypeKlassPtr::dump2( Dict & d, uint depth, outputStream *st ) const {
     {
       const char *name = klass()->name()->as_utf8();
       if( name ) {
-        st->print("klass %s: " INTPTR_FORMAT, name, klass());
+        st->print("klass %s: " INTPTR_FORMAT, name, p2i(klass()));
       } else {
         ShouldNotReachHere();
       }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,13 +26,16 @@
  * @summary Test corner case that overflows malloc site hashtable bucket
  * @requires sun.arch.data.model == "32"
  * @key nmt jcmd stress
- * @library /testlibrary /../../test/lib
- * @build MallocSiteHashOverflow
+ * @modules java.base/jdk.internal.misc
+ * @library /test/lib
+ * @build sun.hotspot.WhiteBox
  * @run main ClassFileInstaller sun.hotspot.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:NativeMemoryTracking=detail MallocSiteHashOverflow
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.JDKToolFinder;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 import sun.hotspot.WhiteBox;
 
 public class MallocSiteHashOverflow {
@@ -48,7 +51,7 @@ public class MallocSiteHashOverflow {
         int MAX_HASH_SIZE = wb.NMTGetHashSize();
 
         // Grab my own PID
-        String pid = Integer.toString(ProcessTools.getProcessId());
+        String pid = Long.toString(ProcessTools.getProcessId());
         ProcessBuilder pb = new ProcessBuilder();
 
         // Verify that current tracking level is "detail"

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,7 +23,6 @@
  * questions.
  */
 
-
 package java.util.logging;
 
 import java.io.*;
@@ -32,11 +31,18 @@ import java.security.*;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.util.concurrent.ConcurrentHashMap;
+import java.nio.file.Paths;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.ReentrantLock;
-import sun.misc.JavaAWTAccess;
-import sun.misc.ManagedLocalsThread;
-import sun.misc.SharedSecrets;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import jdk.internal.misc.JavaAWTAccess;
+import jdk.internal.misc.SharedSecrets;
+import sun.util.logging.internal.LoggingProviderImpl;
+import static jdk.internal.logger.DefaultLoggerFinder.isSystem;
 
 /**
  * There is a single global LogManager object that is used to
@@ -57,37 +63,28 @@ import sun.misc.SharedSecrets;
  * <p>
  * At startup the LogManager class is located using the
  * java.util.logging.manager system property.
+ *
+ * <h3>LogManager Configuration</h3>
+ *
+ * A LogManager initializes the logging configuration via
+ * the {@link #readConfiguration()} method during LogManager initialization.
+ * By default, LogManager default configuration is used.
+ * The logging configuration read by LogManager must be in the
+ * {@linkplain Properties properties file} format.
  * <p>
  * The LogManager defines two optional system properties that allow control over
- * the initial configuration:
+ * the initial configuration, as specified in the {@link #readConfiguration()}
+ * method:
  * <ul>
  * <li>"java.util.logging.config.class"
  * <li>"java.util.logging.config.file"
  * </ul>
- * These two properties may be specified on the command line to the "java"
+ * <p>
+ * These two system properties may be specified on the command line to the "java"
  * command, or as system property definitions passed to JNI_CreateJavaVM.
  * <p>
- * If the "java.util.logging.config.class" property is set, then the
- * property value is treated as a class name.  The given class will be
- * loaded, an object will be instantiated, and that object's constructor
- * is responsible for reading in the initial configuration.  (That object
- * may use other system properties to control its configuration.)  The
- * alternate configuration class can use <tt>readConfiguration(InputStream)</tt>
- * to define properties in the LogManager.
- * <p>
- * If "java.util.logging.config.class" property is <b>not</b> set,
- * then the "java.util.logging.config.file" system property can be used
- * to specify a properties file (in java.util.Properties format). The
- * initial logging configuration will be read from this file.
- * <p>
- * If neither of these properties is defined then the LogManager uses its
- * default configuration. The default configuration is typically loaded from the
- * properties file "{@code conf/logging.properties}" in the Java installation
- * directory.
- * <p>
- * The properties for loggers and Handlers will have names starting
- * with the dot-separated name for the handler or logger.
- * <p>
+ * The {@linkplain Properties properties} for loggers and Handlers will have
+ * names starting with the dot-separated name for the handler or logger.<br>
  * The global logging properties may include:
  * <ul>
  * <li>A property "handlers".  This defines a whitespace or comma separated
@@ -232,13 +229,15 @@ public class LogManager {
                     cname = System.getProperty("java.util.logging.manager");
                     if (cname != null) {
                         try {
-                            Class<?> clz = ClassLoader.getSystemClassLoader()
-                                    .loadClass(cname);
-                            mgr = (LogManager) clz.newInstance();
+                            @SuppressWarnings("deprecation")
+                            Object tmp = ClassLoader.getSystemClassLoader()
+                                .loadClass(cname).newInstance();
+                            mgr = (LogManager) tmp;
                         } catch (ClassNotFoundException ex) {
-                            Class<?> clz = Thread.currentThread()
-                                    .getContextClassLoader().loadClass(cname);
-                            mgr = (LogManager) clz.newInstance();
+                            @SuppressWarnings("deprecation")
+                            Object tmp = Thread.currentThread()
+                                .getContextClassLoader().loadClass(cname).newInstance();
+                            mgr = (LogManager) tmp;
                         }
                     }
                 } catch (Exception ex) {
@@ -256,9 +255,10 @@ public class LogManager {
 
     // This private class is used as a shutdown hook.
     // It does a "reset" to close all open handlers.
-    private class Cleaner extends ManagedLocalsThread {
+    private class Cleaner extends Thread {
 
         private Cleaner() {
+            super(null, null, "Logging-Cleaner", 0, false);
             /* Set context class loader to null in order to avoid
              * keeping a strong reference to an application classloader.
              */
@@ -353,7 +353,8 @@ public class LogManager {
         // see that initializationDone is still false, and perform the
         // initialization.
         //
-        synchronized(this) {
+        configurationLock.lock();
+        try {
             // If initializedCalled is true it means that we're already in
             // the process of initializing the LogManager in this thread.
             // There has been a recursive call to ensureLogManagerInitialized().
@@ -384,11 +385,15 @@ public class LogManager {
                         assert rootLogger == null;
                         assert initializedCalled && !initializationDone;
 
+                        // create root logger before reading primordial
+                        // configuration - to ensure that it will be added
+                        // before the global logger, and not after.
+                        owner.rootLogger = owner.new RootLogger();
+
                         // Read configuration.
                         owner.readPrimordialConfiguration();
 
                         // Create and retain Logger for the root of the namespace.
-                        owner.rootLogger = owner.new RootLogger();
                         owner.addLogger(owner.rootLogger);
                         if (!owner.rootLogger.isLevelInitialized()) {
                             owner.rootLogger.setLevel(defaultLevel);
@@ -409,6 +414,8 @@ public class LogManager {
             } finally {
                 initializationDone = true;
             }
+        } finally {
+            configurationLock.unlock();
         }
     }
 
@@ -423,33 +430,23 @@ public class LogManager {
         return manager;
     }
 
-    private void readPrimordialConfiguration() {
+    private void readPrimordialConfiguration() { // must be called while holding configurationLock
         if (!readPrimordialConfiguration) {
-            synchronized (this) {
-                if (!readPrimordialConfiguration) {
-                    // If System.in/out/err are null, it's a good
-                    // indication that we're still in the
-                    // bootstrapping phase
-                    if (System.out == null) {
-                        return;
-                    }
-                    readPrimordialConfiguration = true;
+            // If System.in/out/err are null, it's a good
+            // indication that we're still in the
+            // bootstrapping phase
+            if (System.out == null) {
+                return;
+            }
+            readPrimordialConfiguration = true;
+            try {
+                readConfiguration();
 
-                    try {
-                        AccessController.doPrivileged(new PrivilegedExceptionAction<Void>() {
-                                @Override
-                                public Void run() throws Exception {
-                                    readConfiguration();
+                // Platform loggers begin to delegate to java.util.logging.Logger
+                jdk.internal.logger.BootstrapLogger.redirectTemporaryLoggers();
 
-                                    // Platform loggers begin to delegate to java.util.logging.Logger
-                                    sun.util.logging.PlatformLogger.redirectPlatformLoggers();
-                                    return null;
-                                }
-                            });
-                    } catch (Exception ex) {
-                        assert false : "Exception raised while reading logging configuration: " + ex;
-                    }
-                }
+            } catch (Exception ex) {
+                assert false : "Exception raised while reading logging configuration: " + ex;
             }
         }
     }
@@ -512,10 +509,16 @@ public class LogManager {
     // as a LogManager subclass may override the addLogger, getLogger,
     // readConfiguration, and other methods.
     Logger demandLogger(String name, String resourceBundleName, Class<?> caller) {
+        final Module module = caller == null ? null : caller.getModule();
+        return demandLogger(name, resourceBundleName, module);
+    }
+
+    Logger demandLogger(String name, String resourceBundleName, Module module) {
         Logger result = getLogger(name);
         if (result == null) {
             // only allocate the new logger once
-            Logger newLogger = new Logger(name, resourceBundleName, caller, this, false);
+            Logger newLogger = new Logger(name, resourceBundleName,
+                                          module, this, false);
             do {
                 if (addLogger(newLogger)) {
                     // We successfully added the new Logger that we
@@ -541,9 +544,14 @@ public class LogManager {
     }
 
     Logger demandSystemLogger(String name, String resourceBundleName, Class<?> caller) {
+        final Module module = caller == null ? null : caller.getModule();
+        return demandSystemLogger(name, resourceBundleName, module);
+    }
+
+    Logger demandSystemLogger(String name, String resourceBundleName, Module module) {
         // Add a system logger in the system context's namespace
         final Logger sysLogger = getSystemContext()
-                .demandLogger(name, resourceBundleName, caller);
+                .demandLogger(name, resourceBundleName, module);
 
         // Add the system logger to the LogManager's namespace if not exist
         // so that there is only one single logger of the given name.
@@ -563,15 +571,13 @@ public class LogManager {
         } while (logger == null);
 
         // LogManager will set the sysLogger's handlers via LogManager.addLogger method.
-        if (logger != sysLogger && sysLogger.accessCheckedHandlers().length == 0) {
-            // if logger already exists but handlers not set
+        if (logger != sysLogger) {
+            // if logger already exists we merge the two logger configurations.
             final Logger l = logger;
             AccessController.doPrivileged(new PrivilegedAction<Void>() {
                 @Override
                 public Void run() {
-                    for (Handler hdl : l.accessCheckedHandlers()) {
-                        sysLogger.addHandler(hdl);
-                    }
+                    l.mergeWithSystemLogger(sysLogger);
                     return null;
                 }
             });
@@ -628,11 +634,11 @@ public class LogManager {
             return global;
         }
 
-        Logger demandLogger(String name, String resourceBundleName, Class<?> caller) {
+        Logger demandLogger(String name, String resourceBundleName, Module module) {
             // a LogManager subclass may have its own implementation to add and
             // get a Logger.  So delegate to the LogManager to do the work.
             final LogManager owner = getOwner();
-            return owner.demandLogger(name, resourceBundleName, caller);
+            return owner.demandLogger(name, resourceBundleName, module);
         }
 
 
@@ -796,7 +802,7 @@ public class LogManager {
             // instantiation of the handler is done in the LogManager.addLogger
             // implementation as a handler class may be only visible to LogManager
             // subclass for the custom log manager case
-            processParentHandlers(logger, name);
+            processParentHandlers(logger, name, VisitedLoggers.NEVER);
 
             // Find the new node and its parent.
             LogNode node = getNode(name);
@@ -844,7 +850,8 @@ public class LogManager {
 
         // If logger.getUseParentHandlers() returns 'true' and any of the logger's
         // parents have levels or handlers defined, make sure they are instantiated.
-        private void processParentHandlers(final Logger logger, final String name) {
+        private void processParentHandlers(final Logger logger, final String name,
+               Predicate<Logger> visited) {
             final LogManager owner = getOwner();
             AccessController.doPrivileged(new PrivilegedAction<Void>() {
                 @Override
@@ -870,7 +877,9 @@ public class LogManager {
                     owner.getProperty(pname + ".handlers") != null) {
                     // This pname has a level/handlers definition.
                     // Make sure it exists.
-                    demandLogger(pname, null, null);
+                    if (visited.test(demandLogger(pname, null, null))) {
+                        break;
+                    }
                 }
                 ix = ix2+1;
             }
@@ -913,11 +922,13 @@ public class LogManager {
         // one single logger of the given name.  System loggers are visible
         // to applications unless a logger of the same name has been added.
         @Override
-        Logger demandLogger(String name, String resourceBundleName, Class<?> caller) {
+        Logger demandLogger(String name, String resourceBundleName,
+                            Module module) {
             Logger result = findLogger(name);
             if (result == null) {
                 // only allocate the new system logger once
-                Logger newLogger = new Logger(name, resourceBundleName, caller, getOwner(), true);
+                Logger newLogger = new Logger(name, resourceBundleName,
+                                              module, getOwner(), true);
                 do {
                     if (addLocalLogger(newLogger)) {
                         // We successfully added the new Logger that we
@@ -950,46 +961,63 @@ public class LogManager {
     private void loadLoggerHandlers(final Logger logger, final String name,
                                     final String handlersPropertyName)
     {
-        AccessController.doPrivileged(new PrivilegedAction<Object>() {
+        AccessController.doPrivileged(new PrivilegedAction<Void>() {
             @Override
-            public Object run() {
-                String names[] = parseClassNames(handlersPropertyName);
-                final boolean ensureCloseOnReset = names.length > 0
-                    && getBooleanProperty(handlersPropertyName + ".ensureCloseOnReset",true);
-
-                int count = 0;
-                for (String type : names) {
-                    try {
-                        Class<?> clz = ClassLoader.getSystemClassLoader().loadClass(type);
-                        Handler hdl = (Handler) clz.newInstance();
-                        // Check if there is a property defining the
-                        // this handler's level.
-                        String levs = getProperty(type + ".level");
-                        if (levs != null) {
-                            Level l = Level.findLevel(levs);
-                            if (l != null) {
-                                hdl.setLevel(l);
-                            } else {
-                                // Probably a bad level. Drop through.
-                                System.err.println("Can't set level for " + type);
-                            }
-                        }
-                        // Add this Handler to the logger
-                        logger.addHandler(hdl);
-                        if (++count == 1 && ensureCloseOnReset) {
-                            // add this logger to the closeOnResetLoggers list.
-                            closeOnResetLoggers.addIfAbsent(CloseOnReset.create(logger));
-                        }
-                    } catch (Exception ex) {
-                        System.err.println("Can't load log handler \"" + type + "\"");
-                        System.err.println("" + ex);
-                        ex.printStackTrace();
-                    }
-                }
-
+            public Void run() {
+                setLoggerHandlers(logger, name, handlersPropertyName,
+                    createLoggerHandlers(name, handlersPropertyName));
                 return null;
             }
         });
+    }
+
+    private void setLoggerHandlers(final Logger logger, final String name,
+                                   final String handlersPropertyName,
+                                   List<Handler> handlers)
+    {
+        final boolean ensureCloseOnReset = ! handlers.isEmpty()
+                    && getBooleanProperty(handlersPropertyName + ".ensureCloseOnReset",true);
+        int count = 0;
+        for (Handler hdl : handlers) {
+            logger.addHandler(hdl);
+            if (++count == 1 && ensureCloseOnReset) {
+                // add this logger to the closeOnResetLoggers list.
+                closeOnResetLoggers.addIfAbsent(CloseOnReset.create(logger));
+            }
+        }
+    }
+
+    private List<Handler> createLoggerHandlers(final String name, final String handlersPropertyName)
+    {
+        String names[] = parseClassNames(handlersPropertyName);
+        List<Handler> handlers = new ArrayList<>(names.length);
+        for (String type : names) {
+            try {
+                @SuppressWarnings("deprecation")
+                Object o = ClassLoader.getSystemClassLoader().loadClass(type).newInstance();
+                Handler hdl = (Handler) o;
+                // Check if there is a property defining the
+                // this handler's level.
+                String levs = getProperty(type + ".level");
+                if (levs != null) {
+                    Level l = Level.findLevel(levs);
+                    if (l != null) {
+                        hdl.setLevel(l);
+                    } else {
+                        // Probably a bad level. Drop through.
+                        System.err.println("Can't set level for " + type);
+                    }
+                }
+                // Add this Handler to the logger
+                handlers.add(hdl);
+            } catch (Exception ex) {
+                System.err.println("Can't load log handler \"" + type + "\"");
+                System.err.println("" + ex);
+                ex.printStackTrace();
+            }
+        }
+
+        return handlers;
     }
 
 
@@ -1250,21 +1278,48 @@ public class LogManager {
     }
 
     /**
-     * Reinitialize the logging properties and reread the logging configuration.
+     * Reads and initializes the logging configuration.
      * <p>
-     * The same rules are used for locating the configuration properties
-     * as are used at startup.  So normally the logging properties will
-     * be re-read from the same file that was used at startup.
-     * <P>
-     * Any log level definitions in the new configuration file will be
-     * applied using Logger.setLevel(), if the target Logger exists.
+     * If the "java.util.logging.config.class" system property is set, then the
+     * property value is treated as a class name.  The given class will be
+     * loaded, an object will be instantiated, and that object's constructor
+     * is responsible for reading in the initial configuration.  (That object
+     * may use other system properties to control its configuration.)  The
+     * alternate configuration class can use {@code readConfiguration(InputStream)}
+     * to define properties in the LogManager.
+     * <p>
+     * If "java.util.logging.config.class" system property is <b>not</b> set,
+     * then this method will read the initial configuration from a properties
+     * file and calls the {@link #readConfiguration(InputStream)} method to initialize
+     * the configuration. The "java.util.logging.config.file" system property can be used
+     * to specify the properties file that will be read as the initial configuration;
+     * if not set, then the LogManager default configuration is used.
+     * The default configuration is typically loaded from the
+     * properties file "{@code conf/logging.properties}" in the Java installation
+     * directory.
+     *
      * <p>
      * Any {@linkplain #addConfigurationListener registered configuration
      * listener} will be invoked after the properties are read.
      *
-     * @exception  SecurityException  if a security manager exists and if
-     *             the caller does not have LoggingPermission("control").
-     * @exception  IOException if there are IO problems reading the configuration.
+     * @apiNote This {@code readConfiguration} method should only be used for
+     * initializing the configuration during LogManager initialization or
+     * used with the "java.util.logging.config.class" property.
+     * When this method is called after loggers have been created, and
+     * the "java.util.logging.config.class" system property is not set, all
+     * existing loggers will be {@linkplain #reset() reset}. Then any
+     * existing loggers that have a level property specified in the new
+     * configuration stream will be {@linkplain
+     * Logger#setLevel(java.util.logging.Level) set} to the specified log level.
+     * <p>
+     * To properly update the logging configuration, use the
+     * {@link #updateConfiguration(java.util.function.Function)} or
+     * {@link #updateConfiguration(java.io.InputStream, java.util.function.Function)}
+     * methods instead.
+     *
+     * @throws   SecurityException  if a security manager exists and if
+     *              the caller does not have LoggingPermission("control").
+     * @throws   IOException if there are IO problems reading the configuration.
      */
     public void readConfiguration() throws IOException, SecurityException {
         checkPermission();
@@ -1278,11 +1333,13 @@ public class LogManager {
                 // calling readConfiguration(InputStream) with a suitable stream.
                 try {
                     Class<?> clz = ClassLoader.getSystemClassLoader().loadClass(cname);
-                    clz.newInstance();
+                    @SuppressWarnings("deprecation")
+                    Object witness = clz.newInstance();
                     return;
                 } catch (ClassNotFoundException ex) {
                     Class<?> clz = Thread.currentThread().getContextClassLoader().loadClass(cname);
-                    clz.newInstance();
+                    @SuppressWarnings("deprecation")
+                    Object witness = clz.newInstance();
                     return;
                 }
             } catch (Exception ex) {
@@ -1292,20 +1349,24 @@ public class LogManager {
             }
         }
 
+        String fname = getConfigurationFileName();
+        try (final InputStream in = new FileInputStream(fname)) {
+            final BufferedInputStream bin = new BufferedInputStream(in);
+            readConfiguration(bin);
+        }
+    }
+
+    String getConfigurationFileName() throws IOException {
         String fname = System.getProperty("java.util.logging.config.file");
         if (fname == null) {
             fname = System.getProperty("java.home");
             if (fname == null) {
                 throw new Error("Can't find java.home ??");
             }
-            File f = new File(fname, "conf");
-            f = new File(f, "logging.properties");
-            fname = f.getCanonicalPath();
+            fname = Paths.get(fname, "conf", "logging.properties")
+                    .toAbsolutePath().normalize().toString();
         }
-        try (final InputStream in = new FileInputStream(fname)) {
-            final BufferedInputStream bin = new BufferedInputStream(in);
-            readConfiguration(bin);
-        }
+        return fname;
     }
 
     /**
@@ -1313,9 +1374,17 @@ public class LogManager {
      * <p>
      * For all named loggers, the reset operation removes and closes
      * all Handlers and (except for the root logger) sets the level
-     * to null.  The root logger's level is set to Level.INFO.
+     * to {@code null}. The root logger's level is set to {@code Level.INFO}.
      *
-     * @exception  SecurityException  if a security manager exists and if
+     * @apiNote Calling this method also clears the LogManager {@linkplain
+     * #getProperty(java.lang.String) properties}. The {@link
+     * #updateConfiguration(java.util.function.Function)
+     * updateConfiguration(Function)} or
+     * {@link #updateConfiguration(java.io.InputStream, java.util.function.Function)
+     * updateConfiguration(InputStream, Function)} method can be used to
+     * properly update to a new configuration.
+     *
+     * @throws  SecurityException  if a security manager exists and if
      *             the caller does not have LoggingPermission("control").
      */
 
@@ -1378,6 +1447,11 @@ public class LogManager {
                 h.close();
             } catch (Exception ex) {
                 // Problems closing a handler?  Keep going...
+            } catch (Error e) {
+                // ignore Errors while shutting down
+                if (globalHandlersState != STATE_SHUTDOWN) {
+                    throw e;
+                }
             }
         }
     }
@@ -1429,18 +1503,32 @@ public class LogManager {
     }
 
     /**
-     * Reinitialize the logging properties and reread the logging configuration
-     * from the given stream, which should be in java.util.Properties format.
+     * Reads and initializes the logging configuration from the given input stream.
+     *
+     * <p>
      * Any {@linkplain #addConfigurationListener registered configuration
      * listener} will be invoked after the properties are read.
-     * <p>
-     * Any log level definitions in the new configuration file will be
-     * applied using Logger.setLevel(), if the target Logger exists.
      *
-     * @param ins       stream to read properties from
-     * @exception  SecurityException  if a security manager exists and if
+     * @apiNote This {@code readConfiguration} method should only be used for
+     * initializing the configuration during LogManager initialization or
+     * used with the "java.util.logging.config.class" property.
+     * When this method is called after loggers have been created, all
+     * existing loggers will be {@linkplain #reset() reset}. Then any
+     * existing loggers that have a level property specified in the
+     * given input stream will be {@linkplain
+     * Logger#setLevel(java.util.logging.Level) set} to the specified log level.
+     * <p>
+     * To properly update the logging configuration, use the
+     * {@link #updateConfiguration(java.util.function.Function)} or
+     * {@link #updateConfiguration(java.io.InputStream, java.util.function.Function)}
+     * method instead.
+     *
+     * @param ins  stream to read properties from
+     * @throws  SecurityException  if a security manager exists and if
      *             the caller does not have LoggingPermission("control").
-     * @exception  IOException if there are problems reading from the stream.
+     * @throws  IOException if there are problems reading from the stream,
+     *             or the given stream is not in the
+     *             {@linkplain java.util.Properties properties file} format.
      */
     public void readConfiguration(InputStream ins) throws IOException, SecurityException {
         checkPermission();
@@ -1483,7 +1571,8 @@ public class LogManager {
                 for (String word : names) {
                     try {
                         Class<?> clz = ClassLoader.getSystemClassLoader().loadClass(word);
-                        clz.newInstance();
+                        @SuppressWarnings("deprecation")
+                        Object witness = clz.newInstance();
                     } catch (Exception ex) {
                         System.err.println("Can't load config class \"" + word + "\"");
                         System.err.println("" + ex);
@@ -1511,6 +1600,635 @@ public class LogManager {
 
         // should be called out of lock to avoid dead-lock situations
         // when user code is involved
+        invokeConfigurationListeners();
+    }
+
+    // This enum enumerate the configuration properties that will be
+    // updated on existing loggers when the configuration is updated
+    // with LogManager.updateConfiguration().
+    //
+    // Note that this works properly only for the global LogManager - as
+    // Handler and its subclasses get their configuration from
+    // LogManager.getLogManager().
+    //
+    static enum ConfigProperty {
+        LEVEL(".level"), HANDLERS(".handlers"), USEPARENT(".useParentHandlers");
+        final String suffix;
+        final int length;
+        private ConfigProperty(String suffix) {
+            this.suffix = Objects.requireNonNull(suffix);
+            length = suffix.length();
+        }
+
+        public boolean handleKey(String key) {
+            if (this == HANDLERS && suffix.substring(1).equals(key)) return true;
+            if (this == HANDLERS && suffix.equals(key)) return false;
+            return key.endsWith(suffix);
+        }
+        String key(String loggerName) {
+            if (this == HANDLERS && (loggerName == null || loggerName.isEmpty())) {
+                return suffix.substring(1);
+            }
+            return loggerName + suffix;
+        }
+        String loggerName(String key) {
+            assert key.equals(suffix.substring(1)) && this == HANDLERS || key.endsWith(suffix);
+            if (this == HANDLERS && suffix.substring(1).equals(key)) return "";
+            return key.substring(0, key.length() - length);
+        }
+
+        /**
+         * If the property is one that should be updated on existing loggers by
+         * updateConfiguration, returns the name of the logger for which the
+         * property is configured. Otherwise, returns null.
+         * @param property a property key in 'props'
+         * @return the name of the logger on which the property is to be set,
+         *         if the property is one that should be updated on existing
+         *         loggers, {@code null} otherwise.
+         */
+        static String getLoggerName(String property) {
+            for (ConfigProperty p : ConfigProperty.ALL) {
+                if (p.handleKey(property)) {
+                    return p.loggerName(property);
+                }
+            }
+            return null; // Not a property that should be updated.
+        }
+
+        /**
+         * Find the ConfigProperty corresponding to the given
+         * property key (may find none).
+         * @param property a property key in 'props'
+         * @return An optional containing a ConfigProperty object,
+         *         if the property is one that should be updated on existing
+         *         loggers, empty otherwise.
+         */
+        static Optional<ConfigProperty> find(String property) {
+            return ConfigProperty.ALL.stream()
+                    .filter(p -> p.handleKey(property))
+                    .findFirst();
+         }
+
+        /**
+         * Returns true if the given property is one that should be updated
+         * on existing loggers.
+         * Used to filter property name streams.
+         * @param property a property key from the configuration.
+         * @return true if this property is of interest for updateConfiguration.
+         */
+        static boolean matches(String property) {
+            return find(property).isPresent();
+        }
+
+        /**
+         * Returns true if the new property value is different from the old,
+         * and therefore needs to be updated on existing loggers.
+         * @param k a property key in the configuration
+         * @param previous the old configuration
+         * @param next the new configuration
+         * @return true if the property is changing value between the two
+         *         configurations.
+         */
+        static boolean needsUpdating(String k, Properties previous, Properties next) {
+            final String p = trim(previous.getProperty(k, null));
+            final String n = trim(next.getProperty(k, null));
+            return ! Objects.equals(p,n);
+        }
+
+        /**
+         * Applies the mapping function for the given key to the next
+         * configuration.
+         * If the mapping function is null then this method does nothing.
+         * Otherwise, it calls the mapping function to compute the value
+         * that should be associated with {@code key} in the resulting
+         * configuration, and applies it to {@code next}.
+         * If the mapping function returns {@code null} the key is removed
+         * from {@code next}.
+         *
+         * @param k a property key in the configuration
+         * @param previous the old configuration
+         * @param next the new configuration (modified by this function)
+         * @param remappingFunction the mapping function.
+         */
+        static void merge(String k, Properties previous, Properties next,
+                          BiFunction<String, String, String> mappingFunction) {
+            String p = trim(previous.getProperty(k, null));
+            String n = trim(next.getProperty(k, null));
+            String mapped = trim(mappingFunction.apply(p,n));
+            if (!Objects.equals(n, mapped)) {
+                if (mapped == null) {
+                    next.remove(k);
+                } else {
+                    next.setProperty(k, mapped);
+                }
+            }
+        }
+
+        private static final EnumSet<ConfigProperty> ALL =
+                EnumSet.allOf(ConfigProperty.class);
+    }
+
+    // trim the value if not null.
+    private static String trim(String value) {
+        return value == null ? null : value.trim();
+    }
+
+    /**
+     * An object that keep track of loggers we have already visited.
+     * Used when updating configuration, to avoid processing the same logger
+     * twice.
+     */
+    static final class VisitedLoggers implements Predicate<Logger> {
+        final IdentityHashMap<Logger,Boolean> visited;
+        private VisitedLoggers(IdentityHashMap<Logger,Boolean> visited) {
+            this.visited = visited;
+        }
+        VisitedLoggers() {
+            this(new IdentityHashMap<>());
+        }
+        @Override
+        public boolean test(Logger logger) {
+            return visited != null && visited.put(logger, Boolean.TRUE) != null;
+        }
+        public void clear() {
+            if (visited != null) visited.clear();
+        }
+
+        // An object that considers that no logger has ever been visited.
+        // This is used when processParentHandlers is called from
+        // LoggerContext.addLocalLogger
+        static final VisitedLoggers NEVER = new VisitedLoggers(null);
+    }
+
+
+    /**
+     * Type of the modification for a given property. One of SAME, ADDED, CHANGED,
+     * or REMOVED.
+     */
+    static enum ModType {
+        SAME,    // property had no value in the old and new conf, or had the
+                 // same value in both.
+        ADDED,   // property had no value in the old conf, but has one in the new.
+        CHANGED, // property has a different value in the old conf and the new conf.
+        REMOVED; // property has no value in the new conf, but had one in the old.
+        static ModType of(String previous, String next) {
+            if (previous == null && next != null) {
+                return ADDED;
+            }
+            if (next == null && previous != null) {
+                return REMOVED;
+            }
+            if (!Objects.equals(trim(previous), trim(next))) {
+                return CHANGED;
+            }
+            return SAME;
+        }
+    }
+
+    /**
+     * Updates the logging configuration.
+     * <p>
+     * If the "java.util.logging.config.file" system property is set,
+     * then the property value specifies the properties file to be read
+     * as the new configuration. Otherwise, the LogManager default
+     * configuration is used.
+     * <br>The default configuration is typically loaded from the
+     * properties file "{@code conf/logging.properties}" in the
+     * Java installation directory.
+     * <p>
+     * This method reads the new configuration and calls the {@link
+     * #updateConfiguration(java.io.InputStream, java.util.function.Function)
+     * updateConfiguration(ins, mapper)} method to
+     * update the configuration.
+     *
+     * @apiNote
+     * This method updates the logging configuration from reading
+     * a properties file and ignores the "java.util.logging.config.class"
+     * system property.  The "java.util.logging.config.class" property is
+     * only used by the {@link #readConfiguration()}  method to load a custom
+     * configuration class as an initial configuration.
+     *
+     * @param mapper a functional interface that takes a configuration
+     *   key <i>k</i> and returns a function <i>f(o,n)</i> whose returned
+     *   value will be applied to the resulting configuration. The
+     *   function <i>f</i> may return {@code null} to indicate that the property
+     *   <i>k</i> will not be added to the resulting configuration.
+     *   <br>
+     *   If {@code mapper} is {@code null} then {@code (k) -> ((o, n) -> n)} is
+     *   assumed.
+     *   <br>
+     *   For each <i>k</i>, the mapped function <i>f</i> will
+     *   be invoked with the value associated with <i>k</i> in the old
+     *   configuration (i.e <i>o</i>) and the value associated with
+     *   <i>k</i> in the new configuration (i.e. <i>n</i>).
+     *   <br>A {@code null} value for <i>o</i> or <i>n</i> indicates that no
+     *   value was present for <i>k</i> in the corresponding configuration.
+     *
+     * @throws  SecurityException  if a security manager exists and if
+     *          the caller does not have LoggingPermission("control"), or
+     *          does not have the permissions required to set up the
+     *          configuration (e.g. open file specified for FileHandlers
+     *          etc...)
+     *
+     * @throws  NullPointerException  if {@code mapper} returns a {@code null}
+     *         function when invoked.
+     *
+     * @throws  IOException if there are problems reading from the
+     *          logging configuration file.
+     *
+     * @see #updateConfiguration(java.io.InputStream, java.util.function.Function)
+     * @since 9
+     */
+    public void updateConfiguration(Function<String, BiFunction<String,String,String>> mapper)
+            throws IOException {
+        checkPermission();
+        ensureLogManagerInitialized();
+        drainLoggerRefQueueBounded();
+
+        String fname = getConfigurationFileName();
+        try (final InputStream in = new FileInputStream(fname)) {
+            final BufferedInputStream bin = new BufferedInputStream(in);
+            updateConfiguration(bin, mapper);
+        }
+    }
+
+    /**
+     * Updates the logging configuration.
+     * <p>
+     * For each configuration key in the {@linkplain
+     * #getProperty(java.lang.String) existing configuration} and
+     * the given input stream configuration, the given {@code mapper} function
+     * is invoked to map from the configuration key to a function,
+     * <i>f(o,n)</i>, that takes the old value and new value and returns
+     * the resulting value to be applied in the resulting configuration,
+     * as specified in the table below.
+     * <p>Let <i>k</i> be a configuration key in the old or new configuration,
+     * <i>o</i> be the old value (i.e. the value associated
+     * with <i>k</i> in the old configuration), <i>n</i> be the
+     * new value (i.e. the value associated with <i>k</i> in the new
+     * configuration), and <i>f</i> be the function returned
+     * by {@code mapper.apply(}<i>k</i>{@code )}: then <i>v = f(o,n)</i> is the
+     * resulting value. If <i>v</i> is not {@code null}, then a property
+     * <i>k</i> with value <i>v</i> will be added to the resulting configuration.
+     * Otherwise, it will be omitted.
+     * <br>A {@code null} value may be passed to function
+     * <i>f</i> to indicate that the corresponding configuration has no
+     * configuration key <i>k</i>.
+     * The function <i>f</i> may return {@code null} to indicate that
+     * there will be no value associated with <i>k</i> in the resulting
+     * configuration.
+     * <p>
+     * If {@code mapper} is {@code null}, then <i>v</i> will be set to
+     * <i>n</i>.
+     * <p>
+     * LogManager {@linkplain #getProperty(java.lang.String) properties} are
+     * updated with the resulting value in the resulting configuration.
+     * <p>
+     * The registered {@linkplain #addConfigurationListener configuration
+     * listeners} will be invoked after the configuration is successfully updated.
+     * <br><br>
+     * <table><caption style="display:none">Updating configuration properties</caption>
+     * <tr>
+     * <th>Property</th>
+     * <th>Resulting Behavior</th>
+     * </tr>
+     * <tr>
+     * <td valign="top">{@code <logger>.level}</td>
+     * <td>
+     * <ul>
+     *   <li>If the resulting configuration defines a level for a logger and
+     *       if the resulting level is different than the level specified in the
+     *       the old configuration, or not specified in
+     *       the old configuration, then if the logger exists or if children for
+     *       that logger exist, the level for that logger will be updated,
+     *       and the change propagated to any existing logger children.
+     *       This may cause the logger to be created, if necessary.
+     *   </li>
+     *   <li>If the old configuration defined a level for a logger, and the
+     *       resulting configuration doesn't, then this change will not be
+     *       propagated to existing loggers, if any.
+     *       To completely replace a configuration - the caller should therefore
+     *       call {@link #reset() reset} to empty the current configuration,
+     *       before calling {@code updateConfiguration}.
+     *   </li>
+     * </ul>
+     * </td>
+     * <tr>
+     * <td valign="top">{@code <logger>.useParentHandlers}</td>
+     * <td>
+     * <ul>
+     *   <li>If either the resulting or the old value for the useParentHandlers
+     *       property is not null, then if the logger exists or if children for
+     *       that logger exist, that logger will be updated to the resulting
+     *       value.
+     *       The value of the useParentHandlers property is the value specified
+     *       in the configuration; if not specified, the default is true.
+     *   </li>
+     * </ul>
+     * </td>
+     * </tr>
+     * <tr>
+     * <td valign="top">{@code <logger>.handlers}</td>
+     * <td>
+     * <ul>
+     *   <li>If the resulting configuration defines a list of handlers for a
+     *       logger, and if the resulting list is different than the list
+     *       specified in the old configuration for that logger (that could be
+     *       empty), then if the logger exists or its children exist, the
+     *       handlers associated with that logger are closed and removed and
+     *       the new handlers will be created per the resulting configuration
+     *       and added to that logger, creating that logger if necessary.
+     *   </li>
+     *   <li>If the old configuration defined some handlers for a logger, and
+     *       the resulting configuration doesn't, if that logger exists,
+     *       its handlers will be removed and closed.
+     *   </li>
+     *   <li>Changing the list of handlers on an existing logger will cause all
+     *       its previous handlers to be removed and closed, regardless of whether
+     *       they had been created from the configuration or programmatically.
+     *       The old handlers will be replaced by new handlers, if any.
+     *   </li>
+     * </ul>
+     * </td>
+     * </tr>
+     * <tr>
+     * <td valign="top">{@code <handler-name>.*}</td>
+     * <td>
+     * <ul>
+     *   <li>Properties configured/changed on handler classes will only affect
+     *       newly created handlers. If a node is configured with the same list
+     *       of handlers in the old and the resulting configuration, then these
+     *       handlers will remain unchanged.
+     *   </li>
+     * </ul>
+     * </td>
+     * </tr>
+     * <tr>
+     * <td valign="top">{@code config} and any other property</td>
+     * <td>
+     * <ul>
+     *   <li>The resulting value for these property will be stored in the
+     *   LogManager properties, but {@code updateConfiguration} will not parse
+     *   or process their values.
+     *   </li>
+     * </ul>
+     * </td>
+     * </tr>
+     * </table>
+     * <p>
+     * <em>Example mapper functions:</em>
+     * <br><br>
+     * <ul>
+     * <li>Replace all logging properties with the new configuration:
+     * <br><br>{@code     (k) -> ((o, n) -> n)}:
+     * <br><br>this is equivalent to passing a null {@code mapper} parameter.
+     * </li>
+     * <li>Merge the new configuration and old configuration and use the
+     * new value if <i>k</i> exists in the new configuration:
+     * <br><br>{@code     (k) -> ((o, n) -> n == null ? o : n)}:
+     * <br><br>as if merging two collections as follows:
+     * {@code result.putAll(oldc); result.putAll(newc)}.<br></li>
+     * <li>Merge the new configuration and old configuration and use the old
+     * value if <i>k</i> exists in the old configuration:
+     * <br><br>{@code     (k) -> ((o, n) -> o == null ? n : o)}:
+     * <br><br>as if merging two collections as follows:
+     * {@code result.putAll(newc); result.putAll(oldc)}.<br></li>
+     * <li>Replace all properties with the new configuration except the handler
+     * property to configure Logger's handler that is not root logger:
+     * <br>
+     * <pre>{@code (k) -> k.endsWith(".handlers")}
+     *      {@code     ? ((o, n) -> (o == null ? n : o))}
+     *      {@code     : ((o, n) -> n)}</pre>
+     * </li>
+     * </ul>
+     * <p>
+     * To completely reinitialize a configuration, an application can first call
+     * {@link #reset() reset} to fully remove the old configuration, followed by
+     * {@code updateConfiguration} to initialize the new configuration.
+     *
+     * @param ins    a stream to read properties from
+     * @param mapper a functional interface that takes a configuration
+     *   key <i>k</i> and returns a function <i>f(o,n)</i> whose returned
+     *   value will be applied to the resulting configuration. The
+     *   function <i>f</i> may return {@code null} to indicate that the property
+     *   <i>k</i> will not be added to the resulting configuration.
+     *   <br>
+     *   If {@code mapper} is {@code null} then {@code (k) -> ((o, n) -> n)} is
+     *   assumed.
+     *   <br>
+     *   For each <i>k</i>, the mapped function <i>f</i> will
+     *   be invoked with the value associated with <i>k</i> in the old
+     *   configuration (i.e <i>o</i>) and the value associated with
+     *   <i>k</i> in the new configuration (i.e. <i>n</i>).
+     *   <br>A {@code null} value for <i>o</i> or <i>n</i> indicates that no
+     *   value was present for <i>k</i> in the corresponding configuration.
+     *
+     * @throws  SecurityException if a security manager exists and if
+     *          the caller does not have LoggingPermission("control"), or
+     *          does not have the permissions required to set up the
+     *          configuration (e.g. open files specified for FileHandlers)
+     *
+     * @throws  NullPointerException if {@code ins} is null or if
+     *          {@code mapper} returns a null function when invoked.
+     *
+     * @throws  IOException if there are problems reading from the stream,
+     *          or the given stream is not in the
+     *          {@linkplain java.util.Properties properties file} format.
+     * @since 9
+     */
+    public void updateConfiguration(InputStream ins,
+            Function<String, BiFunction<String,String,String>> mapper)
+            throws IOException {
+        checkPermission();
+        ensureLogManagerInitialized();
+        drainLoggerRefQueueBounded();
+
+        final Properties previous;
+        final Set<String> updatePropertyNames;
+        List<LoggerContext> cxs = Collections.emptyList();
+        final VisitedLoggers visited = new VisitedLoggers();
+        final Properties next = new Properties();
+
+        try {
+            // Load the properties
+            next.load(ins);
+        } catch (IllegalArgumentException x) {
+            // props.load may throw an IllegalArgumentException if the stream
+            // contains malformed Unicode escape sequences.
+            // We wrap that in an IOException as updateConfiguration is
+            // specified to throw IOException if there are problems reading
+            // from the stream.
+            // Note: new IOException(x.getMessage(), x) allow us to get a more
+            // concise error message than new IOException(x);
+            throw new IOException(x.getMessage(), x);
+        }
+
+        if (globalHandlersState == STATE_SHUTDOWN) return;
+
+        // exclusive lock: readConfiguration/reset/updateConfiguration can't
+        //           run concurrently.
+        // configurationLock.writeLock().lock();
+        configurationLock.lock();
+        try {
+            if (globalHandlersState == STATE_SHUTDOWN) return;
+            previous = props;
+
+            // Builds a TreeSet of all (old and new) property names.
+            updatePropertyNames =
+                    Stream.concat(previous.stringPropertyNames().stream(),
+                                  next.stringPropertyNames().stream())
+                        .collect(Collectors.toCollection(TreeSet::new));
+
+            if (mapper != null) {
+                // mapper will potentially modify the content of
+                // 'next', so we need to call it before affecting props=next.
+                // give a chance to the mapper to control all
+                // properties - not just those we will reset.
+                updatePropertyNames.stream()
+                        .forEachOrdered(k -> ConfigProperty
+                                .merge(k, previous, next,
+                                       Objects.requireNonNull(mapper.apply(k))));
+            }
+
+            props = next;
+
+            // allKeys will contain all keys:
+            //    - which correspond to a configuration property we are interested in
+            //      (first filter)
+            //    - whose value needs to be updated (because it's new, removed, or
+            //      different) in the resulting configuration (second filter)
+            final Stream<String> allKeys = updatePropertyNames.stream()
+                    .filter(ConfigProperty::matches)
+                    .filter(k -> ConfigProperty.needsUpdating(k, previous, next));
+
+            // Group configuration properties by logger name
+            // We use a TreeMap so that parent loggers will be visited before
+            // child loggers.
+            final Map<String, TreeSet<String>> loggerConfigs =
+                    allKeys.collect(Collectors.groupingBy(ConfigProperty::getLoggerName,
+                                    TreeMap::new,
+                                    Collectors.toCollection(TreeSet::new)));
+
+            if (!loggerConfigs.isEmpty()) {
+                cxs = contexts();
+            }
+            final List<Logger> loggers = cxs.isEmpty()
+                    ? Collections.emptyList() : new ArrayList<>(cxs.size());
+            for (Map.Entry<String, TreeSet<String>> e : loggerConfigs.entrySet()) {
+                // This can be a logger name, or something else...
+                // The only thing we know is that we found a property
+                //    we are interested in.
+                // For instance, if we found x.y.z.level, then x.y.z could be
+                // a logger, but it could also be a handler class...
+                // Anyway...
+                final String name = e.getKey();
+                final Set<String> properties = e.getValue();
+                loggers.clear();
+                for (LoggerContext cx : cxs) {
+                    Logger l = cx.findLogger(name);
+                    if (l != null && !visited.test(l)) {
+                        loggers.add(l);
+                    }
+                }
+                if (loggers.isEmpty()) continue;
+                for (String pk : properties) {
+                    ConfigProperty cp = ConfigProperty.find(pk).get();
+                    String p = previous.getProperty(pk, null);
+                    String n = next.getProperty(pk, null);
+
+                    // Determines the type of modification.
+                    ModType mod = ModType.of(p, n);
+
+                    // mod == SAME means that the two values are equals, there
+                    // is nothing to do. Usually, this should not happen as such
+                    // properties should have been filtered above.
+                    // It could happen however if the properties had
+                    // trailing/leading whitespaces.
+                    if (mod == ModType.SAME) continue;
+
+                    switch (cp) {
+                        case LEVEL:
+                            if (mod == ModType.REMOVED) continue;
+                            Level level = Level.findLevel(trim(n));
+                            if (level != null) {
+                                if (name.isEmpty()) {
+                                    rootLogger.setLevel(level);
+                                }
+                                for (Logger l : loggers) {
+                                    if (!name.isEmpty() || l != rootLogger) {
+                                        l.setLevel(level);
+                                    }
+                                }
+                            }
+                            break;
+                        case USEPARENT:
+                            if (!name.isEmpty()) {
+                                boolean useParent = getBooleanProperty(pk, true);
+                                if (n != null || p != null) {
+                                    // reset the flag only if the previous value
+                                    // or the new value are not null.
+                                    for (Logger l : loggers) {
+                                        l.setUseParentHandlers(useParent);
+                                    }
+                                }
+                            }
+                            break;
+                        case HANDLERS:
+                            List<Handler> hdls = null;
+                            if (name.isEmpty()) {
+                                // special handling for the root logger.
+                                globalHandlersState = STATE_READING_CONFIG;
+                                try {
+                                    closeHandlers(rootLogger);
+                                    globalHandlersState = STATE_UNINITIALIZED;
+                                } catch (Throwable t) {
+                                    globalHandlersState = STATE_INITIALIZED;
+                                    throw t;
+                                }
+                            }
+                            for (Logger l : loggers) {
+                                if (l == rootLogger) continue;
+                                closeHandlers(l);
+                                if (mod == ModType.REMOVED) {
+                                    closeOnResetLoggers.removeIf(c -> c.logger == l);
+                                    continue;
+                                }
+                                if (hdls == null) {
+                                    hdls = name.isEmpty()
+                                            ? Arrays.asList(rootLogger.getHandlers())
+                                            : createLoggerHandlers(name, pk);
+                                }
+                                setLoggerHandlers(l, name, pk, hdls);
+                            }
+                            break;
+                        default: break;
+                    }
+                }
+            }
+        } finally {
+            configurationLock.unlock();
+            visited.clear();
+        }
+
+        // Now ensure that if an existing logger has acquired a new parent
+        // in the configuration, this new parent will be created - if needed,
+        // and added to the context of the existing child.
+        //
+        drainLoggerRefQueueBounded();
+        for (LoggerContext cx : cxs) {
+            for (Enumeration<String> names = cx.getLoggerNames() ; names.hasMoreElements();) {
+                String name = names.nextElement();
+                if (name.isEmpty()) continue;  // don't need to process parents on root.
+                Logger l = cx.findLogger(name);
+                if (l != null && !visited.test(l)) {
+                    // should pass visited here to cut the processing when
+                    // reaching a logger already visited.
+                    cx.processParentHandlers(l, name, visited);
+                }
+            }
+        }
+
+        // We changed the configuration: invoke configuration listeners
         invokeConfigurationListeners();
     }
 
@@ -1602,8 +2320,9 @@ public class LogManager {
         String val = getProperty(name);
         try {
             if (val != null) {
-                Class<?> clz = ClassLoader.getSystemClassLoader().loadClass(val);
-                return (Filter) clz.newInstance();
+                @SuppressWarnings("deprecation")
+                Object o = ClassLoader.getSystemClassLoader().loadClass(val).newInstance();
+                return (Filter) o;
             }
         } catch (Exception ex) {
             // We got one of a variety of exceptions in creating the
@@ -1623,8 +2342,9 @@ public class LogManager {
         String val = getProperty(name);
         try {
             if (val != null) {
-                Class<?> clz = ClassLoader.getSystemClassLoader().loadClass(val);
-                return (Formatter) clz.newInstance();
+                @SuppressWarnings("deprecation")
+                Object o = ClassLoader.getSystemClassLoader().loadClass(val).newInstance();
+                return (Formatter) o;
             }
         } catch (Exception ex) {
             // We got one of a variety of exceptions in creating the
@@ -1675,7 +2395,8 @@ public class LogManager {
         }
     }
 
-    static final Permission controlPermission = new LoggingPermission("control", null);
+    static final Permission controlPermission =
+            new LoggingPermission("control", null);
 
     void checkPermission() {
         SecurityManager sm = System.getSecurityManager();
@@ -1792,15 +2513,12 @@ public class LogManager {
         }
     }
 
-    // Management Support
-    private static LoggingMXBean loggingMXBean = null;
     /**
      * String representation of the
      * {@link javax.management.ObjectName} for the management interface
      * for the logging facility.
      *
      * @see java.lang.management.PlatformLoggingMXBean
-     * @see java.util.logging.LoggingMXBean
      *
      * @since 1.5
      */
@@ -1808,25 +2526,22 @@ public class LogManager {
         = "java.util.logging:type=Logging";
 
     /**
-     * Returns <tt>LoggingMXBean</tt> for managing loggers.
-     * An alternative way to manage loggers is through the
-     * {@link java.lang.management.PlatformLoggingMXBean} interface
-     * that can be obtained by calling:
-     * <pre>
-     *     PlatformLoggingMXBean logging = {@link java.lang.management.ManagementFactory#getPlatformMXBean(Class)
-     *         ManagementFactory.getPlatformMXBean}(PlatformLoggingMXBean.class);
-     * </pre>
+     * Returns {@code LoggingMXBean} for managing loggers.
      *
      * @return a {@link LoggingMXBean} object.
+     *
+     * @deprecated {@code java.util.logging.LoggingMXBean} is deprecated and
+     *      replaced with {@code java.lang.management.PlatformLoggingMXBean}. Use
+     *      {@link java.lang.management.ManagementFactory#getPlatformMXBean(Class)
+     *      ManagementFactory.getPlatformMXBean}(PlatformLoggingMXBean.class)
+     *      instead.
      *
      * @see java.lang.management.PlatformLoggingMXBean
      * @since 1.5
      */
+    @Deprecated(since="9")
     public static synchronized LoggingMXBean getLoggingMXBean() {
-        if (loggingMXBean == null) {
-            loggingMXBean =  new Logging();
-        }
-        return loggingMXBean;
+        return Logging.getInstance();
     }
 
     /**
@@ -1857,7 +2572,7 @@ public class LogManager {
      * caller does not have LoggingPermission("control").
      * @throws NullPointerException if the listener is null.
      *
-     * @since 1.9
+     * @since 9
      */
     public LogManager addConfigurationListener(Runnable listener) {
         final Runnable r = Objects.requireNonNull(listener);
@@ -1884,7 +2599,7 @@ public class LogManager {
      * @throws SecurityException if a security manager exists and if the
      * caller does not have LoggingPermission("control").
      *
-     * @since 1.9
+     * @since 9
      */
     public void removeConfigurationListener(Runnable listener) {
         final Runnable key = Objects.requireNonNull(listener);
@@ -1917,6 +2632,72 @@ public class LogManager {
         // after all listeners have been invoked.
         if (t instanceof Error) throw (Error)t;
         if (t instanceof RuntimeException) throw (RuntimeException)t;
+    }
+
+    /**
+     * This class allows the {@link LoggingProviderImpl} to demand loggers on
+     * behalf of system and application classes.
+     */
+    private static final class LoggingProviderAccess
+        implements LoggingProviderImpl.LogManagerAccess,
+                   PrivilegedAction<Void> {
+
+        private LoggingProviderAccess() {
+        }
+
+        /**
+         * Demands a logger on behalf of the given {@code module}.
+         * <p>
+         * If a named logger suitable for the given module is found
+         * returns it.
+         * Otherwise, creates a new logger suitable for the given module.
+         *
+         * @param name   The logger name.
+         * @param module The module on which behalf the logger is created/retrieved.
+         * @return A logger for the given {@code module}.
+         *
+         * @throws NullPointerException if {@code name} is {@code null}
+         *         or {@code module} is {@code null}.
+         * @throws IllegalArgumentException if {@code manager} is not the default
+         *         LogManager.
+         * @throws SecurityException if a security manager is present and the
+         *         calling code doesn't have the
+         *        {@link LoggingPermission LoggingPermission("demandLogger", null)}.
+         */
+        @Override
+        public Logger demandLoggerFor(LogManager manager, String name, Module module) {
+            if (manager != getLogManager()) {
+                // having LogManager as parameter just ensures that the
+                // caller will have initialized the LogManager before reaching
+                // here.
+                throw new IllegalArgumentException("manager");
+            }
+            Objects.requireNonNull(name);
+            Objects.requireNonNull(module);
+            SecurityManager sm = System.getSecurityManager();
+            if (sm != null) {
+                sm.checkPermission(controlPermission);
+            }
+            if (isSystem(module)) {
+                return manager.demandSystemLogger(name,
+                    Logger.SYSTEM_LOGGER_RB_NAME, module);
+            } else {
+                return manager.demandLogger(name, null, module);
+            }
+        }
+
+        @Override
+        public Void run() {
+            LoggingProviderImpl.setLogManagerAccess(INSTANCE);
+            return null;
+        }
+
+        static final LoggingProviderAccess INSTANCE = new LoggingProviderAccess();
+    }
+
+    static {
+        AccessController.doPrivileged(LoggingProviderAccess.INSTANCE, null,
+                                      controlPermission);
     }
 
 }

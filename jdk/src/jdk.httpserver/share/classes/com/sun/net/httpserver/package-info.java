@@ -54,7 +54,7 @@
    }
    ...
 
-   HttpServer server = HttpServer.create(new InetSocketAddress(8000));
+   HttpServer server = HttpServer.create(new InetSocketAddress(8000), 0);
    server.createContext("/applications/myapp", new MyHandler());
    server.setExecutor(null); // creates a default executor
    server.start();
@@ -123,5 +123,4 @@
 
    @since 1.6
  */
-@jdk.Exported
 package com.sun.net.httpserver;

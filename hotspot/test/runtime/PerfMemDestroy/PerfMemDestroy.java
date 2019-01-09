@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,15 +25,16 @@
  * @test
  * @bug 8030955
  * @summary Allow multiple calls to PerfMemory::destroy() without asserting.
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  * @run main PerfMemDestroy
  */
 
 import java.io.File;
 import java.util.Map;
-import jdk.test.lib.*;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 
 public class PerfMemDestroy {
     public static void main(String args[]) throws Throwable {

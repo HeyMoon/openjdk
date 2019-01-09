@@ -54,7 +54,8 @@ import java.util.function.Consumer;
  * <p>This class and its iterator implement all of the
  * <em>optional</em> methods of the {@link Collection} and {@link
  * Iterator} interfaces.  The Iterator provided in method {@link
- * #iterator()} is <em>not</em> guaranteed to traverse the elements of
+ * #iterator()} and the Spliterator provided in method {@link #spliterator()}
+ * are <em>not</em> guaranteed to traverse the elements of
  * the priority queue in any particular order. If you need ordered
  * traversal, consider using {@code Arrays.sort(pq.toArray())}.
  *
@@ -72,12 +73,12 @@ import java.util.function.Consumer;
  * ({@code peek}, {@code element}, and {@code size}).
  *
  * <p>This class is a member of the
- * <a href="{@docRoot}/../technotes/guides/collections/index.html">
+ * <a href="{@docRoot}/java/util/package-summary.html#CollectionsFramework">
  * Java Collections Framework</a>.
  *
  * @since 1.5
  * @author Josh Bloch, Doug Lea
- * @param <E> the type of elements held in this collection
+ * @param <E> the type of elements held in this queue
  */
 public class PriorityQueue<E> extends AbstractQueue<E>
     implements java.io.Serializable {
@@ -99,7 +100,7 @@ public class PriorityQueue<E> extends AbstractQueue<E>
     /**
      * The number of elements in the priority queue.
      */
-    private int size = 0;
+    int size;
 
     /**
      * The comparator, or null if priority queue uses elements'
@@ -111,7 +112,7 @@ public class PriorityQueue<E> extends AbstractQueue<E>
      * The number of times this priority queue has been
      * <i>structurally modified</i>.  See AbstractList for gory details.
      */
-    transient int modCount = 0; // non-private to simplify nested class access
+    transient int modCount;     // non-private to simplify nested class access
 
     /**
      * Creates a {@code PriorityQueue} with the default initial
@@ -337,11 +338,8 @@ public class PriorityQueue<E> extends AbstractQueue<E>
         int i = size;
         if (i >= queue.length)
             grow(i + 1);
+        siftUp(i, e);
         size = i + 1;
-        if (i == 0)
-            queue[0] = e;
-        else
-            siftUp(i, e);
         return true;
     }
 
@@ -448,7 +446,7 @@ public class PriorityQueue<E> extends AbstractQueue<E>
      * The following code can be used to dump the queue into a newly
      * allocated array of {@code String}:
      *
-     *  <pre> {@code String[] y = x.toArray(new String[0]);}</pre>
+     * <pre> {@code String[] y = x.toArray(new String[0]);}</pre>
      *
      * Note that {@code toArray(new Object[0])} is identical in function to
      * {@code toArray()}.
@@ -489,7 +487,7 @@ public class PriorityQueue<E> extends AbstractQueue<E>
          * Index (into queue array) of element to be returned by
          * subsequent call to next.
          */
-        private int cursor = 0;
+        private int cursor;
 
         /**
          * Index of element returned by most recent call to next,
@@ -509,13 +507,13 @@ public class PriorityQueue<E> extends AbstractQueue<E>
          * We expect that most iterations, even those involving removals,
          * will not need to store elements in this field.
          */
-        private ArrayDeque<E> forgetMeNot = null;
+        private ArrayDeque<E> forgetMeNot;
 
         /**
          * Element returned by the most recent call to next iff that
          * element was drawn from the forgetMeNot list.
          */
-        private E lastRetElt = null;
+        private E lastRetElt;
 
         /**
          * The modCount value that the iterator believes that the backing
@@ -523,6 +521,8 @@ public class PriorityQueue<E> extends AbstractQueue<E>
          * has detected concurrent modification.
          */
         private int expectedModCount = modCount;
+
+        Itr() {}                        // prevent access constructor creation
 
         public boolean hasNext() {
             return cursor < size ||
@@ -609,7 +609,7 @@ public class PriorityQueue<E> extends AbstractQueue<E>
      * avoid missing traversing elements.
      */
     @SuppressWarnings("unchecked")
-    private E removeAt(int i) {
+    E removeAt(int i) {
         // assert i >= 0 && i < size;
         modCount++;
         int s = --size;
@@ -633,7 +633,7 @@ public class PriorityQueue<E> extends AbstractQueue<E>
      * promoting x up the tree until it is greater than or equal to
      * its parent, or is the root.
      *
-     * To simplify and speed up coercions and comparisons. the
+     * To simplify and speed up coercions and comparisons, the
      * Comparable and Comparator versions are separated into different
      * methods that are otherwise identical. (Similarly for siftDown.)
      *
@@ -729,11 +729,18 @@ public class PriorityQueue<E> extends AbstractQueue<E>
     /**
      * Establishes the heap invariant (described above) in the entire tree,
      * assuming nothing about the order of the elements prior to the call.
+     * This classic algorithm due to Floyd (1964) is known to be O(size).
      */
     @SuppressWarnings("unchecked")
     private void heapify() {
-        for (int i = (size >>> 1) - 1; i >= 0; i--)
-            siftDown(i, (E) queue[i]);
+        final Object[] es = queue;
+        int i = (size >>> 1) - 1;
+        if (comparator == null)
+            for (; i >= 0; i--)
+                siftDownComparable(i, (E) es[i]);
+        else
+            for (; i >= 0; i--)
+                siftDownUsingComparator(i, (E) es[i]);
     }
 
     /**
@@ -752,10 +759,11 @@ public class PriorityQueue<E> extends AbstractQueue<E>
     /**
      * Saves this queue to a stream (that is, serializes it).
      *
+     * @param s the stream
+     * @throws java.io.IOException if an I/O error occurs
      * @serialData The length of the array backing the instance is
      *             emitted (int), followed by all of its elements
      *             (each an {@code Object}) in the proper order.
-     * @param s the stream
      */
     private void writeObject(java.io.ObjectOutputStream s)
         throws java.io.IOException {
@@ -775,6 +783,9 @@ public class PriorityQueue<E> extends AbstractQueue<E>
      * (that is, deserializes it).
      *
      * @param s the stream
+     * @throws ClassNotFoundException if the class of a serialized object
+     *         could not be found
+     * @throws java.io.IOException if an I/O error occurs
      */
     private void readObject(java.io.ObjectInputStream s)
         throws java.io.IOException, ClassNotFoundException {
@@ -798,7 +809,8 @@ public class PriorityQueue<E> extends AbstractQueue<E>
     /**
      * Creates a <em><a href="Spliterator.html#binding">late-binding</a></em>
      * and <em>fail-fast</em> {@link Spliterator} over the elements in this
-     * queue.
+     * queue. The spliterator does not traverse elements in any particular order
+     * (the {@link Spliterator#ORDERED ORDERED} characteristic is not reported).
      *
      * <p>The {@code Spliterator} reports {@link Spliterator#SIZED},
      * {@link Spliterator#SUBSIZED}, and {@link Spliterator#NONNULL}.
@@ -809,23 +821,16 @@ public class PriorityQueue<E> extends AbstractQueue<E>
      * @since 1.8
      */
     public final Spliterator<E> spliterator() {
-        return new PriorityQueueSpliterator<>(this, 0, -1, 0);
+        return new PriorityQueueSpliterator(0, -1, 0);
     }
 
-    static final class PriorityQueueSpliterator<E> implements Spliterator<E> {
-        /*
-         * This is very similar to ArrayList Spliterator, except for
-         * extra null checks.
-         */
-        private final PriorityQueue<E> pq;
+    final class PriorityQueueSpliterator implements Spliterator<E> {
         private int index;            // current index, modified on advance/split
         private int fence;            // -1 until first use
         private int expectedModCount; // initialized when fence set
 
-        /** Creates new spliterator covering the given range */
-        PriorityQueueSpliterator(PriorityQueue<E> pq, int origin, int fence,
-                             int expectedModCount) {
-            this.pq = pq;
+        /** Creates new spliterator covering the given range. */
+        PriorityQueueSpliterator(int origin, int fence, int expectedModCount) {
             this.index = origin;
             this.fence = fence;
             this.expectedModCount = expectedModCount;
@@ -834,68 +839,54 @@ public class PriorityQueue<E> extends AbstractQueue<E>
         private int getFence() { // initialize fence to size on first use
             int hi;
             if ((hi = fence) < 0) {
-                expectedModCount = pq.modCount;
-                hi = fence = pq.size;
+                expectedModCount = modCount;
+                hi = fence = size;
             }
             return hi;
         }
 
-        public PriorityQueueSpliterator<E> trySplit() {
+        public PriorityQueueSpliterator trySplit() {
             int hi = getFence(), lo = index, mid = (lo + hi) >>> 1;
             return (lo >= mid) ? null :
-                new PriorityQueueSpliterator<>(pq, lo, index = mid,
-                                               expectedModCount);
+                new PriorityQueueSpliterator(lo, index = mid, expectedModCount);
         }
 
         @SuppressWarnings("unchecked")
         public void forEachRemaining(Consumer<? super E> action) {
-            int i, hi, mc; // hoist accesses and checks from loop
-            PriorityQueue<E> q; Object[] a;
             if (action == null)
                 throw new NullPointerException();
-            if ((q = pq) != null && (a = q.queue) != null) {
-                if ((hi = fence) < 0) {
-                    mc = q.modCount;
-                    hi = q.size;
-                }
-                else
-                    mc = expectedModCount;
-                if ((i = index) >= 0 && (index = hi) <= a.length) {
-                    for (E e;; ++i) {
-                        if (i < hi) {
-                            if ((e = (E) a[i]) == null) // must be CME
-                                break;
-                            action.accept(e);
-                        }
-                        else if (q.modCount != mc)
-                            break;
-                        else
-                            return;
-                    }
-                }
+            if (fence < 0) { fence = size; expectedModCount = modCount; }
+            final Object[] a = queue;
+            int i, hi; E e;
+            for (i = index, index = hi = fence; i < hi; i++) {
+                if ((e = (E) a[i]) == null)
+                    break;      // must be CME
+                action.accept(e);
             }
-            throw new ConcurrentModificationException();
+            if (modCount != expectedModCount)
+                throw new ConcurrentModificationException();
         }
 
+        @SuppressWarnings("unchecked")
         public boolean tryAdvance(Consumer<? super E> action) {
             if (action == null)
                 throw new NullPointerException();
-            int hi = getFence(), lo = index;
-            if (lo >= 0 && lo < hi) {
-                index = lo + 1;
-                @SuppressWarnings("unchecked") E e = (E)pq.queue[lo];
-                if (e == null)
+            if (fence < 0) { fence = size; expectedModCount = modCount; }
+            int i;
+            if ((i = index) < fence) {
+                index = i + 1;
+                E e;
+                if ((e = (E) queue[i]) == null
+                    || modCount != expectedModCount)
                     throw new ConcurrentModificationException();
                 action.accept(e);
-                if (pq.modCount != expectedModCount)
-                    throw new ConcurrentModificationException();
                 return true;
             }
             return false;
         }
 
         public long estimateSize() {
-            return (long) (getFence() - index);
+            return getFence() - index;
         }
 
         public int characteristics() {

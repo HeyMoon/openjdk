@@ -19,7 +19,6 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
 /**
@@ -35,7 +34,7 @@ import java.lang.reflect.Method;
 import java.util.Arrays;
 
 public class ClassForNameTest {
-    final static String NAME = ClassForNameTest.class.getName();
+    static final String NAME = ClassForNameTest.class.getName();
 
     public static void main(String[] args) throws Throwable {
         {

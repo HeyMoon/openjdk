@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -112,6 +112,8 @@ import org.testng.annotations.Test;
 
 /**
  * Test Instant.
+ *
+ * @bug 8133022
  */
 @Test
 public class TCKInstant extends AbstractDateTimeTest {
@@ -636,6 +638,12 @@ public class TCKInstant extends AbstractDateTimeTest {
                 {Instant.ofEpochSecond(86400 + 3600 + 60 + 1, 123_456_789), NINETY_MINS, Instant.ofEpochSecond(86400 + 0, 0)},
                 {Instant.ofEpochSecond(86400 + 7200 + 60 + 1, 123_456_789), NINETY_MINS, Instant.ofEpochSecond(86400 + 5400, 0)},
                 {Instant.ofEpochSecond(86400 + 10800 + 60 + 1, 123_456_789), NINETY_MINS, Instant.ofEpochSecond(86400 + 10800, 0)},
+
+                {Instant.ofEpochSecond(-86400 - 3600 - 60 - 1, 123_456_789), MINUTES, Instant.ofEpochSecond(-86400 - 3600 - 120, 0 )},
+                {Instant.ofEpochSecond(-86400 - 3600 - 60 - 1, 123_456_789), MICROS, Instant.ofEpochSecond(-86400 - 3600 - 60 - 1, 123_456_000)},
+
+                {Instant.ofEpochSecond(86400 + 3600 + 60 + 1, 0), SECONDS, Instant.ofEpochSecond(86400 + 3600 + 60 + 1, 0)},
+                {Instant.ofEpochSecond(-86400 - 3600 - 120, 0), MINUTES, Instant.ofEpochSecond(-86400 - 3600 - 120, 0)},
         };
     }
     @Test(dataProvider="truncatedToValid")
@@ -1926,6 +1934,16 @@ public class TCKInstant extends AbstractDateTimeTest {
     @Test(expectedExceptions=ArithmeticException.class)
     public void test_toEpochMilli_tooSmall() {
         Instant.ofEpochSecond(Long.MIN_VALUE / 1000 - 1).toEpochMilli();
+    }
+
+    @Test(expectedExceptions=ArithmeticException.class)
+    public void test_toEpochMillis_overflow() {
+        Instant.ofEpochSecond(Long.MAX_VALUE / 1000, 809_000_000).toEpochMilli();
+    }
+
+    @Test(expectedExceptions=ArithmeticException.class)
+    public void test_toEpochMillis_overflow2() {
+        Instant.ofEpochSecond(-9223372036854776L, 1).toEpochMilli();
     }
 
     //-----------------------------------------------------------------------

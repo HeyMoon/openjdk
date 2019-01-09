@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 package com.sun.java.swing.plaf.gtk;
 
+import javax.swing.plaf.synth.SynthIcon;
 import java.util.*;
 import javax.swing.plaf.synth.*;
 import java.awt.*;
@@ -149,8 +150,7 @@ class GTKIconFactory {
         }
     }
 
-    private static class DelegatingIcon extends SynthIcon implements
-                                   UIResource {
+    private static class DelegatingIcon implements UIResource, SynthIcon {
         private static final Class<?>[] PARAM_TYPES = new Class<?>[] {
             SynthContext.class, Graphics.class, int.class,
             int.class, int.class, int.class, int.class
@@ -214,6 +214,18 @@ class GTKIconFactory {
 
             Region region = context.getRegion();
             GTKStyle style = (GTKStyle) context.getStyle();
+            if (GTKLookAndFeel.is3() && region == Region.MENU) {
+                Object value = style.getClassSpecificValue("arrow-scaling");
+                if (value instanceof Number) {
+                    iconDimension = (int)(((Number) value).floatValue() *
+                            (style.getFont(context).getSize2D() +
+                            2 * style.getClassSpecificIntValue(context,
+                            "indicator-spacing", DEFAULT_ICON_SPACING)));
+                    if (iconDimension > 0) {
+                        return iconDimension;
+                    }
+                }
+            }
             iconDimension = style.getClassSpecificIntValue(context,
                     "indicator-size",
                     (region == Region.CHECK_BOX_MENU_ITEM ||

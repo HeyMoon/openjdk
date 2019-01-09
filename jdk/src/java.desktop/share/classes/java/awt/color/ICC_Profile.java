@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -751,7 +751,17 @@ public class ICC_Profile implements Serializable {
 
     /**
      * Frees the resources associated with an ICC_Profile object.
+     *
+     * @deprecated The {@code finalize} method has been deprecated.
+     *     Subclasses that override {@code finalize} in order to perform cleanup
+     *     should be modified to use alternative cleanup mechanisms and
+     *     to remove the overriding {@code finalize} method.
+     *     When overriding the {@code finalize} method, its implementation must explicitly
+     *     ensure that {@code super.finalize()} is invoked as described in {@link Object#finalize}.
+     *     See the specification for {@link Object#finalize()} for further
+     *     information about migration options.
      */
+    @Deprecated(since="9")
     protected void finalize () {
         if (cmmProfile != null) {
             CMSManager.getModule().freeProfile(cmmProfile);
@@ -766,8 +776,8 @@ public class ICC_Profile implements Serializable {
      * a byte array.  Throws an IllegalArgumentException if the data
      * does not correspond to a valid ICC Profile.
      * @param data the specified ICC Profile data
-     * @return an <code>ICC_Profile</code> object corresponding to
-     *          the data in the specified <code>data</code> array.
+     * @return an {@code ICC_Profile} object corresponding to
+     *          the data in the specified {@code data} array.
      */
     public static ICC_Profile getInstance(byte[] data) {
     ICC_Profile thisProfile;
@@ -821,11 +831,11 @@ public class ICC_Profile implements Serializable {
      *
      * @param cspace the type of color space to create a profile for.
      * The specified type is one of the color
-     * space constants defined in the  <CODE>ColorSpace</CODE> class.
+     * space constants defined in the  {@code ColorSpace} class.
      *
-     * @return an <code>ICC_Profile</code> object corresponding to
-     *          the specified <code>ColorSpace</code> type.
-     * @exception IllegalArgumentException If <CODE>cspace</CODE> is not
+     * @return an {@code ICC_Profile} object corresponding to
+     *          the specified {@code ColorSpace} type.
+     * @exception IllegalArgumentException If {@code cspace} is not
      * one of the predefined color space types.
      */
     public static ICC_Profile getInstance (int cspace) {
@@ -956,7 +966,7 @@ public class ICC_Profile implements Serializable {
      * Profile data.
      * @param fileName The file that contains the data for the profile.
      *
-     * @return an <code>ICC_Profile</code> object corresponding to
+     * @return an {@code ICC_Profile} object corresponding to
      *          the data in the specified file.
      * @exception IOException If the specified file cannot be opened or
      * an I/O error occurs while reading the file.
@@ -997,8 +1007,8 @@ public class ICC_Profile implements Serializable {
      * error occurs while reading the stream.
      * @param s The input stream from which to read the profile data.
      *
-     * @return an <CODE>ICC_Profile</CODE> object corresponding to the
-     *     data in the specified <code>InputStream</code>.
+     * @return an {@code ICC_Profile} object corresponding to the
+     *     data in the specified {@code InputStream}.
      *
      * @exception IOException If an I/O error occurs while reading the stream.
      *
@@ -1071,7 +1081,7 @@ public class ICC_Profile implements Serializable {
      * when loading this profile.
      * If deferring is enabled, then the deferred activation
      * code will take care of access privileges.
-     * @see activateDeferredProfile()
+     * @see #activateDeferredProfile()
      */
     static ICC_Profile getDeferredInstance(ProfileDeferralInfo pdi) {
         if (!ProfileDeferralMgr.deferring) {
@@ -1213,7 +1223,7 @@ public class ICC_Profile implements Serializable {
      * characteristics of the space, e.g. the chromaticities of the
      * primaries.
      * @return One of the color space type constants defined in the
-     * <CODE>ColorSpace</CODE> class.
+     * {@code ColorSpace} class.
      */
     public int getColorSpaceType() {
         if (deferralInfo != null) {
@@ -1245,7 +1255,7 @@ public class ICC_Profile implements Serializable {
      * color space defined in the ICC specification.  For a device
      * link profile, this could be any of the color space type constants.
      * @return One of the color space type constants defined in the
-     * <CODE>ColorSpace</CODE> class.
+     * {@code ColorSpace} class.
      */
     public int getPCSType() {
         if (ProfileDeferralMgr.deferring) {
@@ -1342,7 +1352,7 @@ public class ICC_Profile implements Serializable {
      * want to get.
      *
      * @return A byte array that contains the tagged data element. Returns
-     * <code>null</code> if the specified tag doesn't exist.
+     * {@code null} if the specified tag doesn't exist.
      * @see #setData(int, byte[])
      */
     public byte[] getData(int tagSignature) {
@@ -1864,7 +1874,8 @@ public class ICC_Profile implements Serializable {
                     return
                         PCMM.class.getResourceAsStream("profiles/" + fileName);
                 }
-            }, null, new FilePermission("<<ALL FILES>>", "read"));
+            }, null, new FilePermission("<<ALL FILES>>", "read"),
+                     new RuntimePermission("accessSystemModules"));
     }
 
     /**
@@ -1929,7 +1940,7 @@ public class ICC_Profile implements Serializable {
 
     /**
      * Version of the format of additional serialized data in the
-     * stream.  Version&nbsp;<code>1</code> corresponds to Java&nbsp;2
+     * stream.  Version&nbsp;{@code 1} corresponds to Java&nbsp;2
      * Platform,&nbsp;v1.3.
      * @since 1.3
      * @serial
@@ -1943,17 +1954,17 @@ public class ICC_Profile implements Serializable {
      *
      * @param s stream used for serialization.
      * @throws IOException
-     *     thrown by <code>ObjectInputStream</code>.
+     *     thrown by {@code ObjectInputStream}.
      * @serialData
-     *     The <code>String</code> is the name of one of
+     *     The {@code String} is the name of one of
      *     <code>CS_<var>*</var></code> constants defined in the
      *     {@link ColorSpace} class if the profile object is a profile
      *     for a predefined color space (for example
-     *     <code>"CS_sRGB"</code>).  The string is <code>null</code>
+     *     {@code "CS_sRGB"}).  The string is {@code null}
      *     otherwise.
      *     <p>
-     *     The <code>byte[]</code> array is the profile data for the
-     *     profile.  For predefined color spaces <code>null</code> is
+     *     The {@code byte[]} array is the profile data for the
+     *     profile.  For predefined color spaces {@code null} is
      *     written instead of the profile data.  If in the future
      *     versions of Java API new predefined color spaces will be
      *     added, future versions of this class may choose to write
@@ -2003,19 +2014,19 @@ public class ICC_Profile implements Serializable {
      *
      * @param s stream used for deserialization.
      * @throws IOException
-     *     thrown by <code>ObjectInputStream</code>.
+     *     thrown by {@code ObjectInputStream}.
      * @throws ClassNotFoundException
-     *     thrown by <code>ObjectInputStream</code>.
+     *     thrown by {@code ObjectInputStream}.
      * @serialData
-     *     The <code>String</code> is the name of one of
+     *     The {@code String} is the name of one of
      *     <code>CS_<var>*</var></code> constants defined in the
      *     {@link ColorSpace} class if the profile object is a profile
      *     for a predefined color space (for example
-     *     <code>"CS_sRGB"</code>).  The string is <code>null</code>
+     *     {@code "CS_sRGB"}).  The string is {@code null}
      *     otherwise.
      *     <p>
-     *     The <code>byte[]</code> array is the profile data for the
-     *     profile.  It will usually be <code>null</code> for the
+     *     The {@code byte[]} array is the profile data for the
+     *     profile.  It will usually be {@code null} for the
      *     predefined profiles.
      *     <p>
      *     If the string is recognized as a constant name for

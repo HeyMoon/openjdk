@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,9 +28,8 @@
 #include "asm/macroAssembler.hpp"
 #include "code/stubs.hpp"
 #include "interpreter/bytecodes.hpp"
-#include "runtime/thread.inline.hpp"
+#include "runtime/thread.hpp"
 #include "runtime/vmThread.hpp"
-#include "utilities/top.hpp"
 
 // This file contains the platform-independent parts
 // of the abstract interpreter and the abstract interpreter generator.
@@ -48,22 +47,13 @@
 //                                                      Also code for populating interpreter
 //                                                      frames created during deoptimization.
 //
-// For both template and c++ interpreter. There are common files for aspects of the interpreter
-// that are generic to both interpreters. This is the layout:
-//
-// abstractInterpreter.hpp: generic description of the interpreter.
-// interpreter*:            generic frame creation and handling.
-//
-
-//------------------------------------------------------------------------------------------------------------------------
-// The C++ interface to the bytecode interpreter(s).
 
 class InterpreterMacroAssembler;
 
 class AbstractInterpreter: AllStatic {
   friend class VMStructs;
-  friend class Interpreter;
   friend class CppInterpreterGenerator;
+  friend class TemplateInterpreterGenerator;
  public:
   enum MethodKind {
     zerolocals,                                                 // method needs locals initialization
@@ -86,10 +76,18 @@ class AbstractInterpreter: AllStatic {
     java_lang_math_log10,                                       // implementation of java.lang.Math.log10 (x)
     java_lang_math_pow,                                         // implementation of java.lang.Math.pow   (x,y)
     java_lang_math_exp,                                         // implementation of java.lang.Math.exp   (x)
+    java_lang_math_fmaF,                                        // implementation of java.lang.Math.fma   (x, y, z)
+    java_lang_math_fmaD,                                        // implementation of java.lang.Math.fma   (x, y, z)
     java_lang_ref_reference_get,                                // implementation of java.lang.ref.Reference.get()
     java_util_zip_CRC32_update,                                 // implementation of java.util.zip.CRC32.update()
     java_util_zip_CRC32_updateBytes,                            // implementation of java.util.zip.CRC32.updateBytes()
     java_util_zip_CRC32_updateByteBuffer,                       // implementation of java.util.zip.CRC32.updateByteBuffer()
+    java_util_zip_CRC32C_updateBytes,                           // implementation of java.util.zip.CRC32C.updateBytes(crc, b[], off, end)
+    java_util_zip_CRC32C_updateDirectByteBuffer,                // implementation of java.util.zip.CRC32C.updateDirectByteBuffer(crc, address, off, end)
+    java_lang_Float_intBitsToFloat,                             // implementation of java.lang.Float.intBitsToFloat()
+    java_lang_Float_floatToRawIntBits,                          // implementation of java.lang.Float.floatToRawIntBits()
+    java_lang_Double_longBitsToDouble,                          // implementation of java.lang.Double.longBitsToDouble()
+    java_lang_Double_doubleToRawLongBits,                       // implementation of java.lang.Double.doubleToRawLongBits()
     number_of_method_entries,
     invalid = -1
   };
@@ -116,13 +114,13 @@ class AbstractInterpreter: AllStatic {
 
   // method entry points
   static address    _entry_table[number_of_method_entries];     // entry points for a given method
+  static address    _cds_entry_table[number_of_method_entries]; // entry points for methods in the CDS archive
   static address    _native_abi_to_tosca[number_of_result_handlers];  // for native method result handlers
   static address    _slow_signature_handler;                              // the native method generic (slow) signature handler
 
   static address    _rethrow_exception_entry;                   // rethrows an activation in previous frame
 
   friend class      AbstractInterpreterGenerator;
-  friend class              InterpreterGenerator;
   friend class      InterpreterMacroAssembler;
 
  public:
@@ -135,6 +133,17 @@ class AbstractInterpreter: AllStatic {
   static MethodKind method_kind(methodHandle m);
   static address    entry_for_kind(MethodKind k)                { assert(0 <= k && k < number_of_method_entries, "illegal kind"); return _entry_table[k]; }
   static address    entry_for_method(methodHandle m)            { return entry_for_kind(method_kind(m)); }
+
+  static address entry_for_cds_method(methodHandle m) {
+    MethodKind k = method_kind(m);
+    assert(0 <= k && k < number_of_method_entries, "illegal kind");
+    return _cds_entry_table[k];
+  }
+
+  // used by class data sharing
+  static void       update_cds_entry_table(MethodKind kind) NOT_CDS_RETURN;
+
+  static address    get_trampoline_code_buffer(AbstractInterpreter::MethodKind kind) NOT_CDS_RETURN_(0);
 
   // used for bootstrapping method handles:
   static void       set_entry_for_kind(MethodKind k, address e);
@@ -188,7 +197,7 @@ class AbstractInterpreter: AllStatic {
                                      bool is_bottom_frame);
 
   // Runtime support
-  static bool       is_not_reached(                       methodHandle method, int bci);
+  static bool       is_not_reached(const methodHandle& method, int bci);
   // Safepoint support
   static void       notice_safepoints()                         { ShouldNotReachHere(); } // stops the thread when reaching a safepoint
   static void       ignore_safepoints()                         { ShouldNotReachHere(); } // ignores safepoints
@@ -206,6 +215,29 @@ class AbstractInterpreter: AllStatic {
   const static int stackElementWords   = 1;
   const static int stackElementSize    = stackElementWords * wordSize;
   const static int logStackElementSize = LogBytesPerWord;
+
+  static int expr_index_at(int i) {
+    return stackElementWords * i;
+  }
+
+  static int expr_offset_in_bytes(int i) {
+#if !defined(ZERO) && (defined(PPC) || defined(S390) || defined(SPARC))
+    return stackElementSize * i + wordSize;  // both point to one word past TOS
+#else
+    return stackElementSize * i;
+#endif
+  }
+
+  static int local_index_at(int i) {
+    assert(i <= 0, "local direction already negated");
+    return stackElementWords * i;
+  }
+
+#if !defined(ZERO) && (defined(IA32) || defined(AMD64))
+  static Address::ScaleFactor stackElementScale() {
+    return NOT_LP64(Address::times_4) LP64_ONLY(Address::times_8);
+  }
+#endif
 
   // Local values relative to locals[n]
   static int  local_offset_in_bytes(int n) {
@@ -265,6 +297,8 @@ class AbstractInterpreter: AllStatic {
     default:        ShouldNotReachHere();
     }
   }
+
+  static void initialize_method_handle_entries();
 };
 
 //------------------------------------------------------------------------------------------------------------------------
@@ -274,16 +308,6 @@ class Template;
 class AbstractInterpreterGenerator: public StackObj {
  protected:
   InterpreterMacroAssembler* _masm;
-
-  // shared code sequences
-  // Converter for native abi result to tosca result
-  address generate_result_handler_for(BasicType type);
-  address generate_slow_signature_handler();
-
-  void bang_stack_shadow_pages(bool native_call);
-
-  void generate_all();
-  void initialize_method_handle_entries();
 
  public:
   AbstractInterpreterGenerator(StubQueue* _code);

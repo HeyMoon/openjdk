@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,55 +25,33 @@
  * @test TestGCId
  * @bug 8043607
  * @summary Ensure that the GCId is logged
+ * @requires vm.gc=="null"
  * @key gc
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  */
 
-import jdk.test.lib.ProcessTools;
-import jdk.test.lib.OutputAnalyzer;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
 
 public class TestGCId {
   public static void main(String[] args) throws Exception {
-    testGCId("UseParallelGC", "PrintGC");
-    testGCId("UseParallelGC", "PrintGCDetails");
-
-    testGCId("UseG1GC", "PrintGC");
-    testGCId("UseG1GC", "PrintGCDetails");
-
-    testGCId("UseConcMarkSweepGC", "PrintGC");
-    testGCId("UseConcMarkSweepGC", "PrintGCDetails");
-
-    testGCId("UseSerialGC", "PrintGC");
-    testGCId("UseSerialGC", "PrintGCDetails");
+    testGCId("UseParallelGC");
+    testGCId("UseG1GC");
+    testGCId("UseConcMarkSweepGC");
+    testGCId("UseSerialGC");
   }
 
   private static void verifyContainsGCIDs(OutputAnalyzer output) {
-    output.shouldMatch("^#0: \\[");
-    output.shouldMatch("^#1: \\[");
+    output.shouldMatch("\\[.*\\]\\[.*\\]\\[.*\\] GC\\(0\\) ");
+    output.shouldMatch("\\[.*\\]\\[.*\\]\\[.*\\] GC\\(1\\) ");
     output.shouldHaveExitValue(0);
   }
 
-  private static void verifyContainsNoGCIDs(OutputAnalyzer output) {
-    output.shouldNotMatch("^#[0-9]+: \\[");
-    output.shouldHaveExitValue(0);
-  }
-
-  private static void testGCId(String gcFlag, String logFlag) throws Exception {
-    // GCID logging enabled
-    ProcessBuilder pb_enabled =
-      ProcessTools.createJavaProcessBuilder("-XX:+" + gcFlag, "-XX:+" + logFlag, "-Xmx10M", "-XX:+PrintGCID", GCTest.class.getName());
-    verifyContainsGCIDs(new OutputAnalyzer(pb_enabled.start()));
-
-    // GCID logging disabled
-    ProcessBuilder pb_disabled =
-      ProcessTools.createJavaProcessBuilder("-XX:+" + gcFlag, "-XX:+" + logFlag, "-Xmx10M", "-XX:-PrintGCID", GCTest.class.getName());
-    verifyContainsNoGCIDs(new OutputAnalyzer(pb_disabled.start()));
-
-    // GCID logging default
+  private static void testGCId(String gcFlag) throws Exception {
     ProcessBuilder pb_default =
-      ProcessTools.createJavaProcessBuilder("-XX:+" + gcFlag, "-XX:+" + logFlag, "-Xmx10M", GCTest.class.getName());
+      ProcessTools.createJavaProcessBuilder("-XX:+" + gcFlag, "-Xlog:gc", "-Xmx10M", GCTest.class.getName());
     verifyContainsGCIDs(new OutputAnalyzer(pb_default.start()));
   }
 

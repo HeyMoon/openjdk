@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,7 +42,7 @@ import jdk.internal.HotSpotIntrinsicCandidate;
  * a character's category (lowercase letter, digit, etc.) and for converting
  * characters from uppercase to lowercase and vice versa.
  * <p>
- * Character information is based on the Unicode Standard, version 7.0.0.
+ * Character information is based on the Unicode Standard, version 8.0.0.
  * <p>
  * The methods and data of class {@code Character} are defined by
  * the information in the <i>UnicodeData</i> file that is part of the
@@ -56,7 +56,7 @@ import jdk.internal.HotSpotIntrinsicCandidate;
  * <li><a href="http://www.unicode.org">http://www.unicode.org</a>
  * </ul>
  *
- * <h3><a name="unicode">Unicode Character Representations</a></h3>
+ * <h3><a id="unicode">Unicode Character Representations</a></h3>
  *
  * <p>The {@code char} data type (and therefore the value that a
  * {@code Character} object encapsulates) are based on the
@@ -70,9 +70,9 @@ import jdk.internal.HotSpotIntrinsicCandidate;
  * definition</i></a> of the U+<i>n</i> notation in the Unicode
  * Standard.)
  *
- * <p><a name="BMP">The set of characters from U+0000 to U+FFFF</a> is
+ * <p><a id="BMP">The set of characters from U+0000 to U+FFFF</a> is
  * sometimes referred to as the <em>Basic Multilingual Plane (BMP)</em>.
- * <a name="supplementary">Characters</a> whose code points are greater
+ * <a id="supplementary">Characters</a> whose code points are greater
  * than U+FFFF are called <em>supplementary character</em>s.  The Java
  * platform uses the UTF-16 representation in {@code char} arrays and
  * in the {@code String} and {@code StringBuffer} classes. In
@@ -493,25 +493,25 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
     /**
      * Weak bidirectional character type "LRI" in the Unicode specification.
-     * @since 1.9
+     * @since 9
      */
     public static final byte DIRECTIONALITY_LEFT_TO_RIGHT_ISOLATE = 19;
 
     /**
      * Weak bidirectional character type "RLI" in the Unicode specification.
-     * @since 1.9
+     * @since 9
      */
     public static final byte DIRECTIONALITY_RIGHT_TO_LEFT_ISOLATE = 20;
 
     /**
      * Weak bidirectional character type "FSI" in the Unicode specification.
-     * @since 1.9
+     * @since 9
      */
     public static final byte DIRECTIONALITY_FIRST_STRONG_ISOLATE = 21;
 
     /**
      * Weak bidirectional character type "PDI" in the Unicode specification.
-     * @since 1.9
+     * @since 9
      */
     public static final byte DIRECTIONALITY_POP_DIRECTIONAL_ISOLATE = 22;
 
@@ -1256,14 +1256,14 @@ class Character implements java.io.Serializable, Comparable<Character> {
             new UnicodeBlock("SPECIALS");
 
         /**
-         * @deprecated As of J2SE 5, use {@link #HIGH_SURROGATES},
-         *             {@link #HIGH_PRIVATE_USE_SURROGATES}, and
-         *             {@link #LOW_SURROGATES}. These new constants match
-         *             the block definitions of the Unicode Standard.
-         *             The {@link #of(char)} and {@link #of(int)} methods
-         *             return the new constants, not SURROGATES_AREA.
+         * @deprecated
+         * Instead of {@code SURROGATES_AREA}, use {@link #HIGH_SURROGATES},
+         * {@link #HIGH_PRIVATE_USE_SURROGATES}, and {@link #LOW_SURROGATES}.
+         * These constants match the block definitions of the Unicode Standard.
+         * The {@link #of(char)} and {@link #of(int)} methods return the
+         * standard constants.
          */
-        @Deprecated
+        @Deprecated(since="1.5")
         public static final UnicodeBlock SURROGATES_AREA =
             new UnicodeBlock("SURROGATES_AREA");
 
@@ -2590,7 +2590,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
         /**
          * Constant for the "Combining Diacritical Marks Extended" Unicode
          * character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock COMBINING_DIACRITICAL_MARKS_EXTENDED =
             new UnicodeBlock("COMBINING_DIACRITICAL_MARKS_EXTENDED",
@@ -2599,7 +2599,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Myanmar Extended-B" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock MYANMAR_EXTENDED_B =
             new UnicodeBlock("MYANMAR_EXTENDED_B",
@@ -2608,7 +2608,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Latin Extended-E" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock LATIN_EXTENDED_E =
             new UnicodeBlock("LATIN_EXTENDED_E",
@@ -2617,7 +2617,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Coptic Epact Numbers" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock COPTIC_EPACT_NUMBERS =
             new UnicodeBlock("COPTIC_EPACT_NUMBERS",
@@ -2626,7 +2626,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Old Permic" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock OLD_PERMIC =
             new UnicodeBlock("OLD_PERMIC",
@@ -2635,14 +2635,14 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Elbasan" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock ELBASAN =
             new UnicodeBlock("ELBASAN");
 
         /**
          * Constant for the "Caucasian Albanian" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock CAUCASIAN_ALBANIAN =
             new UnicodeBlock("CAUCASIAN_ALBANIAN",
@@ -2651,7 +2651,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Linear A" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock LINEAR_A =
             new UnicodeBlock("LINEAR_A",
@@ -2660,21 +2660,21 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Palmyrene" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock PALMYRENE =
             new UnicodeBlock("PALMYRENE");
 
         /**
          * Constant for the "Nabataean" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock NABATAEAN =
             new UnicodeBlock("NABATAEAN");
 
         /**
          * Constant for the "Old North Arabian" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock OLD_NORTH_ARABIAN =
             new UnicodeBlock("OLD_NORTH_ARABIAN",
@@ -2683,14 +2683,14 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Manichaean" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock MANICHAEAN =
             new UnicodeBlock("MANICHAEAN");
 
         /**
          * Constant for the "Psalter Pahlavi" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock PSALTER_PAHLAVI =
             new UnicodeBlock("PSALTER_PAHLAVI",
@@ -2699,14 +2699,14 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Mahajani" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock MAHAJANI =
             new UnicodeBlock("MAHAJANI");
 
         /**
          * Constant for the "Sinhala Archaic Numbers" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock SINHALA_ARCHAIC_NUMBERS =
             new UnicodeBlock("SINHALA_ARCHAIC_NUMBERS",
@@ -2715,49 +2715,49 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Khojki" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock KHOJKI =
             new UnicodeBlock("KHOJKI");
 
         /**
          * Constant for the "Khudawadi" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock KHUDAWADI =
             new UnicodeBlock("KHUDAWADI");
 
         /**
          * Constant for the "Grantha" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock GRANTHA =
             new UnicodeBlock("GRANTHA");
 
         /**
          * Constant for the "Tirhuta" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock TIRHUTA =
             new UnicodeBlock("TIRHUTA");
 
         /**
          * Constant for the "Siddham" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock SIDDHAM =
             new UnicodeBlock("SIDDHAM");
 
         /**
          * Constant for the "Modi" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock MODI =
             new UnicodeBlock("MODI");
 
         /**
          * Constant for the "Warang Citi" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock WARANG_CITI =
             new UnicodeBlock("WARANG_CITI",
@@ -2766,7 +2766,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Pau Cin Hau" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock PAU_CIN_HAU =
             new UnicodeBlock("PAU_CIN_HAU",
@@ -2775,14 +2775,14 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Mro" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock MRO =
             new UnicodeBlock("MRO");
 
         /**
          * Constant for the "Bassa Vah" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock BASSA_VAH =
             new UnicodeBlock("BASSA_VAH",
@@ -2791,7 +2791,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Pahawh Hmong" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock PAHAWH_HMONG =
             new UnicodeBlock("PAHAWH_HMONG",
@@ -2800,14 +2800,14 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Duployan" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock DUPLOYAN =
             new UnicodeBlock("DUPLOYAN");
 
         /**
          * Constant for the "Shorthand Format Controls" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock SHORTHAND_FORMAT_CONTROLS =
             new UnicodeBlock("SHORTHAND_FORMAT_CONTROLS",
@@ -2816,7 +2816,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Mende Kikakui" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock MENDE_KIKAKUI =
             new UnicodeBlock("MENDE_KIKAKUI",
@@ -2825,7 +2825,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Ornamental Dingbats" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock ORNAMENTAL_DINGBATS =
             new UnicodeBlock("ORNAMENTAL_DINGBATS",
@@ -2834,7 +2834,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Geometric Shapes Extended" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock GEOMETRIC_SHAPES_EXTENDED =
             new UnicodeBlock("GEOMETRIC_SHAPES_EXTENDED",
@@ -2843,12 +2843,99 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Constant for the "Supplemental Arrows-C" Unicode character block.
-         * @since 1.9
+         * @since 9
          */
         public static final UnicodeBlock SUPPLEMENTAL_ARROWS_C =
             new UnicodeBlock("SUPPLEMENTAL_ARROWS_C",
                              "SUPPLEMENTAL ARROWS-C",
                              "SUPPLEMENTALARROWS-C");
+
+        /**
+         * Constant for the "Cherokee Supplement" Unicode character block.
+         * @since 9
+         */
+        public static final UnicodeBlock CHEROKEE_SUPPLEMENT =
+            new UnicodeBlock("CHEROKEE_SUPPLEMENT",
+                             "CHEROKEE SUPPLEMENT",
+                             "CHEROKEESUPPLEMENT");
+
+        /**
+         * Constant for the "Hatran" Unicode character block.
+         * @since 9
+         */
+        public static final UnicodeBlock HATRAN =
+            new UnicodeBlock("HATRAN");
+
+        /**
+         * Constant for the "Old Hungarian" Unicode character block.
+         * @since 9
+         */
+        public static final UnicodeBlock OLD_HUNGARIAN =
+            new UnicodeBlock("OLD_HUNGARIAN",
+                             "OLD HUNGARIAN",
+                             "OLDHUNGARIAN");
+
+        /**
+         * Constant for the "Multani" Unicode character block.
+         * @since 9
+         */
+        public static final UnicodeBlock MULTANI =
+            new UnicodeBlock("MULTANI");
+
+        /**
+         * Constant for the "Ahom" Unicode character block.
+         * @since 9
+         */
+        public static final UnicodeBlock AHOM =
+            new UnicodeBlock("AHOM");
+
+        /**
+         * Constant for the "Early Dynastic Cuneiform" Unicode character block.
+         * @since 9
+         */
+        public static final UnicodeBlock EARLY_DYNASTIC_CUNEIFORM =
+            new UnicodeBlock("EARLY_DYNASTIC_CUNEIFORM",
+                             "EARLY DYNASTIC CUNEIFORM",
+                             "EARLYDYNASTICCUNEIFORM");
+
+        /**
+         * Constant for the "Anatolian Hieroglyphs" Unicode character block.
+         * @since 9
+         */
+        public static final UnicodeBlock ANATOLIAN_HIEROGLYPHS =
+            new UnicodeBlock("ANATOLIAN_HIEROGLYPHS",
+                             "ANATOLIAN HIEROGLYPHS",
+                             "ANATOLIANHIEROGLYPHS");
+
+        /**
+         * Constant for the "Sutton SignWriting" Unicode character block.
+         * @since 9
+         */
+        public static final UnicodeBlock SUTTON_SIGNWRITING =
+            new UnicodeBlock("SUTTON_SIGNWRITING",
+                             "SUTTON SIGNWRITING",
+                             "SUTTONSIGNWRITING");
+
+        /**
+         * Constant for the "Supplemental Symbols and Pictographs" Unicode
+         * character block.
+         * @since 9
+         */
+        public static final UnicodeBlock SUPPLEMENTAL_SYMBOLS_AND_PICTOGRAPHS =
+            new UnicodeBlock("SUPPLEMENTAL_SYMBOLS_AND_PICTOGRAPHS",
+                             "SUPPLEMENTAL SYMBOLS AND PICTOGRAPHS",
+                             "SUPPLEMENTALSYMBOLSANDPICTOGRAPHS");
+
+        /**
+         * Constant for the "CJK Unified Ideographs Extension E" Unicode
+         * character block.
+         * @since 9
+         */
+        public static final UnicodeBlock CJK_UNIFIED_IDEOGRAPHS_EXTENSION_E =
+            new UnicodeBlock("CJK_UNIFIED_IDEOGRAPHS_EXTENSION_E",
+                             "CJK UNIFIED IDEOGRAPHS EXTENSION E",
+                             "CJKUNIFIEDIDEOGRAPHSEXTENSIONE");
+
 
         private static final int blockStarts[] = {
             0x0000,   // 0000..007F; Basic Latin
@@ -2995,7 +3082,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0xAAE0,   // AAE0..AAFF; Meetei Mayek Extensions
             0xAB00,   // AB00..AB2F; Ethiopic Extended-A
             0xAB30,   // AB30..AB6F; Latin Extended-E
-            0xAB70,   //             unassigned
+            0xAB70,   // AB70..ABBF; Cherokee Supplement
             0xABC0,   // ABC0..ABFF; Meetei Mayek
             0xAC00,   // AC00..D7AF; Hangul Syllables
             0xD7B0,   // D7B0..D7FF; Hangul Jamo Extended-B
@@ -3044,6 +3131,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x10860,  // 10860..1087F; Palmyrene
             0x10880,  // 10880..108AF; Nabataean
             0x108B0,  //               unassigned
+            0x108E0,  // 108E0..108FF; Hatran
             0x10900,  // 10900..1091F; Phoenician
             0x10920,  // 10920..1093F; Lydian
             0x10940,  //               unassigned
@@ -3061,6 +3149,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x10BB0,  //               unassigned
             0x10C00,  // 10C00..10C4F; Old Turkic
             0x10C50,  //               unassigned
+            0x10C80,  // 10C80..10CFF; Old Hungarian
+            0x10D00,  //               unassigned
             0x10E60,  // 10E60..10E7F; Rumi Numeral Symbols
             0x10E80,  //               unassigned
             0x11000,  // 11000..1107F; Brahmi
@@ -3072,6 +3162,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x111E0,  // 111E0..111FF; Sinhala Archaic Numbers
             0x11200,  // 11200..1124F; Khojki
             0x11250,  //               unassigned
+            0x11280,  // 11280..112AF; Multani
             0x112B0,  // 112B0..112FF; Khudawadi
             0x11300,  // 11300..1137F; Grantha
             0x11380,  //               unassigned
@@ -3082,15 +3173,20 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x11660,  //               unassigned
             0x11680,  // 11680..116CF; Takri
             0x116D0,  //               unassigned
+            0x11700,  // 11700..1173F; Ahom
+            0x11740,  //               unassigned
             0x118A0,  // 118A0..118FF; Warang Citi
             0x11900,  //               unassigned
             0x11AC0,  // 11AC0..11AFF; Pau Cin Hau
             0x11B00,  //               unassigned
             0x12000,  // 12000..123FF; Cuneiform
             0x12400,  // 12400..1247F; Cuneiform Numbers and Punctuation
-            0x12480,  //               unassigned
+            0x12480,  // 12480..1254F; Early Dynastic Cuneiform
+            0x12550,  //               unassigned
             0x13000,  // 13000..1342F; Egyptian Hieroglyphs
             0x13430,  //               unassigned
+            0x14400,  // 14400..1467F; Anatolian Hieroglyphs
+            0x14680,  //               unassigned
             0x16800,  // 16800..16A3F; Bamum Supplement
             0x16A40,  // 16A40..16A6F; Mro
             0x16A70,  //               unassigned
@@ -3112,7 +3208,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x1D360,  // 1D360..1D37F; Counting Rod Numerals
             0x1D380,  //               unassigned
             0x1D400,  // 1D400..1D7FF; Mathematical Alphanumeric Symbols
-            0x1D800,  //               unassigned
+            0x1D800,  // 1D800..1DAAF; Sutton SignWriting
+            0x1DAB0,  //               unassigned
             0x1E800,  // 1E800..1E8DF; Mende Kikakui
             0x1E8E0,  //               unassigned
             0x1EE00,  // 1EE00..1EEFF; Arabic Mathematical Alphabetic Symbols
@@ -3122,19 +3219,21 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x1F0A0,  // 1F0A0..1F0FF; Playing Cards
             0x1F100,  // 1F100..1F1FF; Enclosed Alphanumeric Supplement
             0x1F200,  // 1F200..1F2FF; Enclosed Ideographic Supplement
-            0x1F300,  // 1F300..1F5FF; Miscellaneous Symbols And Pictographs
+            0x1F300,  // 1F300..1F5FF; Miscellaneous Symbols and Pictographs
             0x1F600,  // 1F600..1F64F; Emoticons
             0x1F650,  // 1F650..1F67F; Ornamental Dingbats
-            0x1F680,  // 1F680..1F6FF; Transport And Map Symbols
+            0x1F680,  // 1F680..1F6FF; Transport and Map Symbols
             0x1F700,  // 1F700..1F77F; Alchemical Symbols
             0x1F780,  // 1F780..1F7FF; Geometric Shapes Extended
             0x1F800,  // 1F800..1F8FF; Supplemental Arrows-C
-            0x1F900,  //               unassigned
+            0x1F900,  // 1F900..1F9FF; Supplemental Symbols and Pictographs
+            0x1FA00,  //               unassigned
             0x20000,  // 20000..2A6DF; CJK Unified Ideographs Extension B
             0x2A6E0,  //               unassigned
             0x2A700,  // 2A700..2B73F; CJK Unified Ideographs Extension C
             0x2B740,  // 2B740..2B81F; CJK Unified Ideographs Extension D
-            0x2B820,  //               unassigned
+            0x2B820,  // 2B820..2CEAF; CJK Unified Ideographs Extension E
+            0x2CEB0,  //               unassigned
             0x2F800,  // 2F800..2FA1F; CJK Compatibility Ideographs Supplement
             0x2FA20,  //               unassigned
             0xE0000,  // E0000..E007F; Tags
@@ -3290,7 +3389,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             MEETEI_MAYEK_EXTENSIONS,
             ETHIOPIC_EXTENDED_A,
             LATIN_EXTENDED_E,
-            null,
+            CHEROKEE_SUPPLEMENT,
             MEETEI_MAYEK,
             HANGUL_SYLLABLES,
             HANGUL_JAMO_EXTENDED_B,
@@ -3339,6 +3438,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             PALMYRENE,
             NABATAEAN,
             null,
+            HATRAN,
             PHOENICIAN,
             LYDIAN,
             null,
@@ -3356,6 +3456,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             null,
             OLD_TURKIC,
             null,
+            OLD_HUNGARIAN,
+            null,
             RUMI_NUMERAL_SYMBOLS,
             null,
             BRAHMI,
@@ -3367,6 +3469,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             SINHALA_ARCHAIC_NUMBERS,
             KHOJKI,
             null,
+            MULTANI,
             KHUDAWADI,
             GRANTHA,
             null,
@@ -3377,14 +3480,19 @@ class Character implements java.io.Serializable, Comparable<Character> {
             null,
             TAKRI,
             null,
+            AHOM,
+            null,
             WARANG_CITI,
             null,
             PAU_CIN_HAU,
             null,
             CUNEIFORM,
             CUNEIFORM_NUMBERS_AND_PUNCTUATION,
+            EARLY_DYNASTIC_CUNEIFORM,
             null,
             EGYPTIAN_HIEROGLYPHS,
+            null,
+            ANATOLIAN_HIEROGLYPHS,
             null,
             BAMUM_SUPPLEMENT,
             MRO,
@@ -3407,6 +3515,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             COUNTING_ROD_NUMERALS,
             null,
             MATHEMATICAL_ALPHANUMERIC_SYMBOLS,
+            SUTTON_SIGNWRITING,
             null,
             MENDE_KIKAKUI,
             null,
@@ -3424,11 +3533,13 @@ class Character implements java.io.Serializable, Comparable<Character> {
             ALCHEMICAL_SYMBOLS,
             GEOMETRIC_SHAPES_EXTENDED,
             SUPPLEMENTAL_ARROWS_C,
+            SUPPLEMENTAL_SYMBOLS_AND_PICTOGRAPHS,
             null,
             CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B,
             null,
             CJK_UNIFIED_IDEOGRAPHS_EXTENSION_C,
             CJK_UNIFIED_IDEOGRAPHS_EXTENSION_D,
+            CJK_UNIFIED_IDEOGRAPHS_EXTENSION_E,
             null,
             CJK_COMPATIBILITY_IDEOGRAPHS_SUPPLEMENT,
             null,
@@ -3502,7 +3613,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
         /**
          * Returns the UnicodeBlock with the given name. Block
          * names are determined by The Unicode Standard. The file
-         * Blocks-&lt;version&gt;.txt defines blocks for a particular
+         * {@code Blocks-<version>.txt} defines blocks for a particular
          * version of the standard. The {@link Character} class specifies
          * the version of the standard that it supports.
          * <p>
@@ -4078,141 +4189,177 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         /**
          * Unicode script "Caucasian Albanian".
-         * @since 1.9
+         * @since 9
          */
         CAUCASIAN_ALBANIAN,
 
         /**
          * Unicode script "Bassa Vah".
-         * @since 1.9
+         * @since 9
          */
         BASSA_VAH,
 
         /**
          * Unicode script "Duployan".
-         * @since 1.9
+         * @since 9
          */
         DUPLOYAN,
 
         /**
          * Unicode script "Elbasan".
-         * @since 1.9
+         * @since 9
          */
         ELBASAN,
 
         /**
          * Unicode script "Grantha".
-         * @since 1.9
+         * @since 9
          */
         GRANTHA,
 
         /**
          * Unicode script "Pahawh Hmong".
-         * @since 1.9
+         * @since 9
          */
         PAHAWH_HMONG,
 
         /**
          * Unicode script "Khojki".
-         * @since 1.9
+         * @since 9
          */
         KHOJKI,
 
         /**
          * Unicode script "Linear A".
-         * @since 1.9
+         * @since 9
          */
         LINEAR_A,
 
         /**
          * Unicode script "Mahajani".
-         * @since 1.9
+         * @since 9
          */
         MAHAJANI,
 
         /**
          * Unicode script "Manichaean".
-         * @since 1.9
+         * @since 9
          */
         MANICHAEAN,
 
         /**
          * Unicode script "Mende Kikakui".
-         * @since 1.9
+         * @since 9
          */
         MENDE_KIKAKUI,
 
         /**
          * Unicode script "Modi".
-         * @since 1.9
+         * @since 9
          */
         MODI,
 
         /**
          * Unicode script "Mro".
-         * @since 1.9
+         * @since 9
          */
         MRO,
 
         /**
          * Unicode script "Old North Arabian".
-         * @since 1.9
+         * @since 9
          */
         OLD_NORTH_ARABIAN,
 
         /**
          * Unicode script "Nabataean".
-         * @since 1.9
+         * @since 9
          */
         NABATAEAN,
 
         /**
          * Unicode script "Palmyrene".
-         * @since 1.9
+         * @since 9
          */
         PALMYRENE,
 
         /**
          * Unicode script "Pau Cin Hau".
-         * @since 1.9
+         * @since 9
          */
         PAU_CIN_HAU,
 
         /**
          * Unicode script "Old Permic".
-         * @since 1.9
+         * @since 9
          */
         OLD_PERMIC,
 
         /**
          * Unicode script "Psalter Pahlavi".
-         * @since 1.9
+         * @since 9
          */
         PSALTER_PAHLAVI,
 
         /**
          * Unicode script "Siddham".
-         * @since 1.9
+         * @since 9
          */
         SIDDHAM,
 
         /**
          * Unicode script "Khudawadi".
-         * @since 1.9
+         * @since 9
          */
         KHUDAWADI,
 
         /**
          * Unicode script "Tirhuta".
-         * @since 1.9
+         * @since 9
          */
         TIRHUTA,
 
         /**
          * Unicode script "Warang Citi".
-         * @since 1.9
+         * @since 9
          */
         WARANG_CITI,
+
+         /**
+         * Unicode script "Ahom".
+         * @since 9
+         */
+        AHOM,
+
+        /**
+         * Unicode script "Anatolian Hieroglyphs".
+         * @since 9
+         */
+        ANATOLIAN_HIEROGLYPHS,
+
+        /**
+         * Unicode script "Hatran".
+         * @since 9
+         */
+        HATRAN,
+
+        /**
+         * Unicode script "Multani".
+         * @since 9
+         */
+        MULTANI,
+
+        /**
+         * Unicode script "Old Hungarian".
+         * @since 9
+         */
+        OLD_HUNGARIAN,
+
+        /**
+         * Unicode script "SignWriting".
+         * @since 9
+         */
+        SIGNWRITING,
 
         /**
          * Unicode script "Unknown".
@@ -4295,9 +4442,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x0640,   // 0640      ; COMMON
             0x0641,   // 0641..064A; ARABIC
             0x064B,   // 064B..0655; INHERITED
-            0x0656,   // 0656..065F; ARABIC
-            0x0660,   // 0660..0669; COMMON
-            0x066A,   // 066A..066F; ARABIC
+            0x0656,   // 0656..066F; ARABIC
             0x0670,   // 0670      ; INHERITED
             0x0671,   // 0671..06DC; ARABIC
             0x06DD,   // 06DD      ; COMMON
@@ -4320,9 +4465,9 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x085C,   // 085C..085D; UNKNOWN
             0x085E,   // 085E      ; MANDAIC
             0x085F,   // 085F..089F; UNKNOWN
-            0x08A0,   // 08A0..08B2; ARABIC
-            0x08B3,   // 08B3..08E3; UNKNOWN
-            0x08E4,   // 08E4..08FF; ARABIC
+            0x08A0,   // 08A0..08B4; ARABIC
+            0x08B5,   // 08B5..08E2; UNKNOWN
+            0x08E3,   // 08E3..08FF; ARABIC
             0x0900,   // 0900..0950; DEVANAGARI
             0x0951,   // 0951..0952; INHERITED
             0x0953,   // 0953..0963; DEVANAGARI
@@ -4413,7 +4558,9 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x0AE0,   // 0AE0..0AE3; GUJARATI
             0x0AE4,   // 0AE4..0AE5; UNKNOWN
             0x0AE6,   // 0AE6..0AF1; GUJARATI
-            0x0AF2,   // 0AF2..0B00; UNKNOWN
+            0x0AF2,   // 0AF2..0AF8; UNKNOWN
+            0x0AF9,   // 0AF9      ; GUJARATI
+            0x0AFA,   // 0AFA..0B00; UNKNOWN
             0x0B01,   // 0B01..0B03; ORIYA
             0x0B04,   // 0B04      ; UNKNOWN
             0x0B05,   // 0B05..0B0C; ORIYA
@@ -4492,8 +4639,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x0C4E,   // 0C4E..0C54; UNKNOWN
             0x0C55,   // 0C55..0C56; TELUGU
             0x0C57,   // 0C57      ; UNKNOWN
-            0x0C58,   // 0C58..0C59; TELUGU
-            0x0C5A,   // 0C5A..0C5F; UNKNOWN
+            0x0C58,   // 0C58..0C5A; TELUGU
+            0x0C5B,   // 0C5B..0C5F; UNKNOWN
             0x0C60,   // 0C60..0C63; TELUGU
             0x0C64,   // 0C64..0C65; UNKNOWN
             0x0C66,   // 0C66..0C6F; TELUGU
@@ -4543,8 +4690,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x0D4A,   // 0D4A..0D4E; MALAYALAM
             0x0D4F,   // 0D4F..0D56; UNKNOWN
             0x0D57,   // 0D57      ; MALAYALAM
-            0x0D58,   // 0D58..0D5F; UNKNOWN
-            0x0D60,   // 0D60..0D63; MALAYALAM
+            0x0D58,   // 0D58..0D5E; UNKNOWN
+            0x0D5F,   // 0D5F..0D63; MALAYALAM
             0x0D64,   // 0D64..0D65; UNKNOWN
             0x0D66,   // 0D66..0D75; MALAYALAM
             0x0D76,   // 0D76..0D78; UNKNOWN
@@ -4676,8 +4823,10 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x137D,   // 137D..137F; UNKNOWN
             0x1380,   // 1380..1399; ETHIOPIC
             0x139A,   // 139A..139F; UNKNOWN
-            0x13A0,   // 13A0..13F4; CHEROKEE
-            0x13F5,   // 13F5..13FF; UNKNOWN
+            0x13A0,   // 13A0..13F5; CHEROKEE
+            0x13F6,   // 13F6..13F7; UNKNOWN
+            0x13F8,   // 13F8..13FD; CHEROKEE
+            0x13FE,   // 13FE..13FF; UNKNOWN
             0x1400,   // 1400..167F; CANADIAN_ABORIGINAL
             0x1680,   // 1680..169C; OGHAM
             0x169D,   // 169D..169F; UNKNOWN
@@ -4846,8 +4995,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x208F,   // 208F      ; UNKNOWN
             0x2090,   // 2090..209C; LATIN
             0x209D,   // 209D..209F; UNKNOWN
-            0x20A0,   // 20A0..20BD; COMMON
-            0x20BE,   // 20BE..20CF; UNKNOWN
+            0x20A0,   // 20A0..20BE; COMMON
+            0x20BF,   // 20BF..20CF; UNKNOWN
             0x20D0,   // 20D0..20F0; INHERITED
             0x20F1,   // 20F1..20FF; UNKNOWN
             0x2100,   // 2100..2125; COMMON
@@ -4860,8 +5009,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x214E,   // 214E      ; LATIN
             0x214F,   // 214F..215F; COMMON
             0x2160,   // 2160..2188; LATIN
-            0x2189,   // 2189      ; COMMON
-            0x218A,   // 218A..218F; UNKNOWN
+            0x2189,   // 2189..218B; COMMON
+            0x218C,   // 218C..218F; UNKNOWN
             0x2190,   // 2190..23FA; COMMON
             0x23FB,   // 23FB..23FF; UNKNOWN
             0x2400,   // 2400..2426; COMMON
@@ -4879,7 +5028,9 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x2BBD,   // 2BBD..2BC8; COMMON
             0x2BC9,   // 2BC9      ; UNKNOWN
             0x2BCA,   // 2BCA..2BD1; COMMON
-            0x2BD2,   // 2BD2..2BFF; UNKNOWN
+            0x2BD2,   // 2BD2..2BEB; UNKNOWN
+            0x2BEC,   // 2BEC..2BEF; COMMON
+            0x2BF0,   // 2BF0..2BFF; UNKNOWN
             0x2C00,   // 2C00..2C2E; GLAGOLITIC
             0x2C2F,   // 2C2F      ; UNKNOWN
             0x2C30,   // 2C30..2C5E; GLAGOLITIC
@@ -4972,8 +5123,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x3400,   // 3400..4DB5; HAN
             0x4DB6,   // 4DB6..4DBF; UNKNOWN
             0x4DC0,   // 4DC0..4DFF; COMMON
-            0x4E00,   // 4E00..9FCC; HAN
-            0x9FCD,   // 9FCD..9FFF; UNKNOWN
+            0x4E00,   // 4E00..9FD5; HAN
+            0x9FD6,   // 9FD6..9FFF; UNKNOWN
             0xA000,   // A000..A48C; YI
             0xA48D,   // A48D..A48F; UNKNOWN
             0xA490,   // A490..A4C6; YI
@@ -4981,20 +5132,16 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0xA4D0,   // A4D0..A4FF; LISU
             0xA500,   // A500..A62B; VAI
             0xA62C,   // A62C..A63F; UNKNOWN
-            0xA640,   // A640..A69D; CYRILLIC
-            0xA69E,   // A69E      ; UNKNOWN
-            0xA69F,   // A69F      ; CYRILLIC
+            0xA640,   // A640..A69F; CYRILLIC
             0xA6A0,   // A6A0..A6F7; BAMUM
             0xA6F8,   // A6F8..A6FF; UNKNOWN
             0xA700,   // A700..A721; COMMON
             0xA722,   // A722..A787; LATIN
             0xA788,   // A788..A78A; COMMON
-            0xA78B,   // A78B..A78E; LATIN
-            0xA78F,   // A78F      ; UNKNOWN
-            0xA790,   // A790..A7AD; LATIN
+            0xA78B,   // A78B..A7AD; LATIN
             0xA7AE,   // A7AE..A7AF; UNKNOWN
-            0xA7B0,   // A7B0..A7B1; LATIN
-            0xA7B2,   // A7B2..A7F6; UNKNOWN
+            0xA7B0,   // A7B0..A7B7; LATIN
+            0xA7B8,   // A7B8..A7F6; UNKNOWN
             0xA7F7,   // A7F7..A7FF; LATIN
             0xA800,   // A800..A82B; SYLOTI_NAGRI
             0xA82C,   // A82C..A82F; UNKNOWN
@@ -5006,8 +5153,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0xA8C5,   // A8C5..A8CD; UNKNOWN
             0xA8CE,   // A8CE..A8D9; SAURASHTRA
             0xA8DA,   // A8DA..A8DF; UNKNOWN
-            0xA8E0,   // A8E0..A8FB; DEVANAGARI
-            0xA8FC,   // A8FC..A8FF; UNKNOWN
+            0xA8E0,   // A8E0..A8FD; DEVANAGARI
+            0xA8FE,   // A8FE..A8FF; UNKNOWN
             0xA900,   // A900..A92D; KAYAH_LI
             0xA92E,   // A92E      ; COMMON
             0xA92F,   // A92F      ; KAYAH_LI
@@ -5049,11 +5196,10 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0xAB2F,   // AB2F      ; UNKNOWN
             0xAB30,   // AB30..AB5A; LATIN
             0xAB5B,   // AB5B      ; COMMON
-            0xAB5C,   // AB5C..AB5F; LATIN
-            0xAB60,   // AB60..AB63; UNKNOWN
-            0xAB64,   // AB64      ; LATIN
+            0xAB5C,   // AB5C..AB64; LATIN
             0xAB65,   // AB65      ; GREEK
-            0xAB66,   // AB66..ABBF; UNKNOWN
+            0xAB66,   // AB66..AB6F; UNKNOWN
+            0xAB70,   // AB70..ABBF; CHEROKEE
             0xABC0,   // ABC0..ABED; MEETEI_MAYEK
             0xABEE,   // ABEE..ABEF; UNKNOWN
             0xABF0,   // ABF0..ABF9; MEETEI_MAYEK
@@ -5098,7 +5244,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0xFE10,   // FE10..FE19; COMMON
             0xFE1A,   // FE1A..FE1F; UNKNOWN
             0xFE20,   // FE20..FE2D; INHERITED
-            0xFE2E,   // FE2E..FE2F; UNKNOWN
+            0xFE2E,   // FE2E..FE2F; CYRILLIC
             0xFE30,   // FE30..FE52; COMMON
             0xFE53,   // FE53      ; UNKNOWN
             0xFE54,   // FE54..FE66; COMMON
@@ -5220,7 +5366,12 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x10880,  // 10880..1089E; NABATAEAN
             0x1089F,  // 1089F..108A6; UNKNOWN
             0x108A7,  // 108A7..108AF; NABATAEAN
-            0x108B0,  // 108B0..108FF; UNKNOWN
+            0x108B0,  // 108B0..108DF; UNKNOWN
+            0x108E0,  // 108E0..108F2; HATRAN
+            0x108F3,  // 108F3       ; UNKNOWN
+            0x108F4,  // 108F4..108F5; HATRAN
+            0x108F6,  // 108F6..108FA; UNKNOWN
+            0x108FB,  // 108FB..108FF; HATRAN
             0x10900,  // 10900..1091B; PHOENICIAN
             0x1091C,  // 1091C..1091E; UNKNOWN
             0x1091F,  // 1091F       ; PHOENICIAN
@@ -5230,9 +5381,10 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x10940,  // 10940..1097F; UNKNOWN
             0x10980,  // 10980..1099F; MEROITIC_HIEROGLYPHS
             0x109A0,  // 109A0..109B7; MEROITIC_CURSIVE
-            0x109B8,  // 109B8..109BD; UNKNOWN
-            0x109BE,  // 109BE..109BF; MEROITIC_CURSIVE
-            0x109C0,  // 109C0..109FF; UNKNOWN
+            0x109B8,  // 109B8..109BB; UNKNOWN
+            0x109BC,  // 109BC..109CF; MEROITIC_CURSIVE
+            0x109D0,  // 109D0..109D1; UNKNOWN
+            0x109D2,  // 109D2..109FF; MEROITIC_CURSIVE
             0x10A00,  // 10A00..10A03; KHAROSHTHI
             0x10A04,  // 10A04       ; UNKNOWN
             0x10A05,  // 10A05..10A06; KHAROSHTHI
@@ -5272,7 +5424,13 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x10BA9,  // 10BA9..10BAF; PSALTER_PAHLAVI
             0x10BB0,  // 10BB0..10BFF; UNKNOWN
             0x10C00,  // 10C00..10C48; OLD_TURKIC
-            0x10C49,  // 10C49..10E5F; UNKNOWN
+            0x10C49,  // 10C49..10C7F; UNKNOWN
+            0x10C80,  // 10C80..10CB2; OLD_HUNGARIAN
+            0x10CB3,  // 10CB3..10CBF; UNKNOWN
+            0x10CC0,  // 10CC0..10CF2; OLD_HUNGARIAN
+            0x10CF3,  // 10CF3..10CF9; UNKNOWN
+            0x10CFA,  // 10CFA..10CFF; OLD_HUNGARIAN
+            0x10D00,  // 10D00..10E5F; UNKNOWN
             0x10E60,  // 10E60..10E7E; ARABIC
             0x10E7F,  // 10E7F..10FFF; UNKNOWN
             0x11000,  // 11000..1104D; BRAHMI
@@ -5292,23 +5450,31 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x11144,  // 11144..1114F; UNKNOWN
             0x11150,  // 11150..11176; MAHAJANI
             0x11177,  // 11177..1117F; UNKNOWN
-            0x11180,  // 11180..111C8; SHARADA
-            0x111C9,  // 111C9..111CC; UNKNOWN
-            0x111CD,  // 111CD       ; SHARADA
+            0x11180,  // 11180..111CD; SHARADA
             0x111CE,  // 111CE..111CF; UNKNOWN
-            0x111D0,  // 111D0..111DA; SHARADA
-            0x111DB,  // 111DB..111E0; UNKNOWN
+            0x111D0,  // 111D0..111DF; SHARADA
+            0x111E0,  // 111E0       ; UNKNOWN
             0x111E1,  // 111E1..111F4; SINHALA
             0x111F5,  // 111F5..111FF; UNKNOWN
             0x11200,  // 11200..11211; KHOJKI
             0x11212,  // 11212       ; UNKNOWN
             0x11213,  // 11213..1123D; KHOJKI
-            0x1123E,  // 1123E..112AF; UNKNOWN
+            0x1123E,  // 1123E..1127F; UNKNOWN
+            0x11280,  // 11280..11286; MULTANI
+            0x11287,  // 11287       ; UNKNOWN
+            0x11288,  // 11288       ; MULTANI
+            0x11289,  // 11289       ; UNKNOWN
+            0x1128A,  // 1128A..1128D; MULTANI
+            0x1128E,  // 1128E       ; UNKNOWN
+            0x1128F,  // 1128F..1129D; MULTANI
+            0x1129E,  // 1129E       ; UNKNOWN
+            0x1129F,  // 1129F..112A9; MULTANI
+            0x112AA,  // 112AA..112AF; UNKNOWN
             0x112B0,  // 112B0..112EA; KHUDAWADI
             0x112EB,  // 112EB..112EF; UNKNOWN
             0x112F0,  // 112F0..112F9; KHUDAWADI
-            0x112FA,  // 112FA..11300; UNKNOWN
-            0x11301,  // 11301..11303; GRANTHA
+            0x112FA,  // 112FA..112FF; UNKNOWN
+            0x11300,  // 11300..11303; GRANTHA
             0x11304,  // 11304       ; UNKNOWN
             0x11305,  // 11305..1130C; GRANTHA
             0x1130D,  // 1130D..1130E; UNKNOWN
@@ -5327,7 +5493,9 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x11347,  // 11347..11348; GRANTHA
             0x11349,  // 11349..1134A; UNKNOWN
             0x1134B,  // 1134B..1134D; GRANTHA
-            0x1134E,  // 1134E..11356; UNKNOWN
+            0x1134E,  // 1134E..1134F; UNKNOWN
+            0x11350,  // 11350       ; GRANTHA
+            0x11351,  // 11351..11356; UNKNOWN
             0x11357,  // 11357       ; GRANTHA
             0x11358,  // 11358..1135C; UNKNOWN
             0x1135D,  // 1135D..11363; GRANTHA
@@ -5342,8 +5510,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x114DA,  // 114DA..1157F; UNKNOWN
             0x11580,  // 11580..115B5; SIDDHAM
             0x115B6,  // 115B6..115B7; UNKNOWN
-            0x115B8,  // 115B8..115C9; SIDDHAM
-            0x115CA,  // 115CA..115FF; UNKNOWN
+            0x115B8,  // 115B8..115DD; SIDDHAM
+            0x115DE,  // 115DE..115FF; UNKNOWN
             0x11600,  // 11600..11644; MODI
             0x11645,  // 11645..1164F; UNKNOWN
             0x11650,  // 11650..11659; MODI
@@ -5351,21 +5519,31 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x11680,  // 11680..116B7; TAKRI
             0x116B8,  // 116B8..116BF; UNKNOWN
             0x116C0,  // 116C0..116C9; TAKRI
-            0x116CA,  // 116CA..1189F; UNKNOWN
+            0x116CA,  // 116CA..116FF; UNKNOWN
+            0x11700,  // 11700..11719; AHOM
+            0x1171A,  // 1171A..1171C; UNKNOWN
+            0x1171D,  // 1171D..1172B; AHOM
+            0x1172C,  // 1172C..1172F; UNKNOWN
+            0x11730,  // 11730..1173F; AHOM
+            0x11740,  // 11740..1189F; UNKNOWN
             0x118A0,  // 118A0..118F2; WARANG_CITI
             0x118F3,  // 118F3..118FE; UNKNOWN
             0x118FF,  // 118FF       ; WARANG_CITI
             0x11900,  // 11900..11ABF; UNKNOWN
             0x11AC0,  // 11AC0..11AF8; PAU_CIN_HAU
             0x11AF9,  // 11AF9..11FFF; UNKNOWN
-            0x12000,  // 12000..12398; CUNEIFORM
-            0x12399,  // 12399..123FF; UNKNOWN
+            0x12000,  // 12000..12399; CUNEIFORM
+            0x1239A,  // 1239A..123FF; UNKNOWN
             0x12400,  // 12400..1246E; CUNEIFORM
             0x1246F,  // 1246F       ; UNKNOWN
             0x12470,  // 12470..12474; CUNEIFORM
-            0x12475,  // 12475..12FFF; UNKNOWN
+            0x12475,  // 12475..1247F; UNKNOWN
+            0x12480,  // 12480..12543; CUNEIFORM
+            0x12544,  // 12544..12FFF; UNKNOWN
             0x13000,  // 13000..1342E; EGYPTIAN_HIEROGLYPHS
-            0x1342F,  // 1342F..167FF; UNKNOWN
+            0x1342F,  // 1342F..143FF; UNKNOWN
+            0x14400,  // 14400..14646; ANATOLIAN_HIEROGLYPHS
+            0x14647,  // 14647..167FF; UNKNOWN
             0x16800,  // 16800..16A38; BAMUM
             0x16A39,  // 16A39..16A3F; UNKNOWN
             0x16A40,  // 16A40..16A5E; MRO
@@ -5420,8 +5598,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x1D185,  // 1D185..1D18B; INHERITED
             0x1D18C,  // 1D18C..1D1A9; COMMON
             0x1D1AA,  // 1D1AA..1D1AD; INHERITED
-            0x1D1AE,  // 1D1AE..1D1DD; COMMON
-            0x1D1DE,  // 1D1DE..1D1FF; UNKNOWN
+            0x1D1AE,  // 1D1AE..1D1E8; COMMON
+            0x1D1E9,  // 1D1E9..1D1FF; UNKNOWN
             0x1D200,  // 1D200..1D245; GREEK
             0x1D246,  // 1D246..1D2FF; UNKNOWN
             0x1D300,  // 1D300..1D356; COMMON
@@ -5469,7 +5647,12 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x1D6A8,  // 1D6A8..1D7CB; COMMON
             0x1D7CC,  // 1D7CC..1D7CD; UNKNOWN
             0x1D7CE,  // 1D7CE..1D7FF; COMMON
-            0x1D800,  // 1D800..1E7FF; UNKNOWN
+            0x1D800,  // 1D800..1DA8B; SIGNWRITING
+            0x1DA8C,  // 1DA8C..1DA9A; UNKNOWN
+            0x1DA9B,  // 1DA9B..1DA9F; SIGNWRITING
+            0x1DAA0,  // 1DAA0       ; UNKNOWN
+            0x1DAA1,  // 1DAA1..1DAAF; SIGNWRITING
+            0x1DAB0,  // 1DAB0..1E7FF; UNKNOWN
             0x1E800,  // 1E800..1E8C4; MENDE_KIKAKUI
             0x1E8C5,  // 1E8C5..1E8C6; UNKNOWN
             0x1E8C7,  // 1E8C7..1E8D6; MENDE_KIKAKUI
@@ -5572,26 +5755,12 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x1F249,  // 1F249..1F24F; UNKNOWN
             0x1F250,  // 1F250..1F251; COMMON
             0x1F252,  // 1F252..1F2FF; UNKNOWN
-            0x1F300,  // 1F300..1F32C; COMMON
-            0x1F32D,  // 1F32D..1F32F; UNKNOWN
-            0x1F330,  // 1F330..1F37D; COMMON
-            0x1F37E,  // 1F37E..1F37F; UNKNOWN
-            0x1F380,  // 1F380..1F3CE; COMMON
-            0x1F3CF,  // 1F3CF..1F3D3; UNKNOWN
-            0x1F3D4,  // 1F3D4..1F3F7; COMMON
-            0x1F3F8,  // 1F3F8..1F3FF; UNKNOWN
-            0x1F400,  // 1F400..1F4FE; COMMON
-            0x1F4FF,  // 1F4FF       ; UNKNOWN
-            0x1F500,  // 1F500..1F54A; COMMON
-            0x1F54B,  // 1F54B..1F54F; UNKNOWN
-            0x1F550,  // 1F550..1F579; COMMON
+            0x1F300,  // 1F300..1F579; COMMON
             0x1F57A,  // 1F57A       ; UNKNOWN
             0x1F57B,  // 1F57B..1F5A3; COMMON
             0x1F5A4,  // 1F5A4       ; UNKNOWN
-            0x1F5A5,  // 1F5A5..1F642; COMMON
-            0x1F643,  // 1F643..1F644; UNKNOWN
-            0x1F645,  // 1F645..1F6CF; COMMON
-            0x1F6D0,  // 1F6D0..1F6DF; UNKNOWN
+            0x1F5A5,  // 1F5A5..1F6D0; COMMON
+            0x1F6D1,  // 1F6D1..1F6DF; UNKNOWN
             0x1F6E0,  // 1F6E0..1F6EC; COMMON
             0x1F6ED,  // 1F6ED..1F6EF; UNKNOWN
             0x1F6F0,  // 1F6F0..1F6F3; COMMON
@@ -5609,13 +5778,21 @@ class Character implements java.io.Serializable, Comparable<Character> {
             0x1F860,  // 1F860..1F887; COMMON
             0x1F888,  // 1F888..1F88F; UNKNOWN
             0x1F890,  // 1F890..1F8AD; COMMON
-            0x1F8AE,  // 1F8AE..1FFFF; UNKNOWN
+            0x1F8AE,  // 1F8AE..1F90F; UNKNOWN
+            0x1F910,  // 1F910..1F918; COMMON
+            0x1F919,  // 1F919..1F97F; UNKNOWN
+            0x1F980,  // 1F980..1F984; COMMON
+            0x1F985,  // 1F985..1F9BF; UNKNOWN
+            0x1F9C0,  // 1F9C0       ; COMMON
+            0x1F9C1,  // 1F9C1..1FFFF; UNKNOWN
             0x20000,  // 20000..2A6D6; HAN
             0x2A6D7,  // 2A6D7..2A6FF; UNKNOWN
             0x2A700,  // 2A700..2B734; HAN
             0x2B735,  // 2B735..2B73F; UNKNOWN
             0x2B740,  // 2B740..2B81D; HAN
-            0x2B81E,  // 2B81E..2F7FF; UNKNOWN
+            0x2B81E,  // 2B81E..2B81F; UNKNOWN
+            0x2B820,  // 2B820..2CEA1; HAN
+            0x2CEA2,  // 2CEA2..2F7FF; UNKNOWN
             0x2F800,  // 2F800..2FA1D; HAN
             0x2FA1E,  // 2FA1E..E0000; UNKNOWN
             0xE0001,  // E0001       ; COMMON
@@ -5702,9 +5879,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             COMMON,                   // 0640
             ARABIC,                   // 0641..064A
             INHERITED,                // 064B..0655
-            ARABIC,                   // 0656..065F
-            COMMON,                   // 0660..0669
-            ARABIC,                   // 066A..066F
+            ARABIC,                   // 0656..066F
             INHERITED,                // 0670
             ARABIC,                   // 0671..06DC
             COMMON,                   // 06DD
@@ -5727,9 +5902,9 @@ class Character implements java.io.Serializable, Comparable<Character> {
             UNKNOWN,                  // 085C..085D
             MANDAIC,                  // 085E
             UNKNOWN,                  // 085F..089F
-            ARABIC,                   // 08A0..08B2
-            UNKNOWN,                  // 08B3..08E3
-            ARABIC,                   // 08E4..08FF
+            ARABIC,                   // 08A0..08B4
+            UNKNOWN,                  // 08B5..08E2
+            ARABIC,                   // 08E3..08FF
             DEVANAGARI,               // 0900..0950
             INHERITED,                // 0951..0952
             DEVANAGARI,               // 0953..0963
@@ -5820,7 +5995,9 @@ class Character implements java.io.Serializable, Comparable<Character> {
             GUJARATI,                 // 0AE0..0AE3
             UNKNOWN,                  // 0AE4..0AE5
             GUJARATI,                 // 0AE6..0AF1
-            UNKNOWN,                  // 0AF2..0B00
+            UNKNOWN,                  // 0AF2..0AF8
+            GUJARATI,                 // 0AF9
+            UNKNOWN,                  // 0AFA..0B00
             ORIYA,                    // 0B01..0B03
             UNKNOWN,                  // 0B04
             ORIYA,                    // 0B05..0B0C
@@ -5899,8 +6076,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             UNKNOWN,                  // 0C4E..0C54
             TELUGU,                   // 0C55..0C56
             UNKNOWN,                  // 0C57
-            TELUGU,                   // 0C58..0C59
-            UNKNOWN,                  // 0C5A..0C5F
+            TELUGU,                   // 0C58..0C5A
+            UNKNOWN,                  // 0C5B..0C5F
             TELUGU,                   // 0C60..0C63
             UNKNOWN,                  // 0C64..0C65
             TELUGU,                   // 0C66..0C6F
@@ -5950,8 +6127,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             MALAYALAM,                // 0D4A..0D4E
             UNKNOWN,                  // 0D4F..0D56
             MALAYALAM,                // 0D57
-            UNKNOWN,                  // 0D58..0D5F
-            MALAYALAM,                // 0D60..0D63
+            UNKNOWN,                  // 0D58..0D5E
+            MALAYALAM,                // 0D5F..0D63
             UNKNOWN,                  // 0D64..0D65
             MALAYALAM,                // 0D66..0D75
             UNKNOWN,                  // 0D76..0D78
@@ -6083,8 +6260,10 @@ class Character implements java.io.Serializable, Comparable<Character> {
             UNKNOWN,                  // 137D..137F
             ETHIOPIC,                 // 1380..1399
             UNKNOWN,                  // 139A..139F
-            CHEROKEE,                 // 13A0..13F4
-            UNKNOWN,                  // 13F5..13FF
+            CHEROKEE,                 // 13A0..13F5
+            UNKNOWN,                  // 13F6..13F7
+            CHEROKEE,                 // 13F8..13FD
+            UNKNOWN,                  // 13FE..13FF
             CANADIAN_ABORIGINAL,      // 1400..167F
             OGHAM,                    // 1680..169C
             UNKNOWN,                  // 169D..169F
@@ -6253,8 +6432,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             UNKNOWN,                  // 208F
             LATIN,                    // 2090..209C
             UNKNOWN,                  // 209D..209F
-            COMMON,                   // 20A0..20BD
-            UNKNOWN,                  // 20BE..20CF
+            COMMON,                   // 20A0..20BE
+            UNKNOWN,                  // 20BF..20CF
             INHERITED,                // 20D0..20F0
             UNKNOWN,                  // 20F1..20FF
             COMMON,                   // 2100..2125
@@ -6267,8 +6446,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             LATIN,                    // 214E
             COMMON,                   // 214F..215F
             LATIN,                    // 2160..2188
-            COMMON,                   // 2189
-            UNKNOWN,                  // 218A..218F
+            COMMON,                   // 2189..218B
+            UNKNOWN,                  // 218C..218F
             COMMON,                   // 2190..23FA
             UNKNOWN,                  // 23FB..23FF
             COMMON,                   // 2400..2426
@@ -6286,7 +6465,9 @@ class Character implements java.io.Serializable, Comparable<Character> {
             COMMON,                   // 2BBD..2BC8
             UNKNOWN,                  // 2BC9
             COMMON,                   // 2BCA..2BD1
-            UNKNOWN,                  // 2BD2..2BFF
+            UNKNOWN,                  // 2BD2..2BEB
+            COMMON,                   // 2BEC..2BEF
+            UNKNOWN,                  // 2BF0..2BFF
             GLAGOLITIC,               // 2C00..2C2E
             UNKNOWN,                  // 2C2F
             GLAGOLITIC,               // 2C30..2C5E
@@ -6379,8 +6560,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             HAN,                      // 3400..4DB5
             UNKNOWN,                  // 4DB6..4DBF
             COMMON,                   // 4DC0..4DFF
-            HAN,                      // 4E00..9FCC
-            UNKNOWN,                  // 9FCD..9FFF
+            HAN,                      // 4E00..9FD5
+            UNKNOWN,                  // 9FD6..9FFF
             YI,                       // A000..A48C
             UNKNOWN,                  // A48D..A48F
             YI,                       // A490..A4C6
@@ -6388,20 +6569,16 @@ class Character implements java.io.Serializable, Comparable<Character> {
             LISU,                     // A4D0..A4FF
             VAI,                      // A500..A62B
             UNKNOWN,                  // A62C..A63F
-            CYRILLIC,                 // A640..A69D
-            UNKNOWN,                  // A69E
-            CYRILLIC,                 // A69F
+            CYRILLIC,                 // A640..A69F
             BAMUM,                    // A6A0..A6F7
             UNKNOWN,                  // A6F8..A6FF
             COMMON,                   // A700..A721
             LATIN,                    // A722..A787
             COMMON,                   // A788..A78A
-            LATIN,                    // A78B..A78E
-            UNKNOWN,                  // A78F
-            LATIN,                    // A790..A7AD
+            LATIN,                    // A78B..A7AD
             UNKNOWN,                  // A7AE..A7AF
-            LATIN,                    // A7B0..A7B1
-            UNKNOWN,                  // A7B2..A7F6
+            LATIN,                    // A7B0..A7B7
+            UNKNOWN,                  // A7B8..A7F6
             LATIN,                    // A7F7..A7FF
             SYLOTI_NAGRI,             // A800..A82B
             UNKNOWN,                  // A82C..A82F
@@ -6413,8 +6590,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             UNKNOWN,                  // A8C5..A8CD
             SAURASHTRA,               // A8CE..A8D9
             UNKNOWN,                  // A8DA..A8DF
-            DEVANAGARI,               // A8E0..A8FB
-            UNKNOWN,                  // A8FC..A8FF
+            DEVANAGARI,               // A8E0..A8FD
+            UNKNOWN,                  // A8FE..A8FF
             KAYAH_LI,                 // A900..A92D
             COMMON,                   // A92E
             KAYAH_LI,                 // A92F
@@ -6456,11 +6633,10 @@ class Character implements java.io.Serializable, Comparable<Character> {
             UNKNOWN,                  // AB2F
             LATIN,                    // AB30..AB5A
             COMMON,                   // AB5B
-            LATIN,                    // AB5C..AB5F
-            UNKNOWN,                  // AB60..AB63
-            LATIN,                    // AB64
+            LATIN,                    // AB5C..AB64
             GREEK,                    // AB65
-            UNKNOWN,                  // AB66..ABBF
+            UNKNOWN,                  // AB66..AB6F
+            CHEROKEE,                 // AB70..ABBF
             MEETEI_MAYEK,             // ABC0..ABED
             UNKNOWN,                  // ABEE..ABEF
             MEETEI_MAYEK,             // ABF0..ABF9
@@ -6505,7 +6681,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             COMMON,                   // FE10..FE19
             UNKNOWN,                  // FE1A..FE1F
             INHERITED,                // FE20..FE2D
-            UNKNOWN,                  // FE2E..FE2F
+            CYRILLIC,                 // FE2E..FE2F
             COMMON,                   // FE30..FE52
             UNKNOWN,                  // FE53
             COMMON,                   // FE54..FE66
@@ -6627,7 +6803,12 @@ class Character implements java.io.Serializable, Comparable<Character> {
             NABATAEAN,                // 10880..1089E
             UNKNOWN,                  // 1089F..108A6
             NABATAEAN,                // 108A7..108AF
-            UNKNOWN,                  // 108B0..108FF
+            UNKNOWN,                  // 108B0..108DF
+            HATRAN,                   // 108E0..108F2
+            UNKNOWN,                  // 108F3
+            HATRAN,                   // 108F4..108F5
+            UNKNOWN,                  // 108F6..108FA
+            HATRAN,                   // 108FB..108FF
             PHOENICIAN,               // 10900..1091B
             UNKNOWN,                  // 1091C..1091E
             PHOENICIAN,               // 1091F
@@ -6637,9 +6818,10 @@ class Character implements java.io.Serializable, Comparable<Character> {
             UNKNOWN,                  // 10940..1097F
             MEROITIC_HIEROGLYPHS,     // 10980..1099F
             MEROITIC_CURSIVE,         // 109A0..109B7
-            UNKNOWN,                  // 109B8..109BD
-            MEROITIC_CURSIVE,         // 109BE..109BF
-            UNKNOWN,                  // 109C0..109FF
+            UNKNOWN,                  // 109B8..109BB
+            MEROITIC_CURSIVE,         // 109BC..109CF
+            UNKNOWN,                  // 109D0..109D1
+            MEROITIC_CURSIVE,         // 109D2..109FF
             KHAROSHTHI,               // 10A00..10A03
             UNKNOWN,                  // 10A04
             KHAROSHTHI,               // 10A05..10A06
@@ -6679,7 +6861,13 @@ class Character implements java.io.Serializable, Comparable<Character> {
             PSALTER_PAHLAVI,          // 10BA9..10BAF
             UNKNOWN,                  // 10BB0..10BFF
             OLD_TURKIC,               // 10C00..10C48
-            UNKNOWN,                  // 10C49..10E5F
+            UNKNOWN,                  // 10C49..10C7F
+            OLD_HUNGARIAN,            // 10C80..10CB2
+            UNKNOWN,                  // 10CB3..10CBF
+            OLD_HUNGARIAN,            // 10CC0..10CF2
+            UNKNOWN,                  // 10CF3..10CF9
+            OLD_HUNGARIAN,            // 10CFA..10CFF
+            UNKNOWN,                  // 10D00..10E5F
             ARABIC,                   // 10E60..10E7E
             UNKNOWN,                  // 10E7F..10FFF
             BRAHMI,                   // 11000..1104D
@@ -6699,23 +6887,31 @@ class Character implements java.io.Serializable, Comparable<Character> {
             UNKNOWN,                  // 11144..1114F
             MAHAJANI,                 // 11150..11176
             UNKNOWN,                  // 11177..1117F
-            SHARADA,                  // 11180..111C8
-            UNKNOWN,                  // 111C9..111CC
-            SHARADA,                  // 111CD
+            SHARADA,                  // 11180..111CD
             UNKNOWN,                  // 111CE..111CF
-            SHARADA,                  // 111D0..111DA
-            UNKNOWN,                  // 111DB..111E0
+            SHARADA,                  // 111D0..111DF
+            UNKNOWN,                  // 111E0
             SINHALA,                  // 111E1..111F4
             UNKNOWN,                  // 111F5..111FF
             KHOJKI,                   // 11200..11211
             UNKNOWN,                  // 11212
             KHOJKI,                   // 11213..1123D
-            UNKNOWN,                  // 1123E..112AF
+            UNKNOWN,                  // 1123E..1127F
+            MULTANI,                  // 11280..11286
+            UNKNOWN,                  // 11287
+            MULTANI,                  // 11288
+            UNKNOWN,                  // 11289
+            MULTANI,                  // 1128A..1128D
+            UNKNOWN,                  // 1128E
+            MULTANI,                  // 1128F..1129D
+            UNKNOWN,                  // 1129E
+            MULTANI,                  // 1129F..112A9
+            UNKNOWN,                  // 112AA..112AF
             KHUDAWADI,                // 112B0..112EA
             UNKNOWN,                  // 112EB..112EF
             KHUDAWADI,                // 112F0..112F9
-            UNKNOWN,                  // 112FA..11300
-            GRANTHA,                  // 11301..11303
+            UNKNOWN,                  // 112FA..112FF
+            GRANTHA,                  // 11300..11303
             UNKNOWN,                  // 11304
             GRANTHA,                  // 11305..1130C
             UNKNOWN,                  // 1130D..1130E
@@ -6734,7 +6930,9 @@ class Character implements java.io.Serializable, Comparable<Character> {
             GRANTHA,                  // 11347..11348
             UNKNOWN,                  // 11349..1134A
             GRANTHA,                  // 1134B..1134D
-            UNKNOWN,                  // 1134E..11356
+            UNKNOWN,                  // 1134E..1134F
+            GRANTHA,                  // 11350
+            UNKNOWN,                  // 11351..11356
             GRANTHA,                  // 11357
             UNKNOWN,                  // 11358..1135C
             GRANTHA,                  // 1135D..11363
@@ -6749,8 +6947,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             UNKNOWN,                  // 114DA..1157F
             SIDDHAM,                  // 11580..115B5
             UNKNOWN,                  // 115B6..115B7
-            SIDDHAM,                  // 115B8..115C9
-            UNKNOWN,                  // 115CA..115FF
+            SIDDHAM,                  // 115B8..115DD
+            UNKNOWN,                  // 115DE..115FF
             MODI,                     // 11600..11644
             UNKNOWN,                  // 11645..1164F
             MODI,                     // 11650..11659
@@ -6758,21 +6956,31 @@ class Character implements java.io.Serializable, Comparable<Character> {
             TAKRI,                    // 11680..116B7
             UNKNOWN,                  // 116B8..116BF
             TAKRI,                    // 116C0..116C9
-            UNKNOWN,                  // 116CA..1189F
+            UNKNOWN,                  // 116CA..116FF
+            AHOM,                     // 11700..11719
+            UNKNOWN,                  // 1171A..1171C
+            AHOM,                     // 1171D..1172B
+            UNKNOWN,                  // 1172C..1172F
+            AHOM,                     // 11730..1173F
+            UNKNOWN,                  // 11740..1189F
             WARANG_CITI,              // 118A0..118F2
             UNKNOWN,                  // 118F3..118FE
             WARANG_CITI,              // 118FF
             UNKNOWN,                  // 11900..11ABF
             PAU_CIN_HAU,              // 11AC0..11AF8
             UNKNOWN,                  // 11AF9..11FFF
-            CUNEIFORM,                // 12000..12398
-            UNKNOWN,                  // 12399..123FF
+            CUNEIFORM,                // 12000..12399
+            UNKNOWN,                  // 1239A..123FF
             CUNEIFORM,                // 12400..1246E
             UNKNOWN,                  // 1246F
             CUNEIFORM,                // 12470..12474
-            UNKNOWN,                  // 12475..12FFF
+            UNKNOWN,                  // 12475..1247F
+            CUNEIFORM,                // 12480..12543
+            UNKNOWN,                  // 12544..12FFF
             EGYPTIAN_HIEROGLYPHS,     // 13000..1342E
-            UNKNOWN,                  // 1342F..167FF
+            UNKNOWN,                  // 1342F..143FF
+            ANATOLIAN_HIEROGLYPHS,    // 14400..14646
+            UNKNOWN,                  // 14647..167FF
             BAMUM,                    // 16800..16A38
             UNKNOWN,                  // 16A39..16A3F
             MRO,                      // 16A40..16A5E
@@ -6827,8 +7035,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
             INHERITED,                // 1D185..1D18B
             COMMON,                   // 1D18C..1D1A9
             INHERITED,                // 1D1AA..1D1AD
-            COMMON,                   // 1D1AE..1D1DD
-            UNKNOWN,                  // 1D1DE..1D1FF
+            COMMON,                   // 1D1AE..1D1E8
+            UNKNOWN,                  // 1D1E9..1D1FF
             GREEK,                    // 1D200..1D245
             UNKNOWN,                  // 1D246..1D2FF
             COMMON,                   // 1D300..1D356
@@ -6876,7 +7084,12 @@ class Character implements java.io.Serializable, Comparable<Character> {
             COMMON,                   // 1D6A8..1D7CB
             UNKNOWN,                  // 1D7CC..1D7CD
             COMMON,                   // 1D7CE..1D7FF
-            UNKNOWN,                  // 1D800..1E7FF
+            SIGNWRITING,              // 1D800..1DA8B
+            UNKNOWN,                  // 1DA8C..1DA9A
+            SIGNWRITING,              // 1DA9B..1DA9F
+            UNKNOWN,                  // 1DAA0
+            SIGNWRITING,              // 1DAA1..1DAAF
+            UNKNOWN,                  // 1DAB0..1E7FF
             MENDE_KIKAKUI,            // 1E800..1E8C4
             UNKNOWN,                  // 1E8C5..1E8C6
             MENDE_KIKAKUI,            // 1E8C7..1E8D6
@@ -6979,26 +7192,12 @@ class Character implements java.io.Serializable, Comparable<Character> {
             UNKNOWN,                  // 1F249..1F24F
             COMMON,                   // 1F250..1F251
             UNKNOWN,                  // 1F252..1F2FF
-            COMMON,                   // 1F300..1F32C
-            UNKNOWN,                  // 1F32D..1F32F
-            COMMON,                   // 1F330..1F37D
-            UNKNOWN,                  // 1F37E..1F37F
-            COMMON,                   // 1F380..1F3CE
-            UNKNOWN,                  // 1F3CF..1F3D3
-            COMMON,                   // 1F3D4..1F3F7
-            UNKNOWN,                  // 1F3F8..1F3FF
-            COMMON,                   // 1F400..1F4FE
-            UNKNOWN,                  // 1F4FF
-            COMMON,                   // 1F500..1F54A
-            UNKNOWN,                  // 1F54B..1F54F
-            COMMON,                   // 1F550..1F579
+            COMMON,                   // 1F300..1F579
             UNKNOWN,                  // 1F57A
             COMMON,                   // 1F57B..1F5A3
             UNKNOWN,                  // 1F5A4
-            COMMON,                   // 1F5A5..1F642
-            UNKNOWN,                  // 1F643..1F644
-            COMMON,                   // 1F645..1F6CF
-            UNKNOWN,                  // 1F6D0..1F6DF
+            COMMON,                   // 1F5A5..1F6D0
+            UNKNOWN,                  // 1F6D1..1F6DF
             COMMON,                   // 1F6E0..1F6EC
             UNKNOWN,                  // 1F6ED..1F6EF
             COMMON,                   // 1F6F0..1F6F3
@@ -7016,13 +7215,21 @@ class Character implements java.io.Serializable, Comparable<Character> {
             COMMON,                   // 1F860..1F887
             UNKNOWN,                  // 1F888..1F88F
             COMMON,                   // 1F890..1F8AD
-            UNKNOWN,                  // 1F8AE..1FFFF
+            UNKNOWN,                  // 1F8AE..1F90F
+            COMMON,                   // 1F910..1F918
+            UNKNOWN,                  // 1F919..1F97F
+            COMMON,                   // 1F980..1F984
+            UNKNOWN,                  // 1F985..1F9BF
+            COMMON,                   // 1F9C0
+            UNKNOWN,                  // 1F9C1..1FFFF
             HAN,                      // 20000..2A6D6
             UNKNOWN,                  // 2A6D7..2A6FF
             HAN,                      // 2A700..2B734
             UNKNOWN,                  // 2B735..2B73F
             HAN,                      // 2B740..2B81D
-            UNKNOWN,                  // 2B81E..2F7FF
+            UNKNOWN,                  // 2B81E..2B81F
+            HAN,                      // 2B820..2CEA1
+            UNKNOWN,                  // 2CEA2..2F7FF
             HAN,                      // 2F800..2FA1D
             UNKNOWN,                  // 2FA1E..E0000
             COMMON,                   // E0001
@@ -7035,8 +7242,9 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
         private static HashMap<String, Character.UnicodeScript> aliases;
         static {
-            aliases = new HashMap<>(128);
+            aliases = new HashMap<>(134);
             aliases.put("AGHB", CAUCASIAN_ALBANIAN);
+            aliases.put("AHOM", AHOM);
             aliases.put("ARAB", ARABIC);
             aliases.put("ARMI", IMPERIAL_ARAMAIC);
             aliases.put("ARMN", ARMENIAN);
@@ -7075,11 +7283,14 @@ class Character implements java.io.Serializable, Comparable<Character> {
             aliases.put("HANG", HANGUL);
             aliases.put("HANI", HAN);
             aliases.put("HANO", HANUNOO);
+            aliases.put("HATR", HATRAN);
             aliases.put("HEBR", HEBREW);
             aliases.put("HIRA", HIRAGANA);
+            aliases.put("HLUW", ANATOLIAN_HIEROGLYPHS);
             aliases.put("HMNG", PAHAWH_HMONG);
             // it appears we don't have the KATAKANA_OR_HIRAGANA
             //aliases.put("HRKT", KATAKANA_OR_HIRAGANA);
+            aliases.put("HUNG", OLD_HUNGARIAN);
             aliases.put("ITAL", OLD_ITALIC);
             aliases.put("JAVA", JAVANESE);
             aliases.put("KALI", KAYAH_LI);
@@ -7110,6 +7321,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             aliases.put("MONG", MONGOLIAN);
             aliases.put("MROO", MRO);
             aliases.put("MTEI", MEETEI_MAYEK);
+            aliases.put("MULT", MULTANI);
             aliases.put("MYMR", MYANMAR);
             aliases.put("NARB", OLD_NORTH_ARABIAN);
             aliases.put("NBAT", NABATAEAN);
@@ -7133,6 +7345,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
             aliases.put("SAMR", SAMARITAN);
             aliases.put("SARB", OLD_SOUTH_ARABIAN);
             aliases.put("SAUR", SAURASHTRA);
+            aliases.put("SGNW", SIGNWRITING);
             aliases.put("SHAW", SHAVIAN);
             aliases.put("SHRD", SHARADA);
             aliases.put("SIDD", SIDDHAM);
@@ -7195,8 +7408,8 @@ class Character implements java.io.Serializable, Comparable<Character> {
         /**
          * Returns the UnicodeScript constant with the given Unicode script
          * name or the script name alias. Script names and their aliases are
-         * determined by The Unicode Standard. The files Scripts&lt;version&gt;.txt
-         * and PropertyValueAliases&lt;version&gt;.txt define script names
+         * determined by The Unicode Standard. The files {@code Scripts<version>.txt}
+         * and {@code PropertyValueAliases<version>.txt} define script names
          * and the script name aliases for a particular version of the
          * standard. The {@link Character} class specifies the version of
          * the standard that it supports.
@@ -7238,7 +7451,13 @@ class Character implements java.io.Serializable, Comparable<Character> {
      *
      * @param  value   the value to be represented by the
      *                  {@code Character} object.
+     *
+     * @deprecated
+     * It is rarely appropriate to use this constructor. The static factory
+     * {@link #valueOf(char)} is generally a better choice, as it is
+     * likely to yield significantly better space and time performance.
      */
+    @Deprecated(since="9")
     public Character(char value) {
         this.value = value;
     }
@@ -7255,9 +7474,9 @@ class Character implements java.io.Serializable, Comparable<Character> {
     }
 
     /**
-     * Returns a <tt>Character</tt> instance representing the specified
-     * <tt>char</tt> value.
-     * If a new <tt>Character</tt> instance is not required, this method
+     * Returns a {@code Character} instance representing the specified
+     * {@code char} value.
+     * If a new {@code Character} instance is not required, this method
      * should generally be used in preference to the constructor
      * {@link #Character(char)}, as this method is likely to yield
      * significantly better space and time performance by caching
@@ -7268,7 +7487,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
      * cache other values outside of this range.
      *
      * @param  c a char value.
-     * @return a <tt>Character</tt> instance representing <tt>c</tt>.
+     * @return a {@code Character} instance representing {@code c}.
      * @since  1.5
      */
     @HotSpotIntrinsicCandidate
@@ -8586,7 +8805,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
      * @since   1.0.2
      * @deprecated Replaced by isJavaIdentifierStart(char).
      */
-    @Deprecated
+    @Deprecated(since="1.1")
     public static boolean isJavaLetter(char ch) {
         return isJavaIdentifierStart(ch);
     }
@@ -8622,7 +8841,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
      * @since   1.0.2
      * @deprecated Replaced by isJavaIdentifierPart(char).
      */
-    @Deprecated
+    @Deprecated(since="1.1")
     public static boolean isJavaLetterOrDigit(char ch) {
         return isJavaIdentifierPart(ch);
     }
@@ -9347,7 +9566,9 @@ class Character implements java.io.Serializable, Comparable<Character> {
      * Determines if the specified character is ISO-LATIN-1 white space.
      * This method returns {@code true} for the following five
      * characters only:
-     * <table summary="truechars">
+     * <table class="borderless">
+     * <caption style="display:none">truechars</caption>
+     * <tbody>
      * <tr><td>{@code '\t'}</td>            <td>{@code U+0009}</td>
      *     <td>{@code HORIZONTAL TABULATION}</td></tr>
      * <tr><td>{@code '\n'}</td>            <td>{@code U+000A}</td>
@@ -9356,8 +9577,9 @@ class Character implements java.io.Serializable, Comparable<Character> {
      *     <td>{@code FORM FEED}</td></tr>
      * <tr><td>{@code '\r'}</td>            <td>{@code U+000D}</td>
      *     <td>{@code CARRIAGE RETURN}</td></tr>
-     * <tr><td>{@code '&nbsp;'}</td>  <td>{@code U+0020}</td>
+     * <tr><td>{@code ' '}</td>  <td>{@code U+0020}</td>
      *     <td>{@code SPACE}</td></tr>
+     * </tbody>
      * </table>
      *
      * @param      ch   the character to be tested.
@@ -9367,7 +9589,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
      * @see        Character#isWhitespace(char)
      * @deprecated Replaced by isWhitespace(char).
      */
-    @Deprecated
+    @Deprecated(since="1.1")
     public static boolean isSpace(char ch) {
         return (ch <= 0x0020) &&
             (((((1L << 0x0009) |
@@ -9871,7 +10093,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
     }
 
     /**
-     * The number of bits used to represent a <tt>char</tt> value in unsigned
+     * The number of bits used to represent a {@code char} value in unsigned
      * binary form, constant {@code 16}.
      *
      * @since 1.5
@@ -9888,11 +10110,11 @@ class Character implements java.io.Serializable, Comparable<Character> {
 
     /**
      * Returns the value obtained by reversing the order of the bytes in the
-     * specified <tt>char</tt> value.
+     * specified {@code char} value.
      *
      * @param ch The {@code char} of which to reverse the byte order.
      * @return the value obtained by reversing (or, equivalently, swapping)
-     *     the bytes in the specified <tt>char</tt> value.
+     *     the bytes in the specified {@code char} value.
      * @since 1.5
      */
     @HotSpotIntrinsicCandidate
@@ -9913,7 +10135,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
      * <blockquote>{@code
      *     Character.UnicodeBlock.of(codePoint).toString().replace('_', ' ')
      *     + " "
-     *     + Integer.toHexString(codePoint).toUpperCase(Locale.ENGLISH);
+     *     + Integer.toHexString(codePoint).toUpperCase(Locale.ROOT);
      *
      * }</blockquote>
      *
@@ -9932,7 +10154,7 @@ class Character implements java.io.Serializable, Comparable<Character> {
         if (!isValidCodePoint(codePoint)) {
             throw new IllegalArgumentException();
         }
-        String name = CharacterName.get(codePoint);
+        String name = CharacterName.getInstance().getName(codePoint);
         if (name != null)
             return name;
         if (getType(codePoint) == UNASSIGNED)
@@ -9940,8 +10162,52 @@ class Character implements java.io.Serializable, Comparable<Character> {
         UnicodeBlock block = UnicodeBlock.of(codePoint);
         if (block != null)
             return block.toString().replace('_', ' ') + " "
-                   + Integer.toHexString(codePoint).toUpperCase(Locale.ENGLISH);
+                   + Integer.toHexString(codePoint).toUpperCase(Locale.ROOT);
         // should never come here
-        return Integer.toHexString(codePoint).toUpperCase(Locale.ENGLISH);
+        return Integer.toHexString(codePoint).toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * Returns the code point value of the Unicode character specified by
+     * the given Unicode character name.
+     * <p>
+     * Note: if a character is not assigned a name by the <i>UnicodeData</i>
+     * file (part of the Unicode Character Database maintained by the Unicode
+     * Consortium), its name is defined as the result of expression
+     *
+     * <blockquote>{@code
+     *     Character.UnicodeBlock.of(codePoint).toString().replace('_', ' ')
+     *     + " "
+     *     + Integer.toHexString(codePoint).toUpperCase(Locale.ROOT);
+     *
+     * }</blockquote>
+     * <p>
+     * The {@code name} matching is case insensitive, with any leading and
+     * trailing whitespace character removed.
+     *
+     * @param  name the Unicode character name
+     *
+     * @return the code point value of the character specified by its name.
+     *
+     * @throws IllegalArgumentException if the specified {@code name}
+     *         is not a valid Unicode character name.
+     * @throws NullPointerException if {@code name} is {@code null}
+     *
+     * @since 9
+     */
+    public static int codePointOf(String name) {
+        name = name.trim().toUpperCase(Locale.ROOT);
+        int cp = CharacterName.getInstance().getCodePoint(name);
+        if (cp != -1)
+            return cp;
+        try {
+            int off = name.lastIndexOf(' ');
+            if (off != -1) {
+                cp = Integer.parseInt(name, off + 1, name.length(), 16);
+                if (isValidCodePoint(cp) && name.equals(getName(cp)))
+                    return cp;
+            }
+        } catch (Exception x) {}
+        throw new IllegalArgumentException("Unrecognized character name :" + name);
     }
 }

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,7 +32,6 @@
 // Sets the default values for platform dependent flags used by the runtime system.
 // (see globals.hpp)
 
-define_pd_global(bool, ConvertSleepToYield,   true);
 define_pd_global(bool, ShareVtableStubs,      false); // Improves performance markedly for mtrt and compress.
 define_pd_global(bool, NeedsDeoptSuspend,     false); // Only register window machines need this.
 
@@ -41,13 +40,30 @@ define_pd_global(bool, ImplicitNullChecks,    true);  // Generate code for impli
 define_pd_global(bool, TrapBasedNullChecks,   true);
 define_pd_global(bool, UncommonNullCast,      true);  // Uncommon-trap NULLs passed to check cast.
 
-// Use large code-entry alignment.
-define_pd_global(intx, CodeEntryAlignment,    128);
-define_pd_global(intx, OptoLoopAlignment,     16);
-define_pd_global(intx, InlineFrequencyCount,  100);
-define_pd_global(intx, InlineSmallCode,       1500);
+#define DEFAULT_STACK_YELLOW_PAGES (2)
+#define DEFAULT_STACK_RED_PAGES (1)
+// Java_java_net_SocketOutputStream_socketWrite0() uses a 64k buffer on the
+// stack if compiled for unix and LP64. To pass stack overflow tests we need
+// 20 shadow pages.
+#define DEFAULT_STACK_SHADOW_PAGES (20 DEBUG_ONLY(+2))
+#define DEFAULT_STACK_RESERVED_PAGES (1)
 
-define_pd_global(intx, PreInflateSpin,        10);
+#define MIN_STACK_YELLOW_PAGES DEFAULT_STACK_YELLOW_PAGES
+#define MIN_STACK_RED_PAGES DEFAULT_STACK_RED_PAGES
+#define MIN_STACK_SHADOW_PAGES (3 DEBUG_ONLY(+1))
+#define MIN_STACK_RESERVED_PAGES (0)
+
+define_pd_global(intx, StackYellowPages,      DEFAULT_STACK_YELLOW_PAGES);
+define_pd_global(intx, StackRedPages,         DEFAULT_STACK_RED_PAGES);
+define_pd_global(intx, StackShadowPages,      DEFAULT_STACK_SHADOW_PAGES);
+define_pd_global(intx, StackReservedPages,    DEFAULT_STACK_RESERVED_PAGES);
+
+// Use large code-entry alignment.
+define_pd_global(uintx, CodeCacheSegmentSize,  128);
+define_pd_global(intx,  CodeEntryAlignment,    128);
+define_pd_global(intx,  OptoLoopAlignment,     16);
+define_pd_global(intx,  InlineFrequencyCount,  100);
+define_pd_global(intx,  InlineSmallCode,       1500);
 
 // Flags for template interpreter.
 define_pd_global(bool, RewriteBytecodes,      true);
@@ -62,8 +78,20 @@ define_pd_global(size_t, CMSYoungGenPerWorker, 16*M);  // Default max size of CM
 
 define_pd_global(uintx, TypeProfileLevel, 111);
 
+define_pd_global(bool, CompactStrings, true);
+
+// 2x unrolled loop is shorter with more than 9 HeapWords.
+define_pd_global(intx, InitArrayShortSize, 9*BytesPerLong);
+
 // Platform dependent flag handling: flags only defined on this platform.
-#define ARCH_FLAGS(develop, product, diagnostic, experimental, notproduct, range, constraint)  \
+#define ARCH_FLAGS(develop, \
+                   product, \
+                   diagnostic, \
+                   experimental, \
+                   notproduct, \
+                   range, \
+                   constraint, \
+                   writeable)  \
                                                                             \
   /* Load poll address from thread. This is used to implement per-thread */ \
   /* safepoints on platforms != IA64. */                                    \

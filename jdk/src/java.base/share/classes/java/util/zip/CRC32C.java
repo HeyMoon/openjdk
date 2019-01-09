@@ -28,7 +28,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 import jdk.internal.HotSpotIntrinsicCandidate;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 import sun.nio.ch.DirectBuffer;
 
 /**
@@ -44,7 +44,7 @@ import sun.nio.ch.DirectBuffer;
  * {@link NullPointerException} to be thrown.
  * </p>
  *
- * @since 1.9
+ * @since 9
  */
 public final class CRC32C implements Checksum {
 

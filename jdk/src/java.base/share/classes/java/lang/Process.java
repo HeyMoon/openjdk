@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -80,10 +80,10 @@ import java.util.stream.Stream;
  *
  * <p>Subclasses of Process should override the {@link #onExit()} and
  * {@link #toHandle()} methods to provide a fully functional Process including the
- * {@link #getPid() process id},
- * {@link #info() information about the process},
- * {@link #children() direct children}, and
- * {@link #allChildren() direct and indirect children} of the process.
+ * {@linkplain #pid() process id},
+ * {@linkplain #info() information about the process},
+ * {@linkplain #children() direct children}, and
+ * {@linkplain #descendants() direct children plus descendants of those children} of the process.
  * Delegating to the underlying Process or ProcessHandle is typically
  * easiest and most efficient.
  *
@@ -237,14 +237,14 @@ public abstract class Process {
     /**
      * Kills the process.
      * Whether the process represented by this {@code Process} object is
-     * {@link #supportsNormalTermination normally terminated} or not is
+     * {@linkplain #supportsNormalTermination normally terminated} or not is
      * implementation dependent.
      * Forcible process destruction is defined as the immediate termination of a
      * process, whereas normal termination allows the process to shut down cleanly.
      * If the process is not alive, no action is taken.
      * <p>
      * The {@link java.util.concurrent.CompletableFuture} from {@link #onExit} is
-     * {@link java.util.concurrent.CompletableFuture#complete completed}
+     * {@linkplain java.util.concurrent.CompletableFuture#complete completed}
      * when the process has terminated.
      */
     public abstract void destroy();
@@ -257,7 +257,7 @@ public abstract class Process {
      * If the process is not alive, no action is taken.
      * <p>
      * The {@link java.util.concurrent.CompletableFuture} from {@link #onExit} is
-     * {@link java.util.concurrent.CompletableFuture#complete completed}
+     * {@linkplain java.util.concurrent.CompletableFuture#complete completed}
      * when the process has terminated.
      * <p>
      * Invoking this method on {@code Process} objects returned by
@@ -304,7 +304,7 @@ public abstract class Process {
      *         otherwise, {@link #destroy} forcibly terminates the process
      * @throws UnsupportedOperationException if the Process implementation
      *         does not support this operation
-     * @since 1.9
+     * @since 9
      */
     public boolean supportsNormalTermination() {
         throw new UnsupportedOperationException(this.getClass()
@@ -335,15 +335,15 @@ public abstract class Process {
      *
      * @implSpec
      * The implementation of this method returns the process id as:
-     * {@link #toHandle toHandle().getPid()}.
+     * {@link #toHandle toHandle().pid()}.
      *
      * @return the native process id of the process
      * @throws UnsupportedOperationException if the Process implementation
      *         does not support this operation
-     * @since 1.9
+     * @since 9
      */
-    public long getPid() {
-        return toHandle().getPid();
+    public long pid() {
+        return toHandle().pid();
     }
 
     /**
@@ -351,19 +351,16 @@ public abstract class Process {
      * The {@link java.util.concurrent.CompletableFuture} provides the ability
      * to trigger dependent functions or actions that may be run synchronously
      * or asynchronously upon process termination.
-     * When the process terminates the CompletableFuture is
+     * When the process has terminated the CompletableFuture is
      * {@link java.util.concurrent.CompletableFuture#complete completed} regardless
      * of the exit status of the process.
      * <p>
      * Calling {@code onExit().get()} waits for the process to terminate and returns
      * the Process. The future can be used to check if the process is
-     * {@link java.util.concurrent.CompletableFuture#isDone done} or to
-     * {@link java.util.concurrent.CompletableFuture#get() wait} for it to terminate.
-     * {@link java.util.concurrent.CompletableFuture#cancel(boolean) Cancelling}
+     * {@linkplain java.util.concurrent.CompletableFuture#isDone done} or to
+     * {@linkplain java.util.concurrent.CompletableFuture#get() wait} for it to terminate.
+     * {@linkplain java.util.concurrent.CompletableFuture#cancel(boolean) Cancelling}
      * the CompletableFuture does not affect the Process.
-     * <p>
-     * If the process is {@link #isAlive not alive} the {@link CompletableFuture}
-     * returned has been {@link java.util.concurrent.CompletableFuture#complete completed}.
      * <p>
      * Processes returned from {@link ProcessBuilder#start} override the
      * default implementation to provide an efficient mechanism to wait
@@ -392,7 +389,7 @@ public abstract class Process {
      * {@code waitFor} is interrupted, the thread's interrupt status is preserved.
      * <p>
      * When {@link #waitFor()} returns successfully the CompletableFuture is
-     * {@link java.util.concurrent.CompletableFuture#complete completed} regardless
+     * {@linkplain java.util.concurrent.CompletableFuture#complete completed} regardless
      * of the exit status of the process.
      *
      * This implementation may consume a lot of memory for thread stacks if a
@@ -406,10 +403,13 @@ public abstract class Process {
      *       return delegate.onExit().thenApply(p -> this);
      *    }
      * }</pre>
+     * @apiNote
+     * The process may be observed to have terminated with {@link #isAlive}
+     * before the ComputableFuture is completed and dependent actions are invoked.
      *
      * @return a new {@code CompletableFuture<Process>} for the Process
      *
-     * @since 1.9
+     * @since 9
      */
     public CompletableFuture<Process> onExit() {
         return CompletableFuture.supplyAsync(this::waitForInternal);
@@ -463,15 +463,15 @@ public abstract class Process {
      * This implementation throws an instance of
      * {@link java.lang.UnsupportedOperationException} and performs no other action.
      * Subclasses should override this method to provide a ProcessHandle for the
-     * process.  The methods {@link #getPid}, {@link #info}, {@link #children},
-     * and {@link #allChildren}, unless overridden, operate on the ProcessHandle.
+     * process.  The methods {@link #pid}, {@link #info}, {@link #children},
+     * and {@link #descendants}, unless overridden, operate on the ProcessHandle.
      *
      * @return Returns a ProcessHandle for the Process
      * @throws UnsupportedOperationException if the Process implementation
      *         does not support this operation
      * @throws SecurityException if a security manager has been installed and
      *         it denies RuntimePermission("manageProcess")
-     * @since 1.9
+     * @since 9
      */
     public ProcessHandle toHandle() {
         throw new UnsupportedOperationException(this.getClass()
@@ -481,9 +481,8 @@ public abstract class Process {
     /**
      * Returns a snapshot of information about the process.
      *
-     * <p> An {@link ProcessHandle.Info} instance has various accessor methods
-     * that return information about the process, if the process is alive and
-     * the information is available, otherwise {@code null} is returned.
+     * <p> A {@link ProcessHandle.Info} instance has accessor methods
+     * that return information about the process if it is available.
      *
      * @implSpec
      * This implementation returns information about the process as:
@@ -492,7 +491,7 @@ public abstract class Process {
      * @return a snapshot of information about the process, always non-null
      * @throws UnsupportedOperationException if the Process implementation
      *         does not support this operation
-     * @since 1.9
+     * @since 9
      */
     public ProcessHandle.Info info() {
         return toHandle().info();
@@ -500,51 +499,85 @@ public abstract class Process {
 
     /**
      * Returns a snapshot of the direct children of the process.
-     * A process that is {@link #isAlive not alive} has zero children.
+     * The parent of a direct child process is the process.
+     * Typically, a process that is {@linkplain #isAlive not alive} has no children.
      * <p>
      * <em>Note that processes are created and terminate asynchronously.
-     * There is no guarantee that a process is {@link #isAlive alive}.
+     * There is no guarantee that a process is {@linkplain #isAlive alive}.
      * </em>
      *
      * @implSpec
      * This implementation returns the direct children as:
      * {@link #toHandle toHandle().children()}.
      *
-     * @return a Stream of ProcessHandles for processes that are direct children
-     *         of the process
+     * @return a sequential Stream of ProcessHandles for processes that are
+     *         direct children of the process
      * @throws UnsupportedOperationException if the Process implementation
      *         does not support this operation
      * @throws SecurityException if a security manager has been installed and
      *         it denies RuntimePermission("manageProcess")
-     * @since 1.9
+     * @since 9
      */
     public Stream<ProcessHandle> children() {
         return toHandle().children();
     }
 
     /**
-     * Returns a snapshot of the direct and indirect children of the process.
-     * A process that is {@link #isAlive not alive} has zero children.
+     * Returns a snapshot of the descendants of the process.
+     * The descendants of a process are the children of the process
+     * plus the descendants of those children, recursively.
+     * Typically, a process that is {@linkplain #isAlive not alive} has no children.
      * <p>
      * <em>Note that processes are created and terminate asynchronously.
-     * There is no guarantee that a process is {@link #isAlive alive}.
+     * There is no guarantee that a process is {@linkplain #isAlive alive}.
      * </em>
      *
      * @implSpec
      * This implementation returns all children as:
-     * {@link #toHandle toHandle().allChildren()}.
+     * {@link #toHandle toHandle().descendants()}.
      *
-     * @return a Stream of ProcessHandles for processes that are direct and
-     *         indirect children of the process
+     * @return a sequential Stream of ProcessHandles for processes that
+     *         are descendants of the process
      * @throws UnsupportedOperationException if the Process implementation
      *         does not support this operation
      * @throws SecurityException if a security manager has been installed and
      *         it denies RuntimePermission("manageProcess")
-     * @since 1.9
+     * @since 9
      */
-    public Stream<ProcessHandle> allChildren() {
-        return toHandle().allChildren();
+    public Stream<ProcessHandle> descendants() {
+        return toHandle().descendants();
     }
 
+    /**
+     * An input stream for a subprocess pipe that skips by reading bytes
+     * instead of seeking, the underlying pipe does not support seek.
+     */
+    static class PipeInputStream extends FileInputStream {
 
+        PipeInputStream(FileDescriptor fd) {
+            super(fd);
+        }
+
+        @Override
+        public long skip(long n) throws IOException {
+            long remaining = n;
+            int nr;
+
+            if (n <= 0) {
+                return 0;
+            }
+
+            int size = (int)Math.min(2048, remaining);
+            byte[] skipBuffer = new byte[size];
+            while (remaining > 0) {
+                nr = read(skipBuffer, 0, (int)Math.min(size, remaining));
+                if (nr < 0) {
+                    break;
+                }
+                remaining -= nr;
+            }
+
+            return n - remaining;
+        }
+    }
 }

@@ -30,7 +30,10 @@ import static jdk.nashorn.internal.codegen.Compiler.binaryName;
 import static jdk.nashorn.internal.codegen.CompilerConstants.JS_OBJECT_DUAL_FIELD_PREFIX;
 import static jdk.nashorn.internal.codegen.CompilerConstants.JS_OBJECT_SINGLE_FIELD_PREFIX;
 
+import java.lang.module.ModuleDescriptor;
+import java.lang.module.ModuleDescriptor.Modifier;
 import java.security.ProtectionDomain;
+import java.util.Set;
 import jdk.nashorn.internal.codegen.ObjectClassGenerator;
 
 /**
@@ -40,11 +43,35 @@ final class StructureLoader extends NashornLoader {
     private static final String SINGLE_FIELD_PREFIX = binaryName(SCRIPTS_PACKAGE) + '.' + JS_OBJECT_SINGLE_FIELD_PREFIX.symbolName();
     private static final String DUAL_FIELD_PREFIX   = binaryName(SCRIPTS_PACKAGE) + '.' + JS_OBJECT_DUAL_FIELD_PREFIX.symbolName();
 
+    private final Module structuresModule;
+
     /**
      * Constructor.
      */
     StructureLoader(final ClassLoader parent) {
         super(parent);
+
+        // new structures module, it's exports, read edges
+        structuresModule = createModule("jdk.scripting.nashorn.structures");
+
+        // specific exports from nashorn to the structures module
+        NASHORN_MODULE.addExports(SCRIPTS_PKG, structuresModule);
+        NASHORN_MODULE.addExports(RUNTIME_PKG, structuresModule);
+
+        // nashorn has to read fields from classes of the new module
+        NASHORN_MODULE.addReads(structuresModule);
+    }
+
+    private Module createModule(final String moduleName) {
+        final ModuleDescriptor descriptor =
+            ModuleDescriptor.newModule(moduleName, Set.of(Modifier.SYNTHETIC))
+                            .requires(NASHORN_MODULE.getName())
+                            .packages(Set.of(SCRIPTS_PKG))
+                            .build();
+
+        final Module mod = Context.createModuleTrusted(descriptor, this);
+        loadModuleManipulator();
+        return mod;
     }
 
     /**
@@ -72,6 +99,10 @@ final class StructureLoader extends NashornLoader {
      */
     static boolean isStructureClass(final String name) {
         return isDualFieldStructure(name) || isSingleFieldStructure(name);
+    }
+
+    Module getModule() {
+        return structuresModule;
     }
 
     @Override

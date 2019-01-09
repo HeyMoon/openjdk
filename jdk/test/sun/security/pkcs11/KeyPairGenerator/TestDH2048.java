@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,20 +21,21 @@
  * questions.
  */
 
-/**
+/*
  * @test
- * @bug 7196382
- * @summary Ensure that 2048-bit DH key pairs can be generated
+ * @bug 7196382 8072452
+ * @summary Ensure that DH key pairs can be generated for 512 - 8192 bits
  * @author Valerie Peng
  * @library ..
+ * @modules jdk.crypto.cryptoki
+ * @run main/othervm TestDH2048
+ * @run main/othervm TestDH2048 sm
  */
 
-import java.io.*;
-import java.util.*;
-
-import java.security.*;
-
-import javax.crypto.*;
+import java.security.InvalidParameterException;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.Provider;
 
 public class TestDH2048 extends PKCS11Test {
 
@@ -47,20 +48,55 @@ public class TestDH2048 extends PKCS11Test {
         }
     }
 
+    @Override
     public void main(Provider p) throws Exception {
         if (p.getService("KeyPairGenerator", "DH") == null) {
             System.out.println("KPG for DH not supported, skipping");
             return;
         }
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("DH", p);
-        kpg.initialize(2048);
+        kpg.initialize(512);
         KeyPair kp1 = kpg.generateKeyPair();
-        checkUnsupportedKeySize(kpg, 1536);
-        checkUnsupportedKeySize(kpg, 2176);
-        checkUnsupportedKeySize(kpg, 3072);
+
+        kpg.initialize(768);
+        kp1 = kpg.generateKeyPair();
+
+        kpg.initialize(1024);
+        kp1 = kpg.generateKeyPair();
+
+        kpg.initialize(1536);
+        kp1 = kpg.generateKeyPair();
+
+        kpg.initialize(2048);
+        kp1 = kpg.generateKeyPair();
+
+        try {
+            kpg.initialize(3072);
+            kp1 = kpg.generateKeyPair();
+
+            kpg.initialize(4096);
+            kp1 = kpg.generateKeyPair();
+
+            kpg.initialize(6144);
+            kp1 = kpg.generateKeyPair();
+
+            kpg.initialize(8192);
+            kp1 = kpg.generateKeyPair();
+        } catch (InvalidParameterException ipe) {
+            // NSS (as of version 3.13) has a hard coded maximum limit
+            // of 2236 or 3072 bits for DHE keys.
+            System.out.println("4096-bit DH key pair generation: " + ipe);
+            if (!p.getName().equals("SunPKCS11-NSS")) {
+                throw ipe;
+            }
+        }
+
+        // key size must be multiples of 64 though
+        checkUnsupportedKeySize(kpg, 2048 + 63);
+        checkUnsupportedKeySize(kpg, 3072 + 32);
     }
 
     public static void main(String[] args) throws Exception {
-        main(new TestDH2048());
+        main(new TestDH2048(), args);
     }
 }

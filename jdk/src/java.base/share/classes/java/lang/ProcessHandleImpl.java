@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 package java.lang;
 
+import java.lang.annotation.Native;
 import java.security.PrivilegedAction;
 import java.time.Duration;
 import java.time.Instant;
@@ -34,15 +35,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
-
-import sun.misc.InnocuousThread;
 
 import static java.security.AccessController.doPrivileged;
 
@@ -50,9 +45,20 @@ import static java.security.AccessController.doPrivileged;
  * ProcessHandleImpl is the implementation of ProcessHandle.
  *
  * @see Process
- * @since 1.9
+ * @since 9
  */
 final class ProcessHandleImpl implements ProcessHandle {
+    /**
+     * Default size of stack for reaper processes.
+     */
+    private static long REAPER_DEFAULT_STACKSIZE = 128 * 1024;
+
+    /**
+     * Return value from waitForProcessExit0 indicating the process is not a child.
+     */
+    @Native
+    private static final int NOT_A_CHILD = -2;
+
     /**
      * Cache the ProcessHandle of this process.
      */
@@ -81,11 +87,12 @@ final class ProcessHandleImpl implements ProcessHandle {
                 ThreadGroup tg = Thread.currentThread().getThreadGroup();
                 while (tg.getParent() != null) tg = tg.getParent();
                 ThreadGroup systemThreadGroup = tg;
+                final long stackSize = Boolean.getBoolean("jdk.lang.processReaperUseDefaultStackSize")
+                        ? 0 : REAPER_DEFAULT_STACKSIZE;
 
                 ThreadFactory threadFactory = grimReaper -> {
-                    // Our thread stack requirement is quite modest.
                     Thread t = new Thread(systemThreadGroup, grimReaper,
-                            "process reaper", 32768);
+                            "process reaper", stackSize, false);
                     t.setDaemon(true);
                     // A small attempt (probably futile) to avoid priority inversion
                     t.setPriority(Thread.MAX_PRIORITY);
@@ -127,6 +134,29 @@ final class ProcessHandleImpl implements ProcessHandle {
                 // spawn a thread to wait for and deliver the exit value
                 processReaperExecutor.execute(() -> {
                     int exitValue = waitForProcessExit0(pid, shouldReap);
+                    if (exitValue == NOT_A_CHILD) {
+                        // pid not alive or not a child of this process
+                        // If it is alive wait for it to terminate
+                        long sleep = 300;     // initial milliseconds to sleep
+                        int incr = 30;        // increment to the sleep time
+
+                        long startTime = isAlive0(pid);
+                        long origStart = startTime;
+                        while (startTime >= 0) {
+                            try {
+                                Thread.sleep(Math.min(sleep, 5000L)); // no more than 5 sec
+                                sleep += incr;
+                            } catch (InterruptedException ie) {
+                                // ignore and retry
+                            }
+                            startTime = isAlive0(pid);  // recheck if is alive
+                            if (origStart > 0 && startTime != origStart) {
+                                // start time changed, pid is not the same process
+                                break;
+                            }
+                        }
+                        exitValue = 0;
+                    }
                     newCompletion.complete(exitValue);
                     // remove from cache afterwards
                     completions.remove(pid, newCompletion);
@@ -142,7 +172,7 @@ final class ProcessHandleImpl implements ProcessHandle {
             throw new IllegalStateException("onExit for current process not allowed");
         }
 
-        return ProcessHandleImpl.completion(getPid(), false)
+        return ProcessHandleImpl.completion(pid(), false)
                 .handleAsync((exitStatus, unusedThrowable) -> this);
     }
 
@@ -225,7 +255,7 @@ final class ProcessHandleImpl implements ProcessHandle {
      * @return the native process ID
      */
     @Override
-    public long getPid() {
+    public long pid() {
         return pid;
     }
 
@@ -338,7 +368,7 @@ final class ProcessHandleImpl implements ProcessHandle {
      *
      * @return {@code true} if the process represented by this
      * {@code ProcessHandle} object has not yet terminated.
-     * @since 1.9
+     * @since 9
      */
     @Override
     public boolean isAlive() {
@@ -359,7 +389,14 @@ final class ProcessHandleImpl implements ProcessHandle {
 
     @Override
     public Stream<ProcessHandle> children() {
-        return children(pid);
+        // The native OS code selects based on matching the requested parent pid.
+        // If the original parent exits, the pid may have been re-used for
+        // this newer process.
+        // Processes started by the original parent (now dead) will all have
+        // start times less than the start of this newer parent.
+        // Processes started by this newer parent will have start times equal
+        // or after this parent.
+        return children(pid).filter(ph -> startTime <= ((ProcessHandleImpl)ph).startTime);
     }
 
     /**
@@ -389,7 +426,7 @@ final class ProcessHandleImpl implements ProcessHandle {
     }
 
     @Override
-    public Stream<ProcessHandle> allChildren() {
+    public Stream<ProcessHandle> descendants() {
         SecurityManager sm = System.getSecurityManager();
         if (sm != null) {
             sm.checkPermission(new RuntimePermission("manageProcess"));
@@ -408,11 +445,21 @@ final class ProcessHandleImpl implements ProcessHandle {
         int next = 0;       // index of next process to check
         int count = -1;     // count of subprocesses scanned
         long ppid = pid;    // start looking for this parent
+        long ppStart = 0;
+        // Find the start time of the parent
+        for (int i = 0; i < size; i++) {
+            if (pids[i] == ppid) {
+                ppStart = starttimes[i];
+                break;
+            }
+        }
         do {
-            // Scan from next to size looking for ppid
-            // if found, exchange it to index next
+            // Scan from next to size looking for ppid with child start time
+            // the same or later than the parent.
+            // If found, exchange it with index next
             for (int i = next; i < size; i++) {
-                if (ppids[i] == ppid) {
+                if (ppids[i] == ppid &&
+                        ppStart <= starttimes[i]) {
                     swap(pids, i, next);
                     swap(ppids, i, next);
                     swap(starttimes, i, next);
@@ -420,6 +467,7 @@ final class ProcessHandleImpl implements ProcessHandle {
                 }
             }
             ppid = pids[++count];   // pick up the next pid to scan for
+            ppStart = starttimes[count];    // and its start time
         } while (count < next);
 
         final long[] cpids = pids;
@@ -472,7 +520,7 @@ final class ProcessHandleImpl implements ProcessHandle {
     /**
      * Implementation of ProcessHandle.Info.
      * Information snapshot about a process.
-     * The attributes of a process vary by operating system and not available
+     * The attributes of a process vary by operating system and are not available
      * in all implementations.  Additionally, information about other processes
      * is limited by the operating system privileges of the process making the request.
      * If a value is not available, either a {@code null} or {@code -1} is stored.
@@ -496,6 +544,7 @@ final class ProcessHandleImpl implements ProcessHandle {
         private native void info0(long pid);
 
         String command;
+        String commandLine;
         String[] arguments;
         long startTime;
         long totalTime;
@@ -503,6 +552,7 @@ final class ProcessHandleImpl implements ProcessHandle {
 
         Info() {
             command = null;
+            commandLine = null;
             arguments = null;
             startTime = -1L;
             totalTime = -1L;
@@ -536,6 +586,15 @@ final class ProcessHandleImpl implements ProcessHandle {
         @Override
         public Optional<String> command() {
             return Optional.ofNullable(command);
+        }
+
+        @Override
+        public Optional<String> commandLine() {
+            if (command != null && arguments != null) {
+                return Optional.of(command + " " + String.join(" ", arguments));
+            } else {
+                return Optional.ofNullable(commandLine);
+            }
         }
 
         @Override
@@ -579,6 +638,11 @@ final class ProcessHandleImpl implements ProcessHandle {
                 if (sb.length() != 0) sb.append(", ");
                 sb.append("args: ");
                 sb.append(Arrays.toString(arguments));
+            }
+            if (commandLine != null) {
+                if (sb.length() != 0) sb.append(", ");
+                sb.append("cmdLine: ");
+                sb.append(commandLine);
             }
             if (startTime > 0) {
                 if (sb.length() != 0) sb.append(", ");

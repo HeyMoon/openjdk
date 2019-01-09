@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -232,118 +232,6 @@ void LIR_Assembler::osr_entry() {
 }
 
 
-// Optimized Library calls
-// This is the fast version of java.lang.String.compare; it has not
-// OSR-entry and therefore, we generate a slow version for OSR's
-void LIR_Assembler::emit_string_compare(LIR_Opr left, LIR_Opr right, LIR_Opr dst, CodeEmitInfo* info) {
-  Register str0 = left->as_register();
-  Register str1 = right->as_register();
-
-  Label Ldone;
-
-  Register result = dst->as_register();
-  {
-    // Get a pointer to the first character of string0 in tmp0
-    //   and get string0.length() in str0
-    // Get a pointer to the first character of string1 in tmp1
-    //   and get string1.length() in str1
-    // Also, get string0.length()-string1.length() in
-    //   o7 and get the condition code set
-    // Note: some instructions have been hoisted for better instruction scheduling
-
-    Register tmp0 = L0;
-    Register tmp1 = L1;
-    Register tmp2 = L2;
-
-    int  value_offset = java_lang_String:: value_offset_in_bytes(); // char array
-    if (java_lang_String::has_offset_field()) {
-      int offset_offset = java_lang_String::offset_offset_in_bytes(); // first character position
-      int  count_offset = java_lang_String:: count_offset_in_bytes();
-      __ load_heap_oop(str0, value_offset, tmp0);
-      __ ld(str0, offset_offset, tmp2);
-      __ add(tmp0, arrayOopDesc::base_offset_in_bytes(T_CHAR), tmp0);
-      __ ld(str0, count_offset, str0);
-      __ sll(tmp2, exact_log2(sizeof(jchar)), tmp2);
-    } else {
-      __ load_heap_oop(str0, value_offset, tmp1);
-      __ add(tmp1, arrayOopDesc::base_offset_in_bytes(T_CHAR), tmp0);
-      __ ld(tmp1, arrayOopDesc::length_offset_in_bytes(), str0);
-    }
-
-    // str1 may be null
-    add_debug_info_for_null_check_here(info);
-
-    if (java_lang_String::has_offset_field()) {
-      int offset_offset = java_lang_String::offset_offset_in_bytes(); // first character position
-      int  count_offset = java_lang_String:: count_offset_in_bytes();
-      __ load_heap_oop(str1, value_offset, tmp1);
-      __ add(tmp0, tmp2, tmp0);
-
-      __ ld(str1, offset_offset, tmp2);
-      __ add(tmp1, arrayOopDesc::base_offset_in_bytes(T_CHAR), tmp1);
-      __ ld(str1, count_offset, str1);
-      __ sll(tmp2, exact_log2(sizeof(jchar)), tmp2);
-      __ add(tmp1, tmp2, tmp1);
-    } else {
-      __ load_heap_oop(str1, value_offset, tmp2);
-      __ add(tmp2, arrayOopDesc::base_offset_in_bytes(T_CHAR), tmp1);
-      __ ld(tmp2, arrayOopDesc::length_offset_in_bytes(), str1);
-    }
-    __ subcc(str0, str1, O7);
-  }
-
-  {
-    // Compute the minimum of the string lengths, scale it and store it in limit
-    Register count0 = I0;
-    Register count1 = I1;
-    Register limit  = L3;
-
-    Label Lskip;
-    __ sll(count0, exact_log2(sizeof(jchar)), limit);             // string0 is shorter
-    __ br(Assembler::greater, true, Assembler::pt, Lskip);
-    __ delayed()->sll(count1, exact_log2(sizeof(jchar)), limit);  // string1 is shorter
-    __ bind(Lskip);
-
-    // If either string is empty (or both of them) the result is the difference in lengths
-    __ cmp(limit, 0);
-    __ br(Assembler::equal, true, Assembler::pn, Ldone);
-    __ delayed()->mov(O7, result);  // result is difference in lengths
-  }
-
-  {
-    // Neither string is empty
-    Label Lloop;
-
-    Register base0 = L0;
-    Register base1 = L1;
-    Register chr0  = I0;
-    Register chr1  = I1;
-    Register limit = L3;
-
-    // Shift base0 and base1 to the end of the arrays, negate limit
-    __ add(base0, limit, base0);
-    __ add(base1, limit, base1);
-    __ neg(limit);  // limit = -min{string0.length(), string1.length()}
-
-    __ lduh(base0, limit, chr0);
-    __ bind(Lloop);
-    __ lduh(base1, limit, chr1);
-    __ subcc(chr0, chr1, chr0);
-    __ br(Assembler::notZero, false, Assembler::pn, Ldone);
-    assert(chr0 == result, "result must be pre-placed");
-    __ delayed()->inccc(limit, sizeof(jchar));
-    __ br(Assembler::notZero, true, Assembler::pt, Lloop);
-    __ delayed()->lduh(base0, limit, chr0);
-  }
-
-  // If strings are equal up to min length, return the length difference.
-  __ mov(O7, result);
-
-  // Otherwise, return the difference between the first mismatched chars.
-  __ bind(Ldone);
-}
-
-
 // --------------------------------------------------------------------------------------------
 
 void LIR_Assembler::monitorexit(LIR_Opr obj_opr, LIR_Opr lock_opr, Register hdr, int monitor_no) {
@@ -399,7 +287,7 @@ int LIR_Assembler::emit_exception_handler() {
   // generate code for exception handler
   ciMethod* method = compilation()->method();
 
-  address handler_base = __ start_a_stub(exception_handler_size);
+  address handler_base = __ start_a_stub(exception_handler_size());
 
   if (handler_base == NULL) {
     // not enough space left for the handler
@@ -412,7 +300,7 @@ int LIR_Assembler::emit_exception_handler() {
   __ call(Runtime1::entry_for(Runtime1::handle_exception_from_callee_id), relocInfo::runtime_call_type);
   __ delayed()->nop();
   __ should_not_reach_here();
-  guarantee(code_offset() - offset <= exception_handler_size, "overflow");
+  guarantee(code_offset() - offset <= exception_handler_size(), "overflow");
   __ end_a_stub();
 
   return offset;
@@ -487,7 +375,7 @@ int LIR_Assembler::emit_deopt_handler() {
 
   // generate code for deopt handler
   ciMethod* method = compilation()->method();
-  address handler_base = __ start_a_stub(deopt_handler_size);
+  address handler_base = __ start_a_stub(deopt_handler_size());
   if (handler_base == NULL) {
     // not enough space left for the handler
     bailout("deopt handler overflow");
@@ -498,7 +386,7 @@ int LIR_Assembler::emit_deopt_handler() {
   AddressLiteral deopt_blob(SharedRuntime::deopt_blob()->unpack());
   __ JUMP(deopt_blob, G3_scratch, 0); // sethi;jmp
   __ delayed()->nop();
-  guarantee(code_offset() - offset <= deopt_handler_size, "overflow");
+  guarantee(code_offset() - offset <= deopt_handler_size(), "overflow");
   __ end_a_stub();
 
   return offset;
@@ -806,6 +694,7 @@ void LIR_Assembler::vtable_call(LIR_OpJavaCall* op) {
 int LIR_Assembler::store(LIR_Opr from_reg, Register base, int offset, BasicType type, bool wide, bool unaligned) {
   int store_offset;
   if (!Assembler::is_simm13(offset + (type == T_LONG) ? wordSize : 0)) {
+    assert(base != O7, "destroying register");
     assert(!unaligned, "can't handle this");
     // for offsets larger than a simm13 we setup the offset in O7
     __ set(offset, O7);
@@ -824,9 +713,12 @@ int LIR_Assembler::store(LIR_Opr from_reg, Register base, int offset, BasicType 
       case T_LONG  :
 #ifdef _LP64
         if (unaligned || PatchALot) {
-          __ srax(from_reg->as_register_lo(), 32, O7);
+          // Don't use O7 here because it may be equal to 'base' (see LIR_Assembler::reg2mem)
+          assert(G3_scratch != base, "can't handle this");
+          assert(G3_scratch != from_reg->as_register_lo(), "can't handle this");
+          __ srax(from_reg->as_register_lo(), 32, G3_scratch);
           __ stw(from_reg->as_register_lo(), base, offset + lo_word_offset_in_bytes);
-          __ stw(O7,                         base, offset + hi_word_offset_in_bytes);
+          __ stw(G3_scratch,                 base, offset + hi_word_offset_in_bytes);
         } else {
           __ stx(from_reg->as_register_lo(), base, offset);
         }
@@ -933,7 +825,7 @@ int LIR_Assembler::load(Register base, int offset, LIR_Opr to_reg, BasicType typ
       case T_SHORT : __ ldsh(base, offset, to_reg->as_register()); break;
       case T_INT   : __ ld(base, offset, to_reg->as_register()); break;
       case T_LONG  :
-        if (!unaligned) {
+        if (!unaligned && !PatchALot) {
 #ifdef _LP64
           __ ldx(base, offset, to_reg->as_register_lo());
 #else
@@ -1409,7 +1301,7 @@ void LIR_Assembler::mem2reg(LIR_Opr src_opr, LIR_Opr dest, BasicType type,
       disp_reg = O7;
     }
   } else if (unaligned || PatchALot) {
-    __ add(src, addr->index()->as_register(), O7);
+    __ add(src, addr->index()->as_pointer_register(), O7);
     src = O7;
   } else {
     disp_reg = addr->index()->as_pointer_register();
@@ -1536,7 +1428,7 @@ void LIR_Assembler::reg2mem(LIR_Opr from_reg, LIR_Opr dest, BasicType type,
       disp_reg = O7;
     }
   } else if (unaligned || PatchALot) {
-    __ add(src, addr->index()->as_register(), O7);
+    __ add(src, addr->index()->as_pointer_register(), O7);
     src = O7;
   } else {
     disp_reg = addr->index()->as_pointer_register();
@@ -1565,6 +1457,9 @@ void LIR_Assembler::reg2mem(LIR_Opr from_reg, LIR_Opr dest, BasicType type,
 
 
 void LIR_Assembler::return_op(LIR_Opr result) {
+  if (StackReservedPages > 0 && compilation()->has_reserved_stack_access()) {
+    __ reserved_stack_check();
+  }
   // the poll may need a register so just pick one that isn't the return register
 #if defined(TIERED) && !defined(_LP64)
   if (result->type_field() == LIR_OprDesc::long_type) {
@@ -1602,7 +1497,7 @@ int LIR_Assembler::safepoint_poll(LIR_Opr tmp, CodeEmitInfo* info) {
 
 void LIR_Assembler::emit_static_call_stub() {
   address call_pc = __ pc();
-  address stub = __ start_a_stub(call_stub_size);
+  address stub = __ start_a_stub(call_stub_size());
   if (stub == NULL) {
     bailout("static call stub overflow");
     return;
@@ -1617,7 +1512,7 @@ void LIR_Assembler::emit_static_call_stub() {
   __ jump_to(addrlit, G3);
   __ delayed()->nop();
 
-  assert(__ offset() - start <= call_stub_size, "stub too big");
+  assert(__ offset() - start <= call_stub_size(), "stub too big");
   __ end_a_stub();
 }
 
@@ -1914,9 +1809,7 @@ void LIR_Assembler::fpop() {
 
 void LIR_Assembler::intrinsic_op(LIR_Code code, LIR_Opr value, LIR_Opr thread, LIR_Opr dest, LIR_Op* op) {
   switch (code) {
-    case lir_sin:
-    case lir_tan:
-    case lir_cos: {
+    case lir_tan: {
       assert(thread->is_valid(), "preserve the thread object for performance reasons");
       assert(dest->as_double_reg() == F0, "the result will be in f0/f1");
       break;
@@ -2143,6 +2036,27 @@ void LIR_Assembler::emit_arraycopy(LIR_OpArrayCopy* op) {
     __ tst(dst);
     __ brx(Assembler::equal, false, Assembler::pn, *stub->entry());
     __ delayed()->nop();
+  }
+
+  // If the compiler was not able to prove that exact type of the source or the destination
+  // of the arraycopy is an array type, check at runtime if the source or the destination is
+  // an instance type.
+  if (flags & LIR_OpArrayCopy::type_check) {
+    if (!(flags & LIR_OpArrayCopy::LIR_OpArrayCopy::dst_objarray)) {
+      __ load_klass(dst, tmp);
+      __ lduw(tmp, in_bytes(Klass::layout_helper_offset()), tmp2);
+      __ cmp(tmp2, Klass::_lh_neutral_value);
+      __ br(Assembler::greaterEqual, false, Assembler::pn, *stub->entry());
+      __ delayed()->nop();
+    }
+
+    if (!(flags & LIR_OpArrayCopy::LIR_OpArrayCopy::src_objarray)) {
+      __ load_klass(src, tmp);
+      __ lduw(tmp, in_bytes(Klass::layout_helper_offset()), tmp2);
+      __ cmp(tmp2, Klass::_lh_neutral_value);
+      __ br(Assembler::greaterEqual, false, Assembler::pn, *stub->entry());
+      __ delayed()->nop();
+    }
   }
 
   if (flags & LIR_OpArrayCopy::src_pos_positive_check) {
@@ -2924,7 +2838,23 @@ void LIR_Assembler::monitor_address(int monitor_no, LIR_Opr dst_opr) {
 }
 
 void LIR_Assembler::emit_updatecrc32(LIR_OpUpdateCRC32* op) {
-  fatal("CRC32 intrinsic is not implemented on this platform");
+  assert(op->crc()->is_single_cpu(),  "crc must be register");
+  assert(op->val()->is_single_cpu(),  "byte value must be register");
+  assert(op->result_opr()->is_single_cpu(), "result must be register");
+  Register crc = op->crc()->as_register();
+  Register val = op->val()->as_register();
+  Register table = op->result_opr()->as_register();
+  Register res   = op->result_opr()->as_register();
+
+  assert_different_registers(val, crc, table);
+
+  __ set(ExternalAddress(StubRoutines::crc_table_addr()), table);
+  __ not1(crc);
+  __ clruwu(crc);
+  __ update_byte_crc32(crc, val, table);
+  __ not1(crc);
+
+  __ mov(crc, res);
 }
 
 void LIR_Assembler::emit_lock(LIR_OpLock* op) {
@@ -3408,6 +3338,9 @@ void LIR_Assembler::membar_storeload() {
   __ membar(Assembler::Membar_mask_bits(Assembler::StoreLoad));
 }
 
+void LIR_Assembler::on_spin_wait() {
+  Unimplemented();
+}
 
 // Pack two sequential registers containing 32 bit values
 // into a single 64 bit register.

@@ -100,7 +100,11 @@ fi
 
 echo "Using NSS lib at $LIBNAME"
 
-${COMPILEJAVA}${FS}bin${FS}javac ${TESTJAVACOPTS} ${TESTTOOLVMOPTS} -d . -XDignore.symbol.file \
+EXTRAOPTS="--add-exports java.base/sun.security.tools.keytool=ALL-UNNAMED \
+ --add-exports java.base/sun.security.util=ALL-UNNAMED \
+ --add-exports java.base/sun.security.x509=ALL-UNNAMED"
+
+${COMPILEJAVA}${FS}bin${FS}javac ${TESTJAVACOPTS} ${TESTTOOLVMOPTS} ${EXTRAOPTS} -d . -XDignore.symbol.file \
         ${TESTSRC}${FS}KeyToolTest.java || exit 10
 
 NSS=${TESTSRC}${FS}..${FS}..${FS}pkcs11${FS}nss
@@ -113,7 +117,7 @@ cp ${NSS}${FS}db${FS}secmod.db .
 chmod u+w key3.db
 chmod u+w cert8.db
 
-echo | ${TESTJAVA}${FS}bin${FS}java ${TESTVMOPTS} -Dnss \
+echo | ${TESTJAVA}${FS}bin${FS}java ${TESTVMOPTS} ${EXTRAOPTS} -Dnss \
    -Dnss.lib=${LIBNAME} \
    KeyToolTest
 status=$?

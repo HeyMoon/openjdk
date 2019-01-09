@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -86,7 +86,7 @@ public class SSLSocketSSLEngineTemplate {
     /*
      * Enables logging of the SSL/TLS operations.
      */
-    private static boolean logging = true;
+    private static final boolean logging = true;
 
     /*
      * Enables the JSSE system debugging system property:
@@ -97,12 +97,9 @@ public class SSLSocketSSLEngineTemplate {
      * including specific handshake messages, and might be best examined
      * after gaining some familiarity with this application.
      */
-    private static boolean debug = false;
-    private SSLContext sslc;
+    private static final boolean debug = false;
+    private final SSLContext sslc;
     private SSLEngine serverEngine;     // server-side SSLEngine
-    private SSLSocket sslSocket;        // client-side socket
-    private ServerSocket serverSocket;  // server-side Socket, generates the...
-    private Socket socket;              // server-side socket that will read
 
     private final byte[] serverMsg =
         "Hi there Client, I'm a Server.".getBytes();
@@ -128,10 +125,10 @@ public class SSLSocketSSLEngineTemplate {
     private static final String keyStoreFile = "keystore";
     private static final String trustStoreFile = "truststore";
     private static final String passwd = "passphrase";
-    private static String keyFilename =
+    private static final String keyFilename =
             System.getProperty("test.src", ".") + "/" + pathToStores
             + "/" + keyStoreFile;
-    private static String trustFilename =
+    private static final String trustFilename =
             System.getProperty("test.src", ".") + "/" + pathToStores
             + "/" + trustStoreFile;
 
@@ -180,8 +177,11 @@ public class SSLSocketSSLEngineTemplate {
 
         char[] passphrase = "passphrase".toCharArray();
 
-        ks.load(new FileInputStream(keyFilename), passphrase);
-        ts.load(new FileInputStream(trustFilename), passphrase);
+        try (FileInputStream keyFile = new FileInputStream(keyFilename);
+                FileInputStream trustFile = new FileInputStream(trustFilename)) {
+            ks.load(keyFile, passphrase);
+            ts.load(trustFile, passphrase);
+        }
 
         KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
         kmf.init(ks, passphrase);
@@ -216,133 +216,129 @@ public class SSLSocketSSLEngineTemplate {
     private void runTest(boolean direct) throws Exception {
         boolean serverClose = direct;
 
-        serverSocket = new ServerSocket();
-        serverSocket.setReuseAddress(false);
-        serverSocket.bind(null);
-        int port = serverSocket.getLocalPort();
-        Thread thread = createClientThread(port, serverClose);
+        // generates the server-side Socket
+        try (ServerSocket serverSocket = new ServerSocket()) {
+            serverSocket.setReuseAddress(false);
+            serverSocket.bind(null);
+            int port = serverSocket.getLocalPort();
+            Thread thread = createClientThread(port, serverClose);
 
-        socket = serverSocket.accept();
-        socket.setSoTimeout(500);
-        serverSocket.close();
+            createSSLEngine();
+            createBuffers(direct);
 
-        createSSLEngine();
-        createBuffers(direct);
+            // server-side socket that will read
+            try (Socket socket = serverSocket.accept()) {
+                socket.setSoTimeout(500);
 
-        try {
-            boolean closed = false;
-            // will try to read one more time in case client message
-            // is fragmented to multiple pieces
-            boolean retry = true;
+                boolean closed = false;
+                // will try to read one more time in case client message
+                // is fragmented to multiple pieces
+                boolean retry = true;
 
-            InputStream is = socket.getInputStream();
-            OutputStream os = socket.getOutputStream();
+                InputStream is = socket.getInputStream();
+                OutputStream os = socket.getOutputStream();
 
-            SSLEngineResult serverResult;   // results from last operation
+                SSLEngineResult serverResult;   // results from last operation
 
-            /*
-             * Examining the SSLEngineResults could be much more involved,
-             * and may alter the overall flow of the application.
-             *
-             * For example, if we received a BUFFER_OVERFLOW when trying
-             * to write to the output pipe, we could reallocate a larger
-             * pipe, but instead we wait for the peer to drain it.
-             */
-            byte[] inbound = new byte[8192];
-            byte[] outbound = new byte[8192];
+                /*
+                 * Examining the SSLEngineResults could be much more involved,
+                 * and may alter the overall flow of the application.
+                 *
+                 * For example, if we received a BUFFER_OVERFLOW when trying
+                 * to write to the output pipe, we could reallocate a larger
+                 * pipe, but instead we wait for the peer to drain it.
+                 */
+                byte[] inbound = new byte[8192];
+                byte[] outbound = new byte[8192];
 
-            while (!isEngineClosed(serverEngine)) {
-                int len = 0;
+                while (!isEngineClosed(serverEngine)) {
+                    int len;
 
-                // Inbound data
-                log("================");
+                    // Inbound data
+                    log("================");
 
-                // Read from the Client side.
-                try {
-                    len = is.read(inbound);
-                    if (len == -1) {
-                        throw new Exception("Unexpected EOF");
-                    }
-                    cTOs.put(inbound, 0, len);
-                } catch (SocketTimeoutException ste) {
-                    // swallow.  Nothing yet, probably waiting on us.
-                }
-
-                cTOs.flip();
-
-                serverResult = serverEngine.unwrap(cTOs, serverIn);
-                log("server unwrap: ", serverResult);
-                runDelegatedTasks(serverResult, serverEngine);
-                cTOs.compact();
-
-                // Outbound data
-                log("----");
-
-                serverResult = serverEngine.wrap(serverOut, sTOc);
-                log("server wrap: ", serverResult);
-                runDelegatedTasks(serverResult, serverEngine);
-
-                sTOc.flip();
-
-                if ((len = sTOc.remaining()) != 0) {
-                    sTOc.get(outbound, 0, len);
-                    os.write(outbound, 0, len);
-                    // Give the other side a chance to process
-                }
-
-                sTOc.compact();
-
-                if (!closed && (serverOut.remaining() == 0)) {
-                    closed = true;
-
-                    /*
-                     * We'll alternate initiatating the shutdown.
-                     * When the server initiates, it will take one more
-                     * loop, but tests the orderly shutdown.
-                     */
-                    if (serverClose) {
-                        serverEngine.closeOutbound();
-                    }
-                    serverIn.flip();
-
-                    /*
-                     * A sanity check to ensure we got what was sent.
-                     */
-                    if (serverIn.remaining() !=  clientMsg.length) {
-                        if (retry && serverIn.remaining() < clientMsg.length) {
-                            log("Need to read more from client");
-                            retry = false;
-                            continue;
-                        } else {
-                            throw new Exception("Client:  Data length error");
+                    // Read from the Client side.
+                    try {
+                        len = is.read(inbound);
+                        if (len == -1) {
+                            throw new Exception("Unexpected EOF");
                         }
+                        cTOs.put(inbound, 0, len);
+                    } catch (SocketTimeoutException ste) {
+                        // swallow.  Nothing yet, probably waiting on us.
                     }
 
-                    for (int i = 0; i < clientMsg.length; i++) {
-                        if (clientMsg[i] != serverIn.get()) {
-                            throw new Exception("Client:  Data content error");
-                        }
+                    cTOs.flip();
+
+                    serverResult = serverEngine.unwrap(cTOs, serverIn);
+                    log("server unwrap: ", serverResult);
+                    runDelegatedTasks(serverResult, serverEngine);
+                    cTOs.compact();
+
+                    // Outbound data
+                    log("----");
+
+                    serverResult = serverEngine.wrap(serverOut, sTOc);
+                    log("server wrap: ", serverResult);
+                    runDelegatedTasks(serverResult, serverEngine);
+
+                    sTOc.flip();
+
+                    if ((len = sTOc.remaining()) != 0) {
+                        sTOc.get(outbound, 0, len);
+                        os.write(outbound, 0, len);
+                        // Give the other side a chance to process
                     }
-                    serverIn.compact();
+
+                    sTOc.compact();
+
+                    if (!closed && (serverOut.remaining() == 0)) {
+                        closed = true;
+
+                        /*
+                         * We'll alternate initiatating the shutdown.
+                         * When the server initiates, it will take one more
+                         * loop, but tests the orderly shutdown.
+                         */
+                        if (serverClose) {
+                            serverEngine.closeOutbound();
+                        }
+                        serverIn.flip();
+
+                        /*
+                         * A sanity check to ensure we got what was sent.
+                         */
+                        if (serverIn.remaining() !=  clientMsg.length) {
+                            if (retry &&
+                                    serverIn.remaining() < clientMsg.length) {
+                                log("Need to read more from client");
+                                serverIn.compact();
+                                retry = false;
+                                continue;
+                            } else {
+                                throw new Exception(
+                                        "Client: Data length error");
+                            }
+                        }
+
+                        for (int i = 0; i < clientMsg.length; i++) {
+                            if (clientMsg[i] != serverIn.get()) {
+                                throw new Exception(
+                                        "Client: Data content error");
+                            }
+                        }
+                        serverIn.compact();
+                    }
+                }
+            } catch (Exception e) {
+                serverException = e;
+            } finally {
+                // Wait for the client to join up with us.
+                if (thread != null) {
+                    thread.join();
                 }
             }
-            return;
-        } catch (Exception e) {
-            serverException = e;
         } finally {
-            if (socket != null) {
-                socket.close();
-            }
-
-            // Wait for the client to join up with us.
-            if (thread != null) {
-                thread.join();
-            }
-
-            if (sslSocket != null) {
-                sslSocket.close();
-            }
-
             if (serverException != null) {
                 if (clientException != null) {
                     serverException.initCause(clientException);
@@ -369,11 +365,9 @@ public class SSLSocketSSLEngineTemplate {
 
             @Override
             public void run() {
-                try {
-                    Thread.sleep(1000);  // Give server time to finish setup.
-
-                    sslSocket = (SSLSocket) sslc.getSocketFactory().
-                            createSocket("localhost", port);
+                // client-side socket
+                try (SSLSocket sslSocket = (SSLSocket)sslc.getSocketFactory().
+                            createSocket("localhost", port)) {
                     OutputStream os = sslSocket.getOutputStream();
                     InputStream is = sslSocket.getInputStream();
 
@@ -384,13 +378,12 @@ public class SSLSocketSSLEngineTemplate {
                     int pos = 0;
 
                     int len;
-done:
                     while ((len = is.read(inbound, pos, 2048 - pos)) != -1) {
                         pos += len;
                         // Let the client do the closing.
                         if ((pos == serverMsg.length) && !serverClose) {
                             sslSocket.close();
-                            break done;
+                            break;
                         }
                     }
 

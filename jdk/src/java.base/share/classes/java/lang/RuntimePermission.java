@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,35 +26,34 @@
 package java.lang;
 
 import java.security.*;
-import java.util.Enumeration;
-import java.util.Hashtable;
-import java.util.StringTokenizer;
+import java.lang.module.ModuleFinder;
 
 /**
- * This class is for runtime permissions. A RuntimePermission
- * contains a name (also referred to as a "target name") but
- * no actions list; you either have the named permission
- * or you don't.
- *
- * <P>
+ * This class is for runtime permissions. A {@code RuntimePermission}
+ * contains a name (also referred to as a "target name") but no actions
+ * list; you either have the named permission or you don't.
+ * <p>
  * The target name is the name of the runtime permission (see below). The
  * naming convention follows the  hierarchical property naming convention.
- * Also, an asterisk
- * may appear at the end of the name, following a ".", or by itself, to
- * signify a wildcard match. For example: "loadLibrary.*" and "*" signify a
- * wildcard match, while "*loadLibrary" and "a*b" do not.
- * <P>
- * The following table lists all the possible RuntimePermission target names,
- * and for each provides a description of what the permission allows
- * and a discussion of the risks of granting code the permission.
+ * Also, an asterisk may appear at the end of the name, following a ".",
+ * or by itself, to signify a wildcard match. For example: "loadLibrary.*"
+ * and "*" signify a wildcard match, while "*loadLibrary" and "a*b" do not.
+ * <p>
+ * The following table lists the standard {@code RuntimePermission}
+ * target names, and for each provides a description of what the permission
+ * allows and a discussion of the risks of granting code the permission.
  *
- * <table border=1 cellpadding=5 summary="permission target name,
- *  what the target allows,and associated risks">
+ * <table class="striped">
+ * <caption style="display:none">permission target name,
+ *  what the target allows, and associated risks</caption>
+ * <thead>
  * <tr>
  * <th>Permission Target Name</th>
  * <th>What the Permission Allows</th>
  * <th>Risks of Allowing this Permission</th>
  * </tr>
+ * </thead>
+ * <tbody>
  *
  * <tr>
  *   <td>createClassLoader</td>
@@ -172,9 +171,8 @@ import java.util.StringTokenizer;
  * <tr>
  *   <td>modifyThread</td>
  *   <td>Modification of threads, e.g., via calls to Thread
- * <tt>interrupt</tt>, <tt>stop</tt>, <tt>suspend</tt>,
- * <tt>resume</tt>, <tt>setDaemon</tt>, <tt>setPriority</tt>,
- * <tt>setName</tt> and <tt>setUncaughtExceptionHandler</tt>
+ * {@code interrupt, stop, suspend, resume, setDaemon, setPriority,
+ * setName} and {@code setUncaughtExceptionHandler}
  * methods</td>
  * <td>This allows an attacker to modify the behaviour of
  * any thread in the system.</td>
@@ -269,6 +267,16 @@ import java.util.StringTokenizer;
  * </tr>
  *
  * <tr>
+ *   <td>defineClass</td>
+ *   <td>Define a class with
+ * {@link java.lang.invoke.MethodHandles.Lookup#defineClass(byte[])
+ * Lookup.defineClass}.</td>
+ *   <td>This grants code with a suitably privileged {@code Lookup} object
+ * permission to define classes in the same package as the {@code Lookup}'s
+ * lookup class. </td>
+ * </tr>
+ *
+ * <tr>
  *   <td>accessDeclaredMembers</td>
  *   <td>Access to the declared members of a class</td>
  *   <td>This grants code permission to query a class for its public,
@@ -302,6 +310,14 @@ import java.util.StringTokenizer;
  * </tr>
  *
  * <tr>
+ *   <td>getStackWalkerWithClassReference</td>
+ *   <td>Get a stack walker that can retrieve stack frames with class reference.</td>
+ *   <td>This allows retrieval of Class objects from stack walking.
+ *   This might allow malicious code to access Class objects on the stack
+ *   outside its own context.</td>
+ * </tr>
+ *
+ * <tr>
  *   <td>setDefaultUncaughtExceptionHandler</td>
  *   <td>Setting the default handler to be used when a thread
  *   terminates abruptly due to an uncaught exception</td>
@@ -324,16 +340,6 @@ import java.util.StringTokenizer;
  * </tr>
  *
  * <tr>
- *   <td>usePolicy</td>
- *   <td>Granting this permission disables the Java Plug-In's default
- *   security prompting behavior.</td>
- *   <td>For more information, refer to Java Plug-In's guides, <a href=
- *   "../../../technotes/guides/plugin/developer_guide/security.html">
- *   Applet Security Basics</a> and <a href=
- *   "../../../technotes/guides/plugin/developer_guide/rsa_how.html#use">
- *   usePolicy Permission</a>.</td>
- * </tr>
- * <tr>
  *   <td>manageProcess</td>
  *   <td>Native process termination and information about processes
  *       {@link ProcessHandle}.</td>
@@ -352,7 +358,33 @@ import java.util.StringTokenizer;
  *   {@code java.util.spi.LocaleServiceProvider}</a> for more
  *   information.</td>
  * </tr>
+ *
+ * <tr>
+ *   <td>loggerFinder</td>
+ *   <td>This {@code RuntimePermission} is required to be granted to
+ *   classes which subclass or call methods on
+ *   {@code java.lang.System.LoggerFinder}. The permission is
+ *   checked during invocation of the abstract base class constructor, as
+ *   well as on the invocation of its public methods.
+ *   This permission ensures trust in classes which provide loggers
+ *   to system classes.</td>
+ *   <td>See {@link java.lang.System.LoggerFinder java.lang.System.LoggerFinder}
+ *   for more information.</td>
+ * </tr>
+ *
+ * <tr>
+ *   <td>accessSystemModules</td>
+ *   <td>Access system modules in the runtime image.</td>
+ *   <td>This grants the permission to access resources in the
+ *   {@linkplain ModuleFinder#ofSystem system modules} in the runtime image.</td>
+ * </tr>
+ *
+ * </tbody>
  * </table>
+ *
+ * @implNote
+ * Implementations may define additional target names, but should use naming
+ * conventions such as reverse domain name notation to avoid name clashes.
  *
  * @see java.security.BasicPermission
  * @see java.security.Permission
@@ -363,6 +395,7 @@ import java.util.StringTokenizer;
  *
  * @author Marianne Mueller
  * @author Roland Schemers
+ * @since 1.2
  */
 
 public final class RuntimePermission extends BasicPermission {

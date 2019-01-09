@@ -65,8 +65,9 @@ public class ZipFileSystemProvider extends FileSystemProvider {
             // only support legacy JAR URL syntax  jar:{uri}!/{entry} for now
             String spec = uri.getRawSchemeSpecificPart();
             int sep = spec.indexOf("!/");
-            if (sep != -1)
+            if (sep != -1) {
                 spec = spec.substring(0, sep);
+            }
             return Paths.get(new URI(spec)).toAbsolutePath();
         } catch (URISyntaxException e) {
             throw new IllegalArgumentException(e.getMessage(), e);
@@ -99,13 +100,20 @@ public class ZipFileSystemProvider extends FileSystemProvider {
             }
             ZipFileSystem zipfs = null;
             try {
-                zipfs = new ZipFileSystem(this, path, env);
+                if (env.containsKey("multi-release")) {
+                    zipfs = new JarFileSystem(this, path, env);
+                } else {
+                    zipfs = new ZipFileSystem(this, path, env);
+                }
             } catch (ZipException ze) {
                 String pname = path.toString();
                 if (pname.endsWith(".zip") || pname.endsWith(".jar"))
                     throw ze;
                 // assume NOT a zip/jar file
                 throw new UnsupportedOperationException();
+            }
+            if (realPath == null) {  // newly created
+                realPath = path.toRealPath();
             }
             filesystems.put(realPath, zipfs);
             return zipfs;
@@ -120,8 +128,14 @@ public class ZipFileSystemProvider extends FileSystemProvider {
             throw new UnsupportedOperationException();
         }
         ensureFile(path);
-        try {
-            return new ZipFileSystem(this, path, env);
+         try {
+             ZipFileSystem zipfs;
+             if (env.containsKey("multi-release")) {
+                 zipfs = new JarFileSystem(this, path, env);
+             } else {
+                 zipfs = new ZipFileSystem(this, path, env);
+             }
+            return zipfs;
         } catch (ZipException ze) {
             String pname = path.toString();
             if (pname.endsWith(".zip") || pname.endsWith(".jar"))
@@ -132,7 +146,6 @@ public class ZipFileSystemProvider extends FileSystemProvider {
 
     @Override
     public Path getPath(URI uri) {
-
         String spec = uri.getSchemeSpecificPart();
         int sep = spec.indexOf("!/");
         if (sep == -1)

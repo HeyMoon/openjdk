@@ -38,7 +38,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.X509EncodedKeySpec;
 
-import sun.misc.HexDumpEncoder;
+import sun.security.util.HexDumpEncoder;
 import sun.security.util.*;
 
 /**
@@ -255,11 +255,10 @@ public class X509Key implements PublicKey {
                 }
             }
 
-            Object      inst = null;
+            @SuppressWarnings("deprecation")
+            Object      inst = (keyClass != null) ? keyClass.newInstance() : null;
             X509Key     result;
 
-            if (keyClass != null)
-                inst = keyClass.newInstance();
             if (inst instanceof X509Key) {
                 result = (X509Key) inst;
                 result.algid = algid;

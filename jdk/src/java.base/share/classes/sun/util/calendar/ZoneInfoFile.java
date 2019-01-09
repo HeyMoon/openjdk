@@ -206,7 +206,7 @@ public final class ZoneInfoFile {
     }
 
     private static String versionId;
-    private final static Map<String, ZoneInfo> zones = new ConcurrentHashMap<>();
+    private static final Map<String, ZoneInfo> zones = new ConcurrentHashMap<>();
     private static Map<String, String> aliases = new HashMap<>();
 
     private static byte[][] ruleArray;
@@ -245,11 +245,12 @@ public final class ZoneInfoFile {
     };
 
     static {
-        String oldmapping = AccessController.doPrivileged(
-            new GetPropertyAction("sun.timezone.ids.oldmapping", "false")).toLowerCase(Locale.ROOT);
+        String oldmapping = GetPropertyAction
+                .privilegedGetProperty("sun.timezone.ids.oldmapping", "false")
+                .toLowerCase(Locale.ROOT);
         USE_OLDMAPPING = (oldmapping.equals("yes") || oldmapping.equals("true"));
-        AccessController.doPrivileged(new PrivilegedAction<Object>() {
-            public Object run() {
+        AccessController.doPrivileged(new PrivilegedAction<Void>() {
+            public Void run() {
                 try {
                     String libDir = System.getProperty("java.home") + File.separator + "lib";
                     try (DataInputStream dis = new DataInputStream(

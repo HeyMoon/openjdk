@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,11 +24,13 @@
 
 #include "precompiled.hpp"
 #include "gc/g1/g1CollectedHeap.inline.hpp"
-#include "gc/g1/g1SATBCardTableModRefBS.hpp"
+#include "gc/g1/g1SATBCardTableModRefBS.inline.hpp"
 #include "gc/g1/heapRegion.hpp"
-#include "gc/g1/satbQueue.hpp"
+#include "gc/g1/satbMarkQueue.hpp"
+#include "gc/shared/memset_with_concurrent_readers.hpp"
+#include "logging/log.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "runtime/orderAccess.inline.hpp"
 #include "runtime/thread.inline.hpp"
@@ -84,11 +86,6 @@ bool G1SATBCardTableModRefBS::mark_card_deferred(size_t card_index) {
     return false;
   }
 
-  if  (val == g1_young_gen) {
-    // the card is for a young gen region. We don't need to keep track of all pointers into young
-    return false;
-  }
-
   // Cached bit can be installed either on a clean card or on a claimed card.
   jbyte new_val = val;
   if (val == clean_card_val()) {
@@ -108,15 +105,7 @@ void G1SATBCardTableModRefBS::g1_mark_as_young(const MemRegion& mr) {
   jbyte *const first = byte_for(mr.start());
   jbyte *const last = byte_after(mr.last());
 
-  // Below we may use an explicit loop instead of memset() because on
-  // certain platforms memset() can give concurrent readers phantom zeros.
-  if (UseMemSetInBOT) {
-    memset(first, g1_young_gen, last - first);
-  } else {
-    for (jbyte* i = first; i < last; i++) {
-      *i = g1_young_gen;
-    }
-  }
+  memset_with_concurrent_readers(first, g1_young_gen, last - first);
 }
 
 #ifndef PRODUCT
@@ -159,17 +148,10 @@ void G1SATBCardTableLoggingModRefBS::initialize(G1RegionToSpaceMapper* mapper) {
   assert(byte_for(low_bound) == &_byte_map[0], "Checking start of map");
   assert(byte_for(high_bound-1) <= &_byte_map[_last_valid_index], "Checking end of map");
 
-  if (TraceCardTableModRefBS) {
-    gclog_or_tty->print_cr("G1SATBCardTableModRefBS::G1SATBCardTableModRefBS: ");
-    gclog_or_tty->print_cr("  "
-                  "  &_byte_map[0]: " INTPTR_FORMAT
-                  "  &_byte_map[_last_valid_index]: " INTPTR_FORMAT,
-                  p2i(&_byte_map[0]),
-                  p2i(&_byte_map[_last_valid_index]));
-    gclog_or_tty->print_cr("  "
-                  "  byte_map_base: " INTPTR_FORMAT,
-                  p2i(byte_map_base));
-  }
+  log_trace(gc, barrier)("G1SATBCardTableModRefBS::G1SATBCardTableModRefBS: ");
+  log_trace(gc, barrier)("    &_byte_map[0]: " INTPTR_FORMAT "  &_byte_map[_last_valid_index]: " INTPTR_FORMAT,
+                         p2i(&_byte_map[0]), p2i(&_byte_map[_last_valid_index]));
+  log_trace(gc, barrier)("    byte_map_base: " INTPTR_FORMAT,  p2i(byte_map_base));
 }
 
 void
@@ -196,61 +178,88 @@ G1SATBCardTableLoggingModRefBS::write_ref_field_work(void* field,
 }
 
 void
-G1SATBCardTableLoggingModRefBS::write_ref_field_static(void* field,
-                                                       oop new_val) {
-  uintptr_t field_uint = (uintptr_t)field;
-  uintptr_t new_val_uint = cast_from_oop<uintptr_t>(new_val);
-  uintptr_t comb = field_uint ^ new_val_uint;
-  comb = comb >> HeapRegion::LogOfHRGrainBytes;
-  if (comb == 0) return;
-  if (new_val == NULL) return;
-  // Otherwise, log it.
-  G1SATBCardTableLoggingModRefBS* g1_bs =
-    barrier_set_cast<G1SATBCardTableLoggingModRefBS>(G1CollectedHeap::heap()->barrier_set());
-  g1_bs->write_ref_field_work(field, new_val);
-}
-
-void
-G1SATBCardTableLoggingModRefBS::invalidate(MemRegion mr, bool whole_heap) {
+G1SATBCardTableLoggingModRefBS::invalidate(MemRegion mr) {
   volatile jbyte* byte = byte_for(mr.start());
   jbyte* last_byte = byte_for(mr.last());
   Thread* thr = Thread::current();
-  if (whole_heap) {
-    while (byte <= last_byte) {
-      *byte = dirty_card;
-      byte++;
-    }
-  } else {
     // skip all consecutive young cards
-    for (; byte <= last_byte && *byte == g1_young_gen; byte++);
+  for (; byte <= last_byte && *byte == g1_young_gen; byte++);
 
-    if (byte <= last_byte) {
-      OrderAccess::storeload();
-      // Enqueue if necessary.
-      if (thr->is_Java_thread()) {
-        JavaThread* jt = (JavaThread*)thr;
-        for (; byte <= last_byte; byte++) {
-          if (*byte == g1_young_gen) {
-            continue;
-          }
-          if (*byte != dirty_card) {
-            *byte = dirty_card;
-            jt->dirty_card_queue().enqueue(byte);
-          }
+  if (byte <= last_byte) {
+    OrderAccess::storeload();
+    // Enqueue if necessary.
+    if (thr->is_Java_thread()) {
+      JavaThread* jt = (JavaThread*)thr;
+      for (; byte <= last_byte; byte++) {
+        if (*byte == g1_young_gen) {
+          continue;
         }
-      } else {
-        MutexLockerEx x(Shared_DirtyCardQ_lock,
-                        Mutex::_no_safepoint_check_flag);
-        for (; byte <= last_byte; byte++) {
-          if (*byte == g1_young_gen) {
-            continue;
-          }
-          if (*byte != dirty_card) {
-            *byte = dirty_card;
-            _dcqs.shared_dirty_card_queue()->enqueue(byte);
-          }
+        if (*byte != dirty_card) {
+          *byte = dirty_card;
+          jt->dirty_card_queue().enqueue(byte);
         }
       }
+    } else {
+      MutexLockerEx x(Shared_DirtyCardQ_lock,
+                      Mutex::_no_safepoint_check_flag);
+      for (; byte <= last_byte; byte++) {
+        if (*byte == g1_young_gen) {
+          continue;
+        }
+        if (*byte != dirty_card) {
+          *byte = dirty_card;
+          _dcqs.shared_dirty_card_queue()->enqueue(byte);
+        }
+      }
+    }
+  }
+}
+
+void G1SATBCardTableModRefBS::write_ref_nmethod_post(oop* dst, nmethod* nm) {
+  oop obj = oopDesc::load_heap_oop(dst);
+  if (obj != NULL) {
+    G1CollectedHeap* g1h = G1CollectedHeap::heap();
+    HeapRegion* hr = g1h->heap_region_containing(obj);
+    hr->add_strong_code_root(nm);
+  }
+}
+
+class G1EnsureLastRefToRegion : public OopClosure {
+  G1CollectedHeap* _g1h;
+  HeapRegion* _hr;
+  oop* _dst;
+
+  bool _value;
+public:
+  G1EnsureLastRefToRegion(G1CollectedHeap* g1h, HeapRegion* hr, oop* dst) :
+    _g1h(g1h), _hr(hr), _dst(dst), _value(true) {}
+
+  void do_oop(oop* p) {
+    if (_value && p != _dst) {
+      oop obj = oopDesc::load_heap_oop(p);
+      if (obj != NULL) {
+        HeapRegion* hr = _g1h->heap_region_containing(obj);
+        if (hr == _hr) {
+          // Another reference to the same region.
+          _value = false;
+        }
+      }
+    }
+  }
+  void do_oop(narrowOop* p) { ShouldNotReachHere(); }
+  bool value() const        { return _value;  }
+};
+
+void G1SATBCardTableModRefBS::write_ref_nmethod_pre(oop* dst, nmethod* nm) {
+  oop obj = oopDesc::load_heap_oop(dst);
+  if (obj != NULL) {
+    G1CollectedHeap* g1h = G1CollectedHeap::heap();
+    HeapRegion* hr = g1h->heap_region_containing(obj);
+    G1EnsureLastRefToRegion ensure_last_ref(g1h, hr, dst);
+    nm->oops_do(&ensure_last_ref);
+    if (ensure_last_ref.value()) {
+      // Last reference to this region, remove the nmethod from the rset.
+      hr->remove_strong_code_root(nm);
     }
   }
 }

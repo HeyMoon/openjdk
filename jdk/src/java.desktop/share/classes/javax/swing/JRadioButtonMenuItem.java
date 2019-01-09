@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,17 +24,11 @@
  */
 package javax.swing;
 
-import java.util.EventListener;
-
-import java.awt.*;
-import java.awt.event.*;
-import java.awt.image.*;
-
+import java.beans.JavaBean;
+import java.beans.BeanProperty;
 import java.io.ObjectOutputStream;
-import java.io.ObjectInputStream;
 import java.io.IOException;
 
-import javax.swing.plaf.*;
 import javax.accessibility.*;
 
 /**
@@ -56,6 +50,18 @@ import javax.accessibility.*;
  * href="http://docs.oracle.com/javase/tutorial/uiswing/misc/action.html">How
  * to Use Actions</a>, a section in <em>The Java Tutorial</em>.
  * <p>
+ * Some menus can have several button groups with radio button menu items. In
+ * this case it is useful that clicking on one radio button menu item does not
+ * close the menu. Such behavior can be controlled either by client
+ * {@link JComponent#putClientProperty} or the Look and Feel
+ * {@link UIManager#put} property named
+ * {@code "RadioButtonMenuItem.doNotCloseOnMouseClick"}. The default value is
+ * {@code false}. Setting the property to {@code true} prevents the menu from
+ * closing when it is clicked by the mouse. If the client property is set its
+ * value is always used; otherwise the {@literal L&F} property is queried.
+ * Note: some {@code L&F}s may ignore this property. All built-in {@code L&F}s
+ * inherit this behaviour.
+ * <p>
  * For further documentation and examples see
  * <a
  href="http://docs.oracle.com/javase/tutorial/uiswing/components/menu.html">How to Use Menus</a>,
@@ -75,15 +81,13 @@ import javax.accessibility.*;
  * has been added to the <code>java.beans</code> package.
  * Please see {@link java.beans.XMLEncoder}.
  *
- * @beaninfo
- *   attribute: isContainer false
- * description: A component within a group of menu items which can be selected.
- *
  * @author Georges Saab
  * @author David Karlton
  * @see ButtonGroup
  * @since 1.2
  */
+@JavaBean(description = "A component within a group of menu items which can be selected.")
+@SwingContainer(false)
 @SuppressWarnings("serial") // Same-version serialization only
 public class JRadioButtonMenuItem extends JMenuItem implements Accessible {
     /**
@@ -191,6 +195,7 @@ public class JRadioButtonMenuItem extends JMenuItem implements Accessible {
      * @see JComponent#getUIClassID
      * @see UIDefaults#getUI
      */
+    @BeanProperty(bound = false)
     public String getUIClassID() {
         return uiClassID;
     }
@@ -248,6 +253,7 @@ public class JRadioButtonMenuItem extends JMenuItem implements Accessible {
      * @return an AccessibleJRadioButtonMenuItem that serves as the
      *         AccessibleContext of this JRadioButtonMenuItem
      */
+    @BeanProperty(bound = false)
     public AccessibleContext getAccessibleContext() {
         if (accessibleContext == null) {
             accessibleContext = new AccessibleJRadioButtonMenuItem();

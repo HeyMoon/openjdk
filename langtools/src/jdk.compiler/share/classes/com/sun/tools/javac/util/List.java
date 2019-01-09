@@ -134,7 +134,7 @@ public class List<A> extends AbstractCollection<A> implements java.util.List<A> 
     /** Construct a list consisting of given element.
      */
     public static <A> List<A> of(A x1) {
-        return new List<>(x1, List.<A>nil());
+        return new List<>(x1, List.nil());
     }
 
     /** Construct a list consisting of given elements.
@@ -419,13 +419,14 @@ public class List<A> extends AbstractCollection<A> implements java.util.List<A> 
 
     @SuppressWarnings("unchecked")
     public <Z> List<Z> map(Function<A, Z> mapper) {
-        if (nonEmpty()) {
-            List<Z> tail1 = tail.map(mapper);
-            Z head1 = mapper.apply(head);
-            if (tail1 != tail || head1 != head)
-                return tail1.prepend(head1);
+        boolean changed = false;
+        ListBuffer<Z> buf = new ListBuffer<>();
+        for (A a : this) {
+            Z z = mapper.apply(a);
+            buf.append(z);
+            changed |= (z != a);
         }
-        return (List<Z>)this;
+        return changed ? buf.toList() : (List<Z>)this;
     }
 
     @SuppressWarnings("unchecked")
@@ -556,8 +557,8 @@ public class List<A> extends AbstractCollection<A> implements java.util.List<A> 
      */
     public static <Z> Collector<Z, ListBuffer<Z>, List<Z>> collector() {
         return Collector.of(ListBuffer::new,
-                (buf, el)->buf.add(el),
+                ListBuffer::add,
                 (buf1, buf2)-> { buf1.addAll(buf2); return buf1; },
-                buf->buf.toList());
+                ListBuffer::toList);
     }
 }

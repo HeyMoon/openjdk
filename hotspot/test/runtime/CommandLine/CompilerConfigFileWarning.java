@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,13 +25,15 @@
  * @test
  * @bug 7167142
  * @summary Warn if unused .hotspot_compiler file is present
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  */
 
 import java.io.PrintWriter;
-import jdk.test.lib.*;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.Platform;
 
 public class CompilerConfigFileWarning {
     public static void main(String[] args) throws Exception {
@@ -46,7 +48,7 @@ public class CompilerConfigFileWarning {
         pb = ProcessTools.createJavaProcessBuilder("-XX:CompileCommandFile=hs_comp.txt", "-version");
         output = new OutputAnalyzer(pb.start());
         output.shouldContain("CompileCommand: unrecognized command");
-        output.shouldContain("aaa  aaa");
+        output.shouldContain("aaa, aaa");
 
         // Skip on debug builds since we'll always read the file there
         if (!Platform.isDebugBuild()) {

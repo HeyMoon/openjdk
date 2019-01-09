@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -104,9 +104,7 @@ class XHandler: public CompilationResourceObj {
   bool equals(XHandler* other) const;
 };
 
-define_array(_XHandlerArray, XHandler*)
-define_stack(_XHandlerList, _XHandlerArray)
-
+typedef GrowableArray<XHandler*> _XHandlerList;
 
 // XHandlers is the C1 internal list of exception handlers for a method
 class XHandlers: public CompilationResourceObj {
@@ -132,8 +130,7 @@ class XHandlers: public CompilationResourceObj {
 
 
 class IRScope;
-define_array(IRScopeArray, IRScope*)
-define_stack(IRScopeList, IRScopeArray)
+typedef GrowableArray<IRScope*> IRScopeList;
 
 class Compilation;
 class IRScope: public CompilationResourceObj {
@@ -151,9 +148,10 @@ class IRScope: public CompilationResourceObj {
   bool          _monitor_pairing_ok;             // the monitor pairing info
   bool          _wrote_final;                    // has written final field
   bool          _wrote_fields;                   // has written fields
+  bool          _wrote_volatile;                 // has written volatile field
   BlockBegin*   _start;                          // the start block, successsors are method entries
 
-  BitMap        _requires_phi_function;          // bit is set if phi functions at loop headers are necessary for a local variable
+  ResourceBitMap _requires_phi_function;         // bit is set if phi functions at loop headers are necessary for a local variable
 
   // helper functions
   BlockBegin* build_graph(Compilation* compilation, int osr_bci);
@@ -187,7 +185,8 @@ class IRScope: public CompilationResourceObj {
   bool          wrote_final    () const          { return _wrote_final; }
   void          set_wrote_fields()               { _wrote_fields = true; }
   bool          wrote_fields    () const         { return _wrote_fields; }
-
+  void          set_wrote_volatile()             { _wrote_volatile = true; }
+  bool          wrote_volatile    () const       { return _wrote_volatile; }
 };
 
 
@@ -244,7 +243,8 @@ class IRScopeDebugInfo: public CompilationResourceObj {
     // reexecute allowed only for the topmost frame
     bool reexecute = topmost ? should_reexecute() : false;
     bool return_oop = false; // This flag will be ignored since it used only for C2 with escape analysis.
-    recorder->describe_scope(pc_offset, scope()->method(), bci(), reexecute, is_method_handle_invoke, return_oop, locvals, expvals, monvals);
+    bool rethrow_exception = false;
+    recorder->describe_scope(pc_offset, methodHandle(), scope()->method(), bci(), reexecute, rethrow_exception, is_method_handle_invoke, return_oop, locvals, expvals, monvals);
   }
 };
 

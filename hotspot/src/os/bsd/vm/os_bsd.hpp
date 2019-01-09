@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,10 +40,6 @@ class Bsd {
   friend class os;
 
   // For signal-chaining
-#define MAXSIGNUM 32
-  static struct sigaction sigact[MAXSIGNUM]; // saved preinstalled sigactions
-  static unsigned int sigs;             // mask of signals that have
-                                        // preinstalled signal handlers
   static bool libjsig_is_loaded;        // libjsig that interposes sigaction(),
                                         // __sigaction(), signal() is loaded
   static struct sigaction *(*get_signal_action)(int);
@@ -51,9 +47,6 @@ class Bsd {
   static void save_preinstalled_handler(int, struct sigaction&);
 
   static void check_signal_handler(int sig);
-
-  // For signal flags diagnostics
-  static int sigflags[MAXSIGNUM];
 
 #ifdef __APPLE__
   // mach_absolute_time
@@ -75,8 +68,6 @@ class Bsd {
   static julong physical_memory() { return _physical_memory; }
   static void initialize_system_info();
 
-  static bool supports_variable_stack_size();
-
   static void rebuild_cpu_to_node_map();
   static GrowableArray<int>* cpu_to_node()    { return _cpu_to_node; }
 
@@ -95,18 +86,20 @@ class Bsd {
   static int page_size(void)                                        { return _page_size; }
   static void set_page_size(int val)                                { _page_size = val; }
 
-  static address   ucontext_get_pc(ucontext_t* uc);
+  static address   ucontext_get_pc(const ucontext_t* uc);
   static void ucontext_set_pc(ucontext_t* uc, address pc);
-  static intptr_t* ucontext_get_sp(ucontext_t* uc);
-  static intptr_t* ucontext_get_fp(ucontext_t* uc);
+  static intptr_t* ucontext_get_sp(const ucontext_t* uc);
+  static intptr_t* ucontext_get_fp(const ucontext_t* uc);
 
   // For Analyzer Forte AsyncGetCallTrace profiling support:
   //
   // This interface should be declared in os_bsd_i486.hpp, but
   // that file provides extensions to the os class and not the
   // Bsd class.
-  static ExtendedPC fetch_frame_from_ucontext(Thread* thread, ucontext_t* uc,
+  static ExtendedPC fetch_frame_from_ucontext(Thread* thread, const ucontext_t* uc,
                                               intptr_t** ret_sp, intptr_t** ret_fp);
+
+  static bool get_frame_at_stack_banging_point(JavaThread* thread, ucontext_t* uc, frame* fr);
 
   // This boolean allows users to forward their own non-matching signals
   // to JVM_handle_bsd_signal, harmlessly.
@@ -126,14 +119,6 @@ class Bsd {
   // For signal-chaining
   static struct sigaction *get_chained_signal_action(int sig);
   static bool chained_handler(int sig, siginfo_t* siginfo, void* context);
-
-  // Minimum stack size a thread can be created with (allowing
-  // the VM to completely create the thread and enter user code)
-  static size_t min_stack_allowed;
-
-  // Return default stack size or guard size for the specified thread type
-  static size_t default_stack_size(os::ThreadType thr_type);
-  static size_t default_guard_size(os::ThreadType thr_type);
 
   // Real-time clock functions
   static void clock_init(void);

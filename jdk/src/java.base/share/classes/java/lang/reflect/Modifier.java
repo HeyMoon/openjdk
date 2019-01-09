@@ -27,8 +27,8 @@ package java.lang.reflect;
 
 import java.security.AccessController;
 import java.util.StringJoiner;
-import sun.reflect.LangReflectAccess;
-import sun.reflect.ReflectionFactory;
+import jdk.internal.reflect.LangReflectAccess;
+import jdk.internal.reflect.ReflectionFactory;
 
 /**
  * The Modifier class provides {@code static} methods and
@@ -43,6 +43,7 @@ import sun.reflect.ReflectionFactory;
  *
  * @author Nakul Saraiya
  * @author Kenneth Russell
+ * @since 1.1
  */
 public class Modifier {
 
@@ -51,8 +52,7 @@ public class Modifier {
      *  packages
      */
     static {
-        sun.reflect.ReflectionFactory factory =
-            AccessController.doPrivileged(
+        ReflectionFactory factory = AccessController.doPrivileged(
                 new ReflectionFactory.GetReflectionFactoryAction());
         factory.setLangReflectAccess(new java.lang.reflect.ReflectAccess());
     }

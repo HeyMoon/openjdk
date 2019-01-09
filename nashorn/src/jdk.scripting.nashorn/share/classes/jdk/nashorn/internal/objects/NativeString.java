@@ -33,6 +33,7 @@ import static jdk.nashorn.internal.runtime.ScriptRuntime.UNDEFINED;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.lang.reflect.Array;
 import java.text.Collator;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -40,9 +41,9 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import jdk.internal.dynalink.CallSiteDescriptor;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.LinkRequest;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.LinkRequest;
 import jdk.nashorn.internal.lookup.MethodHandleFactory.LookupException;
 import jdk.nashorn.internal.objects.annotations.Attribute;
 import jdk.nashorn.internal.objects.annotations.Constructor;
@@ -56,10 +57,11 @@ import jdk.nashorn.internal.runtime.ConsString;
 import jdk.nashorn.internal.runtime.JSType;
 import jdk.nashorn.internal.runtime.OptimisticBuiltins;
 import jdk.nashorn.internal.runtime.PropertyMap;
-import jdk.nashorn.internal.runtime.ScriptFunction;
 import jdk.nashorn.internal.runtime.ScriptObject;
 import jdk.nashorn.internal.runtime.ScriptRuntime;
 import jdk.nashorn.internal.runtime.arrays.ArrayIndex;
+import jdk.nashorn.internal.runtime.linker.Bootstrap;
+import jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor;
 import jdk.nashorn.internal.runtime.linker.NashornGuards;
 import jdk.nashorn.internal.runtime.linker.PrimitiveLookup;
 
@@ -104,20 +106,6 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
         return getStringValue();
     }
 
-    @Override
-    public boolean equals(final Object other) {
-        if (other instanceof NativeString) {
-            return getStringValue().equals(((NativeString) other).getStringValue());
-        }
-
-        return false;
-    }
-
-    @Override
-    public int hashCode() {
-        return getStringValue().hashCode();
-    }
-
     private String getStringValue() {
         return value instanceof String ? (String) value : value.toString();
     }
@@ -138,15 +126,15 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
 
     // This is to support length as method call as well.
     @Override
-    protected GuardedInvocation findGetMethod(final CallSiteDescriptor desc, final LinkRequest request, final String operator) {
-        final String name = desc.getNameToken(2);
+    protected GuardedInvocation findGetMethod(final CallSiteDescriptor desc, final LinkRequest request) {
+        final String name = NashornCallSiteDescriptor.getOperand(desc);
 
         // if str.length(), then let the bean linker handle it
-        if ("length".equals(name) && "getMethod".equals(operator)) {
+        if ("length".equals(name) && NashornCallSiteDescriptor.isMethodFirstOperation(desc)) {
             return null;
         }
 
-        return super.findGetMethod(desc, request, operator);
+        return super.findGetMethod(desc, request);
     }
 
     // This is to provide array-like access to string characters without creating a NativeString wrapper.
@@ -157,7 +145,7 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
 
         if (returnType == Object.class && JSType.isString(self)) {
             try {
-                return new GuardedInvocation(MH.findStatic(MethodHandles.lookup(), NativeString.class, "get", desc.getMethodType()), NashornGuards.getInstanceOf2Guard(String.class, ConsString.class));
+                return new GuardedInvocation(MH.findStatic(MethodHandles.lookup(), NativeString.class, "get", desc.getMethodType()), NashornGuards.getStringGuard());
             } catch (final LookupException e) {
                 //empty. Shouldn't happen. Fall back to super
             }
@@ -221,14 +209,6 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
     }
 
     @Override
-    public Object get(final long key) {
-        if (key >= 0 && key < value.length()) {
-            return String.valueOf(value.charAt((int)key));
-        }
-        return super.get(key);
-    }
-
-    @Override
     public Object get(final int key) {
         if (key >= 0 && key < value.length()) {
             return String.valueOf(value.charAt(key));
@@ -247,33 +227,8 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
     }
 
     @Override
-    public int getInt(final long key, final int programPoint) {
-        return JSType.toInt32MaybeOptimistic(get(key), programPoint);
-    }
-
-    @Override
     public int getInt(final int key, final int programPoint) {
         return JSType.toInt32MaybeOptimistic(get(key), programPoint);
-    }
-
-    @Override
-    public long getLong(final Object key, final int programPoint) {
-        return JSType.toLongMaybeOptimistic(get(key), programPoint);
-    }
-
-    @Override
-    public long getLong(final double key, final int programPoint) {
-        return JSType.toLongMaybeOptimistic(get(key), programPoint);
-    }
-
-    @Override
-    public long getLong(final long key, final int programPoint) {
-        return JSType.toLongMaybeOptimistic(get(key), programPoint);
-    }
-
-    @Override
-    public long getLong(final int key, final int programPoint) {
-        return JSType.toLongMaybeOptimistic(get(key), programPoint);
     }
 
     @Override
@@ -283,11 +238,6 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
 
     @Override
     public double getDouble(final double key, final int programPoint) {
-        return JSType.toNumberMaybeOptimistic(get(key), programPoint);
-    }
-
-    @Override
-    public double getDouble(final long key, final int programPoint) {
         return JSType.toNumberMaybeOptimistic(get(key), programPoint);
     }
 
@@ -309,12 +259,6 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
     }
 
     @Override
-    public boolean has(final long key) {
-        final int index = ArrayIndex.getArrayIndex(key);
-        return isValidStringIndex(index) || super.has(key);
-    }
-
-    @Override
     public boolean has(final double key) {
         final int index = ArrayIndex.getArrayIndex(key);
         return isValidStringIndex(index) || super.has(key);
@@ -333,12 +277,6 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
     }
 
     @Override
-    public boolean hasOwnProperty(final long key) {
-        final int index = ArrayIndex.getArrayIndex(key);
-        return isValidStringIndex(index) || super.hasOwnProperty(key);
-    }
-
-    @Override
     public boolean hasOwnProperty(final double key) {
         final int index = ArrayIndex.getArrayIndex(key);
         return isValidStringIndex(index) || super.hasOwnProperty(key);
@@ -347,12 +285,6 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
     @Override
     public boolean delete(final int key, final boolean strict) {
         return checkDeleteIndex(key, strict)? false : super.delete(key, strict);
-    }
-
-    @Override
-    public boolean delete(final long key, final boolean strict) {
-        final int index = ArrayIndex.getArrayIndex(key);
-        return checkDeleteIndex(index, strict)? false : super.delete(key, strict);
     }
 
     @Override
@@ -380,7 +312,7 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
     }
 
     @Override
-    public Object getOwnPropertyDescriptor(final String key) {
+    public Object getOwnPropertyDescriptor(final Object key) {
         final int index = ArrayIndex.getArrayIndex(key);
         if (index >= 0 && index < value.length()) {
             final Global global = Global.instance();
@@ -398,7 +330,12 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
      * @return Array of keys.
      */
     @Override
-    protected String[] getOwnKeys(final boolean all, final Set<String> nonEnumerable) {
+    @SuppressWarnings("unchecked")
+    protected <T> T[] getOwnKeys(final Class<T> type, final boolean all, final Set<T> nonEnumerable) {
+        if (type != String.class) {
+            return super.getOwnKeys(type, all, nonEnumerable);
+        }
+
         final List<Object> keys = new ArrayList<>();
 
         // add string index keys
@@ -407,8 +344,8 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
         }
 
         // add super class properties
-        keys.addAll(Arrays.asList(super.getOwnKeys(all, nonEnumerable)));
-        return keys.toArray(new String[keys.size()]);
+        keys.addAll(Arrays.asList(super.getOwnKeys(type, all, nonEnumerable)));
+        return keys.toArray((T[]) Array.newInstance(type, keys.size()));
     }
 
     /**
@@ -599,17 +536,6 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
     @SpecializedFunction(linkLogic=CharCodeAtLinkLogic.class)
     public static int charCodeAt(final Object self, final double pos) {
         return charCodeAt(self, (int)pos); //toInt pos is ok
-    }
-
-    /**
-     * ECMA 15.5.4.5 String.prototype.charCodeAt (pos) - specialized version for long position
-     * @param self self reference
-     * @param pos  position in string
-     * @return number representing charcode at position
-     */
-    @SpecializedFunction(linkLogic=CharCodeAtLinkLogic.class)
-    public static int charCodeAt(final Object self, final long pos) {
-        return charCodeAt(self, (int)pos);
     }
 
     /**
@@ -805,8 +731,8 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
             nativeRegExp = NativeRegExp.flatRegExp(JSType.toString(string));
         }
 
-        if (replacement instanceof ScriptFunction) {
-            return nativeRegExp.replace(str, "", (ScriptFunction)replacement);
+        if (Bootstrap.isCallable(replacement)) {
+            return nativeRegExp.replace(str, "", replacement);
         }
 
         return nativeRegExp.replace(str, JSType.toString(replacement), null);
@@ -1239,24 +1165,7 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
     }
 
     /**
-     * ECMA 15.5.2.1 new String ( [ value ] ) - special version with exactly one {@code int} arg
-     *
-     * Constructor
-     *
-     * @param newObj is this constructor invoked with the new operator
-     * @param self   self reference
-     * @param arg    the arg
-     *
-     * @return new NativeString containing the string representation of the arg
-     */
-    @SpecializedFunction(isConstructor=true)
-    public static Object constructor(final boolean newObj, final Object self, final long arg) {
-        final String str = Long.toString(arg);
-        return newObj ? newObj(str) : str;
-    }
-
-    /**
-     * ECMA 15.5.2.1 new String ( [ value ] ) - special version with exactly one {@code int} arg
+     * ECMA 15.5.2.1 new String ( [ value ] ) - special version with exactly one {@code double} arg
      *
      * Constructor
      *
@@ -1290,6 +1199,17 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
     }
 
     /**
+     * ECMA 6 21.1.3.27 String.prototype [ @@iterator ]( )
+     *
+     * @param self self reference
+     * @return a string iterator
+     */
+    @Function(attributes = Attribute.NOT_ENUMERABLE, name = "@@iterator")
+    public static Object getIterator(final Object self) {
+        return new StringIterator(checkObjectToString(self), Global.instance());
+    }
+
+    /**
      * Lookup the appropriate method for an invoke dynamic call.
      *
      * @param request  the link request
@@ -1297,8 +1217,8 @@ public final class NativeString extends ScriptObject implements OptimisticBuilti
      * @return Link to be invoked at call site.
      */
     public static GuardedInvocation lookupPrimitive(final LinkRequest request, final Object receiver) {
-        final MethodHandle guard = NashornGuards.getInstanceOf2Guard(String.class, ConsString.class);
-        return PrimitiveLookup.lookupPrimitive(request, guard, new NativeString((CharSequence)receiver), WRAPFILTER, PROTOFILTER);
+        return PrimitiveLookup.lookupPrimitive(request, NashornGuards.getStringGuard(),
+                new NativeString((CharSequence)receiver), WRAPFILTER, PROTOFILTER);
     }
 
     @SuppressWarnings("unused")

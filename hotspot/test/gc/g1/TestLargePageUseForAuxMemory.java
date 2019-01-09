@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,19 +26,23 @@
  * @summary Test that auxiliary data structures are allocated using large pages if available.
  * @bug 8058354 8079208
  * @key gc
- * @library /testlibrary /../../test/lib
- * @requires (vm.gc=="G1" | vm.gc=="null")
- * @build jdk.test.lib.* sun.hotspot.WhiteBox
- * @build TestLargePageUseForAuxMemory
+ * @modules java.base/jdk.internal.misc
+ * @library /test/lib
+ * @requires vm.gc.G1
+ * @build sun.hotspot.WhiteBox
  * @run main ClassFileInstaller sun.hotspot.WhiteBox
  *                              sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main/othervm -Xbootclasspath/a:. -XX:+UseG1GC -XX:+WhiteBoxAPI -XX:+IgnoreUnrecognizedVMOptions -XX:+UseLargePages TestLargePageUseForAuxMemory
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UseG1GC -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:+IgnoreUnrecognizedVMOptions -XX:+UseLargePages TestLargePageUseForAuxMemory
  */
 
 import java.lang.Math;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 
-import jdk.test.lib.*;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
 import jdk.test.lib.Asserts;
+import jdk.test.lib.Platform;
 import sun.hotspot.WhiteBox;
 
 public class TestLargePageUseForAuxMemory {
@@ -47,14 +51,29 @@ public class TestLargePageUseForAuxMemory {
     static long smallPageSize;
     static long allocGranularity;
 
+    static void checkSize(OutputAnalyzer output, long expectedSize, String pattern) {
+        String pageSizeStr = output.firstMatch(pattern, 1);
+
+        if (pageSizeStr == null) {
+            output.reportDiagnosticSummary();
+            throw new RuntimeException("Match from '" + pattern + "' got 'null' expected: " + expectedSize);
+        }
+
+        long size = parseMemoryString(pageSizeStr);
+        if (size != expectedSize) {
+            output.reportDiagnosticSummary();
+            throw new RuntimeException("Match from '" + pattern + "' got " + size + " expected: " + expectedSize);
+        }
+    }
+
     static void checkSmallTables(OutputAnalyzer output, long expectedPageSize) throws Exception {
-        output.shouldContain("G1 'Block offset table': pg_sz=" + expectedPageSize);
-        output.shouldContain("G1 'Card counts table': pg_sz=" + expectedPageSize);
+        checkSize(output, expectedPageSize, "Block Offset Table: .*page_size=([^ ]+)");
+        checkSize(output, expectedPageSize, "Card Counts Table: .*page_size=([^ ]+)");
     }
 
     static void checkBitmaps(OutputAnalyzer output, long expectedPageSize) throws Exception {
-        output.shouldContain("G1 'Prev Bitmap': pg_sz=" + expectedPageSize);
-        output.shouldContain("G1 'Next Bitmap': pg_sz=" + expectedPageSize);
+        checkSize(output, expectedPageSize, "Prev Bitmap: .*page_size=([^ ]+)");
+        checkSize(output, expectedPageSize, "Next Bitmap: .*page_size=([^ ]+)");
     }
 
     static void testVM(String what, long heapsize, boolean cardsShouldUseLargePages, boolean bitmapShouldUseLargePages) throws Exception {
@@ -66,7 +85,7 @@ public class TestLargePageUseForAuxMemory {
                                                    "-XX:G1HeapRegionSize=" + HEAP_REGION_SIZE,
                                                    "-Xms" + heapsize,
                                                    "-Xmx" + heapsize,
-                                                   "-XX:+TracePageSizes",
+                                                   "-Xlog:pagesize",
                                                    "-XX:+UseLargePages",
                                                    "-XX:+IgnoreUnrecognizedVMOptions",  // there is no ObjectAlignmentInBytes in 32 bit builds
                                                    "-XX:ObjectAlignmentInBytes=8",
@@ -82,7 +101,7 @@ public class TestLargePageUseForAuxMemory {
                                                    "-XX:G1HeapRegionSize=" + HEAP_REGION_SIZE,
                                                    "-Xms" + heapsize,
                                                    "-Xmx" + heapsize,
-                                                   "-XX:+TracePageSizes",
+                                                   "-Xlog:pagesize",
                                                    "-XX:-UseLargePages",
                                                    "-XX:+IgnoreUnrecognizedVMOptions",  // there is no ObjectAlignmentInBytes in 32 bit builds
                                                    "-XX:ObjectAlignmentInBytes=8",
@@ -94,19 +113,35 @@ public class TestLargePageUseForAuxMemory {
         output.shouldHaveExitValue(0);
     }
 
-    public static void main(String[] args) throws Exception {
-        if (!Platform.isDebugBuild()) {
-            System.out.println("Skip tests on non-debug builds because the required option TracePageSizes is a debug-only option.");
-            return;
+    private static long gcd(long x, long y) {
+        while (x > 0) {
+            long t = x;
+            x = y % x;
+            y = t;
         }
+        return y;
+    }
 
+    private static long lcm(long x, long y) {
+        return x * (y / gcd(x, y));
+    }
+
+    public static void main(String[] args) throws Exception {
+        // Size that a single card covers.
+        final int cardSize = 512;
         WhiteBox wb = WhiteBox.getWhiteBox();
         smallPageSize = wb.getVMPageSize();
         largePageSize = wb.getVMLargePageSize();
         allocGranularity = wb.getVMAllocationGranularity();
+        final long heapAlignment = lcm(cardSize * smallPageSize, largePageSize);
 
         if (largePageSize == 0) {
             System.out.println("Skip tests because large page support does not seem to be available on this platform.");
+            return;
+        }
+        if (largePageSize == smallPageSize) {
+            System.out.println("Skip tests because large page support does not seem to be available on this platform." +
+                               "Small and large page size are the same.");
             return;
         }
 
@@ -114,9 +149,6 @@ public class TestLargePageUseForAuxMemory {
         // 32 bit systems will have problems reserving such an amount of contiguous space, so skip the
         // test there.
         if (!Platform.is32bit()) {
-            // Size that a single card covers.
-            final int cardSize = 512;
-
             final long heapSizeForCardTableUsingLargePages = largePageSize * cardSize;
             final long heapSizeDiffForCardTable = Math.max(Math.max(allocGranularity * cardSize, HEAP_REGION_SIZE), largePageSize);
 
@@ -131,7 +163,8 @@ public class TestLargePageUseForAuxMemory {
         // everywhere.
         final int bitmapTranslationFactor = 8 * 8; // ObjectAlignmentInBytes * BitsPerByte
         final long heapSizeForBitmapUsingLargePages = largePageSize * bitmapTranslationFactor;
-        final long heapSizeDiffForBitmap = Math.max(Math.max(allocGranularity * bitmapTranslationFactor, HEAP_REGION_SIZE), largePageSize);
+        final long heapSizeDiffForBitmap = Math.max(Math.max(allocGranularity * bitmapTranslationFactor, HEAP_REGION_SIZE),
+                                                    Math.max(largePageSize, heapAlignment));
 
         Asserts.assertGT(heapSizeForBitmapUsingLargePages, heapSizeDiffForBitmap,
                          "To test we would require to use an invalid heap size");
@@ -139,5 +172,25 @@ public class TestLargePageUseForAuxMemory {
         testVM("case4: only bitmap uses large pages (barely)", heapSizeForBitmapUsingLargePages, false, true);
         testVM("case5: only bitmap uses large pages (extra slack)", heapSizeForBitmapUsingLargePages + heapSizeDiffForBitmap, false, true);
         testVM("case6: nothing uses large pages (barely not)", heapSizeForBitmapUsingLargePages - heapSizeDiffForBitmap, false, false);
+    }
+
+    public static long parseMemoryString(String value) {
+        long multiplier = 1;
+
+        if (value.endsWith("B")) {
+            multiplier = 1;
+        } else if (value.endsWith("K")) {
+            multiplier = 1024;
+        } else if (value.endsWith("M")) {
+            multiplier = 1024 * 1024;
+        } else if (value.endsWith("G")) {
+            multiplier = 1024 * 1024 * 1024;
+        } else {
+            throw new IllegalArgumentException("Expected memory string '" + value + "'to end with either of: B, K, M, G");
+        }
+
+        long longValue = Long.parseUnsignedLong(value.substring(0, value.length() - 1));
+
+        return longValue * multiplier;
     }
 }

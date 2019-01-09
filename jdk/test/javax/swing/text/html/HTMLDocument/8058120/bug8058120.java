@@ -22,6 +22,7 @@
  */
 
 /* @test
+ * @key headful
  * @bug 8058120
  * @summary Rendering / caret errors with HTMLDocument
  * @author Dmitry Markov
@@ -109,5 +110,3 @@ public class bug8058120 {
         frame.setVisible(true);
     }
 }
-
-

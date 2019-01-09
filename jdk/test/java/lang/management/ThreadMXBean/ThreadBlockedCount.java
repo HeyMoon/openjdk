@@ -27,7 +27,7 @@
  * @summary Basic unit test of ThreadInfo.getBlockedCount()
  * @author  Alexei Guibadoulline and Mandy Chung
  * @author  Jaroslav Bachorik
- * @modules java.management
+ *
  * @run main ThreadBlockedCount
  */
 
@@ -35,8 +35,8 @@ import java.lang.management.*;
 import java.util.concurrent.Phaser;
 
 public class ThreadBlockedCount {
-        final static long EXPECTED_BLOCKED_COUNT = 3;
-    final static int  DEPTH = 10;
+        static final long EXPECTED_BLOCKED_COUNT = 3;
+    static final int  DEPTH = 10;
     private static final ThreadMXBean mbean
         = ManagementFactory.getThreadMXBean();
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,7 @@
 #include "runtime/frame.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "runtime/stubCodeGenerator.hpp"
-#include "utilities/top.hpp"
+#include "utilities/macros.hpp"
 
 // StubRoutines provides entry points to assembly routines used by
 // compiled code and the run-time system. Platform-specific entry
@@ -84,21 +84,8 @@ class StubRoutines: AllStatic {
 
   // Dependencies
   friend class StubGenerator;
-#if defined STUBROUTINES_MD_HPP
-# include STUBROUTINES_MD_HPP
-#elif defined TARGET_ARCH_MODEL_x86_32
-# include "stubRoutines_x86_32.hpp"
-#elif defined TARGET_ARCH_MODEL_x86_64
-# include "stubRoutines_x86_64.hpp"
-#elif defined TARGET_ARCH_MODEL_sparc
-# include "stubRoutines_sparc.hpp"
-#elif defined TARGET_ARCH_MODEL_zero
-# include "stubRoutines_zero.hpp"
-#elif defined TARGET_ARCH_MODEL_ppc_64
-# include "stubRoutines_ppc_64.hpp"
-#elif defined TARGET_ARCH_MODEL_aarch64
-# include "stubRoutines_aarch64.hpp"
-#endif
+
+#include CPU_HEADER(stubRoutines)
 
   static jint    _verify_oop_count;
   static address _verify_oop_subroutine_entry;
@@ -111,7 +98,7 @@ class StubRoutines: AllStatic {
   static address _throw_IncompatibleClassChangeError_entry;
   static address _throw_NullPointerException_at_call_entry;
   static address _throw_StackOverflowError_entry;
-  static address _handler_for_unsafe_access_entry;
+  static address _throw_delayed_StackOverflowError_entry;
 
   static address _atomic_xchg_entry;
   static address _atomic_xchg_ptr_entry;
@@ -185,6 +172,7 @@ class StubRoutines: AllStatic {
   static address _aescrypt_decryptBlock;
   static address _cipherBlockChaining_encryptAESCrypt;
   static address _cipherBlockChaining_decryptAESCrypt;
+  static address _counterMode_AESCrypt;
   static address _ghash_processBlocks;
 
   static address _sha1_implCompress;
@@ -197,7 +185,9 @@ class StubRoutines: AllStatic {
   static address _updateBytesCRC32;
   static address _crc_table_adr;
 
+  static address _crc32c_table_addr;
   static address _updateBytesCRC32C;
+  static address _updateBytesAdler32;
 
   static address _multiplyToLen;
   static address _squareToLen;
@@ -205,15 +195,26 @@ class StubRoutines: AllStatic {
   static address _montgomeryMultiply;
   static address _montgomerySquare;
 
+  static address _vectorizedMismatch;
+
+  static address _dexp;
+  static address _dlog;
+  static address _dlog10;
+  static address _dpow;
+  static address _dsin;
+  static address _dcos;
+  static address _dlibm_sin_cos_huge;
+  static address _dlibm_reduce_pi04l;
+  static address _dlibm_tan_cot_huge;
+  static address _dtan;
+
   // These are versions of the java.lang.Math methods which perform
   // the same operations as the intrinsic version.  They are used for
   // constant folding in the compiler to ensure equivalence.  If the
   // intrinsic version returns the same result as the strict version
   // then they can be set to the appropriate function from
   // SharedRuntime.
-  static double (*_intrinsic_log)(double);
   static double (*_intrinsic_log10)(double);
-  static double (*_intrinsic_exp)(double);
   static double (*_intrinsic_pow)(double, double);
   static double (*_intrinsic_sin)(double);
   static double (*_intrinsic_cos)(double);
@@ -240,8 +241,8 @@ class StubRoutines: AllStatic {
       (_code2 != NULL && _code2->blob_contains(addr)) ;
   }
 
-  static CodeBlob* code1() { return _code1; }
-  static CodeBlob* code2() { return _code2; }
+  static RuntimeBlob* code1() { return _code1; }
+  static RuntimeBlob* code2() { return _code2; }
 
   // Debugging
   static jint    verify_oop_count()                        { return _verify_oop_count; }
@@ -272,10 +273,7 @@ class StubRoutines: AllStatic {
   static address throw_IncompatibleClassChangeError_entry(){ return _throw_IncompatibleClassChangeError_entry; }
   static address throw_NullPointerException_at_call_entry(){ return _throw_NullPointerException_at_call_entry; }
   static address throw_StackOverflowError_entry()          { return _throw_StackOverflowError_entry; }
-
-  // Exceptions during unsafe access - should throw Java exception rather
-  // than crash.
-  static address handler_for_unsafe_access()               { return _handler_for_unsafe_access_entry; }
+  static address throw_delayed_StackOverflowError_entry()  { return _throw_delayed_StackOverflowError_entry; }
 
   static address atomic_xchg_entry()                       { return _atomic_xchg_entry; }
   static address atomic_xchg_ptr_entry()                   { return _atomic_xchg_ptr_entry; }
@@ -351,6 +349,7 @@ class StubRoutines: AllStatic {
   static address aescrypt_decryptBlock()                { return _aescrypt_decryptBlock; }
   static address cipherBlockChaining_encryptAESCrypt()  { return _cipherBlockChaining_encryptAESCrypt; }
   static address cipherBlockChaining_decryptAESCrypt()  { return _cipherBlockChaining_decryptAESCrypt; }
+  static address counterMode_AESCrypt() { return _counterMode_AESCrypt; }
   static address ghash_processBlocks() { return _ghash_processBlocks; }
 
   static address sha1_implCompress()     { return _sha1_implCompress; }
@@ -363,7 +362,9 @@ class StubRoutines: AllStatic {
   static address updateBytesCRC32()    { return _updateBytesCRC32; }
   static address crc_table_addr()      { return _crc_table_adr; }
 
+  static address crc32c_table_addr()   { return _crc32c_table_addr; }
   static address updateBytesCRC32C()   { return _updateBytesCRC32C; }
+  static address updateBytesAdler32()  { return _updateBytesAdler32; }
 
   static address multiplyToLen()       {return _multiplyToLen; }
   static address squareToLen()         {return _squareToLen; }
@@ -371,21 +372,26 @@ class StubRoutines: AllStatic {
   static address montgomeryMultiply()  { return _montgomeryMultiply; }
   static address montgomerySquare()    { return _montgomerySquare; }
 
+  static address vectorizedMismatch()  { return _vectorizedMismatch; }
+
+  static address dexp()                { return _dexp; }
+  static address dlog()                { return _dlog; }
+  static address dlog10()                { return _dlog10; }
+  static address dpow()                { return _dpow; }
+  static address dsin()                { return _dsin; }
+  static address dcos()                { return _dcos; }
+  static address dlibm_reduce_pi04l()  { return _dlibm_reduce_pi04l; }
+  static address dlibm_sin_cos_huge()  { return _dlibm_sin_cos_huge; }
+  static address dlibm_tan_cot_huge()  { return _dlibm_tan_cot_huge; }
+  static address dtan()                { return _dtan; }
+
   static address select_fill_function(BasicType t, bool aligned, const char* &name);
 
   static address zero_aligned_words()   { return _zero_aligned_words; }
 
-  static double  intrinsic_log(double d) {
-    assert(_intrinsic_log != NULL, "must be defined");
-    return _intrinsic_log(d);
-  }
   static double  intrinsic_log10(double d) {
-    assert(_intrinsic_log != NULL, "must be defined");
+    assert(_intrinsic_log10 != NULL, "must be defined");
     return _intrinsic_log10(d);
-  }
-  static double  intrinsic_exp(double d) {
-    assert(_intrinsic_exp != NULL, "must be defined");
-    return _intrinsic_exp(d);
   }
   static double  intrinsic_pow(double d, double d2) {
     assert(_intrinsic_pow != NULL, "must be defined");

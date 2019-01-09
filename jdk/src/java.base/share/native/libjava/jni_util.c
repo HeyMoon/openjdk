@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -147,9 +147,9 @@ JNU_ThrowInstantiationException(JNIEnv *env, const char *msg)
     JNU_ThrowByName(env, "java/lang/InstantiationException", msg);
 }
 
-
-/* Throw an exception by name, using the string returned by
- * JVM_LastErrorString for the detail string.  If the last-error
+/*
+ * Throw an exception by name, using the string returned by
+ * getLastErrorString for the detail string. If the last-error
  * string is NULL, use the given default detail string.
  */
 JNIEXPORT void JNICALL
@@ -174,9 +174,66 @@ JNU_ThrowByNameWithLastError(JNIEnv *env, const char *name,
     }
 }
 
-/* Throw an IOException, using the last-error string for the detail
- * string.  If the last-error string is NULL, use the given default
- * detail string.
+/*
+ * Throw an exception by name, using a given message and the string
+ * returned by getLastErrorString to construct the detail string.
+ */
+JNIEXPORT void JNICALL
+JNU_ThrowByNameWithMessageAndLastError
+  (JNIEnv *env, const char *name, const char *message)
+{
+    char buf[256];
+    size_t n = getLastErrorString(buf, sizeof(buf));
+    size_t messagelen = message == NULL ? 0 : strlen(message);
+
+    if (n > 0) {
+        jstring s = JNU_NewStringPlatform(env, buf);
+        if (s != NULL) {
+            jobject x = NULL;
+            if (messagelen) {
+                jstring s2 = NULL;
+                size_t messageextlen = messagelen + 4;
+                char *str1 = (char *)malloc((messageextlen) * sizeof(char));
+                if (str1 == 0) {
+                    JNU_ThrowOutOfMemoryError(env, 0);
+                    return;
+                }
+                jio_snprintf(str1, messageextlen, " (%s)", message);
+                s2 = (*env)->NewStringUTF(env, str1);
+                free(str1);
+                JNU_CHECK_EXCEPTION(env);
+                if (s2 != NULL) {
+                    jstring s3 = JNU_CallMethodByName(
+                                     env, NULL, s, "concat",
+                                     "(Ljava/lang/String;)Ljava/lang/String;",
+                                     s2).l;
+                    (*env)->DeleteLocalRef(env, s2);
+                    JNU_CHECK_EXCEPTION(env);
+                    if (s3 != NULL) {
+                        (*env)->DeleteLocalRef(env, s);
+                        s = s3;
+                    }
+                }
+            }
+            x = JNU_NewObjectByName(env, name, "(Ljava/lang/String;)V", s);
+            if (x != NULL) {
+                (*env)->Throw(env, x);
+            }
+        }
+    }
+
+    if (!(*env)->ExceptionOccurred(env)) {
+        if (messagelen) {
+            JNU_ThrowByName(env, name, message);
+        } else {
+            JNU_ThrowByName(env, name, "no further information");
+        }
+    }
+}
+
+/*
+ * Convenience method.
+ * Call JNU_ThrowByNameWithLastError for java.io.IOException.
  */
 JNIEXPORT void JNICALL
 JNU_ThrowIOExceptionWithLastError(JNIEnv *env, const char *defaultDetail)
@@ -660,7 +717,8 @@ initializeEncoding(JNIEnv *env)
             */
                     if ((strcmp(encname, "8859_1") == 0) ||
                         (strcmp(encname, "ISO8859-1") == 0) ||
-                        (strcmp(encname, "ISO8859_1") == 0))
+                        (strcmp(encname, "ISO8859_1") == 0) ||
+                        (strcmp(encname, "ISO-8859-1") == 0))
                         fastEncoding = FAST_8859_1;
                     else if (strcmp(encname, "ISO646-US") == 0)
                         fastEncoding = FAST_646_US;

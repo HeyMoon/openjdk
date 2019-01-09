@@ -34,13 +34,20 @@
 /*
  * @test
  * @bug 4486658
- * @run main/timeout=720 ExchangeLoops
  * @summary checks to make sure a pipeline of exchangers passes data.
+ * @library /lib/testlibrary/
  */
 
-import java.util.concurrent.*;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Exchanger;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import jdk.testlibrary.Utils;
 
 public class ExchangeLoops {
+    static final long LONG_DELAY_MS = Utils.adjustTimeout(10_000);
     static final ExecutorService pool = Executors.newCachedThreadPool();
     static boolean print = false;
 
@@ -49,17 +56,16 @@ public class ExchangeLoops {
         Int(int i) { value = i; }
     }
 
-
     public static void main(String[] args) throws Exception {
         int maxStages = 5;
-        int iters = 10000;
+        int iters = 2000;
 
         if (args.length > 0)
             maxStages = Integer.parseInt(args[0]);
 
         print = false;
         System.out.println("Warmup...");
-        oneRun(2, 100000);
+        oneRun(2, iters);
         print = true;
 
         for (int i = 2; i <= maxStages; i += (i+1) >>> 1) {
@@ -67,7 +73,7 @@ public class ExchangeLoops {
             oneRun(i, iters);
         }
         pool.shutdown();
-        if (! pool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS))
+        if (! pool.awaitTermination(LONG_DELAY_MS, MILLISECONDS))
             throw new Error();
    }
 
@@ -110,8 +116,8 @@ public class ExchangeLoops {
                 barrier.await();
 
             }
-            catch (Exception ie) {
-                ie.printStackTrace();
+            catch (Exception ex) {
+                ex.printStackTrace();
                 return;
             }
         }
@@ -121,7 +127,7 @@ public class ExchangeLoops {
         LoopHelpers.BarrierTimer timer = new LoopHelpers.BarrierTimer();
         CyclicBarrier barrier = new CyclicBarrier(nthreads + 1, timer);
         Exchanger<Int> l = null;
-        Exchanger<Int> r = new Exchanger<Int>();
+        Exchanger<Int> r = new Exchanger<>();
         for (int i = 0; i < nthreads; ++i) {
             pool.execute(new Stage(l, r, barrier, iters));
             l = r;

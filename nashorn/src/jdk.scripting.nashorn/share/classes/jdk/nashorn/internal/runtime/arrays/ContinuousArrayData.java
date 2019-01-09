@@ -33,9 +33,9 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.SwitchPoint;
-import jdk.internal.dynalink.CallSiteDescriptor;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.LinkRequest;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.LinkRequest;
 import jdk.nashorn.internal.codegen.types.Type;
 import jdk.nashorn.internal.lookup.Lookup;
 import jdk.nashorn.internal.runtime.ScriptObject;
@@ -191,7 +191,7 @@ public abstract class ContinuousArrayData extends ArrayData {
 
     /**
      * Return element setter for a {@link ContinuousArrayData}
-     * @param clazz        clazz for exact type guard
+     * @param clazz        class for exact type guard
      * @param setHas       set has guard
      * @param elementType  element type
      * @return method handle for element setter
@@ -287,7 +287,7 @@ public abstract class ContinuousArrayData extends ArrayData {
      * @param arg argument
      * @return new array length
      */
-    public long fastPush(final int arg) {
+    public double fastPush(final int arg) {
         throw new ClassCastException(String.valueOf(getClass())); //type is wrong, relink
     }
 
@@ -296,7 +296,7 @@ public abstract class ContinuousArrayData extends ArrayData {
      * @param arg argument
      * @return new array length
      */
-    public long fastPush(final long arg) {
+    public double fastPush(final long arg) {
         throw new ClassCastException(String.valueOf(getClass())); //type is wrong, relink
     }
 
@@ -305,7 +305,7 @@ public abstract class ContinuousArrayData extends ArrayData {
      * @param arg argument
      * @return new array length
      */
-    public long fastPush(final double arg) {
+    public double fastPush(final double arg) {
         throw new ClassCastException(String.valueOf(getClass())); //type is wrong, relink
     }
 
@@ -314,7 +314,7 @@ public abstract class ContinuousArrayData extends ArrayData {
      * @param arg argument
      * @return new array length
      */
-    public long fastPush(final Object arg) {
+    public double fastPush(final Object arg) {
         throw new ClassCastException(String.valueOf(getClass())); //type is wrong, relink
     }
 
@@ -323,14 +323,6 @@ public abstract class ContinuousArrayData extends ArrayData {
      * @return element value
      */
     public int fastPopInt() {
-        throw new ClassCastException(String.valueOf(getClass())); //type is wrong, relink
-    }
-
-    /**
-     * Specialization - fast pop implementation
-     * @return element value
-     */
-    public long fastPopLong() {
         throw new ClassCastException(String.valueOf(getClass())); //type is wrong, relink
     }
 

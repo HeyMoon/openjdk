@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,7 +38,7 @@
 #include "oops/oop.inline.hpp"
 #include "prims/privilegedStack.hpp"
 #include "runtime/arguments.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/frame.hpp"
 #include "runtime/java.hpp"
 #include "runtime/os.hpp"
@@ -51,8 +51,10 @@
 #include "services/heapDumper.hpp"
 #include "utilities/defaultStream.hpp"
 #include "utilities/events.hpp"
-#include "utilities/top.hpp"
+#include "utilities/macros.hpp"
 #include "utilities/vmError.hpp"
+
+#include <stdio.h>
 
 #ifndef ASSERT
 #  ifdef _DEBUG
@@ -78,13 +80,11 @@
 #  endif
 #endif // PRODUCT
 
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
-
 FormatBufferResource::FormatBufferResource(const char * format, ...)
-  : FormatBufferBase((char*)resource_allocate_bytes(RES_BUFSZ)) {
+  : FormatBufferBase((char*)resource_allocate_bytes(FormatBufferBase::BufferSize)) {
   va_list argp;
   va_start(argp, format);
-  jio_vsnprintf(_buf, RES_BUFSZ, format, argp);
+  jio_vsnprintf(_buf, FormatBufferBase::BufferSize, format, argp);
   va_end(argp);
 }
 
@@ -185,7 +185,7 @@ bool error_is_suppressed(const char* file_name, int line_no) {
     return true;
   }
 
-  if (!is_error_reported()) {
+  if (!is_error_reported() && !SuppressFatalErrorMessage) {
     // print a friendly hint:
     fdStream out(defaultStream::output_fd());
     out.print_raw_cr("# To suppress the following error report, specify this argument");
@@ -207,26 +207,41 @@ bool error_is_suppressed(const char* file_name, int line_no) {
 
 #endif // !PRODUCT
 
-void report_vm_error(const char* file, int line, const char* error_msg,
-                     const char* detail_msg)
+void report_vm_error(const char* file, int line, const char* error_msg)
 {
-  if (Debugging || error_is_suppressed(file, line)) return;
-  Thread* const thread = ThreadLocalStorage::get_thread_slow();
-  VMError err(thread, file, line, error_msg, detail_msg);
-  err.report_and_die();
+  report_vm_error(file, line, error_msg, "%s", "");
 }
 
-void report_fatal(const char* file, int line, const char* message)
+void report_vm_error(const char* file, int line, const char* error_msg, const char* detail_fmt, ...)
 {
-  report_vm_error(file, line, "fatal error", message);
+  if (Debugging || error_is_suppressed(file, line)) return;
+  va_list detail_args;
+  va_start(detail_args, detail_fmt);
+  VMError::report_and_die(Thread::current_or_null(), file, line, error_msg, detail_fmt, detail_args);
+  va_end(detail_args);
+}
+
+void report_vm_status_error(const char* file, int line, const char* error_msg,
+                            int status, const char* detail) {
+  report_vm_error(file, line, error_msg, "error %s(%d), %s", os::errno_name(status), status, detail);
+}
+
+void report_fatal(const char* file, int line, const char* detail_fmt, ...)
+{
+  if (Debugging || error_is_suppressed(file, line)) return;
+  va_list detail_args;
+  va_start(detail_args, detail_fmt);
+  VMError::report_and_die(Thread::current_or_null(), file, line, "fatal error", detail_fmt, detail_args);
+  va_end(detail_args);
 }
 
 void report_vm_out_of_memory(const char* file, int line, size_t size,
-                             VMErrorType vm_err_type, const char* message) {
+                             VMErrorType vm_err_type, const char* detail_fmt, ...) {
   if (Debugging) return;
-
-  Thread* thread = ThreadLocalStorage::get_thread_slow();
-  VMError(thread, file, line, size, vm_err_type, message).report_and_die();
+  va_list detail_args;
+  va_start(detail_args, detail_fmt);
+  VMError::report_and_die(Thread::current_or_null(), file, line, size, vm_err_type, detail_fmt, detail_args);
+  va_end(detail_args);
 
   // The UseOSErrorReporting option in report_and_die() may allow a return
   // to here. If so then we'll have to figure out how to handle it.
@@ -245,6 +260,21 @@ void report_unimplemented(const char* file, int line) {
   report_vm_error(file, line, "Unimplemented()");
 }
 
+#ifdef ASSERT
+bool is_executing_unit_tests() {
+  return ExecutingUnitTests;
+}
+
+void report_assert_msg(const char* msg, ...) {
+  va_list ap;
+  va_start(ap, msg);
+
+  fprintf(stderr, "assert failed: %s\n", err_msg(FormatBufferDummy(), msg, ap).buffer());
+
+  va_end(ap);
+}
+#endif // ASSERT
+
 void report_untested(const char* file, int line, const char* message) {
 #ifndef PRODUCT
   warning("Untested: %s in %s: %d\n", message, file, line);
@@ -252,6 +282,12 @@ void report_untested(const char* file, int line, const char* message) {
 }
 
 void report_out_of_shared_space(SharedSpaceType shared_space) {
+  if (shared_space == SharedOptional) {
+    // The estimated shared_optional_space size is large enough
+    // for all class bytes.  It should not run out of space.
+    ShouldNotReachHere();
+  }
+
   static const char* name[] = {
     "shared read only space",
     "shared read write space",
@@ -271,6 +307,7 @@ void report_out_of_shared_space(SharedSpaceType shared_space) {
            name[shared_space], flag[shared_space], name[shared_space]);
    exit(2);
 }
+
 
 void report_insufficient_metaspace(size_t required_size) {
   warning("\nThe MaxMetaspaceSize of " SIZE_FORMAT " bytes is not large enough.\n"
@@ -295,8 +332,17 @@ void report_java_out_of_memory(const char* message) {
     }
 
     if (OnOutOfMemoryError && OnOutOfMemoryError[0]) {
-      VMError err(message);
-      err.report_java_out_of_memory();
+      VMError::report_java_out_of_memory(message);
+    }
+
+    if (CrashOnOutOfMemoryError) {
+      tty->print_cr("Aborting due to java.lang.OutOfMemoryError: %s", message);
+      fatal("OutOfMemory encountered: %s", message);
+    }
+
+    if (ExitOnOutOfMemoryError) {
+      tty->print_cr("Terminating due to java.lang.OutOfMemoryError: %s", message);
+      os::exit(3);
     }
   }
 }
@@ -324,7 +370,9 @@ static void crash_with_sigfpe() {
   volatile int x = 0;
   volatile int y = 1/x;
 #ifndef _WIN32
-  raise(SIGFPE);
+  // OSX implements raise(sig) incorrectly so we need to
+  // explicitly target the current thread
+  pthread_kill(pthread_self(), SIGFPE);
 #endif
 } // end: crash_with_sigfpe
 
@@ -365,22 +413,22 @@ void controlled_crash(int how) {
   char * const dataPtr = NULL;  // bad data pointer
   const void (*funcPtr)(void) = (const void(*)()) 0xF;  // bad function pointer
 
-  // Keep this in sync with test/runtime/6888954/vmerrors.sh.
+  // Keep this in sync with test/runtime/ErrorHandling/ErrorHandler.java
   switch (how) {
     case  1: vmassert(str == NULL, "expected null");
     case  2: vmassert(num == 1023 && *str == 'X',
-                      err_msg("num=" SIZE_FORMAT " str=\"%s\"", num, str));
+                      "num=" SIZE_FORMAT " str=\"%s\"", num, str);
     case  3: guarantee(str == NULL, "expected null");
     case  4: guarantee(num == 1023 && *str == 'X',
-                       err_msg("num=" SIZE_FORMAT " str=\"%s\"", num, str));
+                       "num=" SIZE_FORMAT " str=\"%s\"", num, str);
     case  5: fatal("expected null");
-    case  6: fatal(err_msg("num=" SIZE_FORMAT " str=\"%s\"", num, str));
-    case  7: fatal(err_msg("%s%s#    %s%s#    %s%s#    %s%s#    %s%s#    "
-                           "%s%s#    %s%s#    %s%s#    %s%s#    %s%s#    "
-                           "%s%s#    %s%s#    %s%s#    %s%s#    %s",
-                           msg, eol, msg, eol, msg, eol, msg, eol, msg, eol,
-                           msg, eol, msg, eol, msg, eol, msg, eol, msg, eol,
-                           msg, eol, msg, eol, msg, eol, msg, eol, msg));
+    case  6: fatal("num=" SIZE_FORMAT " str=\"%s\"", num, str);
+    case  7: fatal("%s%s#    %s%s#    %s%s#    %s%s#    %s%s#    "
+                   "%s%s#    %s%s#    %s%s#    %s%s#    %s%s#    "
+                   "%s%s#    %s%s#    %s%s#    %s%s#    %s",
+                   msg, eol, msg, eol, msg, eol, msg, eol, msg, eol,
+                   msg, eol, msg, eol, msg, eol, msg, eol, msg, eol,
+                   msg, eol, msg, eol, msg, eol, msg, eol, msg);
     case  8: vm_exit_out_of_memory(num, OOM_MALLOC_ERROR, "ChunkPool::allocate");
     case  9: ShouldNotCallThis();
     case 10: ShouldNotReachHere();
@@ -442,7 +490,7 @@ extern "C" void blob(CodeBlob* cb) {
 extern "C" void dump_vtable(address p) {
   Command c("dump_vtable");
   Klass* k = (Klass*)p;
-  InstanceKlass::cast(k)->vtable()->print();
+  k->vtable()->print();
 }
 
 
@@ -461,12 +509,13 @@ extern "C" void nm(intptr_t p) {
 extern "C" void disnm(intptr_t p) {
   Command c("disnm");
   CodeBlob* cb = CodeCache::find_blob((address) p);
-  nmethod* nm = cb->as_nmethod_or_null();
-  if (nm) {
-    nm->print();
-    Disassembler::decode(nm);
-  } else {
-    cb->print();
+  if (cb != NULL) {
+    nmethod* nm = cb->as_nmethod_or_null();
+    if (nm != NULL) {
+      nm->print();
+    } else {
+      cb->print();
+    }
     Disassembler::decode(cb);
   }
 }
@@ -486,7 +535,7 @@ extern "C" void printnm(intptr_t p) {
 
 extern "C" void universe() {
   Command c("universe");
-  Universe::print();
+  Universe::print_on(tty);
 }
 
 
@@ -515,7 +564,7 @@ extern "C" void pp(void* p) {
     oop obj = oop(p);
     obj->print();
   } else {
-    tty->print(PTR_FORMAT, p);
+    tty->print(PTR_FORMAT, p2i(p));
   }
 }
 
@@ -527,7 +576,7 @@ extern "C" void findpc(intptr_t x);
 #endif // !PRODUCT
 
 extern "C" void ps() { // print stack
-  if (Thread::current() == NULL) return;
+  if (Thread::current_or_null() == NULL) return;
   Command c("ps");
 
 
@@ -550,7 +599,7 @@ extern "C" void ps() { // print stack
     frame f = os::current_frame();
     RegisterMap reg_map(p);
     f = f.sender(&reg_map);
-    tty->print("(guessing starting frame id=%#p based on current fp)\n", f.id());
+    tty->print("(guessing starting frame id=" PTR_FORMAT " based on current fp)\n", p2i(f.id()));
     p->trace_stack_from(vframe::new_vframe(&f, &reg_map, p));
   pd_ps(f);
 #endif // PRODUCT
@@ -606,7 +655,7 @@ extern "C" void safepoints() {
 #endif // !PRODUCT
 
 extern "C" void pss() { // print all stacks
-  if (Thread::current() == NULL) return;
+  if (Thread::current_or_null() == NULL) return;
   Command c("pss");
   Threads::print(true, PRODUCT_ONLY(false) NOT_PRODUCT(true));
 }
@@ -722,7 +771,7 @@ void print_native_stack(outputStream* st, frame fr, Thread* t, char* buf, int bu
 
   // see if it's a valid frame
   if (fr.pc()) {
-    st->print_cr("Native frames: (J=compiled Java code, j=interpreted, Vv=VM code, C=native code)");
+    st->print_cr("Native frames: (J=compiled Java code, A=aot compiled Java code, j=interpreted, Vv=VM code, C=native code)");
 
     int count = 0;
     while (count++ < StackPrintLimit) {
@@ -763,7 +812,7 @@ void print_native_stack(outputStream* st, frame fr, Thread* t, char* buf, int bu
 extern "C" void pns(void* sp, void* fp, void* pc) { // print native stack
   Command c("pns");
   static char buf[O_BUFLEN];
-  Thread* t = ThreadLocalStorage::get_thread_slow();
+  Thread* t = Thread::current_or_null();
   // Call generic frame constructor (certain arguments may be ignored)
   frame fr(sp, fp, pc);
   print_native_stack(tty, fr, t, buf, sizeof(buf));

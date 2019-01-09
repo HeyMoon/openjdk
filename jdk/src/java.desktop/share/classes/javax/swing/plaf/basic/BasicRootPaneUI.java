@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -256,7 +256,8 @@ public class BasicRootPaneUI extends RootPaneUI implements
             }
         }
 
-        public boolean isEnabled(Object sender) {
+        @Override
+        public boolean accept(Object sender) {
             String key = getName();
             if(key == POST_POPUP) {
                 MenuElement[] elems = MenuSelectionManager
@@ -278,9 +279,9 @@ public class BasicRootPaneUI extends RootPaneUI implements
                 return false;
             }
 
-            if (sender != null && sender instanceof JRootPane) {
+            if (sender instanceof JRootPane) {
                 JButton owner = ((JRootPane)sender).getDefaultButton();
-                return (owner != null && owner.getModel().isEnabled());
+                return (owner != null && owner.getModel().isEnabled() && owner.isShowing());
             }
             return true;
         }

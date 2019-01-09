@@ -28,9 +28,11 @@
  * @author Martin Buchholz
  */
 
-import java.io.*;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.concurrent.DelayQueue;
+import java.util.concurrent.Delayed;
+import java.util.concurrent.TimeUnit;
 
 public class Iterate {
     private static class Godot implements Delayed {
@@ -40,7 +42,7 @@ public class Iterate {
 
     private static void realMain(String[] args) throws Throwable {
         Godot[] godots = new Godot[] { new Godot(), new Godot(), new Godot() };
-        DelayQueue<Godot> q = new DelayQueue<Godot>(Arrays.asList(godots));
+        DelayQueue<Godot> q = new DelayQueue<>(Arrays.asList(godots));
         Iterator<Godot> it = q.iterator();
         q.clear();
         check(it.hasNext());

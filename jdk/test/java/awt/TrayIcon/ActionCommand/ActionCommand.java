@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,10 @@ import java.awt.image.BufferedImage;
  *          of the ActionEvent triggered when TrayIcon is double clicked
  *          (single clicked, on Mac)
  * @author Dmitriy Ermashov (dmitriy.ermashov@oracle.com)
+ * @modules java.desktop/java.awt:open
  * @library ../../../../lib/testlibrary ../
+ * @library /java/awt/patchlib
+ * @build java.desktop/java.awt.Helper
  * @build ExtendedRobot SystemTrayIconHelper
  * @run main ActionCommand
  */
@@ -59,8 +62,11 @@ public class ActionCommand {
                         "and rerun test.");
             } else  if (System.getProperty("os.name").toLowerCase().startsWith("mac")){
                 isMacOS = true;
+            } else if (SystemTrayIconHelper.isOel7()) {
+                System.out.println("OEL 7 doesn't support double click in " +
+                        "systray. Skipped");
+                return;
             }
-
             new ActionCommand().doTest();
         }
     }

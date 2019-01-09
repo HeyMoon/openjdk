@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
  */
 
 #include "precompiled.hpp"
+#include "gc/parallel/objectStartArray.inline.hpp"
 #include "gc/parallel/parallelScavengeHeap.hpp"
 #include "gc/parallel/psAdaptiveSizePolicy.hpp"
 #include "gc/parallel/psMarkSweepDecorator.hpp"
@@ -30,6 +31,7 @@
 #include "gc/shared/cardTableModRefBS.hpp"
 #include "gc/shared/gcLocker.inline.hpp"
 #include "gc/shared/spaceDecorator.hpp"
+#include "logging/log.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/java.hpp"
 
@@ -256,10 +258,8 @@ void PSOldGen::expand(size_t bytes) {
     success = expand_to_reserved();
   }
 
-  if (PrintGC && Verbose) {
-    if (success && GC_locker::is_active_and_needs_gc()) {
-      gclog_or_tty->print_cr("Garbage collection disabled, expanded heap instead");
-    }
+  if (success && GCLocker::is_active_and_needs_gc()) {
+    log_debug(gc)("Garbage collection disabled, expanded heap instead");
   }
 }
 
@@ -291,13 +291,11 @@ bool PSOldGen::expand_by(size_t bytes) {
     }
   }
 
-  if (result && Verbose && PrintGC) {
+  if (result) {
     size_t new_mem_size = virtual_space()->committed_size();
     size_t old_mem_size = new_mem_size - bytes;
-    gclog_or_tty->print_cr("Expanding %s from " SIZE_FORMAT "K by "
-                                       SIZE_FORMAT "K to "
-                                       SIZE_FORMAT "K",
-                    name(), old_mem_size/K, bytes/K, new_mem_size/K);
+    log_debug(gc)("Expanding %s from " SIZE_FORMAT "K by " SIZE_FORMAT "K to " SIZE_FORMAT "K",
+                  name(), old_mem_size/K, bytes/K, new_mem_size/K);
   }
 
   return result;
@@ -311,7 +309,7 @@ bool PSOldGen::expand_to_reserved() {
   const size_t remaining_bytes = virtual_space()->uncommitted_size();
   if (remaining_bytes > 0) {
     result = expand_by(remaining_bytes);
-    DEBUG_ONLY(if (!result) warning("grow to reserve failed"));
+    DEBUG_ONLY(if (!result) log_warning(gc)("grow to reserve failed"));
   }
   return result;
 }
@@ -326,14 +324,10 @@ void PSOldGen::shrink(size_t bytes) {
     virtual_space()->shrink_by(bytes);
     post_resize();
 
-    if (Verbose && PrintGC) {
-      size_t new_mem_size = virtual_space()->committed_size();
-      size_t old_mem_size = new_mem_size + bytes;
-      gclog_or_tty->print_cr("Shrinking %s from " SIZE_FORMAT "K by "
-                                         SIZE_FORMAT "K to "
-                                         SIZE_FORMAT "K",
-                      name(), old_mem_size/K, bytes/K, new_mem_size/K);
-    }
+    size_t new_mem_size = virtual_space()->committed_size();
+    size_t old_mem_size = new_mem_size + bytes;
+    log_debug(gc)("Shrinking %s from " SIZE_FORMAT "K by " SIZE_FORMAT "K to " SIZE_FORMAT "K",
+                  name(), old_mem_size/K, bytes/K, new_mem_size/K);
   }
 }
 
@@ -353,14 +347,12 @@ void PSOldGen::resize(size_t desired_free_space) {
 
   const size_t current_size = capacity_in_bytes();
 
-  if (PrintAdaptiveSizePolicy && Verbose) {
-    gclog_or_tty->print_cr("AdaptiveSizePolicy::old generation size: "
-      "desired free: " SIZE_FORMAT " used: " SIZE_FORMAT
-      " new size: " SIZE_FORMAT " current size " SIZE_FORMAT
-      " gen limits: " SIZE_FORMAT " / " SIZE_FORMAT,
-      desired_free_space, used_in_bytes(), new_size, current_size,
-      gen_size_limit(), min_gen_size());
-  }
+  log_trace(gc, ergo)("AdaptiveSizePolicy::old generation size: "
+    "desired free: " SIZE_FORMAT " used: " SIZE_FORMAT
+    " new size: " SIZE_FORMAT " current size " SIZE_FORMAT
+    " gen limits: " SIZE_FORMAT " / " SIZE_FORMAT,
+    desired_free_space, used_in_bytes(), new_size, current_size,
+    gen_size_limit(), min_gen_size());
 
   if (new_size == current_size) {
     // No change requested
@@ -376,14 +368,10 @@ void PSOldGen::resize(size_t desired_free_space) {
     shrink(change_bytes);
   }
 
-  if (PrintAdaptiveSizePolicy) {
-    ParallelScavengeHeap* heap = ParallelScavengeHeap::heap();
-    gclog_or_tty->print_cr("AdaptiveSizePolicy::old generation size: "
-                  "collection: %d "
-                  "(" SIZE_FORMAT ") -> (" SIZE_FORMAT ") ",
-                  heap->total_collections(),
-                  size_before, virtual_space()->committed_size());
-  }
+  log_trace(gc, ergo)("AdaptiveSizePolicy::old generation size: collection: %d (" SIZE_FORMAT ") -> (" SIZE_FORMAT ") ",
+                      ParallelScavengeHeap::heap()->total_collections(),
+                      size_before,
+                      virtual_space()->committed_size());
 }
 
 // NOTE! We need to be careful about resizing. During a GC, multiple
@@ -430,13 +418,8 @@ size_t PSOldGen::available_for_contraction() {
 void PSOldGen::print() const { print_on(tty);}
 void PSOldGen::print_on(outputStream* st) const {
   st->print(" %-15s", name());
-  if (PrintGCDetails && Verbose) {
-    st->print(" total " SIZE_FORMAT ", used " SIZE_FORMAT,
-                capacity_in_bytes(), used_in_bytes());
-  } else {
-    st->print(" total " SIZE_FORMAT "K, used " SIZE_FORMAT "K",
-                capacity_in_bytes()/K, used_in_bytes()/K);
-  }
+  st->print(" total " SIZE_FORMAT "K, used " SIZE_FORMAT "K",
+              capacity_in_bytes()/K, used_in_bytes()/K);
   st->print_cr(" [" INTPTR_FORMAT ", " INTPTR_FORMAT ", " INTPTR_FORMAT ")",
                 p2i(virtual_space()->low_boundary()),
                 p2i(virtual_space()->high()),
@@ -446,13 +429,8 @@ void PSOldGen::print_on(outputStream* st) const {
 }
 
 void PSOldGen::print_used_change(size_t prev_used) const {
-  gclog_or_tty->print(" [%s:", name());
-  gclog_or_tty->print(" "  SIZE_FORMAT "K"
-                      "->" SIZE_FORMAT "K"
-                      "("  SIZE_FORMAT "K)",
-                      prev_used / K, used_in_bytes() / K,
-                      capacity_in_bytes() / K);
-  gclog_or_tty->print("]");
+  log_info(gc, heap)("%s: "  SIZE_FORMAT "K->" SIZE_FORMAT "K("  SIZE_FORMAT "K)",
+      name(), prev_used / K, used_in_bytes() / K, capacity_in_bytes() / K);
 }
 
 void PSOldGen::update_counters() {
@@ -486,12 +464,12 @@ void PSOldGen::verify() {
   object_space()->verify();
 }
 class VerifyObjectStartArrayClosure : public ObjectClosure {
-  PSOldGen* _gen;
+  PSOldGen* _old_gen;
   ObjectStartArray* _start_array;
 
  public:
-  VerifyObjectStartArrayClosure(PSOldGen* gen, ObjectStartArray* start_array) :
-    _gen(gen), _start_array(start_array) { }
+  VerifyObjectStartArrayClosure(PSOldGen* old_gen, ObjectStartArray* start_array) :
+    _old_gen(old_gen), _start_array(start_array) { }
 
   virtual void do_object(oop obj) {
     HeapWord* test_addr = (HeapWord*)obj + 1;

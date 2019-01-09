@@ -37,7 +37,6 @@ import java.util.List;
  * @author James McIlree
  * @since  1.3
  */
-@jdk.Exported
 public interface ThreadGroupReference extends ObjectReference {
 
     /**
@@ -93,7 +92,7 @@ public interface ThreadGroupReference extends ObjectReference {
      * Returns a List containing each active {@link ThreadGroupReference} in this
      * thread group. Only the active thread groups in this immediate thread group
      * (and not its subgroups) are returned.
-     * See <a href="{@docRoot}/../../../../api/java/lang/ThreadGroup.html">java.lang.ThreadGroup</a>
+     * See {@link java.lang.ThreadGroup}
      * for information about 'active' ThreadGroups.
      * @return a List of {@link ThreadGroupReference} objects mirroring the
      * active thread groups from this thread group in the target VM.

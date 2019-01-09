@@ -40,7 +40,6 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
-import sun.misc.ManagedLocalsThread;
 
 /**
  * A multi-threaded implementation of Selector for Windows.
@@ -54,7 +53,7 @@ final class WindowsSelectorImpl extends SelectorImpl {
     private final int INIT_CAP = 8;
     // Maximum number of sockets for select().
     // Should be INIT_CAP times a power of 2
-    private final static int MAX_SELECTABLE_FDS = 1024;
+    private static final int MAX_SELECTABLE_FDS = 1024;
 
     // The list of SelectableChannels serviced by this Selector. Every mod
     // MAX_SELECTABLE_FDS entry is bogus, to align this array with the poll
@@ -85,16 +84,16 @@ final class WindowsSelectorImpl extends SelectorImpl {
     private Object closeLock = new Object();
 
     // Maps file descriptors to their indices in  pollArray
-    private final static class FdMap extends HashMap<Integer, MapEntry> {
+    private static final class FdMap extends HashMap<Integer, MapEntry> {
         static final long serialVersionUID = 0L;
         private MapEntry get(int desc) {
-            return get(new Integer(desc));
+            return get(Integer.valueOf(desc));
         }
         private MapEntry put(SelectionKeyImpl ski) {
-            return put(new Integer(ski.channel.getFDVal()), new MapEntry(ski));
+            return put(Integer.valueOf(ski.channel.getFDVal()), new MapEntry(ski));
         }
         private MapEntry remove(SelectionKeyImpl ski) {
-            Integer fd = new Integer(ski.channel.getFDVal());
+            Integer fd = Integer.valueOf(ski.channel.getFDVal());
             MapEntry x = get(fd);
             if ((x != null) && (x.ski.channel == ski.channel))
                 return remove(fd);
@@ -103,7 +102,7 @@ final class WindowsSelectorImpl extends SelectorImpl {
     }
 
     // class for fdMap entries
-    private final static class MapEntry {
+    private static final class MapEntry {
         SelectionKeyImpl ski;
         long updateCount = 0;
         long clearedCount = 0;
@@ -120,7 +119,7 @@ final class WindowsSelectorImpl extends SelectorImpl {
 
     // Lock for interrupt triggering and clearing
     private final Object interruptLock = new Object();
-    private volatile boolean interruptTriggered = false;
+    private volatile boolean interruptTriggered;
 
     WindowsSelectorImpl(SelectorProvider sp) throws IOException {
         super(sp);
@@ -404,13 +403,14 @@ final class WindowsSelectorImpl extends SelectorImpl {
     }
 
     // Represents a helper thread used for select.
-    private final class SelectThread extends ManagedLocalsThread {
+    private final class SelectThread extends Thread {
         private final int index; // index of this thread
         final SubSelector subSelector;
         private long lastRun = 0; // last run number
         private volatile boolean zombie;
         // Creates a new thread
         private SelectThread(int i) {
+            super(null, null, "SelectorHelper", 0, false);
             this.index = i;
             this.subSelector = new SubSelector(i);
             //make sure we wait for next round of poll

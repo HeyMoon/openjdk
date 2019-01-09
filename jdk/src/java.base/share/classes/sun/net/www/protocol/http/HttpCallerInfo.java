@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 package sun.net.www.protocol.http;
 
+import java.net.Authenticator;
 import java.net.Authenticator.RequestorType;
 import java.net.InetAddress;
 import java.net.URL;
@@ -42,13 +43,14 @@ import java.net.URL;
  *
  * 2. Schemed: With the scheme field filled, can be used in JGSS-API calls.
  */
-final public class HttpCallerInfo {
+public final class HttpCallerInfo {
     // All info that an Authenticator needs.
-    final public URL url;
-    final public String host, protocol, prompt, scheme;
-    final public int port;
-    final public InetAddress addr;
-    final public RequestorType authType;
+    public final URL url;
+    public final String host, protocol, prompt, scheme;
+    public final int port;
+    public final InetAddress addr;
+    public final RequestorType authType;
+    public final Authenticator authenticator;
 
     /**
      * Create a schemed object based on an un-schemed one.
@@ -62,12 +64,13 @@ final public class HttpCallerInfo {
         this.addr = old.addr;
         this.authType = old.authType;
         this.scheme = scheme;
+        this.authenticator =  old.authenticator;
     }
 
     /**
      * Constructor an un-schemed object for site access.
      */
-    public HttpCallerInfo(URL url) {
+    public HttpCallerInfo(URL url, Authenticator a) {
         this.url= url;
         prompt = "";
         host = url.getHost();
@@ -90,12 +93,13 @@ final public class HttpCallerInfo {
         protocol = url.getProtocol();
         authType = RequestorType.SERVER;
         scheme = "";
+        authenticator = a;
     }
 
     /**
      * Constructor an un-schemed object for proxy access.
      */
-    public HttpCallerInfo(URL url, String host, int port) {
+    public HttpCallerInfo(URL url, String host, int port, Authenticator a) {
         this.url= url;
         this.host = host;
         this.port = port;
@@ -104,5 +108,6 @@ final public class HttpCallerInfo {
         protocol = url.getProtocol();
         authType = RequestorType.PROXY;
         scheme = "";
+        authenticator = a;
     }
 }

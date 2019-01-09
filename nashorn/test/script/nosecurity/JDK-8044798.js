@@ -27,20 +27,20 @@
  * @test
  * @option -Dnashorn.mirror.always=false
  * @fork
- * @run
  */
 
 // basic API exercise checks
 
 var Arrays = Java.type("java.util.Arrays");
 var CharArray = Java.type("char[]");
+var Reflector = Java.type("jdk.nashorn.test.models.Reflector");
 var DebuggerSupport = Java.type("jdk.nashorn.internal.runtime.DebuggerSupport");
 var DebuggerValueDesc = Java.type("jdk.nashorn.internal.runtime.DebuggerSupport.DebuggerValueDesc");
 
 var valueDescFields = DebuggerValueDesc.class.declaredFields;
 Arrays.sort(valueDescFields, function(f1, f2) f1.name.compareTo(f2.name));
 for each (var f in valueDescFields) {
-    f.accessible = true;
+    Reflector.setAccessible(f);
 }
 
 var debuggerSupportMethods = DebuggerSupport.class.declaredMethods;
@@ -50,7 +50,7 @@ var evalMethod, valueInfoMethod, valueInfosMethod;
 var getSourceInfoMethod, valueAsStringMethod;
 
 for each (var m in debuggerSupportMethods) {
-    m.accessible = true;
+    Reflector.setAccessible(m);
     switch (m.name) {
         case "eval":
             evalMethod = m;
@@ -120,18 +120,25 @@ printValue(this);
 
 var Source = Java.type("jdk.nashorn.internal.runtime.Source");
 var Context = Java.type("jdk.nashorn.internal.runtime.Context");
+var ThrowErrorManager = Java.type("jdk.nashorn.internal.runtime.Context.ThrowErrorManager");
+var contextCls = java.lang.Class.forName("jdk.nashorn.internal.runtime.Context");
 var sourceCls = Source.class;
 var errorMgrCls = Java.type("jdk.nashorn.internal.runtime.ErrorManager").class;
 var booleanCls = Java.type("java.lang.Boolean").TYPE;
+var stringCls = Java.type("java.lang.String").class;
 
 // private compile method of Context class
-var compileMethod = Context.class.getDeclaredMethod("compile",
-                sourceCls, errorMgrCls, booleanCls);
-compileMethod.accessible = true;
+var compileMethod = contextCls.getDeclaredMethod("compile",
+                sourceCls, errorMgrCls, booleanCls, booleanCls);
+Reflector.setAccessible(compileMethod);
 
-var scriptCls = compileMethod.invoke(Context.context,
-    Source.sourceFor("test", "print('hello')"),
-    new Context.ThrowErrorManager(), false);
+var getContextMethod = contextCls.getMethod("getContext");
+Reflector.setAccessible(getContextMethod);
+
+var sourceForMethod = sourceCls.getMethod("sourceFor", stringCls, stringCls);
+var scriptCls = compileMethod.invoke(getContextMethod.invoke(null),
+    sourceForMethod.invoke(null, "test", "print('hello')"),
+    ThrowErrorManager.class.newInstance(), false, false);
 
 var SCRIPT_CLASS_NAME_PREFIX = "jdk.nashorn.internal.scripts.Script$";
 print("script class name pattern satisfied? " +
@@ -143,7 +150,7 @@ Arrays.sort(srcInfoFields, function(f1, f2) f1.name.compareTo(f2.name));
 
 print("Source info");
 for each (var f in srcInfoFields) {
-    f.accessible = true;
+    Reflector.setAccessible(f);
     var fieldValue = f.get(srcInfo);
     if (fieldValue instanceof CharArray) {
         fieldValue = new java.lang.String(fieldValue);

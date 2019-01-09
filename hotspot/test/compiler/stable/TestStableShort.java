@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,67 +26,42 @@
 /*
  * @test TestStableShort
  * @summary tests on stable fields and arrays
- * @library /testlibrary /../../test/lib
- * @build TestStableShort StableConfiguration sun.hotspot.WhiteBox
- * @run main ClassFileInstaller sun.hotspot.WhiteBox sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main ClassFileInstaller
- *           java/lang/invoke/StableConfiguration
- *           java/lang/invoke/TestStableShort
- *           java/lang/invoke/TestStableShort$ShortStable
- *           java/lang/invoke/TestStableShort$StaticShortStable
- *           java/lang/invoke/TestStableShort$VolatileShortStable
- *           java/lang/invoke/TestStableShort$ShortArrayDim1
- *           java/lang/invoke/TestStableShort$ShortArrayDim2
- *           java/lang/invoke/TestStableShort$ShortArrayDim3
- *           java/lang/invoke/TestStableShort$ShortArrayDim4
- *           java/lang/invoke/TestStableShort$ObjectArrayLowerDim0
- *           java/lang/invoke/TestStableShort$ObjectArrayLowerDim1
- *           java/lang/invoke/TestStableShort$NestedStableField
- *           java/lang/invoke/TestStableShort$NestedStableField$A
- *           java/lang/invoke/TestStableShort$NestedStableField1
- *           java/lang/invoke/TestStableShort$NestedStableField1$A
- *           java/lang/invoke/TestStableShort$NestedStableField2
- *           java/lang/invoke/TestStableShort$NestedStableField2$A
- *           java/lang/invoke/TestStableShort$NestedStableField3
- *           java/lang/invoke/TestStableShort$NestedStableField3$A
- *           java/lang/invoke/TestStableShort$DefaultValue
- *           java/lang/invoke/TestStableShort$DefaultStaticValue
- *           java/lang/invoke/TestStableShort$ObjectArrayLowerDim2
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ * @modules java.base/jdk.internal.vm.annotation
+ * @build sun.hotspot.WhiteBox
  *
- * @run main/othervm -Xbootclasspath/a:.
- *                   -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
- *                   -XX:-TieredCompilation
- *                   -XX:+FoldStableValues
- *                   -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
- *                   java.lang.invoke.TestStableShort
- * @run main/othervm -Xbootclasspath/a:.
- *                   -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
- *                   -XX:-TieredCompilation
- *                   -XX:-FoldStableValues
- *                   -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
- *                   java.lang.invoke.TestStableShort
+ * @run main/bootclasspath/othervm -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
+ *                                 -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
+ *                                 -XX:-TieredCompilation
+ *                                 -XX:+FoldStableValues
+ *                                 compiler.stable.TestStableShort
+ * @run main/bootclasspath/othervm -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
+ *                                 -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
+ *                                 -XX:-TieredCompilation
+ *                                 -XX:+FoldStableValues
+ *                                 compiler.stable.TestStableShort
  *
- * @run main/othervm -Xbootclasspath/a:.
- *                   -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
- *                   -XX:+TieredCompilation -XX:TieredStopAtLevel=1
- *                   -XX:+FoldStableValues
- *                   -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
- *                   java.lang.invoke.TestStableShort
- * @run main/othervm -Xbootclasspath/a:.
- *                   -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
- *                   -XX:+TieredCompilation -XX:TieredStopAtLevel=1
- *                   -XX:-FoldStableValues
- *                   -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
- *                   java.lang.invoke.TestStableShort
- *
+ * @run main/bootclasspath/othervm -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
+ *                                 -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
+ *                                 -XX:-TieredCompilation
+ *                                 -XX:+FoldStableValues
+ *                                 compiler.stable.TestStableShort
+ * @run main/bootclasspath/othervm -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
+ *                                 -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
+ *                                 -XX:-TieredCompilation
+ *                                 -XX:+FoldStableValues
+ *                                 compiler.stable.TestStableShort
  */
-package java.lang.invoke;
+
+package compiler.stable;
+
+import jdk.internal.vm.annotation.Stable;
 
 import java.lang.reflect.InvocationTargetException;
 
 public class TestStableShort {
     static final boolean isStableEnabled    = StableConfiguration.isStableEnabled;
-    static final boolean isServerWithStable = StableConfiguration.isServerWithStable;
 
     public static void main(String[] args) throws Exception {
         run(DefaultValue.class);
@@ -207,10 +182,10 @@ public class TestStableShort {
                 c.v = new short[1]; c.v[0] = 1; short val1 = get();
                                     c.v[0] = 2; short val2 = get();
                 assertEquals(val1, 1);
-                assertEquals(val2, (isServerWithStable ? 1 : 2));
+                assertEquals(val2, (isStableEnabled ? 1 : 2));
 
                 c.v = new short[1]; c.v[0] = 3; short val3 = get();
-                assertEquals(val3, (isStableEnabled ? (isServerWithStable ? 1 : 2)
+                assertEquals(val3, (isStableEnabled ? (isStableEnabled ? 1 : 2)
                                                     : 3));
             }
 
@@ -218,10 +193,10 @@ public class TestStableShort {
                 c.v = new short[20]; c.v[10] = 1; short val1 = get1();
                                      c.v[10] = 2; short val2 = get1();
                 assertEquals(val1, 1);
-                assertEquals(val2, (isServerWithStable ? 1 : 2));
+                assertEquals(val2, (isStableEnabled ? 1 : 2));
 
                 c.v = new short[20]; c.v[10] = 3; short val3 = get1();
-                assertEquals(val3, (isStableEnabled ? (isServerWithStable ? 1 : 2)
+                assertEquals(val3, (isStableEnabled ? (isStableEnabled ? 1 : 2)
                                                     : 3));
             }
 
@@ -247,21 +222,21 @@ public class TestStableShort {
                 c.v = new short[1][1]; c.v[0][0] = 1; short val1 = get();
                                        c.v[0][0] = 2; short val2 = get();
                 assertEquals(val1, 1);
-                assertEquals(val2, (isServerWithStable ? 1 : 2));
+                assertEquals(val2, (isStableEnabled ? 1 : 2));
 
                 c.v = new short[1][1]; c.v[0][0] = 3; short val3 = get();
-                assertEquals(val3, (isStableEnabled ? (isServerWithStable ? 1 : 2)
+                assertEquals(val3, (isStableEnabled ? (isStableEnabled ? 1 : 2)
                                                     : 3));
 
                 c.v[0] = new short[1]; c.v[0][0] = 4; short val4 = get();
-                assertEquals(val4, (isStableEnabled ? (isServerWithStable ? 1 : 2)
+                assertEquals(val4, (isStableEnabled ? (isStableEnabled ? 1 : 2)
                                                     : 4));
             }
 
             {
                 c.v = new short[1][1]; short[] val1 = get1();
                 c.v[0] = new short[1]; short[] val2 = get1();
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
@@ -287,31 +262,31 @@ public class TestStableShort {
                 c.v = new short[1][1][1]; c.v[0][0][0] = 1; short val1 = get();
                                           c.v[0][0][0] = 2; short val2 = get();
                 assertEquals(val1, 1);
-                assertEquals(val2, (isServerWithStable ? 1 : 2));
+                assertEquals(val2, (isStableEnabled ? 1 : 2));
 
                 c.v = new short[1][1][1]; c.v[0][0][0] = 3; short val3 = get();
-                assertEquals(val3, (isStableEnabled ? (isServerWithStable ? 1 : 2)
+                assertEquals(val3, (isStableEnabled ? (isStableEnabled ? 1 : 2)
                                                     : 3));
 
                 c.v[0] = new short[1][1]; c.v[0][0][0] = 4; short val4 = get();
-                assertEquals(val4, (isStableEnabled ? (isServerWithStable ? 1 : 2)
+                assertEquals(val4, (isStableEnabled ? (isStableEnabled ? 1 : 2)
                                                     : 4));
 
                 c.v[0][0] = new short[1]; c.v[0][0][0] = 5; short val5 = get();
-                assertEquals(val5, (isStableEnabled ? (isServerWithStable ? 1 : 2)
+                assertEquals(val5, (isStableEnabled ? (isStableEnabled ? 1 : 2)
                                                     : 5));
             }
 
             {
                 c.v = new short[1][1][1]; short[] val1 = get1();
                 c.v[0][0] = new short[1]; short[] val2 = get1();
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
                 c.v = new short[1][1][1]; short[][] val1 = get2();
                 c.v[0] = new short[1][1]; short[][] val2 = get2();
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
@@ -338,41 +313,41 @@ public class TestStableShort {
                 c.v = new short[1][1][1][1]; c.v[0][0][0][0] = 1; short val1 = get();
                                              c.v[0][0][0][0] = 2; short val2 = get();
                 assertEquals(val1, 1);
-                assertEquals(val2, (isServerWithStable ? 1 : 2));
+                assertEquals(val2, (isStableEnabled ? 1 : 2));
 
                 c.v = new short[1][1][1][1]; c.v[0][0][0][0] = 3; short val3 = get();
-                assertEquals(val3, (isStableEnabled ? (isServerWithStable ? 1 : 2)
+                assertEquals(val3, (isStableEnabled ? (isStableEnabled ? 1 : 2)
                                                     : 3));
 
                 c.v[0] = new short[1][1][1]; c.v[0][0][0][0] = 4; short val4 = get();
-                assertEquals(val4, (isStableEnabled ? (isServerWithStable ? 1 : 2)
+                assertEquals(val4, (isStableEnabled ? (isStableEnabled ? 1 : 2)
                                                     : 4));
 
                 c.v[0][0] = new short[1][1]; c.v[0][0][0][0] = 5; short val5 = get();
-                assertEquals(val5, (isStableEnabled ? (isServerWithStable ? 1 : 2)
+                assertEquals(val5, (isStableEnabled ? (isStableEnabled ? 1 : 2)
                                                     : 5));
 
                 c.v[0][0][0] = new short[1]; c.v[0][0][0][0] = 6; short val6 = get();
-                assertEquals(val6, (isStableEnabled ? (isServerWithStable ? 1 : 2)
+                assertEquals(val6, (isStableEnabled ? (isStableEnabled ? 1 : 2)
                                                     : 6));
             }
 
             {
                 c.v = new short[1][1][1][1]; short[] val1 = get1();
                 c.v[0][0][0] = new short[1]; short[] val2 = get1();
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
                 c.v = new short[1][1][1][1]; short[][] val1 = get2();
                 c.v[0][0] = new short[1][1]; short[][] val2 = get2();
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
                 c.v = new short[1][1][1][1]; short[][][] val1 = get3();
                 c.v[0] = new short[1][1][1]; short[][][] val2 = get3();
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
@@ -432,7 +407,7 @@ public class TestStableShort {
                 c.v = new short[1][1]; c.v[0] = new short[0]; short[] val1 = get1();
                                        c.v[0] = new short[0]; short[] val2 = get1();
 
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
@@ -468,14 +443,14 @@ public class TestStableShort {
                 c.v = new short[1][1][1]; c.v[0][0] = new short[0]; short[] val1 = get1();
                                           c.v[0][0] = new short[0]; short[] val2 = get1();
 
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
                 c.v = new short[1][1][1]; c.v[0] = new short[0][0]; short[][] val1 = get2();
                                           c.v[0] = new short[0][0]; short[][] val2 = get2();
 
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
@@ -610,7 +585,7 @@ public class TestStableShort {
                                elem.a = 2; short val3 = get(); short val4 = get1();
 
                 assertEquals(val1, 1);
-                assertEquals(val3, (isServerWithStable ? 1 : 2));
+                assertEquals(val3, (isStableEnabled ? 1 : 2));
 
                 assertEquals(val2, 1);
                 assertEquals(val4, 2);

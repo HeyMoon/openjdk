@@ -4,9 +4,7 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -82,17 +80,15 @@ public class MessagerDiags extends AbstractProcessor {
     }
 
     public static void main(String... args) throws IOException {
-        final String bootPath = System.getProperty("sun.boot.class.path");
         final JavaCompiler tool = ToolProvider.getSystemJavaCompiler();
         assert tool != null;
 
         DiagnosticCollector<JavaFileObject> dc = new DiagnosticCollector<>();
-        List<String> options = new LinkedList<>();
-        options.addAll(Arrays.asList("-bootclasspath",  bootPath,
-                        "-source", "1.8", "-classpath",
-                        System.getProperty("java.class.path")));
-        options.addAll(Arrays.asList("-processor",
-                       MessagerDiags.class.getName()));
+        List<String> options = Arrays.asList(
+                "-source", "1.8",
+                "-Xlint:-options",
+                "-classpath", System.getProperty("java.class.path"),
+                "-processor", MessagerDiags.class.getName());
         JavacTask ct = (JavacTask)tool.getTask(null, null, dc, options, null,
                         Arrays.asList(new MyFileObject("class " + CNAME + " {}")));
         ct.analyze();

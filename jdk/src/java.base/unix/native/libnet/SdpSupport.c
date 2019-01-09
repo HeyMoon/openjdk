@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -56,11 +56,7 @@ static int create(JNIEnv* env)
     int s;
 
 #if defined(__solaris__)
-  #ifdef AF_INET6
     int domain = ipv6_available() ? AF_INET6 : AF_INET;
-  #else
-    int domain = AF_INET;
-  #endif
     s = socket(domain, SOCK_STREAM, PROTO_SDP);
 #elif defined(__linux__)
     /**
@@ -108,6 +104,11 @@ Java_sun_net_sdp_SdpSupport_convert0(JNIEnv *env, jclass cls, int fd)
         len = sizeof(arg);
         if (getsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&arg, &len) == 0)
             setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char*)&arg, len);
+#ifdef SO_REUSEPORT
+        len = sizeof(arg);
+        if (getsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (char*)&arg, &len) == 0)
+            setsockopt(s, SOL_SOCKET, SO_REUSEPORT, (char*)&arg, len);
+#endif
         len = sizeof(arg);
         if (getsockopt(fd, SOL_SOCKET, SO_OOBINLINE, (char*)&arg, &len) == 0)
             setsockopt(s, SOL_SOCKET, SO_OOBINLINE, (char*)&arg, len);
@@ -118,6 +119,8 @@ Java_sun_net_sdp_SdpSupport_convert0(JNIEnv *env, jclass cls, int fd)
         RESTARTABLE(dup2(s, fd), res);
         if (res < 0)
             JNU_ThrowIOExceptionWithLastError(env, "dup2");
-        RESTARTABLE(close(s), res);
+        res = close(s);
+        if (res < 0 && !(*env)->ExceptionOccurred(env))
+            JNU_ThrowIOExceptionWithLastError(env, "close");
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,15 +37,14 @@
 // the load of the dispatch address and hence the jmp would still go to the location
 // according to the prior table. So, we let the thread continue and let it block by itself.
 define_pd_global(bool, DontYieldALot,               true);  // yield no more than 100 times per second
-define_pd_global(bool, ConvertSleepToYield,         false); // do not convert sleep(0) to yield. Helps GUI
 define_pd_global(bool, ShareVtableStubs,            false); // improves performance markedly for mtrt and compress
-define_pd_global(bool, CountInterpCalls,            false); // not implemented in the interpreter
 define_pd_global(bool, NeedsDeoptSuspend,           true); // register window machines need this
 
 define_pd_global(bool, ImplicitNullChecks,          true);  // Generate code for implicit null checks
 define_pd_global(bool, TrapBasedNullChecks,         false); // Not needed on sparc.
 define_pd_global(bool, UncommonNullCast,            true);  // Uncommon-trap NULLs passed to check cast
 
+define_pd_global(uintx, CodeCacheSegmentSize, 64 TIERED_ONLY(+64)); // Tiered compilation has large code-entry alignment.
 define_pd_global(intx, CodeEntryAlignment,    32);
 // The default setting 16/16 seems to work best.
 // (For _228_jack 16/16 is 2% better than 4/4, 16/4, 32/32, 32/16, or 16/32.)
@@ -53,21 +52,32 @@ define_pd_global(intx, OptoLoopAlignment,     16);  // = 4*wordSize
 define_pd_global(intx, InlineFrequencyCount,  50);  // we can use more inlining on the SPARC
 define_pd_global(intx, InlineSmallCode,       1500);
 
+#define DEFAULT_STACK_YELLOW_PAGES (2)
+#define DEFAULT_STACK_RED_PAGES (1)
+#define DEFAULT_STACK_RESERVED_PAGES (SOLARIS_ONLY(1) NOT_SOLARIS(0))
+
 #ifdef _LP64
 // Stack slots are 2X larger in LP64 than in the 32 bit VM.
+define_pd_global(intx, CompilerThreadStackSize, 1024);
 define_pd_global(intx, ThreadStackSize,       1024);
 define_pd_global(intx, VMThreadStackSize,     1024);
-define_pd_global(intx, StackShadowPages, 10 DEBUG_ONLY(+1));
+#define DEFAULT_STACK_SHADOW_PAGES (20 DEBUG_ONLY(+2))
 #else
+define_pd_global(intx, CompilerThreadStackSize, 512);
 define_pd_global(intx, ThreadStackSize,       512);
 define_pd_global(intx, VMThreadStackSize,     512);
-define_pd_global(intx, StackShadowPages, 3 DEBUG_ONLY(+1));
-#endif
+#define DEFAULT_STACK_SHADOW_PAGES (6 DEBUG_ONLY(+2))
+#endif // _LP64
 
-define_pd_global(intx, StackYellowPages, 2);
-define_pd_global(intx, StackRedPages, 1);
+#define MIN_STACK_YELLOW_PAGES DEFAULT_STACK_YELLOW_PAGES
+#define MIN_STACK_RED_PAGES DEFAULT_STACK_RED_PAGES
+#define MIN_STACK_SHADOW_PAGES DEFAULT_STACK_SHADOW_PAGES
+#define MIN_STACK_RESERVED_PAGES (0)
 
-define_pd_global(intx, PreInflateSpin,       40);  // Determined by running design center
+define_pd_global(intx, StackYellowPages, DEFAULT_STACK_YELLOW_PAGES);
+define_pd_global(intx, StackRedPages, DEFAULT_STACK_RED_PAGES);
+define_pd_global(intx, StackShadowPages, DEFAULT_STACK_SHADOW_PAGES);
+define_pd_global(intx, StackReservedPages, DEFAULT_STACK_RESERVED_PAGES);
 
 define_pd_global(bool, RewriteBytecodes,     true);
 define_pd_global(bool, RewriteFrequentPairs, true);
@@ -81,10 +91,22 @@ define_pd_global(size_t, CMSYoungGenPerWorker, 16*M);  // default max size of CM
 
 define_pd_global(uintx, TypeProfileLevel, 111);
 
-#define ARCH_FLAGS(develop, product, diagnostic, experimental, notproduct, range, constraint) \
+define_pd_global(bool, CompactStrings, true);
+
+define_pd_global(intx, InitArrayShortSize, 8*BytesPerLong);
+
+#define ARCH_FLAGS(develop, \
+                   product, \
+                   diagnostic, \
+                   experimental, \
+                   notproduct, \
+                   range, \
+                   constraint, \
+                   writeable) \
                                                                             \
   product(intx, UseVIS, 99,                                                 \
           "Highest supported VIS instructions set on Sparc")                \
+          range(0, 99)                                                      \
                                                                             \
   product(bool, UseCBCond, false,                                           \
           "Use compare and branch instruction on SPARC")                    \
@@ -94,12 +116,14 @@ define_pd_global(uintx, TypeProfileLevel, 111);
                                                                             \
   product(intx, BlockZeroingLowLimit, 2048,                                 \
           "Minimum size in bytes when block zeroing will be used")          \
+          range(1, max_jint)                                                \
                                                                             \
   product(bool, UseBlockCopy, false,                                        \
           "Use special cpu instructions for block copy")                    \
                                                                             \
   product(intx, BlockCopyLowLimit, 2048,                                    \
           "Minimum size in bytes when block copy will be used")             \
+          range(1, max_jint)                                                \
                                                                             \
   develop(bool, UseV8InstrsOnly, false,                                     \
           "Use SPARC-V8 Compliant instruction subset")                      \
@@ -111,9 +135,11 @@ define_pd_global(uintx, TypeProfileLevel, 111);
           "Do not use swap instructions, but only CAS (in a loop) on SPARC")\
                                                                             \
   product(uintx,  ArraycopySrcPrefetchDistance, 0,                          \
-          "Distance to prefetch source array in arracopy")                  \
+          "Distance to prefetch source array in arraycopy")                 \
+          constraint(ArraycopySrcPrefetchDistanceConstraintFunc, AfterErgo) \
                                                                             \
   product(uintx,  ArraycopyDstPrefetchDistance, 0,                          \
-          "Distance to prefetch destination array in arracopy")             \
+          "Distance to prefetch destination array in arraycopy")            \
+          constraint(ArraycopyDstPrefetchDistanceConstraintFunc, AfterErgo) \
 
 #endif // CPU_SPARC_VM_GLOBALS_SPARC_HPP

@@ -109,7 +109,7 @@ void Parse::do_field_access(bool is_get, bool is_field) {
     return;
   }
 
-  assert(field->will_link(method()->holder(), bc()), "getfield: typeflow responsibility");
+  assert(field->will_link(method(), bc()), "getfield: typeflow responsibility");
 
   // Note:  We do not check for an unloaded field type here any more.
 
@@ -146,54 +146,21 @@ void Parse::do_field_access(bool is_get, bool is_field) {
 
 
 void Parse::do_get_xxx(Node* obj, ciField* field, bool is_field) {
+  BasicType bt = field->layout_type();
+
   // Does this field have a constant value?  If so, just push the value.
-  if (field->is_constant()) {
+  if (field->is_constant() &&
+      // Keep consistent with types found by ciTypeFlow: for an
+      // unloaded field type, ciTypeFlow::StateVector::do_getstatic()
+      // speculates the field is null. The code in the rest of this
+      // method does the same. We must not bypass it and use a non
+      // null constant here.
+      (bt != T_OBJECT || field->type()->is_loaded())) {
     // final or stable field
-    const Type* stable_type = NULL;
-    if (FoldStableValues && field->is_stable()) {
-      stable_type = Type::get_const_type(field->type());
-      if (field->type()->is_array_klass()) {
-        int stable_dimension = field->type()->as_array_klass()->dimension();
-        stable_type = stable_type->is_aryptr()->cast_to_stable(true, stable_dimension);
-      }
-    }
-    if (field->is_static()) {
-      // final static field
-      if (C->eliminate_boxing()) {
-        // The pointers in the autobox arrays are always non-null.
-        ciSymbol* klass_name = field->holder()->name();
-        if (field->name() == ciSymbol::cache_field_name() &&
-            field->holder()->uses_default_loader() &&
-            (klass_name == ciSymbol::java_lang_Character_CharacterCache() ||
-             klass_name == ciSymbol::java_lang_Byte_ByteCache() ||
-             klass_name == ciSymbol::java_lang_Short_ShortCache() ||
-             klass_name == ciSymbol::java_lang_Integer_IntegerCache() ||
-             klass_name == ciSymbol::java_lang_Long_LongCache())) {
-          bool require_const = true;
-          bool autobox_cache = true;
-          if (push_constant(field->constant_value(), require_const, autobox_cache)) {
-            return;
-          }
-        }
-      }
-      if (push_constant(field->constant_value(), false, false, stable_type))
-        return;
-    } else {
-      // final or stable non-static field
-      // Treat final non-static fields of trusted classes (classes in
-      // java.lang.invoke and sun.invoke packages and subpackages) as
-      // compile time constants.
-      if (obj->is_Con()) {
-        const TypeOopPtr* oop_ptr = obj->bottom_type()->isa_oopptr();
-        ciObject* constant_oop = oop_ptr->const_oop();
-        ciConstant constant = field->constant_value_of(constant_oop);
-        if (FoldStableValues && field->is_stable() && constant.is_null_or_zero()) {
-          // fall through to field load; the field is not yet initialized
-        } else {
-          if (push_constant(constant, true, false, stable_type))
-            return;
-        }
-      }
+    Node* con = make_constant_from_field(field, obj);
+    if (con != NULL) {
+      push_node(field->layout_type(), con);
+      return;
     }
   }
 
@@ -204,7 +171,6 @@ void Parse::do_get_xxx(Node* obj, ciField* field, bool is_field) {
   int offset = field->offset_in_bytes();
   const TypePtr* adr_type = C->alias_type(field)->adr_type();
   Node *adr = basic_plus_adr(obj, obj, offset);
-  BasicType bt = field->layout_type();
 
   // Build the resultant type of the load
   const Type *type;
@@ -215,12 +181,16 @@ void Parse::do_get_xxx(Node* obj, ciField* field, bool is_field) {
     if (!field->type()->is_loaded()) {
       type = TypeInstPtr::BOTTOM;
       must_assert_null = true;
-    } else if (field->is_constant() && field->is_static()) {
+    } else if (field->is_static_constant()) {
       // This can happen if the constant oop is non-perm.
       ciObject* con = field->constant_value().as_object();
       // Do not "join" in the previous type; it doesn't add value,
       // and may yield a vacuous result if the field is of interface type.
-      type = TypeOopPtr::make_from_constant(con)->isa_oopptr();
+      if (con->is_null_object()) {
+        type = TypePtr::NULL_PTR;
+      } else {
+        type = TypeOopPtr::make_from_constant(con)->isa_oopptr();
+      }
       assert(type != NULL, "field singleton type must be consistent");
     } else {
       type = TypeOopPtr::make_from_klass(field_klass->as_klass());
@@ -254,11 +224,9 @@ void Parse::do_get_xxx(Node* obj, ciField* field, bool is_field) {
     // not need to mention the class index, since the class will
     // already have been loaded if we ever see a non-null value.)
     // uncommon_trap(iter().get_field_signature_index());
-#ifndef PRODUCT
     if (PrintOpto && (Verbose || WizardMode)) {
       method()->print_name(); tty->print_cr(" asserting nullness of field at bci: %d", bci());
     }
-#endif
     if (C->log() != NULL) {
       C->log()->elem("assert_null reason='field' klass='%d'",
                      C->log()->identify(field->type()));
@@ -354,46 +322,12 @@ void Parse::do_put_xxx(Node* obj, ciField* field, bool is_field) {
 
     // Preserve allocation ptr to create precedent edge to it in membar
     // generated on exit from constructor.
-    if (C->eliminate_boxing() &&
-        adr_type->isa_oopptr() && adr_type->is_oopptr()->is_ptr_to_boxed_value() &&
-        AllocateNode::Ideal_allocation(obj, &_gvn) != NULL) {
+    // Can't bind stable with its allocation, only record allocation for final field.
+    if (field->is_final() && AllocateNode::Ideal_allocation(obj, &_gvn) != NULL) {
       set_alloc_with_final(obj);
     }
   }
 }
-
-
-
-bool Parse::push_constant(ciConstant constant, bool require_constant, bool is_autobox_cache, const Type* stable_type) {
-  const Type* con_type = Type::make_from_constant(constant, require_constant, is_autobox_cache);
-  switch (constant.basic_type()) {
-  case T_ARRAY:
-  case T_OBJECT:
-    // cases:
-    //   can_be_constant    = (oop not scavengable || ScavengeRootsInCode != 0)
-    //   should_be_constant = (oop not scavengable || ScavengeRootsInCode >= 2)
-    // An oop is not scavengable if it is in the perm gen.
-    if (stable_type != NULL && con_type != NULL && con_type->isa_oopptr())
-      con_type = con_type->join_speculative(stable_type);
-    break;
-
-  case T_ILLEGAL:
-    // Invalid ciConstant returned due to OutOfMemoryError in the CI
-    assert(C->env()->failing(), "otherwise should not see this");
-    // These always occur because of object types; we are going to
-    // bail out anyway, so make the stack depths match up
-    push( zerocon(T_OBJECT) );
-    return false;
-  }
-
-  if (con_type == NULL)
-    // we cannot inline the oop, but we can use it later to narrow a type
-    return false;
-
-  push_node(constant.basic_type(), makecon(con_type));
-  return true;
-}
-
 
 //=============================================================================
 void Parse::do_anewarray() {
@@ -478,7 +412,7 @@ void Parse::do_multianewarray() {
   // The original expression was of this form: new T[length0][length1]...
   // It is often the case that the lengths are small (except the last).
   // If that happens, use the fast 1-d creator a constant number of times.
-  const jint expand_limit = MIN2((juint)MultiArrayExpandLimit, (juint)100);
+  const jint expand_limit = MIN2((jint)MultiArrayExpandLimit, 100);
   jint expand_count = 1;        // count of allocations in the expansion
   jint expand_fanout = 1;       // running total fanout
   for (j = 0; j < ndimensions-1; j++) {

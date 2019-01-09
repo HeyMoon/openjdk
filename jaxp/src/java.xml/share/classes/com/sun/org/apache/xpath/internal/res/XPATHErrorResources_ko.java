@@ -3,13 +3,14 @@
  * DO NOT REMOVE OR ALTER!
  */
 /*
- * Copyright 1999-2004 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,9 +18,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * $Id: XPATHErrorResources_ko.java,v 1.2.4.1 2005/09/15 00:39:20 jeffsuttor Exp $
- */
+
 package com.sun.org.apache.xpath.internal.res;
 
 import java.util.ListResourceBundle;
@@ -93,6 +92,7 @@ public class XPATHErrorResources_ko extends ListResourceBundle
   public static final String ER_CURRENT_TAKES_NO_ARGS =
          "ER_CURRENT_TAKES_NO_ARGS";
   public static final String ER_DOCUMENT_REPLACED = "ER_DOCUMENT_REPLACED";
+  public static final String ER_CONTEXT_CAN_NOT_BE_NULL = "ER_CONTEXT_CAN_NOT_BE_NULL";
   public static final String ER_CONTEXT_HAS_NO_OWNERDOC =
          "ER_CONTEXT_HAS_NO_OWNERDOC";
   public static final String ER_LOCALNAME_HAS_TOO_MANY_ARGS =
@@ -367,6 +367,9 @@ public static final String ER_IGNORABLE_WHITESPACE_NOT_HANDLED =
 
   { ER_DOCUMENT_REPLACED,
       "document() \uD568\uC218 \uAD6C\uD604\uC774 com.sun.org.apache.xalan.internal.xslt.FuncDocument\uB85C \uB300\uCCB4\uB418\uC5C8\uC2B5\uB2C8\uB2E4!"},
+
+  { ER_CONTEXT_CAN_NOT_BE_NULL,
+      "\uC791\uC5C5\uC774 \uCEE8\uD14D\uC2A4\uD2B8\uC5D0 \uC885\uC18D\uC801\uC77C \uB54C \uCEE8\uD14D\uC2A4\uD2B8\uB294 \uB110\uC77C \uC218 \uC5C6\uC2B5\uB2C8\uB2E4."},
 
   { ER_CONTEXT_HAS_NO_OWNERDOC,
       "\uCEE8\uD14D\uC2A4\uD2B8\uC5D0 \uC18C\uC720\uC790 \uBB38\uC11C\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4!"},
@@ -855,7 +858,7 @@ public static final String ER_IGNORABLE_WHITESPACE_NOT_HANDLED =
       "{0}\uC5D0\uC11C URL\uC744 \uC0DD\uC131\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4."},
 
   { WG_EXPAND_ENTITIES_NOT_SUPPORTED,
-      "DTM \uAD6C\uBB38 \uBD84\uC11D\uAE30\uC5D0 \uB300\uD574\uC11C\uB294 -E \uC635\uC158\uC774 \uC9C0\uC6D0\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."},
+      "DTM \uAD6C\uBB38\uBD84\uC11D\uAE30\uC5D0 \uB300\uD574\uC11C\uB294 -E \uC635\uC158\uC774 \uC9C0\uC6D0\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."},
 
   { WG_ILLEGAL_VARIABLE_REFERENCE,
       "\uBCC0\uC218\uC5D0 \uB300\uD574 \uC81C\uACF5\uB41C VariableReference\uAC00 \uCEE8\uD14D\uC2A4\uD2B8\uC5D0\uC11C \uBC97\uC5B4\uB098\uAC70\uB098 \uC815\uC758\uB97C \uD3EC\uD568\uD558\uC9C0 \uC5C6\uC2B5\uB2C8\uB2E4! \uC774\uB984 = {0}"},
@@ -870,7 +873,7 @@ public static final String ER_IGNORABLE_WHITESPACE_NOT_HANDLED =
   { "help_language", "ko"},
   { "language", "ko"},
   { "BAD_CODE", "createMessage\uC5D0 \uB300\uD55C \uB9E4\uAC1C\uBCC0\uC218\uAC00 \uBC94\uC704\uB97C \uBC97\uC5B4\uB0AC\uC2B5\uB2C8\uB2E4."},
-  { "FORMAT_FAILED", "messageFormat \uD638\uCD9C \uC911 \uC608\uC678 \uC0AC\uD56D\uC774 \uBC1C\uC0DD\uD588\uC2B5\uB2C8\uB2E4."},
+  { "FORMAT_FAILED", "messageFormat \uD638\uCD9C \uC911 \uC608\uC678\uC0AC\uD56D\uC774 \uBC1C\uC0DD\uD588\uC2B5\uB2C8\uB2E4."},
   { "version", ">>>>>>> Xalan \uBC84\uC804 "},
   { "version2", "<<<<<<<"},
   { "yes", "\uC608"},
@@ -883,9 +886,9 @@ public static final String ER_IGNORABLE_WHITESPACE_NOT_HANDLED =
   { "optionMatch", "   [-match \uC77C\uCE58 \uD328\uD134(\uC77C\uCE58 \uC9C4\uB2E8\uC758 \uACBD\uC6B0)]"},
   { "optionAnyExpr", "\uB610\uB294 XPath \uD45C\uD604\uC2DD\uC774 \uC9C4\uB2E8 \uB364\uD504\uB97C \uC218\uD589\uD569\uB2C8\uB2E4."},
   { "noParsermsg1", "XSL \uD504\uB85C\uC138\uC2A4\uB97C \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4."},
-  { "noParsermsg2", "** \uAD6C\uBB38 \uBD84\uC11D\uAE30\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC74C **"},
+  { "noParsermsg2", "** \uAD6C\uBB38\uBD84\uC11D\uAE30\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC74C **"},
   { "noParsermsg3", "\uD074\uB798\uC2A4 \uACBD\uB85C\uB97C \uD655\uC778\uD558\uC2ED\uC2DC\uC624."},
-  { "noParsermsg4", "IBM\uC758 Java\uC6A9 XML \uAD6C\uBB38 \uBD84\uC11D\uAE30\uAC00 \uC5C6\uC744 \uACBD\uC6B0 \uB2E4\uC74C \uC704\uCE58\uC5D0\uC11C \uB2E4\uC6B4\uB85C\uB4DC\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4."},
+  { "noParsermsg4", "IBM\uC758 Java\uC6A9 XML \uAD6C\uBB38\uBD84\uC11D\uAE30\uAC00 \uC5C6\uC744 \uACBD\uC6B0 \uB2E4\uC74C \uC704\uCE58\uC5D0\uC11C \uB2E4\uC6B4\uB85C\uB4DC\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4."},
   { "noParsermsg5", "IBM AlphaWorks: http://www.alphaworks.ibm.com/formula/xml"},
   { "gtone", ">1" },
   { "zero", "0" },

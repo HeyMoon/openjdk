@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -63,8 +63,8 @@
 #undef NULL
 // 64-bit Windows uses a P64 data model (not LP64, although we define _LP64)
 // Since longs are 32-bit we cannot use 0L here.  Use the Visual C++ specific
-// 64-bit integer-suffix (i64) instead.
-#define NULL 0i64
+// 64-bit integer-suffix (LL) instead.
+#define NULL 0LL
 #else
 #ifndef NULL
 #define NULL 0
@@ -148,16 +148,6 @@ inline int g_isfinite(jfloat  f)                 { return _finite(f); }
 inline int g_isfinite(jdouble f)                 { return _finite(f); }
 
 //----------------------------------------------------------------------------------------------------
-// Constant for jlong (specifying an long long constant is C++ compiler specific)
-
-// Build a 64bit integer constant on with Visual C++
-#define  CONST64(x) (x ##  i64)
-#define UCONST64(x) (x ## ui64)
-
-const jlong min_jlong = (jlong)UCONST64(0x8000000000000000);
-const jlong max_jlong =         CONST64(0x7fffffffffffffff);
-
-//----------------------------------------------------------------------------------------------------
 // Miscellaneous
 
 // Visual Studio 2005 deprecates POSIX names - use ISO C++ names instead
@@ -170,6 +160,16 @@ const jlong max_jlong =         CONST64(0x7fffffffffffffff);
 #define unlink _unlink
 #define strdup _strdup
 #endif
+
+#if _MSC_VER < 1800
+// Visual Studio 2013 introduced strtoull(); before, one has to use _strtoui64() instead.
+#define strtoull _strtoui64
+// Visual Studio prior to 2013 had no va_copy, but could safely copy va_list by assignement
+#define va_copy(dest, src) dest = src
+// Fixes some wrong warnings about 'this' : used in base member initializer list
+#pragma warning( disable : 4355 )
+#endif
+
 
 #pragma warning( disable : 4100 ) // unreferenced formal parameter
 #pragma warning( disable : 4127 ) // conditional expression is constant
@@ -225,5 +225,16 @@ inline int vsnprintf(char* buf, size_t count, const char* fmt, va_list argptr) {
 #endif
 
 #define offset_of(klass,field) offsetof(klass,field)
+
+#ifndef USE_LIBRARY_BASED_TLS_ONLY
+#define THREAD_LOCAL_DECL __declspec( thread )
+#endif
+
+// Inlining support
+// MSVC has '__declspec(noinline)' but according to the official documentation
+// it only applies to member functions. There are reports though which pretend
+// that it also works for freestanding functions.
+#define NOINLINE     __declspec(noinline)
+#define ALWAYSINLINE __forceinline
 
 #endif // SHARE_VM_UTILITIES_GLOBALDEFINITIONS_VISCPP_HPP

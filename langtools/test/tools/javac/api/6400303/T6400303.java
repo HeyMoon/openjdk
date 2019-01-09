@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@
  * @author  Peter von der Ah\u00e9
  * @modules jdk.compiler/com.sun.tools.javac.api
  *          jdk.compiler/com.sun.tools.javac.code
+ *          jdk.compiler/com.sun.tools.javac.comp
  *          jdk.compiler/com.sun.tools.javac.main
  *          jdk.compiler/com.sun.tools.javac.util
  * @compile Test1.java
@@ -39,15 +40,18 @@ import javax.tools.ToolProvider;
 
 import com.sun.tools.javac.api.JavacTaskImpl;
 import com.sun.tools.javac.code.Symbol.CompletionFailure;
+import com.sun.tools.javac.code.Symtab;
 import com.sun.tools.javac.main.JavaCompiler;
 
 public class T6400303 {
     public static void main(String... args) {
         javax.tools.JavaCompiler tool = ToolProvider.getSystemJavaCompiler();
         JavacTaskImpl task = (JavacTaskImpl)tool.getTask(null, null, null, null, null, null);
+        Symtab syms = Symtab.instance(task.getContext());
+        task.ensureEntered();
         JavaCompiler compiler = JavaCompiler.instance(task.getContext());
         try {
-            compiler.resolveIdent("Test$1").complete();
+            compiler.resolveIdent(syms.unnamedModule, "Test$1").complete();
         } catch (CompletionFailure ex) {
             System.err.println("Got expected completion failure: " + ex.getLocalizedMessage());
             return;

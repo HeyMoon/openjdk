@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,9 +27,9 @@ package sun.nio.ch;
 
 import java.io.FileDescriptor;
 import java.io.IOException;
-import java.security.PrivilegedAction;
-import sun.misc.SharedSecrets;
-import sun.misc.JavaIOFileDescriptorAccess;
+import jdk.internal.misc.SharedSecrets;
+import jdk.internal.misc.JavaIOFileDescriptorAccess;
+import sun.security.action.GetPropertyAction;
 
 class FileDispatcherImpl extends FileDispatcher {
 
@@ -84,6 +84,11 @@ class FileDispatcherImpl extends FileDispatcher {
         return truncate0(fd, size);
     }
 
+    int allocate(FileDescriptor fd, long size) throws IOException {
+        // truncate0() works for extending and truncating file size
+        return truncate0(fd, size);
+    }
+
     long size(FileDescriptor fd) throws IOException {
         return size0(fd);
     }
@@ -119,13 +124,8 @@ class FileDispatcherImpl extends FileDispatcher {
     }
 
     static boolean isFastFileTransferRequested() {
-        String fileTransferProp = java.security.AccessController.doPrivileged(
-            new PrivilegedAction<String>() {
-                @Override
-                public String run() {
-                    return System.getProperty("jdk.nio.enableFastFileTransfer");
-                }
-            });
+        String fileTransferProp = GetPropertyAction
+                .privilegedGetProperty("jdk.nio.enableFastFileTransfer");
         boolean enable;
         if ("".equals(fileTransferProp)) {
             enable = true;

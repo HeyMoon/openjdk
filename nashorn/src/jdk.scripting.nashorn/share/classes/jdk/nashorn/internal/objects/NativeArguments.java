@@ -128,12 +128,6 @@ public final class NativeArguments extends ScriptObject {
     }
 
     @Override
-    public boolean delete(final long key, final boolean strict) {
-        final int index = ArrayIndex.getArrayIndex(key);
-        return isMapped(index) ? deleteMapped(index, strict) : super.delete(key, strict);
-    }
-
-    @Override
     public boolean delete(final double key, final boolean strict) {
         final int index = ArrayIndex.getArrayIndex(key);
         return isMapped(index) ? deleteMapped(index, strict) : super.delete(key, strict);
@@ -151,7 +145,7 @@ public final class NativeArguments extends ScriptObject {
      * ECMA 10.6 for Arguments object.
      */
     @Override
-    public boolean defineOwnProperty(final String key, final Object propertyDesc, final boolean reject) {
+    public boolean defineOwnProperty(final Object key, final Object propertyDesc, final boolean reject) {
         final int index = ArrayIndex.getArrayIndex(key);
         if (index >= 0) {
             final boolean isMapped = isMapped(index);
@@ -159,7 +153,7 @@ public final class NativeArguments extends ScriptObject {
 
             if (!super.defineOwnProperty(key, propertyDesc, false)) {
                 if (reject) {
-                    throw typeError("cant.redefine.property",  key, ScriptRuntime.safeToString(this));
+                    throw typeError("cant.redefine.property",  key.toString(), ScriptRuntime.safeToString(this));
                 }
                 return false;
             }

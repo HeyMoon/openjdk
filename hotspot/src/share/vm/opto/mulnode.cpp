@@ -46,7 +46,7 @@ uint MulNode::hash() const {
 
 //------------------------------Identity---------------------------------------
 // Multiplying a one preserves the other argument
-Node *MulNode::Identity( PhaseTransform *phase ) {
+Node* MulNode::Identity(PhaseGVN* phase) {
   register const Type *one = mul_id();  // The multiplicative identity
   if( phase->type( in(1) )->higher_equal( one ) ) return in(2);
   if( phase->type( in(2) )->higher_equal( one ) ) return in(1);
@@ -139,7 +139,7 @@ Node *MulNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 }
 
 //------------------------------Value-----------------------------------------
-const Type *MulNode::Value( PhaseTransform *phase ) const {
+const Type* MulNode::Value(PhaseGVN* phase) const {
   const Type *t1 = phase->type( in(1) );
   const Type *t2 = phase->type( in(2) );
   // Either input is TOP ==> the result is TOP
@@ -245,13 +245,13 @@ const Type *MulINode::mul_ring(const Type *t0, const Type *t1) const {
   double d = (double)hi1;
 
   // Compute all endpoints & check for overflow
-  int32_t A = lo0*lo1;
+  int32_t A = java_multiply(lo0, lo1);
   if( (double)A != a*c ) return TypeInt::INT; // Overflow?
-  int32_t B = lo0*hi1;
+  int32_t B = java_multiply(lo0, hi1);
   if( (double)B != a*d ) return TypeInt::INT; // Overflow?
-  int32_t C = hi0*lo1;
+  int32_t C = java_multiply(hi0, lo1);
   if( (double)C != b*c ) return TypeInt::INT; // Overflow?
-  int32_t D = hi0*hi1;
+  int32_t D = java_multiply(hi0, hi1);
   if( (double)D != b*d ) return TypeInt::INT; // Overflow?
 
   if( A < B ) { lo0 = A; hi0 = B; } // Sort range endpoints
@@ -341,13 +341,13 @@ const Type *MulLNode::mul_ring(const Type *t0, const Type *t1) const {
   double d = (double)hi1;
 
   // Compute all endpoints & check for overflow
-  jlong A = lo0*lo1;
+  jlong A = java_multiply(lo0, lo1);
   if( (double)A != a*c ) return TypeLong::LONG; // Overflow?
-  jlong B = lo0*hi1;
+  jlong B = java_multiply(lo0, hi1);
   if( (double)B != a*d ) return TypeLong::LONG; // Overflow?
-  jlong C = hi0*lo1;
+  jlong C = java_multiply(hi0, lo1);
   if( (double)C != b*c ) return TypeLong::LONG; // Overflow?
-  jlong D = hi0*hi1;
+  jlong D = java_multiply(hi0, hi1);
   if( (double)D != b*d ) return TypeLong::LONG; // Overflow?
 
   if( A < B ) { lo0 = A; hi0 = B; } // Sort range endpoints
@@ -381,7 +381,7 @@ const Type *MulDNode::mul_ring(const Type *t0, const Type *t1) const {
 
 //=============================================================================
 //------------------------------Value------------------------------------------
-const Type *MulHiLNode::Value( PhaseTransform *phase ) const {
+const Type* MulHiLNode::Value(PhaseGVN* phase) const {
   // Either input is TOP ==> the result is TOP
   const Type *t1 = phase->type( in(1) );
   const Type *t2 = phase->type( in(2) );
@@ -432,7 +432,7 @@ const Type *AndINode::mul_ring( const Type *t0, const Type *t1 ) const {
 
 //------------------------------Identity---------------------------------------
 // Masking off the high bits of an unsigned load is not required
-Node *AndINode::Identity( PhaseTransform *phase ) {
+Node* AndINode::Identity(PhaseGVN* phase) {
 
   // x & x => x
   if (phase->eqv(in(1), in(2))) return in(1);
@@ -483,11 +483,7 @@ Node *AndINode::Ideal(PhaseGVN *phase, bool can_reshape) {
   if (can_reshape &&
       load->outcnt() == 1 && load->unique_out() == this) {
     if (lop == Op_LoadS && (mask & 0xFFFF0000) == 0 ) {
-      Node *ldus = new LoadUSNode(load->in(MemNode::Control),
-                                  load->in(MemNode::Memory),
-                                  load->in(MemNode::Address),
-                                  load->adr_type(),
-                                  TypeInt::CHAR, MemNode::unordered);
+      Node* ldus = load->as_Load()->convert_to_unsigned_load(*phase);
       ldus = phase->transform(ldus);
       return new AndINode(ldus, phase->intcon(mask & 0xFFFF));
     }
@@ -495,11 +491,7 @@ Node *AndINode::Ideal(PhaseGVN *phase, bool can_reshape) {
     // Masking sign bits off of a Byte?  Do an unsigned byte load plus
     // an and.
     if (lop == Op_LoadB && (mask & 0xFFFFFF00) == 0) {
-      Node* ldub = new LoadUBNode(load->in(MemNode::Control),
-                                  load->in(MemNode::Memory),
-                                  load->in(MemNode::Address),
-                                  load->adr_type(),
-                                  TypeInt::UBYTE, MemNode::unordered);
+      Node* ldub = load->as_Load()->convert_to_unsigned_load(*phase);
       ldub = phase->transform(ldub);
       return new AndINode(ldub, phase->intcon(mask));
     }
@@ -562,7 +554,7 @@ const Type *AndLNode::mul_ring( const Type *t0, const Type *t1 ) const {
 
 //------------------------------Identity---------------------------------------
 // Masking off the high bits of an unsigned load is not required
-Node *AndLNode::Identity( PhaseTransform *phase ) {
+Node* AndLNode::Identity(PhaseGVN* phase) {
 
   // x & x => x
   if (phase->eqv(in(1), in(2))) return in(1);
@@ -574,7 +566,8 @@ Node *AndLNode::Identity( PhaseTransform *phase ) {
     // Masking off high bits which are always zero is useless.
     const TypeLong* t1 = phase->type( in(1) )->isa_long();
     if (t1 != NULL && t1->_lo >= 0) {
-      jlong t1_support = ((jlong)1 << (1 + log2_long(t1->_hi))) - 1;
+      int bit_count = log2_long(t1->_hi) + 1;
+      jlong t1_support = jlong(max_julong >> (BitsPerJavaLong - bit_count));
       if ((t1_support & con) == t1_support)
         return usr;
     }
@@ -638,7 +631,7 @@ Node *AndLNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
 //=============================================================================
 //------------------------------Identity---------------------------------------
-Node *LShiftINode::Identity( PhaseTransform *phase ) {
+Node* LShiftINode::Identity(PhaseGVN* phase) {
   const TypeInt *ti = phase->type( in(2) )->isa_int();  // shift count is an int
   return ( ti && ti->is_con() && ( ti->get_con() & ( BitsPerInt - 1 ) ) == 0 ) ? in(1) : this;
 }
@@ -703,7 +696,7 @@ Node *LShiftINode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
 //------------------------------Value------------------------------------------
 // A LShiftINode shifts its input2 left by input1 amount.
-const Type *LShiftINode::Value( PhaseTransform *phase ) const {
+const Type* LShiftINode::Value(PhaseGVN* phase) const {
   const Type *t1 = phase->type( in(1) );
   const Type *t2 = phase->type( in(2) );
   // Either input is TOP ==> the result is TOP
@@ -750,7 +743,7 @@ const Type *LShiftINode::Value( PhaseTransform *phase ) const {
 
 //=============================================================================
 //------------------------------Identity---------------------------------------
-Node *LShiftLNode::Identity( PhaseTransform *phase ) {
+Node* LShiftLNode::Identity(PhaseGVN* phase) {
   const TypeInt *ti = phase->type( in(2) )->isa_int(); // shift count is an int
   return ( ti && ti->is_con() && ( ti->get_con() & ( BitsPerLong - 1 ) ) == 0 ) ? in(1) : this;
 }
@@ -802,7 +795,7 @@ Node *LShiftLNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
   // Check for ((x & ((CONST64(1)<<(64-c0))-1)) << c0) which ANDs off high bits
   // before shifting them away.
-  const jlong bits_mask = ((jlong)CONST64(1) << (jlong)(BitsPerJavaLong - con)) - CONST64(1);
+  const jlong bits_mask = jlong(max_julong >> con);
   if( add1_op == Op_AndL &&
       phase->type(add1->in(2)) == TypeLong::make( bits_mask ) )
     return new LShiftLNode( add1->in(1), in(2) );
@@ -812,7 +805,7 @@ Node *LShiftLNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
 //------------------------------Value------------------------------------------
 // A LShiftLNode shifts its input2 left by input1 amount.
-const Type *LShiftLNode::Value( PhaseTransform *phase ) const {
+const Type* LShiftLNode::Value(PhaseGVN* phase) const {
   const Type *t1 = phase->type( in(1) );
   const Type *t2 = phase->type( in(2) );
   // Either input is TOP ==> the result is TOP
@@ -859,7 +852,7 @@ const Type *LShiftLNode::Value( PhaseTransform *phase ) const {
 
 //=============================================================================
 //------------------------------Identity---------------------------------------
-Node *RShiftINode::Identity( PhaseTransform *phase ) {
+Node* RShiftINode::Identity(PhaseGVN* phase) {
   const TypeInt *t2 = phase->type(in(2))->isa_int();
   if( !t2 ) return this;
   if ( t2->is_con() && ( t2->get_con() & ( BitsPerInt - 1 ) ) == 0 )
@@ -933,11 +926,7 @@ Node *RShiftINode::Ideal(PhaseGVN *phase, bool can_reshape) {
              ld->Opcode() == Op_LoadUS &&
              ld->outcnt() == 1 && ld->unique_out() == shl)
       // Replace zero-extension-load with sign-extension-load
-      return new LoadSNode( ld->in(MemNode::Control),
-                            ld->in(MemNode::Memory),
-                            ld->in(MemNode::Address),
-                            ld->adr_type(), TypeInt::SHORT,
-                            MemNode::unordered);
+      return ld->as_Load()->convert_to_signed_load(*phase);
   }
 
   // Check for "(byte[i] <<24)>>24" which simply sign-extends
@@ -958,7 +947,7 @@ Node *RShiftINode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
 //------------------------------Value------------------------------------------
 // A RShiftINode shifts its input2 right by input1 amount.
-const Type *RShiftINode::Value( PhaseTransform *phase ) const {
+const Type* RShiftINode::Value(PhaseGVN* phase) const {
   const Type *t1 = phase->type( in(1) );
   const Type *t2 = phase->type( in(2) );
   // Either input is TOP ==> the result is TOP
@@ -1013,14 +1002,14 @@ const Type *RShiftINode::Value( PhaseTransform *phase ) const {
 
 //=============================================================================
 //------------------------------Identity---------------------------------------
-Node *RShiftLNode::Identity( PhaseTransform *phase ) {
+Node* RShiftLNode::Identity(PhaseGVN* phase) {
   const TypeInt *ti = phase->type( in(2) )->isa_int(); // shift count is an int
   return ( ti && ti->is_con() && ( ti->get_con() & ( BitsPerLong - 1 ) ) == 0 ) ? in(1) : this;
 }
 
 //------------------------------Value------------------------------------------
 // A RShiftLNode shifts its input2 right by input1 amount.
-const Type *RShiftLNode::Value( PhaseTransform *phase ) const {
+const Type* RShiftLNode::Value(PhaseGVN* phase) const {
   const Type *t1 = phase->type( in(1) );
   const Type *t2 = phase->type( in(2) );
   // Either input is TOP ==> the result is TOP
@@ -1071,7 +1060,7 @@ const Type *RShiftLNode::Value( PhaseTransform *phase ) const {
 
 //=============================================================================
 //------------------------------Identity---------------------------------------
-Node *URShiftINode::Identity( PhaseTransform *phase ) {
+Node* URShiftINode::Identity(PhaseGVN* phase) {
   const TypeInt *ti = phase->type( in(2) )->isa_int();
   if ( ti && ti->is_con() && ( ti->get_con() & ( BitsPerInt - 1 ) ) == 0 ) return in(1);
 
@@ -1167,7 +1156,7 @@ Node *URShiftINode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
 //------------------------------Value------------------------------------------
 // A URShiftINode shifts its input2 right by input1 amount.
-const Type *URShiftINode::Value( PhaseTransform *phase ) const {
+const Type* URShiftINode::Value(PhaseGVN* phase) const {
   // (This is a near clone of RShiftINode::Value.)
   const Type *t1 = phase->type( in(1) );
   const Type *t2 = phase->type( in(2) );
@@ -1241,7 +1230,7 @@ const Type *URShiftINode::Value( PhaseTransform *phase ) const {
 
 //=============================================================================
 //------------------------------Identity---------------------------------------
-Node *URShiftLNode::Identity( PhaseTransform *phase ) {
+Node* URShiftLNode::Identity(PhaseGVN* phase) {
   const TypeInt *ti = phase->type( in(2) )->isa_int(); // shift count is an int
   return ( ti && ti->is_con() && ( ti->get_con() & ( BitsPerLong - 1 ) ) == 0 ) ? in(1) : this;
 }
@@ -1254,7 +1243,7 @@ Node *URShiftLNode::Ideal(PhaseGVN *phase, bool can_reshape) {
   if ( con == 0 ) return NULL;  // let Identity() handle a 0 shift count
                               // note: mask computation below does not work for 0 shift count
   // We'll be wanting the right-shift amount as a mask of that many bits
-  const jlong mask = (((jlong)CONST64(1) << (jlong)(BitsPerJavaLong - con)) -1);
+  const jlong mask = jlong(max_julong >> con);
 
   // Check for ((x << z) + Y) >>> z.  Replace with x + con>>>z
   // The idiom for rounding to a power of 2 is "(Q+(2^z-1)) >>> z".
@@ -1296,7 +1285,7 @@ Node *URShiftLNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
 //------------------------------Value------------------------------------------
 // A URShiftINode shifts its input2 right by input1 amount.
-const Type *URShiftLNode::Value( PhaseTransform *phase ) const {
+const Type* URShiftLNode::Value(PhaseGVN* phase) const {
   // (This is a near clone of RShiftLNode::Value.)
   const Type *t1 = phase->type( in(1) );
   const Type *t2 = phase->type( in(2) );
@@ -1353,4 +1342,48 @@ const Type *URShiftLNode::Value( PhaseTransform *phase ) const {
   }
 
   return TypeLong::LONG;                // Give up
+}
+
+//=============================================================================
+//------------------------------Value------------------------------------------
+const Type* FmaDNode::Value(PhaseGVN* phase) const {
+  const Type *t1 = phase->type(in(1));
+  if (t1 == Type::TOP) return Type::TOP;
+  if (t1->base() != Type::DoubleCon) return Type::DOUBLE;
+  const Type *t2 = phase->type(in(2));
+  if (t2 == Type::TOP) return Type::TOP;
+  if (t2->base() != Type::DoubleCon) return Type::DOUBLE;
+  const Type *t3 = phase->type(in(3));
+  if (t3 == Type::TOP) return Type::TOP;
+  if (t3->base() != Type::DoubleCon) return Type::DOUBLE;
+#ifndef __STDC_IEC_559__
+  return Type::DOUBLE;
+#else
+  double d1 = t1->getd();
+  double d2 = t2->getd();
+  double d3 = t3->getd();
+  return TypeD::make(fma(d1, d2, d3));
+#endif
+}
+
+//=============================================================================
+//------------------------------Value------------------------------------------
+const Type* FmaFNode::Value(PhaseGVN* phase) const {
+  const Type *t1 = phase->type(in(1));
+  if (t1 == Type::TOP) return Type::TOP;
+  if (t1->base() != Type::FloatCon) return Type::FLOAT;
+  const Type *t2 = phase->type(in(2));
+  if (t2 == Type::TOP) return Type::TOP;
+  if (t2->base() != Type::FloatCon) return Type::FLOAT;
+  const Type *t3 = phase->type(in(3));
+  if (t3 == Type::TOP) return Type::TOP;
+  if (t3->base() != Type::FloatCon) return Type::FLOAT;
+#ifndef __STDC_IEC_559__
+  return Type::FLOAT;
+#else
+  float f1 = t1->getf();
+  float f2 = t2->getf();
+  float f3 = t3->getf();
+  return TypeF::make(fma(f1, f2, f3));
+#endif
 }

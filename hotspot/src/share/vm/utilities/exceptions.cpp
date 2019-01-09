@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,8 @@
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "compiler/compileBroker.hpp"
+#include "logging/log.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/init.hpp"
 #include "runtime/java.hpp"
@@ -34,8 +36,6 @@
 #include "runtime/threadCritical.hpp"
 #include "utilities/events.hpp"
 #include "utilities/exceptions.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 // Implementation of ThreadShadow
 void check_ThreadShadow() {
@@ -53,11 +53,11 @@ void ThreadShadow::set_pending_exception(oop exception, const char* file, int li
 }
 
 void ThreadShadow::clear_pending_exception() {
-  if (TraceClearedExceptions) {
-    if (_pending_exception != NULL) {
-      tty->print_cr("Thread::clear_pending_exception: cleared exception:");
-      _pending_exception->print();
-    }
+  if (_pending_exception != NULL && log_is_enabled(Debug, exceptions)) {
+    ResourceMark rm;
+    outputStream* logst = Log(exceptions)::debug_stream();
+    logst->print("Thread::clear_pending_exception: cleared exception:");
+    _pending_exception->print_on(logst);
   }
   _pending_exception = NULL;
   _exception_file    = NULL;
@@ -80,12 +80,12 @@ bool Exceptions::special_exception(Thread* thread, const char* file, int line, H
   if (h_exception()->klass() == SystemDictionary::StackOverflowError_klass()) {
     InstanceKlass* ik = InstanceKlass::cast(h_exception->klass());
     assert(ik->is_initialized(),
-           "need to increase min_stack_allowed calculation");
+           "need to increase java_thread_min_stack_allowed calculation");
   }
 #endif // ASSERT
 
   if (thread->is_VM_thread()
-      || thread->is_Compiler_thread()
+      || !thread->can_call_java()
       || DumpSharedSpaces ) {
     // We do not care what kind of exception we get for the vm-thread or a thread which
     // is compiling.  We just install a dummy exception object
@@ -112,7 +112,7 @@ bool Exceptions::special_exception(Thread* thread, const char* file, int line, S
   }
 
   if (thread->is_VM_thread()
-      || thread->is_Compiler_thread()
+      || !thread->can_call_java()
       || DumpSharedSpaces ) {
     // We do not care what kind of exception we get for the vm-thread or a thread which
     // is compiling.  We just install a dummy exception object
@@ -138,16 +138,13 @@ void Exceptions::_throw(Thread* thread, const char* file, int line, Handle h_exc
   assert(h_exception() != NULL, "exception should not be NULL");
 
   // tracing (do this up front - so it works during boot strapping)
-  if (TraceExceptions) {
-    ttyLocker ttyl;
-    tty->print_cr("Exception <%s%s%s> (" INTPTR_FORMAT ") \n"
-                  "thrown [%s, line %d]\nfor thread " INTPTR_FORMAT,
-                  h_exception->print_value_string(),
-                  message ? ": " : "", message ? message : "",
-                  (address)h_exception(), file, line, thread);
-  }
+  log_info(exceptions)("Exception <%s%s%s> (" INTPTR_FORMAT ") \n"
+                       "thrown [%s, line %d]\nfor thread " INTPTR_FORMAT,
+                       h_exception->print_value_string(),
+                       message ? ": " : "", message ? message : "",
+                       p2i(h_exception()), file, line, p2i(thread));
   // for AbortVMOnException flag
-  NOT_PRODUCT(Exceptions::debug_check_abort(h_exception, message));
+  Exceptions::debug_check_abort(h_exception, message);
 
   // Check for special boot-strapping/vm-thread handling
   if (special_exception(thread, file, line, h_exception)) {
@@ -167,7 +164,7 @@ void Exceptions::_throw(Thread* thread, const char* file, int line, Handle h_exc
   if (LogEvents){
     Events::log_exception(thread, "Exception <%s%s%s> (" INTPTR_FORMAT ") thrown at [%s, line %d]",
                           h_exception->print_value_string(), message ? ": " : "", message ? message : "",
-                          (address)h_exception(), file, line);
+                          p2i(h_exception()), file, line);
   }
 }
 
@@ -224,13 +221,13 @@ void Exceptions::_throw_cause(Thread* thread, const char* file, int line, Symbol
 }
 
 
-void Exceptions::throw_stack_overflow_exception(Thread* THREAD, const char* file, int line, methodHandle method) {
+void Exceptions::throw_stack_overflow_exception(Thread* THREAD, const char* file, int line, const methodHandle& method) {
   Handle exception;
   if (!THREAD->has_pending_exception()) {
     Klass* k = SystemDictionary::StackOverflowError_klass();
     oop e = InstanceKlass::cast(k)->allocate_instance(CHECK);
     exception = Handle(THREAD, e);  // fill_in_stack trace does gc
-    assert(InstanceKlass::cast(k)->is_initialized(), "need to increase min_stack_allowed calculation");
+    assert(InstanceKlass::cast(k)->is_initialized(), "need to increase java_thread_min_stack_allowed calculation");
     if (StackTraceInThrowable) {
       java_lang_Throwable::fill_in_stack_trace(exception, method());
     }
@@ -479,28 +476,46 @@ ExceptionMark::~ExceptionMark() {
 
 // ----------------------------------------------------------------------------------------
 
-#ifndef PRODUCT
 // caller frees value_string if necessary
 void Exceptions::debug_check_abort(const char *value_string, const char* message) {
   if (AbortVMOnException != NULL && value_string != NULL &&
       strstr(value_string, AbortVMOnException)) {
-    if (AbortVMOnExceptionMessage == NULL || message == NULL ||
-        strcmp(message, AbortVMOnExceptionMessage) == 0) {
-      fatal(err_msg("Saw %s, aborting", value_string));
+    if (AbortVMOnExceptionMessage == NULL || (message != NULL &&
+        strstr(message, AbortVMOnExceptionMessage))) {
+      fatal("Saw %s, aborting", value_string);
     }
   }
 }
 
 void Exceptions::debug_check_abort(Handle exception, const char* message) {
   if (AbortVMOnException != NULL) {
-    ResourceMark rm;
-    if (message == NULL && exception->is_a(SystemDictionary::Throwable_klass())) {
-      oop msg = java_lang_Throwable::message(exception);
-      if (msg != NULL) {
-        message = java_lang_String::as_utf8_string(msg);
-      }
-    }
-    debug_check_abort(InstanceKlass::cast(exception()->klass())->external_name(), message);
+    debug_check_abort_helper(exception, message);
   }
 }
-#endif
+
+void Exceptions::debug_check_abort_helper(Handle exception, const char* message) {
+  ResourceMark rm;
+  if (message == NULL && exception->is_a(SystemDictionary::Throwable_klass())) {
+    oop msg = java_lang_Throwable::message(exception);
+    if (msg != NULL) {
+      message = java_lang_String::as_utf8_string(msg);
+    }
+  }
+  debug_check_abort(exception()->klass()->external_name(), message);
+}
+
+// for logging exceptions
+void Exceptions::log_exception(Handle exception, stringStream tempst) {
+  ResourceMark rm;
+  Symbol* message = java_lang_Throwable::detail_message(exception());
+  if (message != NULL) {
+    log_info(exceptions)("Exception <%s: %s>\n thrown in %s",
+                         exception->print_value_string(),
+                         message->as_C_string(),
+                         tempst.as_string());
+  } else {
+    log_info(exceptions)("Exception <%s>\n thrown in %s",
+                         exception->print_value_string(),
+                         tempst.as_string());
+  }
+}

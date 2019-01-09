@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -81,13 +81,7 @@ private:
   // Accessing
   oop obj_at(int index) const;
 
-  void obj_at_put(int index, oop value) {
-    if (UseCompressedOops) {
-      oop_store(obj_at_addr<narrowOop>(index), value);
-    } else {
-      oop_store(obj_at_addr<oop>(index), value);
-    }
-  }
+  void inline obj_at_put(int index, oop value);
 
   oop atomic_compare_exchange_oop(int index, oop exchange_value, oop compare_value);
 
@@ -106,7 +100,7 @@ private:
 
   // special iterators for index ranges, returns size of object
 #define ObjArrayOop_OOP_ITERATE_DECL(OopClosureType, nv_suffix)     \
-  int oop_iterate_range(OopClosureType* blk, int start, int end);
+  void oop_iterate_range(OopClosureType* blk, int start, int end);
 
   ALL_OOP_OOP_ITERATE_CLOSURES_1(ObjArrayOop_OOP_ITERATE_DECL)
   ALL_OOP_OOP_ITERATE_CLOSURES_2(ObjArrayOop_OOP_ITERATE_DECL)

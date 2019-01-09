@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,8 +34,8 @@
 #include "runtime/thread.inline.hpp"
 #include "runtime/vmThread.hpp"
 #include "utilities/globalDefinitions.hpp"
+#include "utilities/macros.hpp"
 #include "utilities/preserveException.hpp"
-#include "utilities/top.hpp"
 
 // Wrapper for all entry points to the virtual machine.
 // The HandleMarkCleaner is a faster version of HandleMark.
@@ -74,19 +74,12 @@ class InterfaceSupport: AllStatic {
   static long _number_of_calls;
   static long _fullgc_alot_invocation;
 
-  // tracing
-  static void trace(const char* result_type, const char* header);
-
   // Helper methods used to implement +ScavengeALot and +FullGCALot
   static void check_gc_alot() { if (ScavengeALot || FullGCALot) gc_alot(); }
   static void gc_alot();
 
   static void walk_stack_from(vframe* start_vf);
   static void walk_stack();
-
-# ifdef ENABLE_ZAP_DEAD_LOCALS
-  static void zap_dead_locals_old();
-# endif
 
   static void zombieAll();
   static void unlinkSymbols();
@@ -98,21 +91,8 @@ class InterfaceSupport: AllStatic {
 
  public:
   // OS dependent stuff
-#ifdef TARGET_OS_FAMILY_linux
-# include "interfaceSupport_linux.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_solaris
-# include "interfaceSupport_solaris.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_windows
-# include "interfaceSupport_windows.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_aix
-# include "interfaceSupport_aix.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_bsd
-# include "interfaceSupport_bsd.hpp"
-#endif
+
+#include OS_HEADER(interfaceSupport)
 
 };
 
@@ -239,6 +219,9 @@ class ThreadInVMfromJava : public ThreadStateTransition {
     trans_from_java(_thread_in_vm);
   }
   ~ThreadInVMfromJava()  {
+    if (_thread->stack_yellow_reserved_zone_disabled()) {
+      _thread->enable_stack_yellow_reserved_zone();
+    }
     trans(_thread_in_vm, _thread_in_Java);
     // Check for pending. async. exceptions or suspends.
     if (_thread->has_special_runtime_exit_condition()) _thread->handle_special_runtime_exit_condition();
@@ -297,6 +280,7 @@ class ThreadToNativeFromVM : public ThreadStateTransition {
 
   ~ThreadToNativeFromVM() {
     trans_from_native(_thread_in_vm);
+    assert(!_thread->is_pending_jni_exception_check(), "Pending JNI Exception Check");
     // We don't need to clear_walkable because it will happen automagically when we return to java
   }
 };
@@ -326,6 +310,9 @@ class ThreadInVMfromJavaNoAsyncException : public ThreadStateTransition {
     trans_from_java(_thread_in_vm);
   }
   ~ThreadInVMfromJavaNoAsyncException()  {
+    if (_thread->stack_yellow_reserved_zone_disabled()) {
+      _thread->enable_stack_yellow_reserved_zone();
+    }
     trans(_thread_in_vm, _thread_in_Java);
     // NOTE: We do not check for pending. async. exceptions.
     // If we did and moved the pending async exception over into the
@@ -333,6 +320,7 @@ class ThreadInVMfromJavaNoAsyncException : public ThreadStateTransition {
     // only). However, to do so would require that we transition back
     // to the _thread_in_vm state. Instead we postpone the handling of
     // the async exception.
+
 
     // Check for pending. suspends only.
     if (_thread->has_special_runtime_exit_condition())
@@ -357,11 +345,6 @@ class VMEntryWrapper {
     if (WalkStackALot) {
       InterfaceSupport::walk_stack();
     }
-#ifdef ENABLE_ZAP_DEAD_LOCALS
-    if (ZapDeadLocalsOld) {
-      InterfaceSupport::zap_dead_locals_old();
-    }
-#endif
 #ifdef COMPILER2
     // This option is not used by Compiler 1
     if (StressDerivedPointers) {
@@ -411,8 +394,6 @@ class RuntimeHistogramElement : public HistogramElement {
 
 #define TRACE_CALL(result_type, header)                            \
   InterfaceSupport::_number_of_calls++;                            \
-  if (TraceRuntimeCalls)                                           \
-    InterfaceSupport::trace(#result_type, #header);                \
   if (CountRuntimeCalls) {                                         \
     static RuntimeHistogramElement* e = new RuntimeHistogramElement(#header); \
     if (e != NULL) e->increment_count();                           \
@@ -428,6 +409,14 @@ class RuntimeHistogramElement : public HistogramElement {
 #define VM_LEAF_BASE(result_type, header)                            \
   TRACE_CALL(result_type, header)                                    \
   debug_only(NoHandleMark __hm;)                                     \
+  os::verify_stack_alignment();                                      \
+  /* begin of body */
+
+#define VM_ENTRY_BASE_FROM_LEAF(result_type, header, thread)         \
+  TRACE_CALL(result_type, header)                                    \
+  debug_only(ResetNoHandleMark __rnhm;)                              \
+  HandleMarkCleaner __hm(thread);                                    \
+  Thread* THREAD = thread;                                           \
   os::verify_stack_alignment();                                      \
   /* begin of body */
 
@@ -465,7 +454,7 @@ class RuntimeHistogramElement : public HistogramElement {
 #define IRT_LEAF(result_type, header)                                \
   result_type header {                                               \
     VM_LEAF_BASE(result_type, header)                                \
-    debug_only(No_Safepoint_Verifier __nspv(true);)
+    debug_only(NoSafepointVerifier __nspv(true);)
 
 
 #define IRT_ENTRY_NO_ASYNC(result_type, header)                      \
@@ -489,7 +478,7 @@ class RuntimeHistogramElement : public HistogramElement {
 #define JRT_LEAF(result_type, header)                                \
   result_type header {                                               \
   VM_LEAF_BASE(result_type, header)                                  \
-  debug_only(JRT_Leaf_Verifier __jlv;)
+  debug_only(JRTLeafVerifier __jlv;)
 
 
 #define JRT_ENTRY_NO_ASYNC(result_type, header)                      \
@@ -527,9 +516,9 @@ class RuntimeHistogramElement : public HistogramElement {
     JNI_ENTRY_NO_PRESERVE(result_type, header)                       \
     WeakPreserveExceptionMark __wem(thread);
 
-#define JNI_ENTRY_NO_PRESERVE(result_type, header)             \
+#define JNI_ENTRY_NO_PRESERVE(result_type, header)                   \
 extern "C" {                                                         \
-  result_type JNICALL header {                                \
+  result_type JNICALL header {                                       \
     JavaThread* thread=JavaThread::thread_from_jni_environment(env); \
     assert( !VerifyJNIEnvThread || (thread == Thread::current()), "JNIEnv is only valid in same thread"); \
     ThreadInVMfromNative __tiv(thread);                              \
@@ -541,7 +530,7 @@ extern "C" {                                                         \
 // a GC, is called outside the NoHandleMark (set via VM_QUICK_ENTRY_BASE).
 #define JNI_QUICK_ENTRY(result_type, header)                         \
 extern "C" {                                                         \
-  result_type JNICALL header {                                \
+  result_type JNICALL header {                                       \
     JavaThread* thread=JavaThread::thread_from_jni_environment(env); \
     assert( !VerifyJNIEnvThread || (thread == Thread::current()), "JNIEnv is only valid in same thread"); \
     ThreadInVMfromNative __tiv(thread);                              \
@@ -551,7 +540,7 @@ extern "C" {                                                         \
 
 #define JNI_LEAF(result_type, header)                                \
 extern "C" {                                                         \
-  result_type JNICALL header {                                \
+  result_type JNICALL header {                                       \
     JavaThread* thread=JavaThread::thread_from_jni_environment(env); \
     assert( !VerifyJNIEnvThread || (thread == Thread::current()), "JNIEnv is only valid in same thread"); \
     VM_LEAF_BASE(result_type, header)
@@ -576,7 +565,7 @@ extern "C" {                                                         \
 #define JVM_ENTRY_NO_ENV(result_type, header)                        \
 extern "C" {                                                         \
   result_type JNICALL header {                                       \
-    JavaThread* thread = (JavaThread*)ThreadLocalStorage::thread();  \
+    JavaThread* thread = JavaThread::current();                      \
     ThreadInVMfromNative __tiv(thread);                              \
     debug_only(VMNativeEntryWrapper __vew;)                          \
     VM_ENTRY_BASE(result_type, header, thread)
@@ -596,6 +585,14 @@ extern "C" {                                                         \
   result_type JNICALL header {                                       \
     VM_Exit::block_if_vm_exited();                                   \
     VM_LEAF_BASE(result_type, header)
+
+
+#define JVM_ENTRY_FROM_LEAF(env, result_type, header)                \
+  { {                                                                \
+    JavaThread* thread=JavaThread::thread_from_jni_environment(env); \
+    ThreadInVMfromNative __tiv(thread);                              \
+    debug_only(VMNativeEntryWrapper __vew;)                          \
+    VM_ENTRY_BASE_FROM_LEAF(result_type, header, thread)
 
 
 #define JVM_END } }

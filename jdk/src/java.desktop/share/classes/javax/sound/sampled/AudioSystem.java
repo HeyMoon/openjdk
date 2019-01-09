@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,14 +25,17 @@
 
 package javax.sound.sampled;
 
+import java.io.EOFException;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
 import java.util.Vector;
@@ -69,13 +72,16 @@ import com.sun.media.sound.JDK13Services;
  * {@link Properties#load(InputStream) Properties.load}. The following table
  * lists the available property keys and which methods consider them:
  *
- * <table border=0>
- *  <caption>Audio System Property Keys</caption>
+ * <table class="striped">
+ * <caption>Audio System Property Keys</caption>
+ * <thead>
  *  <tr>
  *   <th>Property Key</th>
  *   <th>Interface</th>
  *   <th>Affected Method(s)</th>
  *  </tr>
+ * </thead>
+ * <tbody>
  *  <tr>
  *   <td>{@code javax.sound.sampled.Clip}</td>
  *   <td>{@link Clip}</td>
@@ -96,6 +102,7 @@ import com.sun.media.sound.JDK13Services;
  *   <td>{@link TargetDataLine}</td>
  *   <td>{@link #getLine}, {@link #getTargetDataLine}</td>
  *  </tr>
+ * </tbody>
  * </table>
  *
  * The property value consists of the provider class name and the mixer name,
@@ -191,50 +198,21 @@ public class AudioSystem {
      *         mixer installed on the system
      * @see #getMixerInfo
      */
-    public static Mixer getMixer(Mixer.Info info) {
-
-        Mixer mixer = null;
-        List<MixerProvider> providers = getMixerProviders();
-
-        for(int i = 0; i < providers.size(); i++ ) {
-
+    public static Mixer getMixer(final Mixer.Info info) {
+        for (final MixerProvider provider : getMixerProviders()) {
             try {
-                return providers.get(i).getMixer(info);
-
-            } catch (IllegalArgumentException e) {
-            } catch (NullPointerException e) {
-                // $$jb 08.20.99:  If the strings in the info object aren't
-                // set, then Netscape (using jdk1.1.5) tends to throw
-                // NPE's when doing some string manipulation.  This is
-                // probably not the best fix, but is solves the problem
-                // of the NPE in Netscape using local classes
-                // $$jb 11.01.99: Replacing this patch.
+                return provider.getMixer(info);
+            } catch (IllegalArgumentException | NullPointerException ignored) {
+                // The MixerProvider.getMixer(null) should return default Mixer,
+                // This behaviour was assumed from the beginning, but strictly
+                // specified only in the jdk9. Since the jdk1.1.5 we skipped
+                // NPE for some reason and therefore skipped some
+                // implementations of MixerProviders, which throw NPE. To keep
+                // support of such implementations, we still ignore NPE.
             }
         }
-
-        //$$fb if looking for default mixer, and not found yet, add a round of looking
-        if (info == null) {
-            for(int i = 0; i < providers.size(); i++ ) {
-                try {
-                    MixerProvider provider = providers.get(i);
-                    Mixer.Info[] infos = provider.getMixerInfo();
-                    // start from 0 to last device (do not reverse this order)
-                    for (int ii = 0; ii < infos.length; ii++) {
-                        try {
-                            return provider.getMixer(infos[ii]);
-                        } catch (IllegalArgumentException e) {
-                            // this is not a good default device :)
-                        }
-                    }
-                } catch (IllegalArgumentException e) {
-                } catch (NullPointerException e) {
-                }
-            }
-        }
-
-
-        throw new IllegalArgumentException("Mixer not supported: "
-                                           + (info!=null?info.toString():"null"));
+        throw new IllegalArgumentException(
+                String.format("Mixer not supported: %s", info));
     }
 
     //$$fb 2002-11-26: fix for 4757930: DOC: AudioSystem.getTarget/SourceLineInfo() is ambiguous
@@ -696,8 +674,10 @@ public class AudioSystem {
      *         array of length 0 is returned. Otherwise, the array will have a
      *         length of at least 1, representing {@code sourceEncoding}
      *         (no conversion).
+     * @throws NullPointerException if {@code sourceEncoding} is {@code null}
      */
     public static AudioFormat.Encoding[] getTargetEncodings(AudioFormat.Encoding sourceEncoding) {
+        Objects.requireNonNull(sourceEncoding);
 
         List<FormatConversionProvider> codecs = getFormatConversionProviders();
         Vector<AudioFormat.Encoding> encodings = new Vector<>();
@@ -714,8 +694,11 @@ public class AudioSystem {
                 }
             }
         }
-        AudioFormat.Encoding encs2[] = encodings.toArray(new AudioFormat.Encoding[0]);
-        return encs2;
+        if (!encodings.contains(sourceEncoding)) {
+            encodings.addElement(sourceEncoding);
+        }
+
+        return encodings.toArray(new AudioFormat.Encoding[encodings.size()]);
     }
 
     // $$fb 2002-04-12: fix for 4662082: behavior of AudioSystem.getTargetEncodings() methods doesn't match the spec
@@ -730,35 +713,24 @@ public class AudioSystem {
      *         array of length 0 is returned. Otherwise, the array will have a
      *         length of at least 1, representing the encoding of
      *         {@code sourceFormat} (no conversion).
+     * @throws NullPointerException if {@code sourceFormat} is {@code null}
      */
     public static AudioFormat.Encoding[] getTargetEncodings(AudioFormat sourceFormat) {
-
+        Objects.requireNonNull(sourceFormat);
 
         List<FormatConversionProvider> codecs = getFormatConversionProviders();
-        Vector<AudioFormat.Encoding[]> encodings = new Vector<>();
-
-        int size = 0;
-        int index = 0;
-        AudioFormat.Encoding encs[] = null;
+        List<AudioFormat.Encoding> encs = new ArrayList<>();
 
         // gather from all the codecs
-
-        for(int i=0; i<codecs.size(); i++ ) {
-            encs = codecs.get(i).getTargetEncodings(sourceFormat);
-            size += encs.length;
-            encodings.addElement( encs );
+        for (final FormatConversionProvider codec : codecs) {
+            Collections.addAll(encs, codec.getTargetEncodings(sourceFormat));
         }
 
-        // now build a new array
-
-        AudioFormat.Encoding encs2[] = new AudioFormat.Encoding[size];
-        for(int i=0; i<encodings.size(); i++ ) {
-            encs = encodings.get(i);
-            for(int j=0; j<encs.length; j++ ) {
-                encs2[index++] = encs[j];
-            }
+        if (!encs.contains(sourceFormat.getEncoding())) {
+            encs.add(sourceFormat.getEncoding());
         }
-        return encs2;
+
+        return encs.toArray(new AudioFormat.Encoding[encs.size()]);
     }
 
     /**
@@ -769,9 +741,15 @@ public class AudioSystem {
      * @param  sourceFormat the audio format before conversion
      * @return {@code true} if the conversion is supported, otherwise
      *         {@code false}
+     * @throws NullPointerException if {@code targetEncoding} or
+     *         {@code sourceFormat} are {@code null}
      */
     public static boolean isConversionSupported(AudioFormat.Encoding targetEncoding, AudioFormat sourceFormat) {
-
+        Objects.requireNonNull(targetEncoding);
+        Objects.requireNonNull(sourceFormat);
+        if (sourceFormat.getEncoding().equals(targetEncoding)) {
+            return true;
+        }
 
         List<FormatConversionProvider> codecs = getFormatConversionProviders();
 
@@ -792,6 +770,8 @@ public class AudioSystem {
      * @param  sourceStream the stream to be converted
      * @return an audio input stream of the indicated encoding
      * @throws IllegalArgumentException if the conversion is not supported
+     * @throws NullPointerException if {@code targetEncoding} or
+     *         {@code sourceStream} are {@code null}
      * @see #getTargetEncodings(AudioFormat.Encoding)
      * @see #getTargetEncodings(AudioFormat)
      * @see #isConversionSupported(AudioFormat.Encoding, AudioFormat)
@@ -799,6 +779,11 @@ public class AudioSystem {
      */
     public static AudioInputStream getAudioInputStream(AudioFormat.Encoding targetEncoding,
                                                        AudioInputStream sourceStream) {
+        Objects.requireNonNull(targetEncoding);
+        Objects.requireNonNull(sourceStream);
+        if (sourceStream.getFormat().getEncoding().equals(targetEncoding)) {
+            return sourceStream;
+        }
 
         List<FormatConversionProvider> codecs = getFormatConversionProviders();
 
@@ -821,35 +806,35 @@ public class AudioSystem {
      * @param  sourceFormat the audio format before conversion
      * @return array of formats. If no formats of the specified encoding are
      *         supported, an array of length 0 is returned.
+     * @throws NullPointerException if {@code targetEncoding} or
+     *         {@code sourceFormat} are {@code null}
      */
     public static AudioFormat[] getTargetFormats(AudioFormat.Encoding targetEncoding, AudioFormat sourceFormat) {
+        Objects.requireNonNull(targetEncoding);
+        Objects.requireNonNull(sourceFormat);
 
         List<FormatConversionProvider> codecs = getFormatConversionProviders();
-        Vector<AudioFormat[]> formats = new Vector<>();
+        List<AudioFormat> formats = new ArrayList<>();
 
-        int size = 0;
-        int index = 0;
-        AudioFormat fmts[] = null;
-
+        boolean matchFound = false;
         // gather from all the codecs
-
-        for(int i=0; i<codecs.size(); i++ ) {
-            FormatConversionProvider codec = codecs.get(i);
-            fmts = codec.getTargetFormats(targetEncoding, sourceFormat);
-            size += fmts.length;
-            formats.addElement( fmts );
-        }
-
-        // now build a new array
-
-        AudioFormat fmts2[] = new AudioFormat[size];
-        for(int i=0; i<formats.size(); i++ ) {
-            fmts = formats.get(i);
-            for(int j=0; j<fmts.length; j++ ) {
-                fmts2[index++] = fmts[j];
+        for (final FormatConversionProvider codec : codecs) {
+            AudioFormat[] elements = codec
+                    .getTargetFormats(targetEncoding, sourceFormat);
+            for (AudioFormat format : elements) {
+                formats.add(format);
+                if (sourceFormat.matches(format)) {
+                    matchFound = true;
+                }
             }
         }
-        return fmts2;
+
+        if (targetEncoding.equals(sourceFormat.getEncoding())) {
+            if (!matchFound) {
+                formats.add(sourceFormat);
+            }
+        }
+        return formats.toArray(new AudioFormat[formats.size()]);
     }
 
     /**
@@ -860,8 +845,15 @@ public class AudioSystem {
      * @param  sourceFormat the audio format before conversion
      * @return {@code true} if the conversion is supported, otherwise
      *         {@code false}
+     * @throws NullPointerException if {@code targetFormat} or
+     *         {@code sourceFormat} are {@code null}
      */
     public static boolean isConversionSupported(AudioFormat targetFormat, AudioFormat sourceFormat) {
+        Objects.requireNonNull(targetFormat);
+        Objects.requireNonNull(sourceFormat);
+        if (sourceFormat.matches(targetFormat)) {
+            return true;
+        }
 
         List<FormatConversionProvider> codecs = getFormatConversionProviders();
 
@@ -882,6 +874,8 @@ public class AudioSystem {
      * @param  sourceStream the stream to be converted
      * @return an audio input stream of the indicated format
      * @throws IllegalArgumentException if the conversion is not supported
+     * @throws NullPointerException if {@code targetFormat} or
+     *         {@code sourceStream} are {@code null}
      * @see #getTargetEncodings(AudioFormat)
      * @see #getTargetFormats(AudioFormat.Encoding, AudioFormat)
      * @see #isConversionSupported(AudioFormat, AudioFormat)
@@ -889,7 +883,6 @@ public class AudioSystem {
      */
     public static AudioInputStream getAudioInputStream(AudioFormat targetFormat,
                                                        AudioInputStream sourceStream) {
-
         if (sourceStream.getFormat().matches(targetFormat)) {
             return sourceStream;
         }
@@ -912,9 +905,9 @@ public class AudioSystem {
      * must point to valid audio file data. The implementation of this method
      * may require multiple parsers to examine the stream to determine whether
      * they support it. These parsers must be able to mark the stream, read
-     * enough data to determine whether they support the stream, and, if not,
-     * reset the stream's read pointer to its original position. If the input
-     * stream does not support these operations, this method may fail with an
+     * enough data to determine whether they support the stream, and reset the
+     * stream's read pointer to its original position. If the input stream does
+     * not support these operations, this method may fail with an
      * {@code IOException}.
      *
      * @param  stream the input stream from which file format information should
@@ -924,30 +917,21 @@ public class AudioSystem {
      * @throws UnsupportedAudioFileException if the stream does not point to
      *         valid audio file data recognized by the system
      * @throws IOException if an input/output exception occurs
+     * @throws NullPointerException if {@code stream} is {@code null}
      * @see InputStream#markSupported
      * @see InputStream#mark
      */
-    public static AudioFileFormat getAudioFileFormat(InputStream stream)
-        throws UnsupportedAudioFileException, IOException {
+    public static AudioFileFormat getAudioFileFormat(final InputStream stream)
+            throws UnsupportedAudioFileException, IOException {
+        Objects.requireNonNull(stream);
 
-        List<AudioFileReader> providers = getAudioFileReaders();
-        AudioFileFormat format = null;
-
-        for(int i = 0; i < providers.size(); i++ ) {
-            AudioFileReader reader = providers.get(i);
+        for (final AudioFileReader reader : getAudioFileReaders()) {
             try {
-                format = reader.getAudioFileFormat( stream ); // throws IOException
-                break;
-            } catch (UnsupportedAudioFileException e) {
-                continue;
+                return reader.getAudioFileFormat(stream);
+            } catch (final UnsupportedAudioFileException ignored) {
             }
         }
-
-        if( format==null ) {
-            throw new UnsupportedAudioFileException("file is not a supported file type");
-        } else {
-            return format;
-        }
+        throw new UnsupportedAudioFileException("Stream of unsupported format");
     }
 
     /**
@@ -961,28 +945,19 @@ public class AudioSystem {
      * @throws UnsupportedAudioFileException if the URL does not point to valid
      *         audio file data recognized by the system
      * @throws IOException if an input/output exception occurs
+     * @throws NullPointerException if {@code url} is {@code null}
      */
-    public static AudioFileFormat getAudioFileFormat(URL url)
-        throws UnsupportedAudioFileException, IOException {
+    public static AudioFileFormat getAudioFileFormat(final URL url)
+            throws UnsupportedAudioFileException, IOException {
+        Objects.requireNonNull(url);
 
-        List<AudioFileReader> providers = getAudioFileReaders();
-        AudioFileFormat format = null;
-
-        for(int i = 0; i < providers.size(); i++ ) {
-            AudioFileReader reader = providers.get(i);
+        for (final AudioFileReader reader : getAudioFileReaders()) {
             try {
-                format = reader.getAudioFileFormat( url ); // throws IOException
-                break;
-            } catch (UnsupportedAudioFileException e) {
-                continue;
+                return reader.getAudioFileFormat(url);
+            } catch (final UnsupportedAudioFileException ignored) {
             }
         }
-
-        if( format==null ) {
-            throw new UnsupportedAudioFileException("file is not a supported file type");
-        } else {
-            return format;
-        }
+        throw new UnsupportedAudioFileException("URL of unsupported format");
     }
 
     /**
@@ -996,28 +971,19 @@ public class AudioSystem {
      * @throws UnsupportedAudioFileException if the {@code File} does not point
      *         to valid audio file data recognized by the system
      * @throws IOException if an I/O exception occurs
+     * @throws NullPointerException if {@code file} is {@code null}
      */
-    public static AudioFileFormat getAudioFileFormat(File file)
-        throws UnsupportedAudioFileException, IOException {
+    public static AudioFileFormat getAudioFileFormat(final File file)
+            throws UnsupportedAudioFileException, IOException {
+        Objects.requireNonNull(file);
 
-        List<AudioFileReader> providers = getAudioFileReaders();
-        AudioFileFormat format = null;
-
-        for(int i = 0; i < providers.size(); i++ ) {
-            AudioFileReader reader = providers.get(i);
+        for (final AudioFileReader reader : getAudioFileReaders()) {
             try {
-                format = reader.getAudioFileFormat( file ); // throws IOException
-                break;
-            } catch (UnsupportedAudioFileException e) {
-                continue;
+                return reader.getAudioFileFormat(file);
+            } catch (final UnsupportedAudioFileException ignored) {
             }
         }
-
-        if( format==null ) {
-            throw new UnsupportedAudioFileException("file is not a supported file type");
-        } else {
-            return format;
-        }
+        throw new UnsupportedAudioFileException("File of unsupported format");
     }
 
     /**
@@ -1025,9 +991,9 @@ public class AudioSystem {
      * must point to valid audio file data. The implementation of this method
      * may require multiple parsers to examine the stream to determine whether
      * they support it. These parsers must be able to mark the stream, read
-     * enough data to determine whether they support the stream, and, if not,
-     * reset the stream's read pointer to its original position. If the input
-     * stream does not support these operation, this method may fail with an
+     * enough data to determine whether they support the stream, and reset the
+     * stream's read pointer to its original position. If the input stream does
+     * not support these operation, this method may fail with an
      * {@code IOException}.
      *
      * @param  stream the input stream from which the {@code AudioInputStream}
@@ -1037,30 +1003,21 @@ public class AudioSystem {
      * @throws UnsupportedAudioFileException if the stream does not point to
      *         valid audio file data recognized by the system
      * @throws IOException if an I/O exception occurs
+     * @throws NullPointerException if {@code stream} is {@code null}
      * @see InputStream#markSupported
      * @see InputStream#mark
      */
-    public static AudioInputStream getAudioInputStream(InputStream stream)
-        throws UnsupportedAudioFileException, IOException {
+    public static AudioInputStream getAudioInputStream(final InputStream stream)
+            throws UnsupportedAudioFileException, IOException {
+        Objects.requireNonNull(stream);
 
-        List<AudioFileReader> providers = getAudioFileReaders();
-        AudioInputStream audioStream = null;
-
-        for(int i = 0; i < providers.size(); i++ ) {
-            AudioFileReader reader = providers.get(i);
+        for (final AudioFileReader reader : getAudioFileReaders()) {
             try {
-                audioStream = reader.getAudioInputStream( stream ); // throws IOException
-                break;
-            } catch (UnsupportedAudioFileException e) {
-                continue;
+                return reader.getAudioInputStream(stream);
+            } catch (final UnsupportedAudioFileException ignored) {
             }
         }
-
-        if( audioStream==null ) {
-            throw new UnsupportedAudioFileException("could not get audio input stream from input stream");
-        } else {
-            return audioStream;
-        }
+        throw new UnsupportedAudioFileException("Stream of unsupported format");
     }
 
     /**
@@ -1074,28 +1031,19 @@ public class AudioSystem {
      * @throws UnsupportedAudioFileException if the URL does not point to valid
      *         audio file data recognized by the system
      * @throws IOException if an I/O exception occurs
+     * @throws NullPointerException if {@code url} is {@code null}
      */
-    public static AudioInputStream getAudioInputStream(URL url)
-        throws UnsupportedAudioFileException, IOException {
+    public static AudioInputStream getAudioInputStream(final URL url)
+            throws UnsupportedAudioFileException, IOException {
+        Objects.requireNonNull(url);
 
-        List<AudioFileReader> providers = getAudioFileReaders();
-        AudioInputStream audioStream = null;
-
-        for(int i = 0; i < providers.size(); i++ ) {
-            AudioFileReader reader = providers.get(i);
+        for (final AudioFileReader reader : getAudioFileReaders()) {
             try {
-                audioStream = reader.getAudioInputStream( url ); // throws IOException
-                break;
-            } catch (UnsupportedAudioFileException e) {
-                continue;
+                return reader.getAudioInputStream(url);
+            } catch (final UnsupportedAudioFileException ignored) {
             }
         }
-
-        if( audioStream==null ) {
-            throw new UnsupportedAudioFileException("could not get audio input stream from input URL");
-        } else {
-            return audioStream;
-        }
+        throw new UnsupportedAudioFileException("URL of unsupported format");
     }
 
     /**
@@ -1109,28 +1057,19 @@ public class AudioSystem {
      * @throws UnsupportedAudioFileException if the {@code File} does not point
      *         to valid audio file data recognized by the system
      * @throws IOException if an I/O exception occurs
+     * @throws NullPointerException if {@code file} is {@code null}
      */
-    public static AudioInputStream getAudioInputStream(File file)
-        throws UnsupportedAudioFileException, IOException {
+    public static AudioInputStream getAudioInputStream(final File file)
+            throws UnsupportedAudioFileException, IOException {
+        Objects.requireNonNull(file);
 
-        List<AudioFileReader> providers = getAudioFileReaders();
-        AudioInputStream audioStream = null;
-
-        for(int i = 0; i < providers.size(); i++ ) {
-            AudioFileReader reader = providers.get(i);
+        for (final AudioFileReader reader : getAudioFileReaders()) {
             try {
-                audioStream = reader.getAudioInputStream( file ); // throws IOException
-                break;
-            } catch (UnsupportedAudioFileException e) {
-                continue;
+                return reader.getAudioInputStream(file);
+            } catch (final UnsupportedAudioFileException ignored) {
             }
         }
-
-        if( audioStream==null ) {
-            throw new UnsupportedAudioFileException("could not get audio input stream from input file");
-        } else {
-            return audioStream;
-        }
+        throw new UnsupportedAudioFileException("File of unsupported format");
     }
 
     /**
@@ -1163,9 +1102,10 @@ public class AudioSystem {
      * @param  fileType the file type for which write capabilities are queried
      * @return {@code true} if the file type is supported, otherwise
      *         {@code false}
+     * @throws NullPointerException if {@code fileType} is {@code null}
      */
     public static boolean isFileTypeSupported(AudioFileFormat.Type fileType) {
-
+        Objects.requireNonNull(fileType);
         List<AudioFileWriter> providers = getAudioFileWriters();
 
         for(int i=0; i < providers.size(); i++) {
@@ -1185,8 +1125,10 @@ public class AudioSystem {
      *         support is queried
      * @return array of file types. If no file types are supported, an array of
      *         length 0 is returned.
+     * @throws NullPointerException if {@code stream} is {@code null}
      */
     public static AudioFileFormat.Type[] getAudioFileTypes(AudioInputStream stream) {
+        Objects.requireNonNull(stream);
         List<AudioFileWriter> providers = getAudioFileWriters();
         Set<AudioFileFormat.Type> returnTypesSet = new HashSet<>();
 
@@ -1210,10 +1152,13 @@ public class AudioSystem {
      * @param  stream the stream for which file-writing support is queried
      * @return {@code true} if the file type is supported for this audio input
      *         stream, otherwise {@code false}
+     * @throws NullPointerException if {@code fileType} or {@code stream} are
+     *         {@code null}
      */
     public static boolean isFileTypeSupported(AudioFileFormat.Type fileType,
                                               AudioInputStream stream) {
-
+        Objects.requireNonNull(fileType);
+        Objects.requireNonNull(stream);
         List<AudioFileWriter> providers = getAudioFileWriters();
 
         for(int i=0; i < providers.size(); i++) {
@@ -1241,32 +1186,29 @@ public class AudioSystem {
      * @throws IOException if an input/output exception occurs
      * @throws IllegalArgumentException if the file type is not supported by the
      *         system
+     * @throws NullPointerException if {@code stream} or {@code fileType} or
+     *         {@code out} are {@code null}
      * @see #isFileTypeSupported
      * @see #getAudioFileTypes
      */
-    public static int write(AudioInputStream stream, AudioFileFormat.Type fileType,
-                            OutputStream out) throws IOException {
+    public static int write(final AudioInputStream stream,
+                            final AudioFileFormat.Type fileType,
+                            final OutputStream out) throws IOException {
+        Objects.requireNonNull(stream);
+        Objects.requireNonNull(fileType);
+        Objects.requireNonNull(out);
 
-        List<AudioFileWriter> providers = getAudioFileWriters();
-        int bytesWritten = 0;
-        boolean flag = false;
-
-        for(int i=0; i < providers.size(); i++) {
-            AudioFileWriter writer = providers.get(i);
+        for (final AudioFileWriter writer : getAudioFileWriters()) {
             try {
-                bytesWritten = writer.write( stream, fileType, out ); // throws IOException
-                flag = true;
-                break;
-            } catch (IllegalArgumentException e) {
-                // thrown if this provider cannot write the sequence, try the next
-                continue;
+                return writer.write(stream, fileType, out);
+            } catch (final IllegalArgumentException ignored) {
+                // thrown if this provider cannot write the stream, try next
             }
         }
-        if(!flag) {
-            throw new IllegalArgumentException("could not write audio file: file type not supported: " + fileType);
-        } else {
-            return bytesWritten;
-        }
+        // "File type " + type + " not supported."
+        throw new IllegalArgumentException(
+                "could not write audio file: file type not supported: "
+                        + fileType);
     }
 
     /**
@@ -1281,32 +1223,28 @@ public class AudioSystem {
      * @throws IOException if an I/O exception occurs
      * @throws IllegalArgumentException if the file type is not supported by the
      *         system
+     * @throws NullPointerException if {@code stream} or {@code fileType} or
+     *         {@code out} are {@code null}
      * @see #isFileTypeSupported
      * @see #getAudioFileTypes
      */
-    public static int write(AudioInputStream stream, AudioFileFormat.Type fileType,
-                            File out) throws IOException {
+    public static int write(final AudioInputStream stream,
+                            final AudioFileFormat.Type fileType,
+                            final File out) throws IOException {
+        Objects.requireNonNull(stream);
+        Objects.requireNonNull(fileType);
+        Objects.requireNonNull(out);
 
-        List<AudioFileWriter> providers = getAudioFileWriters();
-        int bytesWritten = 0;
-        boolean flag = false;
-
-        for(int i=0; i < providers.size(); i++) {
-            AudioFileWriter writer = providers.get(i);
+        for (final AudioFileWriter writer : getAudioFileWriters()) {
             try {
-                bytesWritten = writer.write( stream, fileType, out ); // throws IOException
-                flag = true;
-                break;
-            } catch (IllegalArgumentException e) {
-                // thrown if this provider cannot write the sequence, try the next
-                continue;
+                return writer.write(stream, fileType, out);
+            } catch (final IllegalArgumentException ignored) {
+                // thrown if this provider cannot write the stream, try next
             }
         }
-        if (!flag) {
-            throw new IllegalArgumentException("could not write audio file: file type not supported: " + fileType);
-        } else {
-            return bytesWritten;
-        }
+        throw new IllegalArgumentException(
+                "could not write audio file: file type not supported: "
+                        + fileType);
     }
 
     // METHODS FOR INTERNAL IMPLEMENTATION USE

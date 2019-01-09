@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,9 +36,8 @@ import jdk.nashorn.api.scripting.ScriptObjectMirror;
 /**
  * Represents nashorn ECMAScript parser instance.
  *
- * @since 1.9
+ * @since 9
  */
-@jdk.Exported
 public interface Parser {
     /**
      * Parses the source file and returns compilation unit tree
@@ -80,7 +79,7 @@ public interface Parser {
     public CompilationUnitTree parse(final URL url, final DiagnosticListener listener) throws IOException, NashornException;
 
     /**
-     * Parses the readerand returns compilation unit tree
+     * Parses the reader and returns compilation unit tree
      *
      * @param name name of the source file to parse
      * @param reader from which source is read
@@ -131,15 +130,17 @@ public interface Parser {
      * <dt>"--no-syntax-extensions" or "-nse"</dt><dd>disable ECMAScript syntax extensions</dd>
      * <dt>"-scripting"</dt><dd>enable scripting mode extensions</dd>
      * <dt>"-strict"</dt><dd>enable ECMAScript strict mode</dd>
+     * <dt>"--language=es6"</dt><dd>enable ECMAScript 6 parsing mode</dd>
+     * <dt>"--es6-module"</dt><dd>enable ECMAScript 6 module parsing mode. This option implies --language=es6</dd>
      * </dl>
      *
-     * @throws NullPointerException if options arrry or any of it's element is null
+     * @throws NullPointerException if options array or any of its element is null
      * @throws IllegalArgumentException on unsupported option value.
      * @return a new Parser instance.
      */
     public static Parser create(final String... options) throws IllegalArgumentException {
         options.getClass();
-        for (String opt : options) {
+        for (final String opt : options) {
             switch (opt) {
                 case "--const-as-var":
                 case "-dump-on-error":
@@ -149,6 +150,8 @@ public interface Parser {
                 case "-nse":
                 case "-scripting":
                 case "-strict":
+                case "--language=es6":
+                case "--es6-module":
                     break;
                 default:
                     throw new IllegalArgumentException(opt);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +22,6 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 
 package com.sun.tools.javah;
 
@@ -92,7 +91,6 @@ public class Util {
         log.println(s);
     }
 
-
     /*
      * Help for loading localized messages.
      */
@@ -115,18 +113,6 @@ public class Util {
             fatal("Key " + key + " not found in resources.", e);
         }
         return null; /* dead code */
-    }
-
-    /*
-     * Usage message.
-     */
-    public void usage() throws Exit {
-        log.println(getText("usage"));
-    }
-
-    public void version() throws Exit {
-        log.println(getText("javah.version",
-                                   System.getProperty("java.version"), null));
     }
 
     /*

@@ -33,6 +33,7 @@ import java.net.URLConnection;
 import java.net.MalformedURLException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.io.EOFException;
 import java.io.File;
 import java.io.FilePermission;
 import java.io.IOException;
@@ -51,8 +52,6 @@ import java.security.Permission;
 import java.security.PermissionCollection;
 import sun.awt.AppContext;
 import sun.awt.SunToolkit;
-import sun.misc.IOUtils;
-import sun.misc.ManagedLocalsThread;
 import sun.net.www.ParseUtil;
 import sun.security.util.SecurityConstants;
 
@@ -334,7 +333,9 @@ public class AppletClassLoader extends URLClassLoader {
 
         byte[] b;
         try {
-            b = IOUtils.readFully(in, len, true);
+            b = in.readAllBytes();
+            if (len != -1 && b.length != len)
+                throw new EOFException("Expected:" + len + ", read:" + b.length);
         } finally {
             in.close();
         }
@@ -356,7 +357,7 @@ public class AppletClassLoader extends URLClassLoader {
      * #getResource(String)}.<p>
      *
      * @param  name the resource name
-     * @return an input stream for reading the resource, or <code>null</code>
+     * @return an input stream for reading the resource, or {@code null}
      *         if the resource could not be found
      * @since  1.1
      */
@@ -416,7 +417,7 @@ public class AppletClassLoader extends URLClassLoader {
      * #getResource(String)}.<p>
      *
      * @param  name the resource name
-     * @return an input stream for reading the resource, or <code>null</code>
+     * @return an input stream for reading the resource, or {@code null}
      *         if the resource could not be found
      * @since  1.1
      */
@@ -856,13 +857,20 @@ public     void grab() {
  * this operation to complete before continuing, wait for the notifyAll()
  * operation on the syncObject to occur.
  */
-class AppContextCreator extends ManagedLocalsThread {
+class AppContextCreator extends Thread {
     Object syncObject = new Object();
     AppContext appContext = null;
     volatile boolean created = false;
 
+    /**
+     * Must call the 5-args super-class constructor to erase locals.
+     */
+    private AppContextCreator() {
+        throw new UnsupportedOperationException("Must erase locals");
+    }
+
     AppContextCreator(ThreadGroup group)  {
-        super(group, "AppContextCreator");
+        super(group, null, "AppContextCreator", 0, false);
     }
 
     public void run()  {

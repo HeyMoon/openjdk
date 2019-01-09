@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,21 +26,9 @@
 #define SHARE_VM_PRIMS_JVM_H
 
 #include "prims/jni.h"
-#ifdef TARGET_OS_FAMILY_linux
-# include "jvm_linux.h"
-#endif
-#ifdef TARGET_OS_FAMILY_solaris
-# include "jvm_solaris.h"
-#endif
-#ifdef TARGET_OS_FAMILY_windows
-# include "jvm_windows.h"
-#endif
-#ifdef TARGET_OS_FAMILY_aix
-# include "jvm_aix.h"
-#endif
-#ifdef TARGET_OS_FAMILY_bsd
-# include "jvm_bsd.h"
-#endif
+#include "utilities/macros.hpp"
+
+#include OS_HEADER_H(jvm)
 
 #ifndef _JAVASOFT_JVM_H_
 #define _JAVASOFT_JVM_H_
@@ -87,7 +75,7 @@ extern "C" {
  *    class.
  */
 
-#define JVM_INTERFACE_VERSION 4
+#define JVM_INTERFACE_VERSION 5
 
 JNIEXPORT jobjectArray JNICALL
 JVM_GetMethodParameters(JNIEnv *env, jobject method);
@@ -141,6 +129,10 @@ JVM_ArrayCopy(JNIEnv *env, jclass ignored, jobject src, jint src_pos,
 JNIEXPORT jobject JNICALL
 JVM_InitProperties(JNIEnv *env, jobject p);
 
+/*
+ * java.lang.Runtime
+ */
+
 JNIEXPORT void JNICALL
 JVM_Halt(jint code);
 
@@ -188,17 +180,43 @@ JVM_FindLibraryEntry(void *handle, const char *name);
 JNIEXPORT jboolean JNICALL
 JVM_IsSupportedJNIVersion(jint version);
 
+JNIEXPORT jobjectArray JNICALL
+JVM_GetVmArguments(JNIEnv *env);
+
 /*
  * java.lang.Throwable
  */
 JNIEXPORT void JNICALL
 JVM_FillInStackTrace(JNIEnv *env, jobject throwable);
 
-JNIEXPORT jint JNICALL
-JVM_GetStackTraceDepth(JNIEnv *env, jobject throwable);
+/*
+ * java.lang.StackTraceElement
+ */
+JNIEXPORT void JNICALL
+JVM_InitStackTraceElementArray(JNIEnv *env, jobjectArray elements, jobject throwable);
+
+JNIEXPORT void JNICALL
+JVM_InitStackTraceElement(JNIEnv* env, jobject element, jobject stackFrameInfo);
+
+/*
+ * java.lang.StackWalker
+ */
+enum {
+  JVM_STACKWALK_FILL_CLASS_REFS_ONLY       = 0x02,
+  JVM_STACKWALK_GET_CALLER_CLASS           = 0x04,
+  JVM_STACKWALK_SHOW_HIDDEN_FRAMES         = 0x20,
+  JVM_STACKWALK_FILL_LIVE_STACK_FRAMES     = 0x100
+};
 
 JNIEXPORT jobject JNICALL
-JVM_GetStackTraceElement(JNIEnv *env, jobject throwable, jint index);
+JVM_CallStackWalk(JNIEnv *env, jobject stackStream, jlong mode,
+                  jint skip_frames, jint frame_count, jint start_index,
+                  jobjectArray frames);
+
+JNIEXPORT jint JNICALL
+JVM_MoreStackWalk(JNIEnv *env, jobject stackStream, jlong mode, jlong anchor,
+                  jint frame_count, jint start_index,
+                  jobjectArray frames);
 
 /*
  * java.lang.Thread
@@ -281,6 +299,18 @@ JVM_GetSystemPackage(JNIEnv *env, jstring name);
 
 JNIEXPORT jobjectArray JNICALL
 JVM_GetSystemPackages(JNIEnv *env);
+
+/*
+ * java.lang.ref.Reference
+ */
+JNIEXPORT jobject JNICALL
+JVM_GetAndClearReferencePendingList(JNIEnv *env);
+
+JNIEXPORT jboolean JNICALL
+JVM_HasReferencePendingList(JNIEnv *env);
+
+JNIEXPORT void JNICALL
+JVM_WaitForReferencePendingList(JNIEnv *env);
 
 /*
  * java.io.ObjectInputStream
@@ -378,16 +408,63 @@ JVM_DefineClassWithSource(JNIEnv *env, const char *name, jobject loader,
                           const jbyte *buf, jsize len, jobject pd,
                           const char *source);
 
-/* Define a class with a source with conditional verification (added HSX 14)
- * -Xverify:all will verify anyway, -Xverify:none will not verify,
- * -Xverify:remote (default) will obey this conditional
- * i.e. true = should_verify_class
+/*
+ * Module support funcions
  */
-JNIEXPORT jclass JNICALL
-JVM_DefineClassWithSourceCond(JNIEnv *env, const char *name,
-                              jobject loader, const jbyte *buf,
-                              jsize len, jobject pd, const char *source,
-                              jboolean verify);
+
+/*
+ * Define a module with the specified packages and bind the module to the
+ * given class loader.
+ *  module:       module to define
+ *  is_open:      specifies if module is open (currently ignored)
+ *  version:      the module version
+ *  location:     the module location
+ *  packages:     list of packages in the module
+ *  num_packages: number of packages in the module
+ */
+JNIEXPORT void JNICALL
+JVM_DefineModule(JNIEnv *env, jobject module, jboolean is_open, jstring version,
+                 jstring location, const char* const* packages, jsize num_packages);
+
+/*
+ * Set the boot loader's unnamed module.
+ *  module: boot loader's unnamed module
+ */
+JNIEXPORT void JNICALL
+JVM_SetBootLoaderUnnamedModule(JNIEnv *env, jobject module);
+
+/*
+ * Do a qualified export of a package.
+ *  from_module: module containing the package to export
+ *  package:     name of the package to export
+ *  to_module:   module to export the package to
+ */
+JNIEXPORT void JNICALL
+JVM_AddModuleExports(JNIEnv *env, jobject from_module, const char* package, jobject to_module);
+
+/*
+ * Do an export of a package to all unnamed modules.
+ *  from_module: module containing the package to export
+ *  package:     name of the package to export to all unnamed modules
+ */
+JNIEXPORT void JNICALL
+JVM_AddModuleExportsToAllUnnamed(JNIEnv *env, jobject from_module, const char* package);
+
+/*
+ * Do an unqualified export of a package.
+ *  from_module: module containing the package to export
+ *  package:     name of the package to export
+ */
+JNIEXPORT void JNICALL
+JVM_AddModuleExportsToAll(JNIEnv *env, jobject from_module, const char* package);
+
+/*
+ * Add a module to the list of modules that a given module can read.
+ *  from_module:   module requesting read access
+ *  source_module: module that from_module wants to read
+ */
+JNIEXPORT void JNICALL
+JVM_AddReadsModule(JNIEnv *env, jobject from_module, jobject source_module);
 
 /*
  * Reflection support functions
@@ -505,6 +582,15 @@ JNIEXPORT jobject JNICALL JVM_ConstantPoolGetFieldAtIfLoaded
 JNIEXPORT jobjectArray JNICALL JVM_ConstantPoolGetMemberRefInfoAt
 (JNIEnv *env, jobject obj, jobject unused, jint index);
 
+JNIEXPORT jobjectArray JNICALL JVM_ConstantPoolGetNameAndTypeRefInfoAt
+(JNIEnv *env, jobject obj, jobject unused, jint index);
+
+JNIEXPORT jint JNICALL JVM_ConstantPoolGetNameAndTypeRefIndexAt
+(JNIEnv *env, jobject obj, jobject unused, jint index);
+
+JNIEXPORT jint JNICALL JVM_ConstantPoolGetClassRefIndexAt
+(JNIEnv *env, jobject obj, jobject unused, jint index);
+
 JNIEXPORT jint JNICALL JVM_ConstantPoolGetIntAt
 (JNIEnv *env, jobject obj, jobject unused, jint index);
 
@@ -522,6 +608,9 @@ JNIEXPORT jstring JNICALL JVM_ConstantPoolGetStringAt
 
 JNIEXPORT jstring JNICALL JVM_ConstantPoolGetUTF8At
 (JNIEnv *env, jobject obj, jobject unused, jint index);
+
+JNIEXPORT jbyte JNICALL JVM_ConstantPoolGetTagAt
+(JNIEnv *env, jobject unused, jobject jcpool, jint index);
 
 /*
  * java.security.*
@@ -570,52 +659,6 @@ JVM_AssertionStatusDirectives(JNIEnv *env, jclass unused);
  */
 JNIEXPORT jboolean JNICALL
 JVM_SupportsCX8(void);
-
-/*
- * jdk.internal.jimage
- * WARNING: This API is experimental and temporary during JDK 9 development
- * cycle. It will not be supported in the eventual JDK 9 release.
- */
-
-JNIEXPORT jlong JNICALL
-JVM_ImageOpen(JNIEnv *env, const char *nativePath, jboolean big_endian);
-
-JNIEXPORT void JNICALL
-JVM_ImageClose(JNIEnv *env, jlong id);
-
-JNIEXPORT jlong JNICALL
-JVM_ImageGetIndexAddress(JNIEnv *env, jlong id);
-
-JNIEXPORT jlong JNICALL
-JVM_ImageGetDataAddress(JNIEnv *env,jlong id);
-
-JNIEXPORT jboolean JNICALL
-JVM_ImageRead(JNIEnv *env, jlong id, jlong offset,
-            unsigned char* uncompressedAddress, jlong uncompressed_size);
-
-
-JNIEXPORT jboolean JNICALL
-JVM_ImageReadCompressed(JNIEnv *env, jlong id, jlong offset,
-            unsigned char* compressedBuffer, jlong compressed_size,
-            unsigned char* uncompressedBuffer, jlong uncompressed_size);
-
-JNIEXPORT const char* JNICALL
-JVM_ImageGetStringBytes(JNIEnv *env, jlong id, jint offset);
-
-JNIEXPORT jlong* JNICALL
-JVM_ImageGetAttributes(JNIEnv *env, jlong* rawAttributes, jlong id, jint offset);
-
-JNIEXPORT jsize JNICALL
-JVM_ImageGetAttributesCount(JNIEnv *env);
-
-JNIEXPORT jlong* JNICALL
-JVM_ImageFindAttributes(JNIEnv *env, jlong* rawAttributes, jbyte* rawBytes, jsize size, jlong id);
-
-JNIEXPORT jint* JNICALL
-JVM_ImageAttributeOffsets(JNIEnv *env, jint* rawOffsets, unsigned int length, jlong id);
-
-JNIEXPORT unsigned int JNICALL
-JVM_ImageAttributeOffsetsLength(JNIEnv *env, jlong id);
 
 /*************************************************************************
  PART 2: Support for the Verifier and Class File Format Checker
@@ -927,6 +970,7 @@ JVM_IsSameClassPackage(JNIEnv *env, jclass class1, jclass class2);
 #define JVM_ACC_SYNTHETIC     0x1000  /* compiler-generated class, method or field */
 #define JVM_ACC_ANNOTATION    0x2000  /* annotation type */
 #define JVM_ACC_ENUM          0x4000  /* field is declared as element of enum */
+#define JVM_ACC_MODULE        0x8000  /* module-info class file */
 
 #define JVM_ACC_PUBLIC_BIT        0
 #define JVM_ACC_PRIVATE_BIT       1
@@ -1230,10 +1274,9 @@ JVM_GetEnclosingMethodInfo(JNIEnv* env, jclass ofClass);
  * ==========================================================================
  */
 typedef struct {
-    /* VM version string: follows the JDK release version naming convention    */
-    unsigned int jvm_version; /* <major_ver>.<minor_ver>.<micro_ver>[-<identifier>][-<debug_target>][-b<nn>]  */
-    unsigned int update_version : 8;
-    unsigned int special_update_version : 8;
+    unsigned int jvm_version; /* Encoded $VNUM as defined by JEP-223 */
+    unsigned int patch_version : 8; /* JEP-223 patch version */
+    unsigned int reserved3 : 8;
     unsigned int reserved1 : 16;
     unsigned int reserved2;
 
@@ -1252,18 +1295,16 @@ typedef struct {
 
 #define JVM_VERSION_MAJOR(version) ((version & 0xFF000000) >> 24)
 #define JVM_VERSION_MINOR(version) ((version & 0x00FF0000) >> 16)
-#define JVM_VERSION_MICRO(version) ((version & 0x0000FF00) >> 8)
+#define JVM_VERSION_SECURITY(version) ((version & 0x0000FF00) >> 8)
 #define JVM_VERSION_BUILD(version) ((version & 0x000000FF))
 
 JNIEXPORT void JNICALL
 JVM_GetVersionInfo(JNIEnv* env, jvm_version_info* info, size_t info_size);
 
 typedef struct {
-    // Naming convention of RE build version string: n.n.n[_uu[c]][-<identifier>]-bxx
-    unsigned int jdk_version;   /* Consists of major, minor, micro (n.n.n) */
-                                /* and build number (xx) */
-    unsigned int update_version : 8;         /* Update release version (uu) */
-    unsigned int special_update_version : 8; /* Special update release version (c)*/
+    unsigned int jdk_version; /* Encoded $VNUM as defined by JEP-223 */
+    unsigned int patch_version : 8; /* JEP-223 patch version */
+    unsigned int reserved3 : 8;
     unsigned int reserved1 : 16;
     unsigned int reserved2;
 
@@ -1284,11 +1325,7 @@ typedef struct {
 
 #define JDK_VERSION_MAJOR(version) ((version & 0xFF000000) >> 24)
 #define JDK_VERSION_MINOR(version) ((version & 0x00FF0000) >> 16)
-#define JDK_VERSION_MICRO(version) ((version & 0x0000FF00) >> 8)
-
-/* Build number is available only for RE build (i.e. JDK_BUILD_NUMBER is set to bNN)
- * It will be zero for internal builds.
- */
+#define JDK_VERSION_SECURITY(version) ((version & 0x0000FF00) >> 8)
 #define JDK_VERSION_BUILD(version) ((version & 0x000000FF))
 
 /*

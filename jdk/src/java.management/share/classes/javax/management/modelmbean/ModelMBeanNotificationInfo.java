@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,7 +38,7 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.ObjectStreamField;
 import java.security.AccessController;
-import java.util.logging.Level;
+import java.lang.System.Logger.Level;
 
 import javax.management.Descriptor;
 import javax.management.DescriptorAccess;
@@ -56,7 +56,8 @@ import javax.management.RuntimeOperationsException;
  * Note that when the Type in this table is Number, a String that is the decimal
  * representation of a Long can also be used.</P>
  *
- * <table border="1" cellpadding="5" summary="ModelMBeanNotificationInfo Fields">
+ * <table class="striped">
+ * <caption style="display:none">ModelMBeanNotificationInfo Fields</caption>
  * <tr><th>Name</th><th>Type</th><th>Meaning</th></tr>
  * <tr><td>name</td><td>String</td>
  *     <td>Notification name.</td></tr>
@@ -199,10 +200,8 @@ public class ModelMBeanNotificationInfo
                                       String description,
                                       Descriptor descriptor) {
         super(notifTypes, name, description);
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINER)) {
-            MODELMBEAN_LOGGER.logp(Level.FINER,
-                    ModelMBeanNotificationInfo.class.getName(),
-                    "ModelMBeanNotificationInfo", "Entry");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry");
         }
         notificationDescriptor = validDescriptor(descriptor);
     }
@@ -225,10 +224,8 @@ public class ModelMBeanNotificationInfo
      * duplicate of this ModelMBeanNotificationInfo.
      **/
     public Object clone () {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINER)) {
-            MODELMBEAN_LOGGER.logp(Level.FINER,
-                    ModelMBeanNotificationInfo.class.getName(),
-                    "clone()", "Entry");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry");
         }
         return(new ModelMBeanNotificationInfo(this));
     }
@@ -243,18 +240,15 @@ public class ModelMBeanNotificationInfo
      * @see #setDescriptor
      **/
     public Descriptor getDescriptor() {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINER)) {
-            MODELMBEAN_LOGGER.logp(Level.FINER,
-                    ModelMBeanNotificationInfo.class.getName(),
-                    "getDescriptor()", "Entry");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry");
         }
 
         if (notificationDescriptor == null) {
             // Dead code. Should never happen.
-            if (MODELMBEAN_LOGGER.isLoggable(Level.FINER)) {
-                MODELMBEAN_LOGGER.logp(Level.FINER,
-                        ModelMBeanNotificationInfo.class.getName(),
-                        "getDescriptor()", "Descriptor value is null, " +
+            if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                MODELMBEAN_LOGGER.log(Level.TRACE,
+                        "Descriptor value is null, " +
                         "setting descriptor to default values");
             }
             notificationDescriptor = validDescriptor(null);
@@ -281,10 +275,8 @@ public class ModelMBeanNotificationInfo
      * @see #getDescriptor
      **/
     public void setDescriptor(Descriptor inDescriptor) {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINER)) {
-            MODELMBEAN_LOGGER.logp(Level.FINER,
-                    ModelMBeanNotificationInfo.class.getName(),
-                    "setDescriptor(Descriptor)", "Entry");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry");
         }
         notificationDescriptor = validDescriptor(inDescriptor);
     }
@@ -296,10 +288,8 @@ public class ModelMBeanNotificationInfo
      * @return a string describing this object.
      **/
     public String toString() {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINER)) {
-            MODELMBEAN_LOGGER.logp(Level.FINER,
-                    ModelMBeanNotificationInfo.class.getName(),
-                    "toString()", "Entry");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry");
         }
 
         final StringBuilder retStr = new StringBuilder();
@@ -342,7 +332,7 @@ public class ModelMBeanNotificationInfo
         boolean defaulted = (in == null);
         if (defaulted) {
             clone = new DescriptorSupport();
-            MODELMBEAN_LOGGER.finer("Null Descriptor, creating new.");
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Null Descriptor, creating new.");
         } else {
             clone = (Descriptor) in.clone();
         }
@@ -350,19 +340,19 @@ public class ModelMBeanNotificationInfo
         //Setting defaults.
         if (defaulted && clone.getFieldValue("name")==null) {
             clone.setField("name", this.getName());
-            MODELMBEAN_LOGGER.finer("Defaulting Descriptor name to " + this.getName());
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Defaulting Descriptor name to " + this.getName());
         }
         if (defaulted && clone.getFieldValue("descriptorType")==null) {
             clone.setField("descriptorType", "notification");
-            MODELMBEAN_LOGGER.finer("Defaulting descriptorType to \"notification\"");
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Defaulting descriptorType to \"notification\"");
         }
         if (clone.getFieldValue("displayName") == null) {
             clone.setField("displayName",this.getName());
-            MODELMBEAN_LOGGER.finer("Defaulting Descriptor displayName to " + this.getName());
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Defaulting Descriptor displayName to " + this.getName());
         }
         if (clone.getFieldValue("severity") == null) {
             clone.setField("severity", "6");
-            MODELMBEAN_LOGGER.finer("Defaulting Descriptor severity field to 6");
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Defaulting Descriptor severity field to 6");
         }
 
         //Checking validity

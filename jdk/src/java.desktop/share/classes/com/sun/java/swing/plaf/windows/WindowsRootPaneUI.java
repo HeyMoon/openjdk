@@ -70,7 +70,7 @@ import javax.swing.plaf.basic.ComboPopup;
  */
 public class WindowsRootPaneUI extends BasicRootPaneUI {
 
-    private final static WindowsRootPaneUI windowsRootPaneUI = new WindowsRootPaneUI();
+    private static final WindowsRootPaneUI windowsRootPaneUI = new WindowsRootPaneUI();
     static final AltProcessor altProcessor = new AltProcessor();
 
     public static ComponentUI createUI(JComponent c) {
@@ -165,8 +165,11 @@ public class WindowsRootPaneUI extends BasicRootPaneUI {
         }
 
         public boolean postProcessKeyEvent(KeyEvent ev) {
-            if(ev.isConsumed()) {
-                // do not manage consumed event
+            if(ev.isConsumed() && ev.getKeyCode() != KeyEvent.VK_ALT) {
+                // mnemonic combination, it's consumed, but we need
+                // set altKeyPressed to false, otherwise after selection
+                // component by mnemonic combination a menu will be open
+                altKeyPressed = false;
                 return false;
             }
             if (ev.getKeyCode() == KeyEvent.VK_ALT) {

@@ -1,15 +1,15 @@
 /*
- * reserved comment block
- * DO NOT REMOVE OR ALTER!
+ * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright 1999-2004 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,18 +17,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * $Id: SimpleResultTreeImpl.java,v 1.2.4.1 2005/09/06 10:09:25 pvedula Exp $
- */
+
 package com.sun.org.apache.xalan.internal.xsltc.dom;
 
 import com.sun.org.apache.xalan.internal.xsltc.DOM;
-import com.sun.org.apache.xalan.internal.xsltc.TransletException;
 import com.sun.org.apache.xalan.internal.xsltc.StripFilter;
-import com.sun.org.apache.xalan.internal.xsltc.runtime.Hashtable;
-
-import com.sun.org.apache.xml.internal.dtm.DTM;
+import com.sun.org.apache.xalan.internal.xsltc.TransletException;
 import com.sun.org.apache.xml.internal.dtm.Axis;
+import com.sun.org.apache.xml.internal.dtm.DTM;
 import com.sun.org.apache.xml.internal.dtm.DTMAxisIterator;
 import com.sun.org.apache.xml.internal.dtm.DTMAxisTraverser;
 import com.sun.org.apache.xml.internal.dtm.DTMManager;
@@ -38,13 +34,11 @@ import com.sun.org.apache.xml.internal.serializer.EmptySerializer;
 import com.sun.org.apache.xml.internal.serializer.SerializationHandler;
 import com.sun.org.apache.xml.internal.utils.XMLString;
 import com.sun.org.apache.xml.internal.utils.XMLStringDefault;
-
+import java.util.Map;
+import javax.xml.transform.SourceLocator;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
-
 import org.xml.sax.SAXException;
-
-import javax.xml.transform.SourceLocator;
 
 /**
  * This class represents a light-weight DOM model for simple result tree fragment(RTF).
@@ -608,7 +602,7 @@ public class SimpleResultTreeImpl extends EmptySerializer implements DOM, DTM
         return null;
     }
 
-    public Hashtable getElementsWithIDs()
+    public Map<String, Integer> getElementsWithIDs()
     {
         return null;
     }
@@ -1016,5 +1010,13 @@ public class SimpleResultTreeImpl extends EmptySerializer implements DOM, DTM
 
     public void migrateTo(DTMManager manager)
     {
+    }
+
+    public void release()
+    {
+        if (_documentID != 0) {
+            _dtmManager.release(this, true);
+            _documentID = 0;
+        }
     }
 }

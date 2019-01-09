@@ -46,8 +46,8 @@ import com.apple.laf.AquaIcon.JRSUIControlSpec;
 import com.apple.laf.AquaIcon.SystemIcon;
 import com.apple.laf.AquaUtils.RecyclableObject;
 import com.apple.laf.AquaUtils.RecyclableSingleton;
-import sun.awt.image.MultiResolutionImage;
 import sun.awt.image.MultiResolutionCachedImage;
+import sun.lwawt.macosx.CImage;
 
 public class AquaImageFactory {
     public static IconUIResource getConfirmImageIcon() {
@@ -73,7 +73,7 @@ public class AquaImageFactory {
     public static IconUIResource getLockImageIcon() {
         // public, because UIDefaults.ProxyLazyValue uses reflection to get this value
         if (JRSUIUtils.Images.shouldUseLegacySecurityUIPath()) {
-            final Image lockIcon = AquaUtils.getCImageCreator().createImageFromFile("/System/Library/CoreServices/SecurityAgent.app/Contents/Resources/Security.icns", kAlertIconSize, kAlertIconSize);
+            final Image lockIcon = CImage.createImageFromFile("/System/Library/CoreServices/SecurityAgent.app/Contents/Resources/Security.icns", kAlertIconSize, kAlertIconSize);
             return getAppIconCompositedOn(lockIcon);
         }
 
@@ -240,14 +240,14 @@ public class AquaImageFactory {
         }
     }
 
-    protected static final NamedImageSingleton northArrow = new NamedImageSingleton("NSMenuScrollUp");
-    protected static final IconUIResourceSingleton northArrowIcon = new IconUIResourceSingleton(northArrow);
-    protected static final NamedImageSingleton southArrow = new NamedImageSingleton("NSMenuScrollDown");
-    protected static final IconUIResourceSingleton southArrowIcon = new IconUIResourceSingleton(southArrow);
-    protected static final NamedImageSingleton westArrow = new NamedImageSingleton("NSMenuSubmenuLeft");
-    protected static final IconUIResourceSingleton westArrowIcon = new IconUIResourceSingleton(westArrow);
-    protected static final NamedImageSingleton eastArrow = new NamedImageSingleton("NSMenuSubmenu");
-    protected static final IconUIResourceSingleton eastArrowIcon = new IconUIResourceSingleton(eastArrow);
+    private static final NamedImageSingleton northArrow = new NamedImageSingleton("NSMenuScrollUp");
+    private static final IconUIResourceSingleton northArrowIcon = new IconUIResourceSingleton(northArrow);
+    private static final NamedImageSingleton southArrow = new NamedImageSingleton("NSMenuScrollDown");
+    private static final IconUIResourceSingleton southArrowIcon = new IconUIResourceSingleton(southArrow);
+    private static final NamedImageSingleton westArrow = new NamedImageSingleton("NSMenuSubmenuLeft");
+    private static final IconUIResourceSingleton westArrowIcon = new IconUIResourceSingleton(westArrow);
+    private static final NamedImageSingleton eastArrow = new NamedImageSingleton("NSMenuSubmenu");
+    private static final IconUIResourceSingleton eastArrowIcon = new IconUIResourceSingleton(eastArrow);
 
     static Image getArrowImageForDirection(final int direction) {
         switch(direction) {

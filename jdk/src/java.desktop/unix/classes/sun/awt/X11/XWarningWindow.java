@@ -33,14 +33,14 @@ import sun.awt.AWTAccessor;
 import sun.awt.SunToolkit;
 
 class XWarningWindow extends XWindow {
-    private final static int SHOWING_DELAY = 330;
-    private final static int HIDING_DELAY = 2000;
+    private static final int SHOWING_DELAY = 330;
+    private static final int HIDING_DELAY = 2000;
 
     private final Window ownerWindow;
     private WeakReference<XWindowPeer> ownerPeer;
     private long parentWindow;
 
-    private final static String OWNER = "OWNER";
+    private static final String OWNER = "OWNER";
     private InfoWindow.Tooltip tooltip;
 
     /**
@@ -258,10 +258,10 @@ class XWarningWindow extends XWindow {
         super.handleExposeEvent(xev);
 
         XExposeEvent xe = xev.get_xexpose();
-        final int x = xe.get_x();
-        final int y = xe.get_y();
-        final int width = xe.get_width();
-        final int height = xe.get_height();
+        final int x = scaleDown(xe.get_x());
+        final int y = scaleDown(xe.get_y());
+        final int width = scaleDown(xe.get_width());
+        final int height = scaleDown(xe.get_height());
         SunToolkit.executeOnEventHandlerThread(target,
                 new Runnable() {
                     public void run() {

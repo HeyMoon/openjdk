@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,9 +32,9 @@
 #include "compiler/disassembler.hpp"
 #include "interpreter/interpreter.hpp"
 #include "jvm_bsd.h"
+#include "logging/log.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/filemap.hpp"
-#include "mutex_bsd.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "os_bsd.inline.hpp"
 #include "os_share_bsd.hpp"
@@ -42,7 +42,7 @@
 #include "prims/jvm.h"
 #include "prims/jvm_misc.hpp"
 #include "runtime/arguments.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/extendedPC.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/interfaceSupport.hpp"
@@ -127,8 +127,6 @@
 #define ALL_64_BITS CONST64(0xFFFFFFFFFFFFFFFF)
 
 #define LARGEPAGES_BIT (1 << 6)
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 ////////////////////////////////////////////////////////////////////////////////
 // global variables
@@ -442,6 +440,10 @@ void os::init_system_properties_values() {
     if (pslash != NULL) {
       *pslash = '\0';            // Get rid of /{client|server|hotspot}.
     }
+#ifdef STATIC_BUILD
+    strcat(buf, "/lib");
+#endif
+
     Arguments::set_dll_dir(buf);
 
     if (pslash != NULL) {
@@ -662,7 +664,7 @@ static uint64_t locate_unique_thread_id(mach_port_t mach_thread_port) {
 #endif
 
 // Thread start routine for all newly created threads
-static void *java_start(Thread *thread) {
+static void *thread_native_entry(Thread *thread) {
   // Try to randomize the cache line index of hot stack frames.
   // This helps when threads of the same stack traces evict each other's
   // cache lines. The threads can be either from the same JVM instance, or
@@ -672,12 +674,15 @@ static void *java_start(Thread *thread) {
   int pid = os::current_process_id();
   alloca(((pid ^ counter++) & 7) * 128);
 
-  ThreadLocalStorage::set_thread(thread);
+  thread->initialize_thread_current();
 
   OSThread* osthread = thread->osthread();
   Monitor* sync = osthread->startThread_lock();
 
   osthread->set_thread_id(os::Bsd::gettid());
+
+  log_info(os, thread)("Thread is alive (tid: " UINTX_FORMAT ", pthread id: " UINTX_FORMAT ").",
+    os::current_thread_id(), (uintx) pthread_self());
 
 #ifdef __APPLE__
   uint64_t unique_thread_id = locate_unique_thread_id(osthread->thread_id());
@@ -714,10 +719,23 @@ static void *java_start(Thread *thread) {
   // call one more level start routine
   thread->run();
 
+  log_info(os, thread)("Thread finished (tid: " UINTX_FORMAT ", pthread id: " UINTX_FORMAT ").",
+    os::current_thread_id(), (uintx) pthread_self());
+
+  // If a thread has not deleted itself ("delete this") as part of its
+  // termination sequence, we have to ensure thread-local-storage is
+  // cleared before we actually terminate. No threads should ever be
+  // deleted asynchronously with respect to their termination.
+  if (Thread::current_or_null_safe() != NULL) {
+    assert(Thread::current_or_null_safe() == thread, "current thread is wrong");
+    thread->clear_thread_current();
+  }
+
   return 0;
 }
 
-bool os::create_thread(Thread* thread, ThreadType thr_type, size_t stack_size) {
+bool os::create_thread(Thread* thread, ThreadType thr_type,
+                       size_t req_stack_size) {
   assert(thread->osthread() == NULL, "caller responsible");
 
   // Allocate the OSThread object
@@ -739,52 +757,28 @@ bool os::create_thread(Thread* thread, ThreadType thr_type, size_t stack_size) {
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
-  // stack size
-  if (os::Bsd::supports_variable_stack_size()) {
-    // calculate stack size if it's not specified by caller
-    if (stack_size == 0) {
-      stack_size = os::Bsd::default_stack_size(thr_type);
-
-      switch (thr_type) {
-      case os::java_thread:
-        // Java threads use ThreadStackSize which default value can be
-        // changed with the flag -Xss
-        assert(JavaThread::stack_size_at_create() > 0, "this should be set");
-        stack_size = JavaThread::stack_size_at_create();
-        break;
-      case os::compiler_thread:
-        if (CompilerThreadStackSize > 0) {
-          stack_size = (size_t)(CompilerThreadStackSize * K);
-          break;
-        } // else fall through:
-          // use VMThreadStackSize if CompilerThreadStackSize is not defined
-      case os::vm_thread:
-      case os::pgc_thread:
-      case os::cgc_thread:
-      case os::watcher_thread:
-        if (VMThreadStackSize > 0) stack_size = (size_t)(VMThreadStackSize * K);
-        break;
-      }
-    }
-
-    stack_size = MAX2(stack_size, os::Bsd::min_stack_allowed);
-    pthread_attr_setstacksize(&attr, stack_size);
-  } else {
-    // let pthread_create() pick the default value.
-  }
+  // calculate stack size if it's not specified by caller
+  size_t stack_size = os::Posix::get_initial_stack_size(thr_type, req_stack_size);
+  pthread_attr_setstacksize(&attr, stack_size);
 
   ThreadState state;
 
   {
     pthread_t tid;
-    int ret = pthread_create(&tid, &attr, (void* (*)(void*)) java_start, thread);
+    int ret = pthread_create(&tid, &attr, (void* (*)(void*)) thread_native_entry, thread);
+
+    char buf[64];
+    if (ret == 0) {
+      log_info(os, thread)("Thread started (pthread id: " UINTX_FORMAT ", attributes: %s). ",
+        (uintx) tid, os::Posix::describe_pthread_attr(buf, sizeof(buf), &attr));
+    } else {
+      log_warning(os, thread)("Failed to start thread - pthread_create failed (%s) for attributes: %s.",
+        os::errno_name(ret), os::Posix::describe_pthread_attr(buf, sizeof(buf), &attr));
+    }
 
     pthread_attr_destroy(&attr);
 
     if (ret != 0) {
-      if (PrintMiscellaneous && (Verbose || WizardMode)) {
-        perror("pthread_create()");
-      }
       // Need to clean up stuff we've allocated so far
       thread->set_osthread(NULL);
       delete osthread;
@@ -861,6 +855,9 @@ bool os::create_attached_thread(JavaThread* thread) {
   // and save the caller's signal mask
   os::Bsd::hotspot_sigmask(thread);
 
+  log_info(os, thread)("Thread attached (tid: " UINTX_FORMAT ", pthread id: " UINTX_FORMAT ").",
+    os::current_thread_id(), (uintx) pthread_self());
+
   return true;
 }
 
@@ -876,52 +873,17 @@ void os::pd_start_thread(Thread* thread) {
 void os::free_thread(OSThread* osthread) {
   assert(osthread != NULL, "osthread not set");
 
-  if (Thread::current()->osthread() == osthread) {
-    // Restore caller's signal mask
-    sigset_t sigmask = osthread->caller_sigmask();
-    pthread_sigmask(SIG_SETMASK, &sigmask, NULL);
-  }
+  // We are told to free resources of the argument thread,
+  // but we can only really operate on the current thread.
+  assert(Thread::current()->osthread() == osthread,
+         "os::free_thread but not current thread");
+
+  // Restore caller's signal mask
+  sigset_t sigmask = osthread->caller_sigmask();
+  pthread_sigmask(SIG_SETMASK, &sigmask, NULL);
 
   delete osthread;
 }
-
-//////////////////////////////////////////////////////////////////////////////
-// thread local storage
-
-// Restore the thread pointer if the destructor is called. This is in case
-// someone from JNI code sets up a destructor with pthread_key_create to run
-// detachCurrentThread on thread death. Unless we restore the thread pointer we
-// will hang or crash. When detachCurrentThread is called the key will be set
-// to null and we will not be called again. If detachCurrentThread is never
-// called we could loop forever depending on the pthread implementation.
-static void restore_thread_pointer(void* p) {
-  Thread* thread = (Thread*) p;
-  os::thread_local_storage_at_put(ThreadLocalStorage::thread_index(), thread);
-}
-
-int os::allocate_thread_local_storage() {
-  pthread_key_t key;
-  int rslt = pthread_key_create(&key, restore_thread_pointer);
-  assert(rslt == 0, "cannot allocate thread local storage");
-  return (int)key;
-}
-
-// Note: This is currently not used by VM, as we don't destroy TLS key
-// on VM exit.
-void os::free_thread_local_storage(int index) {
-  int rslt = pthread_key_delete((pthread_key_t)index);
-  assert(rslt == 0, "invalid index");
-}
-
-void os::thread_local_storage_at_put(int index, void* value) {
-  int rslt = pthread_setspecific((pthread_key_t)index, value);
-  assert(rslt == 0, "pthread_setspecific failed");
-}
-
-extern "C" Thread* get_thread() {
-  return ThreadLocalStorage::thread();
-}
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // time support
@@ -1118,7 +1080,7 @@ void os::shutdown() {
 // Note: os::abort() might be called very early during initialization, or
 // called from signal handler. Before adding something to os::abort(), make
 // sure it is async-safe and can handle partially initialized VM.
-void os::abort(bool dump_core, void* siginfo, void* context) {
+void os::abort(bool dump_core, void* siginfo, const void* context) {
   os::shutdown();
   if (dump_core) {
 #ifndef PRODUCT
@@ -1147,7 +1109,7 @@ void os::die() {
 size_t os::lasterror(char *buf, size_t len) {
   if (errno == 0)  return 0;
 
-  const char *s = ::strerror(errno);
+  const char *s = os::strerror(errno);
   size_t n = ::strlen(s);
   if (n >= len) {
     n = len - 1;
@@ -1395,6 +1357,9 @@ bool os::dll_address_to_library_name(address addr, char* buf,
 
 #ifdef __APPLE__
 void * os::dll_load(const char *filename, char *ebuf, int ebuflen) {
+#ifdef STATIC_BUILD
+  return os::get_default_process_handle();
+#else
   void * result= ::dlopen(filename, RTLD_LAZY);
   if (result != NULL) {
     // Successful loading
@@ -1406,9 +1371,13 @@ void * os::dll_load(const char *filename, char *ebuf, int ebuflen) {
   ebuf[ebuflen-1]='\0';
 
   return NULL;
+#endif // STATIC_BUILD
 }
 #else
 void * os::dll_load(const char *filename, char *ebuf, int ebuflen) {
+#ifdef STATIC_BUILD
+  return os::get_default_process_handle();
+#else
   void * result= ::dlopen(filename, RTLD_LAZY);
   if (result != NULL) {
     // Successful loading
@@ -1581,6 +1550,7 @@ void * os::dll_load(const char *filename, char *ebuf, int ebuflen) {
   }
 
   return NULL;
+#endif // STATIC_BUILD
 }
 #endif // !__APPLE__
 
@@ -1598,24 +1568,6 @@ void* os::get_default_process_handle() {
 // XXX: Do we need a lock around this as per Linux?
 void* os::dll_lookup(void* handle, const char* name) {
   return dlsym(handle, name);
-}
-
-
-static bool _print_ascii_file(const char* filename, outputStream* st) {
-  int fd = ::open(filename, O_RDONLY);
-  if (fd == -1) {
-    return false;
-  }
-
-  char buf[32];
-  int bytes;
-  while ((bytes = ::read(fd, buf, sizeof(buf))) > 0) {
-    st->print_raw(buf, bytes);
-  }
-
-  ::close(fd);
-
-  return true;
 }
 
 int _print_dll_info_cb(const char * name, address base_address, address top_address, void * param) {
@@ -1678,15 +1630,38 @@ int os::get_loaded_modules_info(os::LoadedModulesCallbackFunc callback, void *pa
 #endif
 }
 
-void os::print_os_info_brief(outputStream* st) {
-  st->print("Bsd");
+void os::get_summary_os_info(char* buf, size_t buflen) {
+  // These buffers are small because we want this to be brief
+  // and not use a lot of stack while generating the hs_err file.
+  char os[100];
+  size_t size = sizeof(os);
+  int mib_kern[] = { CTL_KERN, KERN_OSTYPE };
+  if (sysctl(mib_kern, 2, os, &size, NULL, 0) < 0) {
+#ifdef __APPLE__
+      strncpy(os, "Darwin", sizeof(os));
+#elif __OpenBSD__
+      strncpy(os, "OpenBSD", sizeof(os));
+#else
+      strncpy(os, "BSD", sizeof(os));
+#endif
+  }
 
+  char release[100];
+  size = sizeof(release);
+  int mib_release[] = { CTL_KERN, KERN_OSRELEASE };
+  if (sysctl(mib_release, 2, release, &size, NULL, 0) < 0) {
+      // if error, leave blank
+      strncpy(release, "", sizeof(release));
+  }
+  snprintf(buf, buflen, "%s %s", os, release);
+}
+
+void os::print_os_info_brief(outputStream* st) {
   os::Posix::print_uname_info(st);
 }
 
 void os::print_os_info(outputStream* st) {
   st->print("OS:");
-  st->print("Bsd");
 
   os::Posix::print_uname_info(st);
 
@@ -1699,6 +1674,33 @@ void os::pd_print_cpu_info(outputStream* st, char* buf, size_t buflen) {
   // Nothing to do for now.
 }
 
+void os::get_summary_cpu_info(char* buf, size_t buflen) {
+  unsigned int mhz;
+  size_t size = sizeof(mhz);
+  int mib[] = { CTL_HW, HW_CPU_FREQ };
+  if (sysctl(mib, 2, &mhz, &size, NULL, 0) < 0) {
+    mhz = 1;  // looks like an error but can be divided by
+  } else {
+    mhz /= 1000000;  // reported in millions
+  }
+
+  char model[100];
+  size = sizeof(model);
+  int mib_model[] = { CTL_HW, HW_MODEL };
+  if (sysctl(mib_model, 2, model, &size, NULL, 0) < 0) {
+    strncpy(model, cpu_arch, sizeof(model));
+  }
+
+  char machine[100];
+  size = sizeof(machine);
+  int mib_machine[] = { CTL_HW, HW_MACHINE };
+  if (sysctl(mib_machine, 2, machine, &size, NULL, 0) < 0) {
+      strncpy(machine, "", sizeof(machine));
+  }
+
+  snprintf(buf, buflen, "%s %s %d MHz", model, machine, mhz);
+}
+
 void os::print_memory_info(outputStream* st) {
 
   st->print("Memory:");
@@ -1709,30 +1711,7 @@ void os::print_memory_info(outputStream* st) {
   st->print("(" UINT64_FORMAT "k free)",
             os::available_memory() >> 10);
   st->cr();
-
-  // meminfo
-  st->print("\n/proc/meminfo:\n");
-  _print_ascii_file("/proc/meminfo", st);
-  st->cr();
 }
-
-void os::print_siginfo(outputStream* st, void* siginfo) {
-  const siginfo_t* si = (const siginfo_t*)siginfo;
-
-  os::Posix::print_siginfo_brief(st, si);
-
-  if (si && (si->si_signo == SIGBUS || si->si_signo == SIGSEGV) &&
-      UseSharedSpaces) {
-    FileMapInfo* mapinfo = FileMapInfo::current_info();
-    if (mapinfo->is_in_shared_space(si->si_addr)) {
-      st->print("\n\nError accessing class data sharing archive."   \
-                " Mapped file inaccessible during execution, "      \
-                " possible disk/network problem.");
-    }
-  }
-  st->cr();
-}
-
 
 static void print_signal_handler(outputStream* st, int sig,
                                  char* buf, size_t buflen);
@@ -1745,7 +1724,6 @@ void os::print_signal_handlers(outputStream* st, char* buf, size_t buflen) {
   print_signal_handler(st, SIGPIPE, buf, buflen);
   print_signal_handler(st, SIGXFSZ, buf, buflen);
   print_signal_handler(st, SIGILL , buf, buflen);
-  print_signal_handler(st, INTERRUPT_SIGNAL, buf, buflen);
   print_signal_handler(st, SR_signum, buf, buflen);
   print_signal_handler(st, SHUTDOWN1_SIGNAL, buf, buflen);
   print_signal_handler(st, SHUTDOWN2_SIGNAL , buf, buflen);
@@ -1955,7 +1933,7 @@ static const char* sem_init_strerror(kern_return_t value) {
 OSXSemaphore::OSXSemaphore(uint value) {
   kern_return_t ret = SEM_INIT(_semaphore, value);
 
-  guarantee(ret == KERN_SUCCESS, err_msg("Failed to create semaphore: %s", sem_init_strerror(ret)));
+  guarantee(ret == KERN_SUCCESS, "Failed to create semaphore: %s", sem_init_strerror(ret));
 }
 
 OSXSemaphore::~OSXSemaphore() {
@@ -2150,7 +2128,7 @@ static void warn_fail_commit_memory(char* addr, size_t size, bool exec,
                                     int err) {
   warning("INFO: os::commit_memory(" PTR_FORMAT ", " SIZE_FORMAT
           ", %d) failed; error='%s' (errno=%d)", addr, size, exec,
-          strerror(err), err);
+          os::errno_name(err), err);
 }
 
 // NOTE: Bsd kernel does not really reserve the pages for us.
@@ -2191,7 +2169,7 @@ void os::pd_commit_memory_or_exit(char* addr, size_t size, bool exec,
   if (!pd_commit_memory(addr, size, exec)) {
     // add extra info in product mode for vm_exit_out_of_memory():
     PRODUCT_ONLY(warn_fail_commit_memory(addr, size, exec, errno);)
-    vm_exit_out_of_memory(size, OOM_MMAP_ERROR, mesg);
+    vm_exit_out_of_memory(size, OOM_MMAP_ERROR, "%s", mesg);
   }
 }
 
@@ -2714,7 +2692,8 @@ void os::hint_no_preempt() {}
 //      - sets target osthread state to continue
 //      - sends signal to end the sigsuspend loop in the SR_handler
 //
-//  Note that the SR_lock plays no role in this suspend/resume protocol.
+//  Note that the SR_lock plays no role in this suspend/resume protocol,
+//  but is checked for NULL in SR_handler as a thread termination indicator.
 
 static void resume_clear_context(OSThread *osthread) {
   osthread->set_ucontext(NULL);
@@ -2744,9 +2723,22 @@ static void SR_handler(int sig, siginfo_t* siginfo, ucontext_t* context) {
   // after sigsuspend.
   int old_errno = errno;
 
-  Thread* thread = Thread::current();
-  OSThread* osthread = thread->osthread();
+  Thread* thread = Thread::current_or_null_safe();
+  assert(thread != NULL, "Missing current thread in SR_handler");
+
+  // On some systems we have seen signal delivery get "stuck" until the signal
+  // mask is changed as part of thread termination. Check that the current thread
+  // has not already terminated (via SR_lock()) - else the following assertion
+  // will fail because the thread is no longer a JavaThread as the ~JavaThread
+  // destructor has completed.
+
+  if (thread->SR_lock() == NULL) {
+    return;
+  }
+
   assert(thread->is_VM_thread() || thread->is_Java_thread(), "Must be VMThread or JavaThread");
+
+  OSThread* osthread = thread->osthread();
 
   os::SuspendResume::State current = osthread->sr.state();
   if (current == os::SuspendResume::SR_SUSPEND_REQUEST) {
@@ -2800,8 +2792,12 @@ static int SR_initialize() {
   // Get signal number to use for suspend/resume
   if ((s = ::getenv("_JAVA_SR_SIGNUM")) != 0) {
     int sig = ::strtol(s, 0, 10);
-    if (sig > 0 || sig < NSIG) {
+    if (sig > MAX2(SIGSEGV, SIGBUS) &&  // See 4355769.
+        sig < NSIG) {                   // Must be legal signal and fit into sigflags[].
       SR_signum = sig;
+    } else {
+      warning("You set _JAVA_SR_SIGNUM=%d. It must be in range [%d, %d]. Using %d instead.",
+              sig, MAX2(SIGSEGV, SIGBUS)+1, NSIG-1, SR_signum);
     }
   }
 
@@ -2954,8 +2950,11 @@ void signalHandler(int sig, siginfo_t* info, void* uc) {
 bool os::Bsd::signal_handlers_are_installed = false;
 
 // For signal-chaining
-struct sigaction os::Bsd::sigact[MAXSIGNUM];
-unsigned int os::Bsd::sigs = 0;
+struct sigaction sigact[NSIG];
+uint32_t sigs = 0;
+#if (32 < NSIG-1)
+#error "Not all signals can be encoded in sigs. Adapt its type!"
+#endif
 bool os::Bsd::libjsig_is_loaded = false;
 typedef struct sigaction *(*get_signal_t)(int);
 get_signal_t os::Bsd::get_signal_action = NULL;
@@ -3033,29 +3032,31 @@ bool os::Bsd::chained_handler(int sig, siginfo_t* siginfo, void* context) {
 }
 
 struct sigaction* os::Bsd::get_preinstalled_handler(int sig) {
-  if ((((unsigned int)1 << sig) & sigs) != 0) {
+  if ((((uint32_t)1 << (sig-1)) & sigs) != 0) {
     return &sigact[sig];
   }
   return NULL;
 }
 
 void os::Bsd::save_preinstalled_handler(int sig, struct sigaction& oldAct) {
-  assert(sig > 0 && sig < MAXSIGNUM, "vm signal out of expected range");
+  assert(sig > 0 && sig < NSIG, "vm signal out of expected range");
   sigact[sig] = oldAct;
-  sigs |= (unsigned int)1 << sig;
+  sigs |= (uint32_t)1 << (sig-1);
 }
 
 // for diagnostic
-int os::Bsd::sigflags[MAXSIGNUM];
+int sigflags[NSIG];
 
 int os::Bsd::get_our_sigflags(int sig) {
-  assert(sig > 0 && sig < MAXSIGNUM, "vm signal out of expected range");
+  assert(sig > 0 && sig < NSIG, "vm signal out of expected range");
   return sigflags[sig];
 }
 
 void os::Bsd::set_our_sigflags(int sig, int flags) {
-  assert(sig > 0 && sig < MAXSIGNUM, "vm signal out of expected range");
-  sigflags[sig] = flags;
+  assert(sig > 0 && sig < NSIG, "vm signal out of expected range");
+  if (sig > 0 && sig < NSIG) {
+    sigflags[sig] = flags;
+  }
 }
 
 void os::Bsd::set_signal_handler(int sig, bool set_installed) {
@@ -3078,8 +3079,8 @@ void os::Bsd::set_signal_handler(int sig, bool set_installed) {
       // libjsig also interposes the sigaction() call below and saves the
       // old sigaction on it own.
     } else {
-      fatal(err_msg("Encountered unexpected pre-existing sigaction handler "
-                    "%#lx for signal %d.", (long)oldhand, sig));
+      fatal("Encountered unexpected pre-existing sigaction handler "
+            "%#lx for signal %d.", (long)oldhand, sig);
     }
   }
 
@@ -3106,7 +3107,7 @@ void os::Bsd::set_signal_handler(int sig, bool set_installed) {
 #endif
 
   // Save flags, which are set by ours
-  assert(sig > 0 && sig < MAXSIGNUM, "vm signal out of expected range");
+  assert(sig > 0 && sig < NSIG, "vm signal out of expected range");
   sigflags[sig] = sigAct.sa_flags;
 
   int ret = sigaction(sig, &sigAct, &oldAct);
@@ -3313,7 +3314,6 @@ void os::run_periodic_checks() {
   }
 
   DO_SIGNAL_CHECK(SR_signum);
-  DO_SIGNAL_CHECK(INTERRUPT_SIGNAL);
 }
 
 typedef int (*os_sigaction_t)(int, const struct sigaction *, struct sigaction *);
@@ -3359,10 +3359,6 @@ void os::Bsd::check_signal_handler(int sig) {
     jvmHandler = (address)user_handler();
     break;
 
-  case INTERRUPT_SIGNAL:
-    jvmHandler = CAST_FROM_FN_PTR(address, SIG_DFL);
-    break;
-
   default:
     if (sig == SR_signum) {
       jvmHandler = CAST_FROM_FN_PTR(address, (sa_sigaction_t)SR_handler);
@@ -3385,8 +3381,12 @@ void os::Bsd::check_signal_handler(int sig) {
     }
   } else if(os::Bsd::get_our_sigflags(sig) != 0 && (int)act.sa_flags != os::Bsd::get_our_sigflags(sig)) {
     tty->print("Warning: %s handler flags ", exception_name(sig, buf, O_BUFLEN));
-    tty->print("expected:" PTR32_FORMAT, os::Bsd::get_our_sigflags(sig));
-    tty->print_cr("  found:" PTR32_FORMAT, act.sa_flags);
+    tty->print("expected:");
+    os::Posix::print_sa_flags(tty, os::Bsd::get_our_sigflags(sig));
+    tty->cr();
+    tty->print("  found:");
+    os::Posix::print_sa_flags(tty, act.sa_flags);
+    tty->cr();
     // No need to check this sig any longer
     sigaddset(&check_signal_done, sig);
   }
@@ -3399,20 +3399,6 @@ void os::Bsd::check_signal_handler(int sig) {
 
 extern void report_error(char* file_name, int line_no, char* title,
                          char* format, ...);
-
-extern bool signal_name(int signo, char* buf, size_t len);
-
-const char* os::exception_name(int exception_code, char* buf, size_t size) {
-  if (0 < exception_code && exception_code <= SIGRTMAX) {
-    // signal
-    if (!signal_name(exception_code, buf, size)) {
-      jio_snprintf(buf, size, "SIG%d", exception_code);
-    }
-    return buf;
-  } else {
-    return NULL;
-  }
-}
 
 // this is called _before_ the most of global arguments have been parsed
 void os::init(void) {
@@ -3437,8 +3423,7 @@ void os::init(void) {
 
   Bsd::set_page_size(getpagesize());
   if (Bsd::page_size() == -1) {
-    fatal(err_msg("os_bsd.cpp: os::init: sysconf failed (%s)",
-                  strerror(errno)));
+    fatal("os_bsd.cpp: os::init: sysconf failed (%s)", os::strerror(errno));
   }
   init_page_sizes((size_t) Bsd::page_size());
 
@@ -3475,25 +3460,13 @@ jint os::init_2(void) {
   guarantee(polling_page != MAP_FAILED, "os::init_2: failed to allocate polling page");
 
   os::set_polling_page(polling_page);
-
-#ifndef PRODUCT
-  if (Verbose && PrintMiscellaneous) {
-    tty->print("[SafePoint Polling address: " INTPTR_FORMAT "]\n",
-               (intptr_t)polling_page);
-  }
-#endif
+  log_info(os)("SafePoint Polling address: " INTPTR_FORMAT, p2i(polling_page));
 
   if (!UseMembar) {
     address mem_serialize_page = (address) ::mmap(NULL, Bsd::page_size(), PROT_READ | PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
     guarantee(mem_serialize_page != MAP_FAILED, "mmap Failed for memory serialize page");
     os::set_memory_serialize_page(mem_serialize_page);
-
-#ifndef PRODUCT
-    if (Verbose && PrintMiscellaneous) {
-      tty->print("[Memory Serialize  Page address: " INTPTR_FORMAT "]\n",
-                 (intptr_t)mem_serialize_page);
-    }
-#endif
+    log_info(os)("Memory Serialize Page address: " INTPTR_FORMAT, p2i(mem_serialize_page));
   }
 
   // initialize suspend/resume support - must do this before signal_sets_init()
@@ -3505,28 +3478,10 @@ jint os::init_2(void) {
   Bsd::signal_sets_init();
   Bsd::install_signal_handlers();
 
-  // Check minimum allowable stack size for thread creation and to initialize
-  // the java system classes, including StackOverflowError - depends on page
-  // size.  Add a page for compiler2 recursion in main thread.
-  // Add in 2*BytesPerWord times page size to account for VM stack during
-  // class initialization depending on 32 or 64 bit VM.
-  os::Bsd::min_stack_allowed = MAX2(os::Bsd::min_stack_allowed,
-                                    (size_t)(StackYellowPages+StackRedPages+StackShadowPages+
-                                    2*BytesPerWord COMPILER2_PRESENT(+1)) * Bsd::page_size());
-
-  size_t threadStackSizeInBytes = ThreadStackSize * K;
-  if (threadStackSizeInBytes != 0 &&
-      threadStackSizeInBytes < os::Bsd::min_stack_allowed) {
-    tty->print_cr("\nThe stack size specified is too small, "
-                  "Specify at least %dk",
-                  os::Bsd::min_stack_allowed/ K);
+  // Check and sets minimum stack sizes against command line options
+  if (Posix::set_minimum_stack_sizes() == JNI_ERR) {
     return JNI_ERR;
   }
-
-  // Make the stack size a multiple of the page size so that
-  // the yellow/red zones can be guarded.
-  JavaThread::set_stack_size_at_create(round_to(threadStackSizeInBytes,
-                                                vm_page_size()));
 
   if (MaxFDLimit) {
     // set the number of file descriptors to max. print out error
@@ -3534,9 +3489,7 @@ jint os::init_2(void) {
     struct rlimit nbr_files;
     int status = getrlimit(RLIMIT_NOFILE, &nbr_files);
     if (status != 0) {
-      if (PrintMiscellaneous && (Verbose || WizardMode)) {
-        perror("os::init_2 getrlimit failed");
-      }
+      log_info(os)("os::init_2 getrlimit failed: %s", os::strerror(errno));
     } else {
       nbr_files.rlim_cur = nbr_files.rlim_max;
 
@@ -3549,9 +3502,7 @@ jint os::init_2(void) {
 
       status = setrlimit(RLIMIT_NOFILE, &nbr_files);
       if (status != 0) {
-        if (PrintMiscellaneous && (Verbose || WizardMode)) {
-          perror("os::init_2 setrlimit failed");
-        }
+        log_info(os)("os::init_2 setrlimit failed: %s", os::strerror(errno));
       }
     }
   }
@@ -3657,7 +3608,7 @@ void PcFetcher::do_task(const os::SuspendedThreadTaskContext& context) {
   Thread* thread = context.thread();
   OSThread* osthread = thread->osthread();
   if (osthread->ucontext() != NULL) {
-    _epc = os::Bsd::ucontext_get_pc((ucontext_t *) context.ucontext());
+    _epc = os::Bsd::ucontext_get_pc((const ucontext_t *) context.ucontext());
   } else {
     // NULL context is unexpected, double-check this is the VMThread
     guarantee(thread->is_VM_thread(), "can only be called for VMThread");
@@ -3726,7 +3677,7 @@ bool os::find(address addr, outputStream* st) {
 // able to use structured exception handling (thread-local exception filters)
 // on, e.g., Win32.
 void os::os_exception_wrapper(java_call_t f, JavaValue* value,
-                              methodHandle* method, JavaCallArguments* args,
+                              const methodHandle& method, JavaCallArguments* args,
                               Thread* thread) {
   f(value, method, args, thread);
 }
@@ -3734,7 +3685,7 @@ void os::os_exception_wrapper(java_call_t f, JavaValue* value,
 void os::print_statistics() {
 }
 
-int os::message_box(const char* title, const char* message) {
+bool os::message_box(const char* title, const char* message) {
   int i;
   fdStream err(defaultStream::error_fd());
   for (i = 0; i < 78; i++) err.print_raw("=");
@@ -3763,8 +3714,25 @@ int os::stat(const char *path, struct stat *sbuf) {
   return ::stat(pathbuf, sbuf);
 }
 
-bool os::check_heap(bool force) {
-  return true;
+static inline struct timespec get_mtime(const char* filename) {
+  struct stat st;
+  int ret = os::stat(filename, &st);
+  assert(ret == 0, "failed to stat() file '%s': %s", filename, strerror(errno));
+#ifdef __APPLE__
+  return st.st_mtimespec;
+#else
+  return st.st_mtim;
+#endif
+}
+
+int os::compare_file_modified_times(const char* file1, const char* file2) {
+  struct timespec filetime1 = get_mtime(file1);
+  struct timespec filetime2 = get_mtime(file2);
+  int diff = filetime1.tv_sec - filetime2.tv_sec;
+  if (diff == 0) {
+    return filetime1.tv_nsec - filetime2.tv_nsec;
+  }
+  return diff;
 }
 
 // Is a (classpath) directory empty?
@@ -3882,9 +3850,6 @@ int os::available(int fd, jlong *bytes) {
   if (::fstat(fd, &buf) >= 0) {
     mode = buf.st_mode;
     if (S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode)) {
-      // XXX: is the following call interruptible? If so, this might
-      // need to go through the INTERRUPT_IO() wrapper as for other
-      // blocking, interruptible calls in this file.
       int n;
       if (::ioctl(fd, FIONREAD, &n) >= 0) {
         *bytes = n;
@@ -4076,61 +4041,6 @@ void os::pause() {
 //        could have been signaled after a wait started
 //    1 : signaled - thread is running or ready
 //
-// Beware -- Some versions of NPTL embody a flaw where pthread_cond_timedwait() can
-// hang indefinitely.  For instance NPTL 0.60 on 2.4.21-4ELsmp is vulnerable.
-// For specifics regarding the bug see GLIBC BUGID 261237 :
-//    http://www.mail-archive.com/debian-glibc@lists.debian.org/msg10837.html.
-// Briefly, pthread_cond_timedwait() calls with an expiry time that's not in the future
-// will either hang or corrupt the condvar, resulting in subsequent hangs if the condvar
-// is used.  (The simple C test-case provided in the GLIBC bug report manifests the
-// hang).  The JVM is vulernable via sleep(), Object.wait(timo), LockSupport.parkNanos()
-// and monitorenter when we're using 1-0 locking.  All those operations may result in
-// calls to pthread_cond_timedwait().  Using LD_ASSUME_KERNEL to use an older version
-// of libpthread avoids the problem, but isn't practical.
-//
-// Possible remedies:
-//
-// 1.   Establish a minimum relative wait time.  50 to 100 msecs seems to work.
-//      This is palliative and probabilistic, however.  If the thread is preempted
-//      between the call to compute_abstime() and pthread_cond_timedwait(), more
-//      than the minimum period may have passed, and the abstime may be stale (in the
-//      past) resultin in a hang.   Using this technique reduces the odds of a hang
-//      but the JVM is still vulnerable, particularly on heavily loaded systems.
-//
-// 2.   Modify park-unpark to use per-thread (per ParkEvent) pipe-pairs instead
-//      of the usual flag-condvar-mutex idiom.  The write side of the pipe is set
-//      NDELAY. unpark() reduces to write(), park() reduces to read() and park(timo)
-//      reduces to poll()+read().  This works well, but consumes 2 FDs per extant
-//      thread.
-//
-// 3.   Embargo pthread_cond_timedwait() and implement a native "chron" thread
-//      that manages timeouts.  We'd emulate pthread_cond_timedwait() by enqueuing
-//      a timeout request to the chron thread and then blocking via pthread_cond_wait().
-//      This also works well.  In fact it avoids kernel-level scalability impediments
-//      on certain platforms that don't handle lots of active pthread_cond_timedwait()
-//      timers in a graceful fashion.
-//
-// 4.   When the abstime value is in the past it appears that control returns
-//      correctly from pthread_cond_timedwait(), but the condvar is left corrupt.
-//      Subsequent timedwait/wait calls may hang indefinitely.  Given that, we
-//      can avoid the problem by reinitializing the condvar -- by cond_destroy()
-//      followed by cond_init() -- after all calls to pthread_cond_timedwait().
-//      It may be possible to avoid reinitialization by checking the return
-//      value from pthread_cond_timedwait().  In addition to reinitializing the
-//      condvar we must establish the invariant that cond_signal() is only called
-//      within critical sections protected by the adjunct mutex.  This prevents
-//      cond_signal() from "seeing" a condvar that's in the midst of being
-//      reinitialized or that is corrupt.  Sadly, this invariant obviates the
-//      desirable signal-after-unlock optimization that avoids futile context switching.
-//
-//      I'm also concerned that some versions of NTPL might allocate an auxilliary
-//      structure when a condvar is used or initialized.  cond_destroy()  would
-//      release the helper structure.  Our reinitialize-after-timedwait fix
-//      put excessive stress on malloc/free and locks protecting the c-heap.
-//
-// We currently use (4).  See the WorkAroundNTPLTimedWaitHang flag.
-// It may be possible to refine (4) by checking the kernel and NTPL verisons
-// and only enabling the work-around for vulnerable environments.
 
 // utility to compute the abstime argument to timedwait:
 // millis is the relative timeout time
@@ -4242,10 +4152,6 @@ int os::PlatformEvent::park(jlong millis) {
 
   while (_Event < 0) {
     status = pthread_cond_timedwait(_cond, _mutex, &abst);
-    if (status != 0 && WorkAroundNPTLTimedWaitHang) {
-      pthread_cond_destroy(_cond);
-      pthread_cond_init(_cond, NULL);
-    }
     assert_status(status == 0 || status == EINTR ||
                   status == ETIMEDOUT,
                   status, "cond_timedwait");
@@ -4289,10 +4195,6 @@ void os::PlatformEvent::unpark() {
   assert_status(status == 0, status, "mutex_lock");
   int AnyWaiters = _nParked;
   assert(AnyWaiters == 0 || AnyWaiters == 1, "invariant");
-  if (AnyWaiters != 0 && WorkAroundNPTLTimedWaitHang) {
-    AnyWaiters = 0;
-    pthread_cond_signal(_cond);
-  }
   status = pthread_mutex_unlock(_mutex);
   assert_status(status == 0, status, "mutex_unlock");
   if (AnyWaiters != 0) {
@@ -4425,7 +4327,7 @@ void Parker::park(bool isAbsolute, jlong time) {
   if (_counter > 0)  { // no wait needed
     _counter = 0;
     status = pthread_mutex_unlock(_mutex);
-    assert(status == 0, "invariant");
+    assert_status(status == 0, status, "invariant");
     // Paranoia to ensure our locked and lock-free paths interact
     // correctly with each other and Java-level accesses.
     OrderAccess::fence();
@@ -4448,10 +4350,6 @@ void Parker::park(bool isAbsolute, jlong time) {
     status = pthread_cond_wait(_cond, _mutex);
   } else {
     status = pthread_cond_timedwait(_cond, _mutex, &absTime);
-    if (status != 0 && WorkAroundNPTLTimedWaitHang) {
-      pthread_cond_destroy(_cond);
-      pthread_cond_init(_cond, NULL);
-    }
   }
   assert_status(status == 0 || status == EINTR ||
                 status == ETIMEDOUT,
@@ -4476,24 +4374,14 @@ void Parker::park(bool isAbsolute, jlong time) {
 
 void Parker::unpark() {
   int status = pthread_mutex_lock(_mutex);
-  assert(status == 0, "invariant");
+  assert_status(status == 0, status, "invariant");
   const int s = _counter;
   _counter = 1;
+  status = pthread_mutex_unlock(_mutex);
+  assert_status(status == 0, status, "invariant");
   if (s < 1) {
-    if (WorkAroundNPTLTimedWaitHang) {
-      status = pthread_cond_signal(_cond);
-      assert(status == 0, "invariant");
-      status = pthread_mutex_unlock(_mutex);
-      assert(status == 0, "invariant");
-    } else {
-      status = pthread_mutex_unlock(_mutex);
-      assert(status == 0, "invariant");
-      status = pthread_cond_signal(_cond);
-      assert(status == 0, "invariant");
-    }
-  } else {
-    pthread_mutex_unlock(_mutex);
-    assert(status == 0, "invariant");
+    status = pthread_cond_signal(_cond);
+    assert_status(status == 0, status, "invariant");
   }
 }
 
@@ -4641,3 +4529,29 @@ void TestReserveMemorySpecial_test() {
   // No tests available for this platform
 }
 #endif
+
+bool os::start_debugging(char *buf, int buflen) {
+  int len = (int)strlen(buf);
+  char *p = &buf[len];
+
+  jio_snprintf(p, buflen-len,
+             "\n\n"
+             "Do you want to debug the problem?\n\n"
+             "To debug, run 'gdb /proc/%d/exe %d'; then switch to thread " INTX_FORMAT " (" INTPTR_FORMAT ")\n"
+             "Enter 'yes' to launch gdb automatically (PATH must include gdb)\n"
+             "Otherwise, press RETURN to abort...",
+             os::current_process_id(), os::current_process_id(),
+             os::current_thread_id(), os::current_thread_id());
+
+  bool yes = os::message_box("Unexpected Error", buf);
+
+  if (yes) {
+    // yes, user asked VM to launch debugger
+    jio_snprintf(buf, sizeof(buf), "gdb /proc/%d/exe %d",
+                     os::current_process_id(), os::current_process_id());
+
+    os::fork_and_exec(buf);
+    yes = false;
+  }
+  return yes;
+}

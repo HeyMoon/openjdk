@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,11 +34,6 @@ class Linux {
   friend class os;
   friend class TestReserveMemorySpecial;
 
-  // For signal-chaining
-#define MAXSIGNUM 32
-  static struct sigaction sigact[MAXSIGNUM]; // saved preinstalled sigactions
-  static unsigned int sigs;             // mask of signals that have
-                                        // preinstalled signal handlers
   static bool libjsig_is_loaded;        // libjsig that interposes sigaction(),
                                         // __sigaction(), signal() is loaded
   static struct sigaction *(*get_signal_action)(int);
@@ -46,9 +41,6 @@ class Linux {
   static void save_preinstalled_handler(int, struct sigaction&);
 
   static void check_signal_handler(int sig);
-
-  // For signal flags diagnostics
-  static int sigflags[MAXSIGNUM];
 
   static int (*_clock_gettime)(clockid_t, struct timespec *);
   static int (*_pthread_getcpuclockid)(pthread_t, clockid_t *);
@@ -64,13 +56,21 @@ class Linux {
 
   static GrowableArray<int>* _cpu_to_node;
 
+  // 0x00000000 = uninitialized,
+  // 0x01000000 = kernel version unknown,
+  // otherwise a 32-bit number:
+  // Ox00AABBCC
+  // AA, Major Version
+  // BB, Minor Version
+  // CC, Fix   Version
+  static uint32_t _os_version;
+
  protected:
 
   static julong _physical_memory;
   static pthread_t _main_thread;
   static Mutex* _createThread_lock;
   static int _page_size;
-  static const int _vm_default_page_size;
 
   static julong available_memory();
   static julong physical_memory() { return _physical_memory; }
@@ -82,8 +82,6 @@ class Linux {
 
   static void set_glibc_version(const char *s)      { _glibc_version = s; }
   static void set_libpthread_version(const char *s) { _libpthread_version = s; }
-
-  static bool supports_variable_stack_size();
 
   static void rebuild_cpu_to_node_map();
   static GrowableArray<int>* cpu_to_node()    { return _cpu_to_node; }
@@ -131,20 +129,20 @@ class Linux {
   static int page_size(void)                                        { return _page_size; }
   static void set_page_size(int val)                                { _page_size = val; }
 
-  static int vm_default_page_size(void)                             { return _vm_default_page_size; }
-
-  static address   ucontext_get_pc(ucontext_t* uc);
+  static address   ucontext_get_pc(const ucontext_t* uc);
   static void ucontext_set_pc(ucontext_t* uc, address pc);
-  static intptr_t* ucontext_get_sp(ucontext_t* uc);
-  static intptr_t* ucontext_get_fp(ucontext_t* uc);
+  static intptr_t* ucontext_get_sp(const ucontext_t* uc);
+  static intptr_t* ucontext_get_fp(const ucontext_t* uc);
 
   // For Analyzer Forte AsyncGetCallTrace profiling support:
   //
   // This interface should be declared in os_linux_i486.hpp, but
   // that file provides extensions to the os class and not the
   // Linux class.
-  static ExtendedPC fetch_frame_from_ucontext(Thread* thread, ucontext_t* uc,
+  static ExtendedPC fetch_frame_from_ucontext(Thread* thread, const ucontext_t* uc,
                                               intptr_t** ret_sp, intptr_t** ret_fp);
+
+  static bool get_frame_at_stack_banging_point(JavaThread* thread, ucontext_t* uc, frame* fr);
 
   // This boolean allows users to forward their own non-matching signals
   // to JVM_handle_linux_signal, harmlessly.
@@ -172,12 +170,8 @@ class Linux {
   static void libpthread_init();
   static bool libnuma_init();
   static void* libnuma_dlsym(void* handle, const char* name);
-  // Minimum stack size a thread can be created with (allowing
-  // the VM to completely create the thread and enter user code)
-  static size_t min_stack_allowed;
 
-  // Return default stack size or guard size for the specified thread type
-  static size_t default_stack_size(os::ThreadType thr_type);
+  // Return default guard size for the specified thread type
   static size_t default_guard_size(os::ThreadType thr_type);
 
   static void capture_initial_stack(size_t max_size);
@@ -205,6 +199,10 @@ class Linux {
   }
 
   static jlong fast_thread_cpu_time(clockid_t clockid);
+
+  static void initialize_os_info();
+  static bool os_version_is_known();
+  static uint32_t os_version();
 
   // pthread_cond clock suppport
  private:

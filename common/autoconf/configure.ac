@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -39,13 +39,14 @@ m4_include([build-aux/pkg.m4])
 # Include these first...
 m4_include([basics.m4])
 m4_include([basics_windows.m4])
-m4_include([builddeps.m4])
 # ... then the rest
 m4_include([boot-jdk.m4])
 m4_include([build-performance.m4])
 m4_include([flags.m4])
 m4_include([help.m4])
+m4_include([hotspot.m4])
 m4_include([jdk-options.m4])
+m4_include([jdk-version.m4])
 m4_include([libraries.m4])
 m4_include([platform.m4])
 m4_include([source-dirs.m4])
@@ -94,9 +95,8 @@ JDKOPT_SETUP_OPEN_OR_CUSTOM
 
 # These are needed to be able to create a configuration name (and thus the output directory)
 JDKOPT_SETUP_JDK_VARIANT
-JDKOPT_SETUP_JVM_INTERPRETER
-JDKOPT_SETUP_JVM_VARIANTS
 JDKOPT_SETUP_DEBUG_LEVEL
+HOTSPOT_SETUP_JVM_VARIANTS
 
 # With basic setup done, call the custom early hook.
 CUSTOM_EARLY_HOOK
@@ -121,11 +121,8 @@ PKG_PROG_PKG_CONFIG
 # After basic tools have been setup, we can check build os specific details.
 PLATFORM_SETUP_OPENJDK_BUILD_OS_VERSION
 
-# Setup builddeps, for automatic downloading of tools we need.
-# This is needed before we can call BDEPS_CHECK_MODULE, which is done in
-# boot-jdk setup, but we need to have basic tools setup first.
-BDEPS_CONFIGURE_BUILDDEPS
-BDEPS_SCAN_FOR_BUILDDEPS
+# Misc basic settings
+BASIC_SETUP_DEFAULT_MAKE_TARGET
 
 ###############################################################################
 #
@@ -135,7 +132,8 @@ BDEPS_SCAN_FOR_BUILDDEPS
 
 # We need build & target for this.
 JDKOPT_SETUP_JDK_OPTIONS
-JDKOPT_SETUP_JDK_VERSION_NUMBERS
+JDKOPT_SETUP_JLINK_OPTIONS
+JDKVER_SETUP_JDK_VERSION_NUMBERS
 
 ###############################################################################
 #
@@ -144,6 +142,7 @@ JDKOPT_SETUP_JDK_VERSION_NUMBERS
 ###############################################################################
 
 BOOTJDK_SETUP_BOOT_JDK
+BOOTJDK_SETUP_BUILD_JDK
 
 ###############################################################################
 #
@@ -155,6 +154,8 @@ SRCDIRS_SETUP_TOPDIRS
 SRCDIRS_SETUP_ALTERNATIVE_TOPDIRS
 SRCDIRS_SETUP_OUTPUT_DIRS
 
+SRCDIRS_SETUP_IMPORT_MODULES
+
 ###############################################################################
 #
 # Setup the toolchain (compilers etc), i.e. tools used to compile and process
@@ -162,8 +163,16 @@ SRCDIRS_SETUP_OUTPUT_DIRS
 #
 ###############################################################################
 
+# See if we are doing a complete static build or not
+JDKOPT_SETUP_STATIC_BUILD
+
 # First determine the toolchain type (compiler family)
 TOOLCHAIN_DETERMINE_TOOLCHAIN_TYPE
+
+# User supplied flags should be used when configure detects compilers
+FLAGS_SETUP_USER_SUPPLIED_FLAGS
+# The sysroot cflags are needed for configure to be able to run the compilers
+FLAGS_SETUP_SYSROOT_FLAGS
 
 # Then detect the actual binaries needed
 TOOLCHAIN_PRE_DETECTION
@@ -173,15 +182,12 @@ TOOLCHAIN_POST_DETECTION
 
 # Finally do some processing after the detection phase
 TOOLCHAIN_SETUP_BUILD_COMPILERS
-TOOLCHAIN_SETUP_LEGACY
 TOOLCHAIN_MISC_CHECKS
 
 # Setup the JTReg Regression Test Harness.
 TOOLCHAIN_SETUP_JTREG
 
 FLAGS_SETUP_INIT_FLAGS
-
-# FIXME: Currently we must test this after toolchain but before flags. Fix!
 
 # Now we can test some aspects on the target using configure macros.
 PLATFORM_SETUP_OPENJDK_TARGET_BITS
@@ -197,6 +203,11 @@ FLAGS_SETUP_COMPILER_FLAGS_MISC
 JDKOPT_SETUP_DEBUG_SYMBOLS
 JDKOPT_SETUP_CODE_COVERAGE
 
+# Need toolchain to setup dtrace
+HOTSPOT_SETUP_DTRACE
+HOTSPOT_ENABLE_DISABLE_AOT
+HOTSPOT_ENABLE_DISABLE_GTEST
+
 ###############################################################################
 #
 # Check dependencies for external and internal libraries.
@@ -206,14 +217,12 @@ JDKOPT_SETUP_CODE_COVERAGE
 # After we have toolchain, we can compile fixpath. It's needed by the lib checks.
 BASIC_COMPILE_FIXPATH
 
-LIB_SETUP_INIT
-LIB_SETUP_X11
-LIB_SETUP_CUPS
-LIB_SETUP_FREETYPE
-LIB_SETUP_ALSA
-LIB_SETUP_MISC_LIBS
-LIB_SETUP_STATIC_LINK_LIBSTDCPP
-LIB_SETUP_ON_WINDOWS
+LIB_DETERMINE_DEPENDENCIES
+LIB_SETUP_LIBRARIES
+
+# Hotspot setup depends on lib checks (AOT needs libelf).
+
+HOTSPOT_SETUP_JVM_FEATURES
 
 ###############################################################################
 #
@@ -221,8 +230,9 @@ LIB_SETUP_ON_WINDOWS
 #
 ###############################################################################
 
-JDKOPT_SETUP_BUILD_TWEAKS
 JDKOPT_DETECT_INTREE_EC
+JDKOPT_ENABLE_DISABLE_FAILURE_HANDLER
+JDKOPT_ENABLE_DISABLE_GENERATE_CLASSLIST
 
 ###############################################################################
 #
@@ -234,12 +244,16 @@ JDKOPT_DETECT_INTREE_EC
 BPERF_SETUP_BUILD_CORES
 BPERF_SETUP_BUILD_MEMORY
 BPERF_SETUP_BUILD_JOBS
+BPERF_SETUP_TEST_JOBS
 
 # Setup arguments for the boot jdk (after cores and memory have been setup)
 BOOTJDK_SETUP_BOOT_JDK_ARGUMENTS
 
 # Setup smart javac (after cores and memory have been setup)
 BPERF_SETUP_SMART_JAVAC
+
+# Setup use of icecc if requested
+BPERF_SETUP_ICECC
 
 # Can the C/C++ compiler use precompiled headers?
 BPERF_SETUP_PRECOMPILED_HEADERS
@@ -258,6 +272,9 @@ BASIC_TEST_USABILITY_ISSUES
 
 # At the end, call the custom hook. (Dummy macro if no custom sources available)
 CUSTOM_LATE_HOOK
+
+# This needs to be done after CUSTOM_LATE_HOOK since we can setup custom features.
+HOTSPOT_VALIDATE_JVM_FEATURES
 
 # We're messing a bit with internal autoconf variables to put the config.status
 # in the output directory instead of the current directory.

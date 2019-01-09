@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,25 +22,33 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package com.sun.tools.javac.main;
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
-import java.util.Optional;
-import java.util.ServiceLoader;
 import java.util.Set;
+import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
 
+import javax.lang.model.SourceVersion;
 import javax.tools.JavaFileManager;
+import javax.tools.JavaFileManager.Location;
 import javax.tools.JavaFileObject;
+import javax.tools.JavaFileObject.Kind;
 import javax.tools.StandardJavaFileManager;
 import javax.tools.StandardLocation;
 
@@ -53,9 +61,11 @@ import com.sun.tools.javac.jvm.Profile;
 import com.sun.tools.javac.jvm.Target;
 import com.sun.tools.javac.main.OptionHelper.GrumpyHelper;
 import com.sun.tools.javac.platform.PlatformDescription;
-import com.sun.tools.javac.platform.PlatformProvider;
-import com.sun.tools.javac.platform.PlatformProvider.PlatformNotSupported;
+import com.sun.tools.javac.platform.PlatformUtils;
+import com.sun.tools.javac.resources.CompilerProperties.Errors;
+import com.sun.tools.javac.resources.CompilerProperties.Warnings;
 import com.sun.tools.javac.util.Context;
+import com.sun.tools.javac.util.JCDiagnostic;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Log;
@@ -72,13 +82,14 @@ public class Arguments {
     /**
      * The context key for the arguments.
      */
-    protected static final Context.Key<Arguments> argsKey = new Context.Key<>();
+    public static final Context.Key<Arguments> argsKey = new Context.Key<>();
 
     private String ownName;
     private Set<String> classNames;
-    private Set<File> files;
+    private Set<Path> files;
     private Map<Option, String> deferredFileManagerOptions;
     private Set<JavaFileObject> fileObjects;
+    private boolean emptyAllowed;
     private final Options options;
 
     private JavaFileManager fileManager;
@@ -135,7 +146,7 @@ public class Arguments {
 
         @Override
         public boolean handleFileManagerOption(Option option, String value) {
-            options.put(option.getText(), value);
+            options.put(option, value);
             deferredFileManagerOptions.put(option, value);
             return true;
         }
@@ -151,13 +162,8 @@ public class Arguments {
         }
 
         @Override
-        public void error(String key, Object... args) {
-            Arguments.this.error(key, args);
-        }
-
-        @Override
-        public void addFile(File f) {
-            files.add(f);
+        public void addFile(Path p) {
+            files.add(p);
         }
 
         @Override
@@ -185,12 +191,15 @@ public class Arguments {
         fileObjects = null;
         classNames = new LinkedHashSet<>();
         processArgs(List.from(args), Option.getJavaCompilerOptions(), cmdLineHelper, true, false);
+        if (errors) {
+            log.printLines(PrefixKind.JAVAC, "msg.usage", ownName);
+        }
     }
 
     private final OptionHelper apiHelper = new GrumpyHelper(null) {
         @Override
         public String get(Option option) {
-            return options.get(option.getText());
+            return options.get(option);
         }
 
         @Override
@@ -201,11 +210,6 @@ public class Arguments {
         @Override
         public void remove(String name) {
             options.remove(name);
-        }
-
-        @Override
-        public void error(String key, Object... args) {
-            Arguments.this.error(key, args);
         }
 
         @Override
@@ -245,19 +249,28 @@ public class Arguments {
     }
 
     /**
+     * Minimal initialization for tools, like javadoc,
+     * to be able to process javac options for themselves,
+     * and then call validate.
+     * @param ownName  the name of this tool; used to prefix messages
+     */
+    public void init(String ownName) {
+        this.ownName = ownName;
+        errorMode = ErrorMode.LOG;
+    }
+
+    /**
      * Gets the files to be compiled.
      * @return the files to be compiled
      */
     public Set<JavaFileObject> getFileObjects() {
         if (fileObjects == null) {
-            if (files == null) {
-                fileObjects = Collections.emptySet();
-            } else {
-                fileObjects = new LinkedHashSet<>();
-                JavacFileManager jfm = (JavacFileManager) getFileManager();
-                for (JavaFileObject fo: jfm.getJavaFileObjectsFromFiles(files))
-                    fileObjects.add(fo);
-            }
+            fileObjects = new LinkedHashSet<>();
+        }
+        if (files != null) {
+            JavacFileManager jfm = (JavacFileManager) getFileManager();
+            for (JavaFileObject fo: jfm.getJavaFileObjectsFromPaths(files))
+                fileObjects.add(fo);
         }
         return fileObjects;
     }
@@ -268,6 +281,72 @@ public class Arguments {
      */
     public Set<String> getClassNames() {
         return classNames;
+    }
+
+    /**
+     * Handles the {@code --release} option.
+     *
+     * @param additionalOptions a predicate to handle additional options implied by the
+     * {@code --release} option. The predicate should return true if all the additional
+     * options were processed successfully.
+     * @return true if successful, false otherwise
+     */
+    public boolean handleReleaseOptions(Predicate<Iterable<String>> additionalOptions) {
+        String platformString = options.get(Option.RELEASE);
+
+        checkOptionAllowed(platformString == null,
+                option -> error("err.release.bootclasspath.conflict", option.getPrimaryName()),
+                Option.BOOT_CLASS_PATH, Option.XBOOTCLASSPATH, Option.XBOOTCLASSPATH_APPEND,
+                Option.XBOOTCLASSPATH_PREPEND,
+                Option.ENDORSEDDIRS, Option.DJAVA_ENDORSED_DIRS,
+                Option.EXTDIRS, Option.DJAVA_EXT_DIRS,
+                Option.SOURCE, Option.TARGET,
+                Option.SYSTEM, Option.UPGRADE_MODULE_PATH);
+
+        if (platformString != null) {
+            PlatformDescription platformDescription = PlatformUtils.lookupPlatformDescription(platformString);
+
+            if (platformDescription == null) {
+                error("err.unsupported.release.version", platformString);
+                return false;
+            }
+
+            options.put(Option.SOURCE, platformDescription.getSourceVersion());
+            options.put(Option.TARGET, platformDescription.getTargetVersion());
+
+            context.put(PlatformDescription.class, platformDescription);
+
+            if (!additionalOptions.test(platformDescription.getAdditionalOptions()))
+                return false;
+
+            Collection<Path> platformCP = platformDescription.getPlatformPath();
+
+            if (platformCP != null) {
+                JavaFileManager fm = getFileManager();
+
+                if (!(fm instanceof StandardJavaFileManager)) {
+                    error("err.release.not.standard.file.manager");
+                    return false;
+                }
+
+                try {
+                    StandardJavaFileManager sfm = (StandardJavaFileManager) fm;
+
+                    if (Source.instance(context).allowModules()) {
+                        sfm.handleOption("--system", Arrays.asList("none").iterator());
+                        sfm.setLocationFromPaths(StandardLocation.UPGRADE_MODULE_PATH, platformCP);
+                    } else {
+                        sfm.setLocationFromPaths(StandardLocation.PLATFORM_CLASS_PATH, platformCP);
+                    }
+                } catch (IOException ex) {
+                    log.printLines(PrefixKind.JAVAC, "msg.io");
+                    ex.printStackTrace(log.getWriter(WriterKind.NOTICE));
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -288,51 +367,8 @@ public class Arguments {
         if (!doProcessArgs(args, allowableOpts, helper, allowOperands, checkFileManager))
             return false;
 
-        String platformString = options.get(Option.RELEASE);
-
-        checkOptionAllowed(platformString == null,
-                option -> error("err.release.bootclasspath.conflict", option.getText()),
-                Option.BOOTCLASSPATH, Option.XBOOTCLASSPATH, Option.XBOOTCLASSPATH_APPEND,
-                Option.XBOOTCLASSPATH_PREPEND, Option.ENDORSEDDIRS, Option.EXTDIRS, Option.SOURCE,
-                Option.TARGET);
-
-        if (platformString != null) {
-            PlatformDescription platformDescription = lookupDescription(platformString);
-
-            if (platformDescription == null) {
-                error("err.unsupported.release.version", platformString);
-                return false;
-            }
-
-            options.put(Option.SOURCE, platformDescription.getSourceVersion());
-            options.put(Option.TARGET, platformDescription.getTargetVersion());
-
-            context.put(PlatformDescription.class, platformDescription);
-
-            if (!doProcessArgs(platformDescription.getAdditionalOptions(), allowableOpts, helper, allowOperands, checkFileManager))
-                return false;
-
-            Collection<Path> platformCP = platformDescription.getPlatformPath();
-
-            if (platformCP != null) {
-                JavaFileManager fm = getFileManager();
-
-                if (!(fm instanceof StandardJavaFileManager)) {
-                    error("err.release.not.standard.file.manager");
-                    return false;
-                }
-
-                try {
-                    StandardJavaFileManager sfm = (StandardJavaFileManager) fm;
-
-                    sfm.setLocationFromPaths(StandardLocation.PLATFORM_CLASS_PATH, platformCP);
-                } catch (IOException ex) {
-                    log.printLines(PrefixKind.JAVAC, "msg.io");
-                    ex.printStackTrace(log.getWriter(WriterKind.NOTICE));
-                    return false;
-                }
-            }
-        }
+        if (!handleReleaseOptions(extra -> doProcessArgs(extra, allowableOpts, helper, allowOperands, checkFileManager)))
+            return false;
 
         options.notifyListeners();
 
@@ -352,39 +388,32 @@ public class Arguments {
             }
 
             Option option = null;
+
+            // first, check the provided set of javac options
             if (arg.startsWith("-")) {
-                for (Option o : allowableOpts) {
-                    if (o.matches(arg)) {
-                        option = o;
-                        break;
-                    }
-                }
+                option = Option.lookup(arg, allowableOpts);
             } else if (allowOperands && Option.SOURCEFILE.matches(arg)) {
                 option = Option.SOURCEFILE;
             }
 
-            if (option == null) {
-                if (fm != null && fm.handleOption(arg, argIter)) {
-                    continue;
+            if (option != null) {
+                try {
+                    option.handleOption(helper, arg, argIter);
+                } catch (Option.InvalidValueException e) {
+                    error(e);
+                    return false;
                 }
-                error("err.invalid.flag", arg);
-                return false;
+                continue;
             }
 
-            if (option.hasArg()) {
-                if (!argIter.hasNext()) {
-                    error("err.req.arg", arg);
-                    return false;
-                }
-                String operand = argIter.next();
-                if (option.process(helper, arg, operand)) {
-                    return false;
-                }
-            } else {
-                if (option.process(helper, arg)) {
-                    return false;
-                }
+            // check file manager option
+            if (fm != null && fm.handleOption(arg, argIter)) {
+                continue;
             }
+
+            // none of the above
+            error("err.invalid.flag", arg);
+            return false;
         }
 
         return true;
@@ -393,26 +422,68 @@ public class Arguments {
     /**
      * Validates the overall consistency of the options and operands
      * processed by processOptions.
-     * @return true if all args are successfully validating; false otherwise.
+     * @return true if all args are successfully validated; false otherwise.
      * @throws IllegalStateException if a problem is found and errorMode is set to
      *      ILLEGAL_STATE
      */
     public boolean validate() {
+        JavaFileManager fm = getFileManager();
+        if (options.isSet(Option.MODULE)) {
+            if (!fm.hasLocation(StandardLocation.CLASS_OUTPUT)) {
+                log.error(Errors.OutputDirMustBeSpecifiedWithDashMOption);
+            } else if (!fm.hasLocation(StandardLocation.MODULE_SOURCE_PATH)) {
+                log.error(Errors.ModulesourcepathMustBeSpecifiedWithDashMOption);
+            } else {
+                java.util.List<String> modules = Arrays.asList(options.get(Option.MODULE).split(","));
+                try {
+                    for (String module : modules) {
+                        Location sourceLoc = fm.getLocationForModule(StandardLocation.MODULE_SOURCE_PATH, module);
+                        if (sourceLoc == null) {
+                            log.error(Errors.ModuleNotFoundInModuleSourcePath(module));
+                        } else {
+                            Location classLoc = fm.getLocationForModule(StandardLocation.CLASS_OUTPUT, module);
+
+                            for (JavaFileObject file : fm.list(sourceLoc, "", EnumSet.of(JavaFileObject.Kind.SOURCE), true)) {
+                                String className = fm.inferBinaryName(sourceLoc, file);
+                                JavaFileObject classFile = fm.getJavaFileForInput(classLoc, className, Kind.CLASS);
+
+                                if (classFile == null || classFile.getLastModified() < file.getLastModified()) {
+                                    if (fileObjects == null)
+                                        fileObjects = new HashSet<>();
+                                    fileObjects.add(file);
+                                }
+                            }
+                        }
+                    }
+                } catch (IOException ex) {
+                    log.printLines(PrefixKind.JAVAC, "msg.io");
+                    ex.printStackTrace(log.getWriter(WriterKind.NOTICE));
+                    return false;
+                }
+            }
+        }
+
         if (isEmpty()) {
             // It is allowed to compile nothing if just asking for help or version info.
             // But also note that none of these options are supported in API mode.
             if (options.isSet(Option.HELP)
-                || options.isSet(Option.X)
-                || options.isSet(Option.VERSION)
-                || options.isSet(Option.FULLVERSION))
+                    || options.isSet(Option.X)
+                    || options.isSet(Option.VERSION)
+                    || options.isSet(Option.FULLVERSION)
+                    || options.isSet(Option.MODULE)) {
                 return true;
-
-            if (JavaCompiler.explicitAnnotationProcessingRequested(options)) {
-                error("err.no.source.files.classes");
-            } else {
-                error("err.no.source.files");
             }
-            return false;
+
+            if (!emptyAllowed) {
+                if (!errors) {
+                    if (JavaCompiler.explicitAnnotationProcessingRequested(options)) {
+                        error("err.no.source.files.classes");
+                    } else {
+                        error("err.no.source.files");
+                    }
+                }
+                return false;
+            }
         }
 
         if (!checkDirectory(Option.D)) {
@@ -421,6 +492,35 @@ public class Arguments {
         if (!checkDirectory(Option.S)) {
             return false;
         }
+        if (!checkDirectory(Option.H)) {
+            return false;
+        }
+
+        // The following checks are to help avoid accidental confusion between
+        // directories of modules and exploded module directories.
+        if (fm instanceof StandardJavaFileManager) {
+            StandardJavaFileManager sfm = (StandardJavaFileManager) fileManager;
+            if (sfm.hasLocation(StandardLocation.CLASS_OUTPUT)) {
+                Path outDir = sfm.getLocationAsPaths(StandardLocation.CLASS_OUTPUT).iterator().next();
+                if (sfm.hasLocation(StandardLocation.MODULE_SOURCE_PATH)) {
+                    // multi-module mode
+                    if (Files.exists(outDir.resolve("module-info.class"))) {
+                        log.error(Errors.MultiModuleOutdirCannotBeExplodedModule(outDir));
+                    }
+                } else {
+                    // single-module or legacy mode
+                    boolean lintPaths = options.isUnset(Option.XLINT_CUSTOM,
+                            "-" + LintCategory.PATH.option);
+                    if (lintPaths) {
+                        Path outDirParent = outDir.getParent();
+                        if (outDirParent != null && Files.exists(outDirParent.resolve("module-info.class"))) {
+                            log.warning(LintCategory.PATH, Warnings.OutdirIsInExplodedModule(outDir));
+                        }
+                    }
+                }
+            }
+        }
+
 
         String sourceString = options.get(Option.SOURCE);
         Source source = (sourceString != null)
@@ -465,15 +565,17 @@ public class Arguments {
 
             // This check is only effective in command line mode,
             // where the file manager options are added to options
-            if (options.get(Option.BOOTCLASSPATH) != null) {
+            if (options.get(Option.BOOT_CLASS_PATH) != null) {
                 error("err.profile.bootclasspath.conflict");
             }
         }
 
-        boolean lintOptions = options.isUnset(Option.XLINT_CUSTOM, "-" + LintCategory.OPTIONS.option);
+        if (options.isSet(Option.SOURCE_PATH) && options.isSet(Option.MODULE_SOURCE_PATH)) {
+            error("err.sourcepath.modulesourcepath.conflict");
+        }
 
+        boolean lintOptions = options.isUnset(Option.XLINT_CUSTOM, "-" + LintCategory.OPTIONS.option);
         if (lintOptions && source.compareTo(Source.DEFAULT) < 0 && !options.isSet(Option.RELEASE)) {
-            JavaFileManager fm = getFileManager();
             if (fm instanceof BaseFileManager) {
                 if (((BaseFileManager) fm).isDefaultBootClassPath())
                     log.warning(LintCategory.OPTIONS, "source.no.bootclasspath", source.name);
@@ -483,48 +585,204 @@ public class Arguments {
         boolean obsoleteOptionFound = false;
 
         if (source.compareTo(Source.MIN) < 0) {
-            log.error("option.removed.source", source.name, Source.MIN.name);
+            log.error(Errors.OptionRemovedSource(source.name, Source.MIN.name));
         } else if (source == Source.MIN && lintOptions) {
-            log.warning(LintCategory.OPTIONS, "option.obsolete.source", source.name);
+            log.warning(LintCategory.OPTIONS, Warnings.OptionObsoleteSource(source.name));
             obsoleteOptionFound = true;
         }
 
         if (target.compareTo(Target.MIN) < 0) {
-            log.error("option.removed.target", target.name, Target.MIN.name);
+            log.error(Errors.OptionRemovedTarget(target.name, Target.MIN.name));
         } else if (target == Target.MIN && lintOptions) {
-            log.warning(LintCategory.OPTIONS, "option.obsolete.target", target.name);
+            log.warning(LintCategory.OPTIONS, Warnings.OptionObsoleteTarget(target.name));
             obsoleteOptionFound = true;
         }
 
-        if (obsoleteOptionFound)
-            log.warning(LintCategory.OPTIONS, "option.obsolete.suppression");
+        final Target t = target;
+        checkOptionAllowed(t.compareTo(Target.JDK1_8) <= 0,
+                option -> error("err.option.not.allowed.with.target", option.getPrimaryName(), t.name),
+                Option.BOOT_CLASS_PATH,
+                Option.XBOOTCLASSPATH_PREPEND, Option.XBOOTCLASSPATH, Option.XBOOTCLASSPATH_APPEND,
+                Option.ENDORSEDDIRS, Option.DJAVA_ENDORSED_DIRS,
+                Option.EXTDIRS, Option.DJAVA_EXT_DIRS,
+                Option.PROFILE);
 
-        return !errors;
+        checkOptionAllowed(t.compareTo(Target.JDK1_9) >= 0,
+                option -> error("err.option.not.allowed.with.target", option.getPrimaryName(), t.name),
+                Option.MODULE_SOURCE_PATH, Option.UPGRADE_MODULE_PATH,
+                Option.SYSTEM, Option.MODULE_PATH, Option.ADD_MODULES,
+                Option.ADD_EXPORTS, Option.ADD_OPENS, Option.ADD_READS,
+                Option.LIMIT_MODULES,
+                Option.PATCH_MODULE);
+
+        if (fm.hasLocation(StandardLocation.MODULE_SOURCE_PATH)) {
+            if (!options.isSet(Option.PROC, "only")
+                    && !fm.hasLocation(StandardLocation.CLASS_OUTPUT)) {
+                log.error(Errors.NoOutputDir);
+            }
+        }
+
+        if (fm.hasLocation(StandardLocation.ANNOTATION_PROCESSOR_MODULE_PATH) &&
+            fm.hasLocation(StandardLocation.ANNOTATION_PROCESSOR_PATH)) {
+            log.error(Errors.ProcessorpathNoProcessormodulepath);
+        }
+
+        if (obsoleteOptionFound && lintOptions) {
+            log.warning(LintCategory.OPTIONS, "option.obsolete.suppression");
+        }
+
+        SourceVersion sv = Source.toSourceVersion(source);
+        validateAddExports(sv);
+        validateAddModules(sv);
+        validateAddReads(sv);
+        validateLimitModules(sv);
+        validateDefaultModuleForCreatedFiles(sv);
+
+        if (lintOptions && options.isSet(Option.ADD_OPENS)) {
+            log.warning(LintCategory.OPTIONS, Warnings.AddopensIgnored);
+        }
+
+        return !errors && (log.nerrors == 0);
     }
 
-    private PlatformDescription lookupDescription(String platformString) {
-        int separator = platformString.indexOf(":");
-        String platformProviderName =
-                separator != (-1) ? platformString.substring(0, separator) : platformString;
-        String platformOptions =
-                separator != (-1) ? platformString.substring(separator + 1) : "";
-        Iterable<PlatformProvider> providers =
-                ServiceLoader.load(PlatformProvider.class, Arguments.class.getClassLoader());
+    private void validateAddExports(SourceVersion sv) {
+        String addExports = options.get(Option.ADD_EXPORTS);
+        if (addExports != null) {
+            // Each entry must be of the form sourceModule/sourcePackage=target-list where
+            // target-list is a comma separated list of module or ALL-UNNAMED.
+            // Empty items in the target-list are ignored.
+            // There must be at least one item in the list; this is handled in Option.ADD_EXPORTS.
+            Pattern p = Option.ADD_EXPORTS.getPattern();
+            for (String e : addExports.split("\0")) {
+                Matcher m = p.matcher(e);
+                if (m.matches()) {
+                    String sourceModuleName = m.group(1);
+                    if (!SourceVersion.isName(sourceModuleName, sv)) {
+                        // syntactically invalid source name:  e.g. --add-exports m!/p1=m2
+                        log.warning(Warnings.BadNameForOption(Option.ADD_EXPORTS, sourceModuleName));
+                    }
+                    String sourcePackageName = m.group(2);
+                    if (!SourceVersion.isName(sourcePackageName, sv)) {
+                        // syntactically invalid source name:  e.g. --add-exports m1/p!=m2
+                        log.warning(Warnings.BadNameForOption(Option.ADD_EXPORTS, sourcePackageName));
+                    }
 
-        return StreamSupport.stream(providers.spliterator(), false)
-                            .filter(provider -> StreamSupport.stream(provider.getSupportedPlatformNames()
-                                                                             .spliterator(),
-                                                                     false)
-                                                             .anyMatch(platformProviderName::equals))
-                            .findFirst()
-                            .flatMap(provider -> {
-                                try {
-                                    return Optional.of(provider.getPlatform(platformProviderName, platformOptions));
-                                } catch (PlatformNotSupported pns) {
-                                    return Optional.empty();
+                    String targetNames = m.group(3);
+                    for (String targetName : targetNames.split(",")) {
+                        switch (targetName) {
+                            case "":
+                            case "ALL-UNNAMED":
+                                break;
+
+                            default:
+                                if (!SourceVersion.isName(targetName, sv)) {
+                                    // syntactically invalid target name:  e.g. --add-exports m1/p1=m!
+                                    log.warning(Warnings.BadNameForOption(Option.ADD_EXPORTS, targetName));
                                 }
-                            })
-                            .orElse(null);
+                                break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private void validateAddReads(SourceVersion sv) {
+        String addReads = options.get(Option.ADD_READS);
+        if (addReads != null) {
+            // Each entry must be of the form source=target-list where target-list is a
+            // comma-separated list of module or ALL-UNNAMED.
+            // Empty items in the target list are ignored.
+            // There must be at least one item in the list; this is handled in Option.ADD_READS.
+            Pattern p = Option.ADD_READS.getPattern();
+            for (String e : addReads.split("\0")) {
+                Matcher m = p.matcher(e);
+                if (m.matches()) {
+                    String sourceName = m.group(1);
+                    if (!SourceVersion.isName(sourceName, sv)) {
+                        // syntactically invalid source name:  e.g. --add-reads m!=m2
+                        log.warning(Warnings.BadNameForOption(Option.ADD_READS, sourceName));
+                    }
+
+                    String targetNames = m.group(2);
+                    for (String targetName : targetNames.split(",", -1)) {
+                        switch (targetName) {
+                            case "":
+                            case "ALL-UNNAMED":
+                                break;
+
+                            default:
+                                if (!SourceVersion.isName(targetName, sv)) {
+                                    // syntactically invalid target name:  e.g. --add-reads m1=m!
+                                    log.warning(Warnings.BadNameForOption(Option.ADD_READS, targetName));
+                                }
+                                break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private void validateAddModules(SourceVersion sv) {
+        String addModules = options.get(Option.ADD_MODULES);
+        if (addModules != null) {
+            // Each entry must be of the form target-list where target-list is a
+            // comma separated list of module names, or ALL-DEFAULT, ALL-SYSTEM,
+            // or ALL-MODULE_PATH.
+            // Empty items in the target list are ignored.
+            // There must be at least one item in the list; this is handled in Option.ADD_MODULES.
+            for (String moduleName : addModules.split(",")) {
+                switch (moduleName) {
+                    case "":
+                    case "ALL-SYSTEM":
+                    case "ALL-MODULE-PATH":
+                        break;
+
+                    default:
+                        if (!SourceVersion.isName(moduleName, sv)) {
+                            // syntactically invalid module name:  e.g. --add-modules m1,m!
+                            log.error(Errors.BadNameForOption(Option.ADD_MODULES, moduleName));
+                        }
+                        break;
+                }
+            }
+        }
+    }
+
+    private void validateLimitModules(SourceVersion sv) {
+        String limitModules = options.get(Option.LIMIT_MODULES);
+        if (limitModules != null) {
+            // Each entry must be of the form target-list where target-list is a
+            // comma separated list of module names, or ALL-DEFAULT, ALL-SYSTEM,
+            // or ALL-MODULE_PATH.
+            // Empty items in the target list are ignored.
+            // There must be at least one item in the list; this is handled in Option.LIMIT_EXPORTS.
+            for (String moduleName : limitModules.split(",")) {
+                switch (moduleName) {
+                    case "":
+                        break;
+
+                    default:
+                        if (!SourceVersion.isName(moduleName, sv)) {
+                            // syntactically invalid module name:  e.g. --limit-modules m1,m!
+                            log.error(Errors.BadNameForOption(Option.LIMIT_MODULES, moduleName));
+                        }
+                        break;
+                }
+            }
+        }
+    }
+
+    private void validateDefaultModuleForCreatedFiles(SourceVersion sv) {
+        String moduleName = options.get(Option.DEFAULT_MODULE_FOR_CREATED_FILES);
+        if (moduleName != null) {
+            if (!SourceVersion.isName(moduleName, sv)) {
+                // syntactically invalid module name:  e.g. --default-module-for-created-files m!
+                log.error(Errors.BadNameForOption(Option.DEFAULT_MODULE_FOR_CREATED_FILES,
+                                                  moduleName));
+            }
+        }
     }
 
     /**
@@ -534,7 +792,11 @@ public class Arguments {
     public boolean isEmpty() {
         return ((files == null) || files.isEmpty())
                 && ((fileObjects == null) || fileObjects.isEmpty())
-                && classNames.isEmpty();
+                && (classNames == null || classNames.isEmpty());
+    }
+
+    public void allowEmpty() {
+        this.emptyAllowed = true;
     }
 
     /**
@@ -581,7 +843,7 @@ public class Arguments {
             for (String s: xdoclintCustom.split("\\s+")) {
                 if (s.isEmpty())
                     continue;
-                doclintOpts.add(s.replace(Option.XDOCLINT_CUSTOM.text, DocLint.XMSGS_CUSTOM_PREFIX));
+                doclintOpts.add(DocLint.XMSGS_CUSTOM_PREFIX + s);
             }
         }
 
@@ -589,17 +851,20 @@ public class Arguments {
             return List.nil();
 
         String checkPackages = options.get(Option.XDOCLINT_PACKAGE);
-
         if (checkPackages != null) {
             for (String s : checkPackages.split("\\s+")) {
-                doclintOpts.add(s.replace(Option.XDOCLINT_PACKAGE.text, DocLint.XCHECK_PACKAGE));
+                doclintOpts.add(DocLint.XCHECK_PACKAGE + s);
             }
+        }
+
+        String format = options.get(Option.DOCLINT_FORMAT);
+        if (format != null) {
+            doclintOpts.add(DocLint.XHTML_VERSION_PREFIX + format);
         }
 
         // standard doclet normally generates H1, H2,
         // so for now, allow user comments to assume that
         doclintOpts.add(DocLint.XIMPLICIT_HEADERS + "2");
-
         return List.from(doclintOpts.toArray(new String[doclintOpts.size()]));
     }
 
@@ -608,12 +873,8 @@ public class Arguments {
         if (value == null) {
             return true;
         }
-        File file = new File(value);
-        if (!file.exists()) {
-            error("err.dir.not.found", value);
-            return false;
-        }
-        if (!file.isDirectory()) {
+        Path file = Paths.get(value);
+        if (Files.exists(file) && !Files.isDirectory(file)) {
             error("err.file.not.directory", value);
             return false;
         }
@@ -632,6 +893,22 @@ public class Arguments {
         }
     }
 
+    void error(JCDiagnostic.Error error) {
+        errors = true;
+        switch (errorMode) {
+            case ILLEGAL_ARGUMENT: {
+                String msg = log.localize(error);
+                throw new PropagatedException(new IllegalArgumentException(msg));
+            }
+            case ILLEGAL_STATE: {
+                String msg = log.localize(error);
+                throw new PropagatedException(new IllegalStateException(msg));
+            }
+            case LOG:
+                report(error);
+        }
+    }
+
     void error(String key, Object... args) {
         errors = true;
         switch (errorMode) {
@@ -645,7 +922,21 @@ public class Arguments {
             }
             case LOG:
                 report(key, args);
-                log.printLines(PrefixKind.JAVAC, "msg.usage", ownName);
+        }
+    }
+
+    void error(Option.InvalidValueException f) {
+        String msg = f.getMessage();
+        errors = true;
+        switch (errorMode) {
+            case ILLEGAL_ARGUMENT: {
+                throw new PropagatedException(new IllegalArgumentException(msg, f.getCause()));
+            }
+            case ILLEGAL_STATE: {
+                throw new PropagatedException(new IllegalStateException(msg, f.getCause()));
+            }
+            case LOG:
+                log.printRawLines(ownName + ": " + msg);
         }
     }
 
@@ -654,7 +945,13 @@ public class Arguments {
     }
 
     private void report(String key, Object... args) {
+        // Would be good to have support for -XDrawDiagnostics here
         log.printRawLines(ownName + ": " + log.localize(PrefixKind.JAVAC, key, args));
+    }
+
+    private void report(JCDiagnostic.Error error) {
+        // Would be good to have support for -XDrawDiagnostics here
+        log.printRawLines(ownName + ": " + log.localize(error));
     }
 
     private JavaFileManager getFileManager() {

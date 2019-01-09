@@ -28,14 +28,13 @@ package jdk.nashorn.api.tree;
 /**
  * Represents regular expression literal in the source code.
  *
- * @since 1.9
+ * @since 9
  */
-@jdk.Exported
-public interface RegExpLiteralTree extends Tree {
+public interface RegExpLiteralTree extends ExpressionTree {
     /**
      * Regular expression pattern to match.
      *
-     * @return regular expression patten
+     * @return regular expression pattern
      */
     public String getPattern();
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -142,8 +142,16 @@ public class ParameterNamesAreNotCopiedToAnonymousInitTest {
                     fm.getJavaFileObjectsFromFiles(
                     Arrays.asList(new File(System.getProperty("test.src"),
                     this.getClass().getName() + ".java")));
-            JavacTask task = (JavacTask) c.getTask(null, fm, null,
-                    Arrays.asList("-d", System.getProperty("user.dir")), null, fos);
+            java.util.List<String> options = Arrays.asList(
+                "--add-modules", "jdk.jdeps",
+                "--add-exports", "jdk.jdeps/com.sun.tools.classfile=ALL-UNNAMED",
+                "--add-exports", "jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+                "--add-exports", "jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED",
+                "--add-exports", "jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED",
+                "--add-exports", "jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED",
+                "-d", System.getProperty("user.dir")
+            );
+            JavacTask task = (JavacTask) c.getTask(null, fm, null, options, null, fos);
 
             BasicJavacTask impl = (BasicJavacTask)task;
             Context context = impl.getContext();

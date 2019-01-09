@@ -1,15 +1,13 @@
 /*
- * reserved comment block
- * DO NOT REMOVE OR ALTER!
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements. See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership. The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the  "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -19,15 +17,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * $Id: TransformerImpl.java,v 1.10 2007/06/13 01:57:09 joehw Exp $
- */
 
 package com.sun.org.apache.xalan.internal.xsltc.trax;
 
 import com.sun.org.apache.xalan.internal.XalanConstants;
 import com.sun.org.apache.xalan.internal.utils.FactoryImpl;
 import com.sun.org.apache.xalan.internal.utils.XMLSecurityManager;
+import com.sun.org.apache.xalan.internal.xsltc.DOM;
+import com.sun.org.apache.xalan.internal.xsltc.DOMCache;
+import com.sun.org.apache.xalan.internal.xsltc.StripFilter;
+import com.sun.org.apache.xalan.internal.xsltc.Translet;
+import com.sun.org.apache.xalan.internal.xsltc.TransletException;
+import com.sun.org.apache.xalan.internal.xsltc.compiler.util.ErrorMsg;
+import com.sun.org.apache.xalan.internal.xsltc.dom.DOMWSFilter;
+import com.sun.org.apache.xalan.internal.xsltc.dom.SAXImpl;
+import com.sun.org.apache.xalan.internal.xsltc.dom.XSLTCDTMManager;
+import com.sun.org.apache.xalan.internal.xsltc.runtime.AbstractTranslet;
+import com.sun.org.apache.xalan.internal.xsltc.runtime.output.TransletOutputHandlerFactory;
+import com.sun.org.apache.xml.internal.dtm.DTMWSFilter;
+import com.sun.org.apache.xml.internal.serializer.OutputPropertiesFactory;
+import com.sun.org.apache.xml.internal.serializer.SerializationHandler;
+import com.sun.org.apache.xml.internal.utils.SystemIDResolver;
+import com.sun.org.apache.xml.internal.utils.XMLReaderManager;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -39,12 +50,17 @@ import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
 import java.net.UnknownServiceException;
+import java.util.ArrayList;
 import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Properties;
 import java.util.StringTokenizer;
-import java.util.ArrayList;
-import java.lang.reflect.Constructor;
-
+import javax.xml.XMLConstants;
+import javax.xml.catalog.CatalogException;
+import javax.xml.catalog.CatalogFeatures;
+import javax.xml.catalog.CatalogManager;
+import javax.xml.catalog.CatalogResolver;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
@@ -65,29 +81,8 @@ import javax.xml.transform.stax.StAXResult;
 import javax.xml.transform.stax.StAXSource;
 import javax.xml.transform.stream.StreamResult;
 import javax.xml.transform.stream.StreamSource;
-import javax.xml.XMLConstants;
-
-import com.sun.org.apache.xml.internal.utils.SystemIDResolver;
-
-import com.sun.org.apache.xalan.internal.xsltc.DOM;
-import com.sun.org.apache.xalan.internal.xsltc.DOMCache;
-import com.sun.org.apache.xalan.internal.xsltc.DOMEnhancedForDTM;
-import com.sun.org.apache.xalan.internal.xsltc.StripFilter;
-import com.sun.org.apache.xalan.internal.xsltc.Translet;
-import com.sun.org.apache.xalan.internal.xsltc.TransletException;
-import com.sun.org.apache.xml.internal.serializer.OutputPropertiesFactory;
-import com.sun.org.apache.xml.internal.serializer.SerializationHandler;
-import com.sun.org.apache.xalan.internal.xsltc.compiler.util.ErrorMsg;
-import com.sun.org.apache.xalan.internal.xsltc.dom.DOMWSFilter;
-import com.sun.org.apache.xalan.internal.xsltc.dom.SAXImpl;
-import com.sun.org.apache.xalan.internal.xsltc.dom.XSLTCDTMManager;
-import com.sun.org.apache.xalan.internal.xsltc.runtime.AbstractTranslet;
-import com.sun.org.apache.xalan.internal.xsltc.runtime.Hashtable;
-import com.sun.org.apache.xalan.internal.xsltc.runtime.output.TransletOutputHandlerFactory;
-
-import com.sun.org.apache.xml.internal.dtm.DTMWSFilter;
-import com.sun.org.apache.xml.internal.utils.XMLReaderManager;
-
+import jdk.xml.internal.JdkXmlFeatures;
+import jdk.xml.internal.JdkXmlUtils;
 import org.xml.sax.ContentHandler;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
@@ -162,7 +157,7 @@ public final class TransformerImpl extends Transformer
     /**
      * Number of indent spaces to add when indentation is on.
      */
-    private int _indentNumber;
+    private int _indentNumber = -1;
 
     /**
      * A reference to the transformer factory that this templates
@@ -219,11 +214,20 @@ public final class TransformerImpl extends Transformer
 
     private XMLSecurityManager _securityManager;
     /**
-     * A hashtable to store parameters for the identity transform. These
+     * A map to store parameters for the identity transform. These
      * are not needed during the transformation, but we must keep track of
      * them to be fully complaint with the JAXP API.
      */
-    private Hashtable _parameters = null;
+    private Map<String, Object> _parameters = null;
+
+    // Catalog features
+    CatalogFeatures _catalogFeatures;
+    CatalogResolver _catalogUriResolver;
+
+    // Catalog is enabled by default
+    boolean _useCatalog = true;
+
+    int _cdataChunkSize = JdkXmlUtils.CDATA_CHUNK_SIZE_DEFAULT;
 
     /**
      * This class wraps an ErrorListener into a MessageHandler in order to
@@ -278,6 +282,19 @@ public final class TransformerImpl extends Transformer
         _readerManager.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, _accessExternalDTD);
         _readerManager.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, _isSecureProcessing);
         _readerManager.setProperty(XalanConstants.SECURITY_MANAGER, _securityManager);
+        _cdataChunkSize = JdkXmlUtils.getValue(_tfactory.getAttribute(JdkXmlUtils.CDATA_CHUNK_SIZE),
+                JdkXmlUtils.CDATA_CHUNK_SIZE_DEFAULT);
+        _readerManager.setProperty(JdkXmlUtils.CDATA_CHUNK_SIZE, _cdataChunkSize);
+
+        _useCatalog = _tfactory.getFeature(XMLConstants.USE_CATALOG);
+        if (_useCatalog) {
+            _catalogFeatures = (CatalogFeatures)_tfactory.getAttribute(JdkXmlFeatures.CATALOG_FEATURES);
+            String catalogFiles = _catalogFeatures.get(CatalogFeatures.Feature.DEFER);
+            if (catalogFiles != null) {
+                _readerManager.setFeature(XMLConstants.USE_CATALOG, _useCatalog);
+                _readerManager.setProperty(JdkXmlFeatures.CATALOG_FEATURES, _catalogFeatures);
+            }
+        }
         //_isIncremental = tfactory._incremental;
     }
 
@@ -347,7 +364,8 @@ public final class TransformerImpl extends Transformer
             throw new TransformerException(err.toString());
         }
 
-        if (_uriResolver != null && !_isIdentity) {
+        if (!_isIdentity && (_uriResolver != null || (_tfactory.getFeature(XMLConstants.USE_CATALOG)
+                    && _tfactory.getAttribute(JdkXmlUtils.CATALOG_FILES) != null))) {
             _translet.setDOMCache(this);
         }
 
@@ -731,15 +749,33 @@ public final class TransformerImpl extends Transformer
                 ((SAXSource)source).getXMLReader()==null )||
                 (source instanceof DOMSource &&
                 ((DOMSource)source).getNode()==null)){
-                        DocumentBuilderFactory builderF = FactoryImpl.getDOMFactory(_useServicesMechanism);
-                        DocumentBuilder builder = builderF.newDocumentBuilder();
-                        String systemID = source.getSystemId();
-                        source = new DOMSource(builder.newDocument());
 
-                        // Copy system ID from original, empty Source to new
-                        if (systemID != null) {
-                          source.setSystemId(systemID);
+                boolean supportCatalog = true;
+
+                DocumentBuilderFactory builderF = FactoryImpl.getDOMFactory(_useServicesMechanism);
+                try {
+                    builderF.setFeature(XMLConstants.USE_CATALOG, _useCatalog);
+                } catch (ParserConfigurationException e) {
+                    supportCatalog = false;
+                }
+
+                if (supportCatalog && _useCatalog) {
+                    CatalogFeatures cf = (CatalogFeatures)_tfactory.getAttribute(JdkXmlFeatures.CATALOG_FEATURES);
+                    if (cf != null) {
+                        for (CatalogFeatures.Feature f : CatalogFeatures.Feature.values()) {
+                            builderF.setAttribute(f.getPropertyName(), cf.get(f));
                         }
+                    }
+                }
+
+                DocumentBuilder builder = builderF.newDocumentBuilder();
+                String systemID = source.getSystemId();
+                source = new DOMSource(builder.newDocument());
+
+                // Copy system ID from original, empty Source to new
+                if (systemID != null) {
+                  source.setSystemId(systemID);
+                }
             }
             if (_isIdentity) {
                 transformIdentity(source, handler);
@@ -826,31 +862,6 @@ public final class TransformerImpl extends Transformer
         catch (TransformerException e) {
             // ignored - transformation cannot be continued
         }
-    }
-
-    /**
-     * The translet stores all CDATA sections set in the <xsl:output> element
-     * in a Hashtable. This method will re-construct the whitespace separated
-     * list of elements given in the <xsl:output> element.
-     */
-    private String makeCDATAString(Hashtable cdata) {
-        // Return a 'null' string if no CDATA section elements were specified
-        if (cdata == null) return null;
-
-        final StringBuilder result = new StringBuilder();
-
-        // Get an enumeration of all the elements in the hashtable
-        Enumeration elements = cdata.keys();
-        if (elements.hasMoreElements()) {
-            result.append((String)elements.nextElement());
-            while (elements.hasMoreElements()) {
-                String element = (String)elements.nextElement();
-                result.append(' ');
-                result.append(element);
-            }
-        }
-
-        return(result.toString());
     }
 
     /**
@@ -1226,7 +1237,7 @@ public final class TransformerImpl extends Transformer
 
         if (_isIdentity) {
             if (_parameters == null) {
-                _parameters = new Hashtable();
+                _parameters = new HashMap<>();
             }
             _parameters.put(name, value);
         }
@@ -1320,7 +1331,19 @@ public final class TransformerImpl extends Transformer
              *  com.sun.org.apache.xalan.internal.xsltc.dom.LoadDocument
              *
              */
-            Source resolvedSource = _uriResolver.resolve(href, baseURI);
+            Source resolvedSource = null;
+            if (_uriResolver != null) {
+                resolvedSource = _uriResolver.resolve(href, baseURI);
+            }
+
+            if (resolvedSource == null && _useCatalog &&
+                    _catalogFeatures.get(CatalogFeatures.Feature.FILES) != null)  {
+                if (_catalogUriResolver == null) {
+                    _catalogUriResolver = CatalogManager.catalogResolver(_catalogFeatures);
+                }
+                resolvedSource = _catalogUriResolver.resolve(href, baseURI);
+            }
+
             if (resolvedSource == null)  {
                 StreamSource streamSource = new StreamSource(
                      SystemIDResolver.getAbsoluteURI(href, baseURI));
@@ -1329,7 +1352,7 @@ public final class TransformerImpl extends Transformer
 
             return getDOM(resolvedSource);
         }
-        catch (TransformerException e) {
+        catch (TransformerException | CatalogException e) {
             if (_errorListener != null)
                 postErrorToListener("File not found: " + e.getMessage());
             return(null);
@@ -1436,7 +1459,7 @@ public final class TransformerImpl extends Transformer
         _uriResolver = null;
         _dom = null;
         _parameters = null;
-        _indentNumber = 0;
+        _indentNumber = -1;
         setOutputProperties (null);
         _tohFactory = null;
         _ostream = null;

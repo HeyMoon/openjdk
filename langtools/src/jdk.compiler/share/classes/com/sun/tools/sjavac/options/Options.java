@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
+import java.util.StringJoiner;
 
 import com.sun.tools.sjavac.Transformer;
 import com.sun.tools.sjavac.Util;
@@ -97,7 +98,7 @@ public class Options {
 
     /** Get the path for the state directory, defaults to destDir. */
     public Path getStateDir() {
-        return stateDir != null ? stateDir : destDir;
+        return stateDir;
     }
 
     /** Get all source locations for files to be compiled */
@@ -220,17 +221,12 @@ public class Options {
                 for (SourceLocation sl : locs) {
                     for (String pkg : sl.includes) addArg(Option.I, pkg);
                     for (String pkg : sl.excludes) addArg(Option.X, pkg);
-                    for (String f : sl.excludedFiles) addArg(Option.XF, f);
-                    for (String f : sl.includedFiles) addArg(Option.IF, f);
                     addArg(opt, sl.getPath());
                 }
             }
 
             String getResult() {
-                String result = "";
-                for (String s : args)
-                    result += s + " ";
-                return result.trim();
+                return String.join(" ", args);
             }
 
             public void addAll(Collection<String> toAdd) {
@@ -255,9 +251,9 @@ public class Options {
 
         // Source roots
         args.addSourceLocations(Option.SRC, sources);
-        args.addSourceLocations(Option.SOURCEPATH, sourceSearchPaths);
-        args.addSourceLocations(Option.CLASSPATH,  classSearchPaths);
-        args.addSourceLocations(Option.MODULEPATH, moduleSearchPaths);
+        args.addSourceLocations(Option.SOURCE_PATH, sourceSearchPaths);
+        args.addSourceLocations(Option.CLASS_PATH,  classSearchPaths);
+        args.addSourceLocations(Option.MODULE_PATH, moduleSearchPaths);
 
         // Boolean options
         if (permitSourcesInDefaultPackage)
@@ -317,7 +313,7 @@ public class Options {
         }
 
         // Enable dependency generation
-        args.add("-XDcompletionDeps=source,class");
+        args.add("--debug:completionDeps=source,class");
 
         // This can't be anything but 'none'. Enforced by sjavac main method.
         args.add("-implicit:" + implicitPolicy);
@@ -339,10 +335,11 @@ public class Options {
     // Helper method to join a list of source locations separated by
     // File.pathSeparator
     private static String concatenateSourceLocations(List<SourceLocation> locs) {
-        String s = "";
-        for (SourceLocation loc : locs)
-            s += (s.isEmpty() ? "" : java.io.File.pathSeparator) + loc.getPath();
-        return s;
+        StringJoiner joiner = new StringJoiner(java.io.File.pathSeparator);
+        for (SourceLocation loc : locs) {
+            joiner.add(loc.getPath().toString());
+        }
+        return joiner.toString();
     }
 
     // OptionHelper that records the traversed options in this Options instance.
@@ -377,18 +374,6 @@ public class Options {
         public void include(String inclPattern) {
             inclPattern = Util.normalizeDriveLetter(inclPattern);
             includes.add(inclPattern);
-        }
-
-        @Override
-        public void excludeFile(String exclFilePattern) {
-            exclFilePattern = Util.normalizeDriveLetter(exclFilePattern);
-            excludeFiles.add(exclFilePattern);
-        }
-
-        @Override
-        public void includeFile(String inclFilePattern) {
-            inclFilePattern = Util.normalizeDriveLetter(inclFilePattern);
-            includeFiles.add(inclFilePattern);
         }
 
         @Override
@@ -519,9 +504,7 @@ public class Options {
                 result.add(new SourceLocation(
                         path,
                         includes,
-                        excludes,
-                        includeFiles,
-                        excludeFiles));
+                        excludes));
             }
             resetFilters();
             return result;

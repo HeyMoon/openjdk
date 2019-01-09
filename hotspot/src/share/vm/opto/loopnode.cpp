@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 #include "compiler/compileLog.hpp"
 #include "libadt/vectset.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "opto/addnode.hpp"
 #include "opto/callnode.hpp"
 #include "opto/connode.hpp"
@@ -278,8 +279,16 @@ bool PhaseIdealLoop::is_counted_loop( Node *x, IdealLoopTree *loop ) {
     return false;
 
   // Allow funny placement of Safepoint
-  if (back_control->Opcode() == Op_SafePoint)
+  if (back_control->Opcode() == Op_SafePoint) {
+    if (UseCountedLoopSafepoints) {
+      // Leaving the safepoint on the backedge and creating a
+      // CountedLoop will confuse optimizations. We can't move the
+      // safepoint around because its jvm state wouldn't match a new
+      // location. Give up on that loop.
+      return false;
+    }
     back_control = back_control->in(TypeFunc::Control);
+  }
 
   // Controlling test for loop
   Node *iftrue = back_control;
@@ -329,6 +338,9 @@ bool PhaseIdealLoop::is_counted_loop( Node *x, IdealLoopTree *loop ) {
 
   Node* phi_incr = NULL;
   // Trip-counter increment must be commutative & associative.
+  if (incr->Opcode() == Op_CastII) {
+    incr = incr->in(1);
+  }
   if (incr->is_Phi()) {
     if (incr->as_Phi()->region() != x || incr->req() != 3)
       return false; // Not simple trip counter expression
@@ -355,6 +367,9 @@ bool PhaseIdealLoop::is_counted_loop( Node *x, IdealLoopTree *loop ) {
     Node *tmp = xphi;           // 'incr' is commutative, so ok to swap
     xphi = stride;
     stride = tmp;
+  }
+  if (xphi->Opcode() == Op_CastII) {
+    xphi = xphi->in(1);
   }
   // Stride must be constant
   int stride_con = stride->get_int();
@@ -456,8 +471,6 @@ bool PhaseIdealLoop::is_counted_loop( Node *x, IdealLoopTree *loop ) {
   C->print_method(PHASE_BEFORE_CLOOPS, 3);
 
   Node *hook = new Node(6);
-
-  if (LoopLimitCheck) {
 
   // ===================================================
   // Generate loop limit check to avoid integer overflow
@@ -587,111 +600,16 @@ bool PhaseIdealLoop::is_counted_loop( Node *x, IdealLoopTree *loop ) {
   }
   set_subtree_ctrl( limit );
 
-  } else { // LoopLimitCheck
-
-  // If compare points to incr, we are ok.  Otherwise the compare
-  // can directly point to the phi; in this case adjust the compare so that
-  // it points to the incr by adjusting the limit.
-  if (cmp->in(1) == phi || cmp->in(2) == phi)
-    limit = gvn->transform(new AddINode(limit,stride));
-
-  // trip-count for +-tive stride should be: (limit - init_trip + stride - 1)/stride.
-  // Final value for iterator should be: trip_count * stride + init_trip.
-  Node *one_p = gvn->intcon( 1);
-  Node *one_m = gvn->intcon(-1);
-
-  Node *trip_count = NULL;
-  switch( bt ) {
-  case BoolTest::eq:
-    ShouldNotReachHere();
-  case BoolTest::ne:            // Ahh, the case we desire
-    if (stride_con == 1)
-      trip_count = gvn->transform(new SubINode(limit,init_trip));
-    else if (stride_con == -1)
-      trip_count = gvn->transform(new SubINode(init_trip,limit));
-    else
-      ShouldNotReachHere();
-    set_subtree_ctrl(trip_count);
-    //_loop.map(trip_count->_idx,loop(limit));
-    break;
-  case BoolTest::le:            // Maybe convert to '<' case
-    limit = gvn->transform(new AddINode(limit,one_p));
-    set_subtree_ctrl( limit );
-    hook->init_req(4, limit);
-
-    bt = BoolTest::lt;
-    // Make the new limit be in the same loop nest as the old limit
-    //_loop.map(limit->_idx,limit_loop);
-    // Fall into next case
-  case BoolTest::lt: {          // Maybe convert to '!=' case
-    if (stride_con < 0) // Count down loop rolls through MAXINT
-      ShouldNotReachHere();
-    Node *range = gvn->transform(new SubINode(limit,init_trip));
-    set_subtree_ctrl( range );
-    hook->init_req(0, range);
-
-    Node *bias  = gvn->transform(new AddINode(range,stride));
-    set_subtree_ctrl( bias );
-    hook->init_req(1, bias);
-
-    Node *bias1 = gvn->transform(new AddINode(bias,one_m));
-    set_subtree_ctrl( bias1 );
-    hook->init_req(2, bias1);
-
-    trip_count  = gvn->transform(new DivINode(0,bias1,stride));
-    set_subtree_ctrl( trip_count );
-    hook->init_req(3, trip_count);
-    break;
-  }
-
-  case BoolTest::ge:            // Maybe convert to '>' case
-    limit = gvn->transform(new AddINode(limit,one_m));
-    set_subtree_ctrl( limit );
-    hook->init_req(4 ,limit);
-
-    bt = BoolTest::gt;
-    // Make the new limit be in the same loop nest as the old limit
-    //_loop.map(limit->_idx,limit_loop);
-    // Fall into next case
-  case BoolTest::gt: {          // Maybe convert to '!=' case
-    if (stride_con > 0) // count up loop rolls through MININT
-      ShouldNotReachHere();
-    Node *range = gvn->transform(new SubINode(limit,init_trip));
-    set_subtree_ctrl( range );
-    hook->init_req(0, range);
-
-    Node *bias  = gvn->transform(new AddINode(range,stride));
-    set_subtree_ctrl( bias );
-    hook->init_req(1, bias);
-
-    Node *bias1 = gvn->transform(new AddINode(bias,one_p));
-    set_subtree_ctrl( bias1 );
-    hook->init_req(2, bias1);
-
-    trip_count  = gvn->transform(new DivINode(0,bias1,stride));
-    set_subtree_ctrl( trip_count );
-    hook->init_req(3, trip_count);
-    break;
-  }
-  } // switch( bt )
-
-  Node *span = gvn->transform(new MulINode(trip_count,stride));
-  set_subtree_ctrl( span );
-  hook->init_req(5, span);
-
-  limit = gvn->transform(new AddINode(span,init_trip));
-  set_subtree_ctrl( limit );
-
-  } // LoopLimitCheck
-
-  // Check for SafePoint on backedge and remove
-  Node *sfpt = x->in(LoopNode::LoopBackControl);
-  if (sfpt->Opcode() == Op_SafePoint && is_deleteable_safept(sfpt)) {
-    lazy_replace( sfpt, iftrue );
-    if (loop->_safepts != NULL) {
-      loop->_safepts->yank(sfpt);
+  if (!UseCountedLoopSafepoints) {
+    // Check for SafePoint on backedge and remove
+    Node *sfpt = x->in(LoopNode::LoopBackControl);
+    if (sfpt->Opcode() == Op_SafePoint && is_deleteable_safept(sfpt)) {
+      lazy_replace( sfpt, iftrue );
+      if (loop->_safepts != NULL) {
+        loop->_safepts->yank(sfpt);
+      }
+      loop->_tail = iftrue;
     }
-    loop->_tail = iftrue;
   }
 
   // Build a canonical trip test.
@@ -747,8 +665,8 @@ bool PhaseIdealLoop::is_counted_loop( Node *x, IdealLoopTree *loop ) {
     set_loop(iff2, get_loop(iffalse));
 
     // Lazy update of 'get_ctrl' mechanism.
-    lazy_replace_proj( iffalse, iff2 );
-    lazy_replace_proj( iftrue,  ift2 );
+    lazy_replace(iffalse, iff2);
+    lazy_replace(iftrue,  ift2);
 
     // Swap names
     iffalse = iff2;
@@ -780,12 +698,14 @@ bool PhaseIdealLoop::is_counted_loop( Node *x, IdealLoopTree *loop ) {
   lazy_replace( x, l );
   set_idom(l, init_control, dom_depth(x));
 
-  // Check for immediately preceding SafePoint and remove
-  Node *sfpt2 = le->in(0);
-  if (sfpt2->Opcode() == Op_SafePoint && is_deleteable_safept(sfpt2)) {
-    lazy_replace( sfpt2, sfpt2->in(TypeFunc::Control));
-    if (loop->_safepts != NULL) {
-      loop->_safepts->yank(sfpt2);
+  if (!UseCountedLoopSafepoints) {
+    // Check for immediately preceding SafePoint and remove
+    Node *sfpt2 = le->in(0);
+    if (sfpt2->Opcode() == Op_SafePoint && is_deleteable_safept(sfpt2)) {
+      lazy_replace( sfpt2, sfpt2->in(TypeFunc::Control));
+      if (loop->_safepts != NULL) {
+        loop->_safepts->yank(sfpt2);
+      }
     }
   }
 
@@ -805,6 +725,11 @@ bool PhaseIdealLoop::is_counted_loop( Node *x, IdealLoopTree *loop ) {
 
   C->print_method(PHASE_AFTER_CLOOPS, 3);
 
+  // Capture bounds of the loop in the induction variable Phi before
+  // subsequent transformation (iteration splitting) obscures the
+  // bounds
+  l->phi()->as_Phi()->set_type(l->phi()->Value(&_igvn));
+
   return true;
 }
 
@@ -814,7 +739,7 @@ Node* PhaseIdealLoop::exact_limit( IdealLoopTree *loop ) {
   CountedLoopNode *cl = loop->_head->as_CountedLoop();
   assert(cl->is_valid_counted_loop(), "");
 
-  if (!LoopLimitCheck || ABS(cl->stride_con()) == 1 ||
+  if (ABS(cl->stride_con()) == 1 ||
       cl->limit()->Opcode() == Op_LoopLimit) {
     // Old code has exact limit (it could be incorrect in case of int overflow).
     // Loop limit is exact with stride == 1. And loop may already have exact limit.
@@ -887,7 +812,7 @@ int CountedLoopEndNode::stride_con() const {
 
 //=============================================================================
 //------------------------------Value-----------------------------------------
-const Type *LoopLimitNode::Value( PhaseTransform *phase ) const {
+const Type* LoopLimitNode::Value(PhaseGVN* phase) const {
   const Type* init_t   = phase->type(in(Init));
   const Type* limit_t  = phase->type(in(Limit));
   const Type* stride_t = phase->type(in(Stride));
@@ -1001,7 +926,7 @@ Node *LoopLimitNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
 //------------------------------Identity---------------------------------------
 // If stride == 1 return limit node.
-Node *LoopLimitNode::Identity( PhaseTransform *phase ) {
+Node* LoopLimitNode::Identity(PhaseGVN* phase) {
   int stride_con = phase->type(in(Stride))->is_int()->get_con();
   if (stride_con == 1 || stride_con == -1)
     return in(Limit);
@@ -1175,7 +1100,7 @@ void CountedLoopEndNode::dump_spec(outputStream *st) const {
 //=============================================================================
 //------------------------------is_member--------------------------------------
 // Is 'l' a member of 'this'?
-int IdealLoopTree::is_member( const IdealLoopTree *l ) const {
+bool IdealLoopTree::is_member(const IdealLoopTree *l) const {
   while( l->_nest > _nest ) l = l->_parent;
   return l == this;
 }
@@ -1762,6 +1687,12 @@ void PhaseIdealLoop::replace_parallel_iv(IdealLoopTree *loop) {
     Node *init2 = phi2->in( LoopNode::EntryControl );
     int stride_con2 = incr2->in(2)->get_int();
 
+    // The ratio of the two strides cannot be represented as an int
+    // if stride_con2 is min_int and stride_con is -1.
+    if (stride_con2 == min_jint && stride_con == -1) {
+      continue;
+    }
+
     // The general case here gets a little tricky.  We want to find the
     // GCD of all possible parallel IV's and make a new IV using this
     // GCD for the loop.  Then all possible IVs are simple multiples of
@@ -1807,6 +1738,37 @@ void PhaseIdealLoop::replace_parallel_iv(IdealLoopTree *loop) {
   }
 }
 
+void IdealLoopTree::remove_safepoints(PhaseIdealLoop* phase, bool keep_one) {
+  Node* keep = NULL;
+  if (keep_one) {
+    // Look for a safepoint on the idom-path.
+    for (Node* i = tail(); i != _head; i = phase->idom(i)) {
+      if (i->Opcode() == Op_SafePoint && phase->get_loop(i) == this) {
+        keep = i;
+        break; // Found one
+      }
+    }
+  }
+
+  // Don't remove any safepoints if it is requested to keep a single safepoint and
+  // no safepoint was found on idom-path. It is not safe to remove any safepoint
+  // in this case since there's no safepoint dominating all paths in the loop body.
+  bool prune = !keep_one || keep != NULL;
+
+  // Delete other safepoints in this loop.
+  Node_List* sfpts = _safepts;
+  if (prune && sfpts != NULL) {
+    assert(keep == NULL || keep->Opcode() == Op_SafePoint, "not safepoint");
+    for (uint i = 0; i < sfpts->size(); i++) {
+      Node* n = sfpts->at(i);
+      assert(phase->get_loop(n) == this, "");
+      if (n != keep && phase->is_deleteable_safept(n)) {
+        phase->lazy_replace(n, n->in(TypeFunc::Control));
+      }
+    }
+  }
+}
+
 //------------------------------counted_loop-----------------------------------
 // Convert to counted loops where possible
 void IdealLoopTree::counted_loop( PhaseIdealLoop *phase ) {
@@ -1818,42 +1780,23 @@ void IdealLoopTree::counted_loop( PhaseIdealLoop *phase ) {
 
   if (_head->is_CountedLoop() ||
       phase->is_counted_loop(_head, this)) {
-    _has_sfpt = 1;              // Indicate we do not need a safepoint here
 
-    // Look for safepoints to remove.
-    Node_List* sfpts = _safepts;
-    if (sfpts != NULL) {
-      for (uint i = 0; i < sfpts->size(); i++) {
-        Node* n = sfpts->at(i);
-        assert(phase->get_loop(n) == this, "");
-        if (phase->is_deleteable_safept(n)) {
-          phase->lazy_replace(n, n->in(TypeFunc::Control));
-        }
-      }
+    if (!UseCountedLoopSafepoints) {
+      // Indicate we do not need a safepoint here
+      _has_sfpt = 1;
     }
+
+    // Remove safepoints
+    bool keep_one_sfpt = !(_has_call || _has_sfpt);
+    remove_safepoints(phase, keep_one_sfpt);
 
     // Look for induction variables
     phase->replace_parallel_iv(this);
 
   } else if (_parent != NULL && !_irreducible) {
-    // Not a counted loop.
-    // Look for a safepoint on the idom-path.
-    Node* sfpt = tail();
-    for (; sfpt != _head; sfpt = phase->idom(sfpt)) {
-      if (sfpt->Opcode() == Op_SafePoint && phase->get_loop(sfpt) == this)
-        break; // Found one
-    }
-    // Delete other safepoints in this loop.
-    Node_List* sfpts = _safepts;
-    if (sfpts != NULL && sfpt != _head && sfpt->Opcode() == Op_SafePoint) {
-      for (uint i = 0; i < sfpts->size(); i++) {
-        Node* n = sfpts->at(i);
-        assert(phase->get_loop(n) == this, "");
-        if (n != sfpt && phase->is_deleteable_safept(n)) {
-          phase->lazy_replace(n, n->in(TypeFunc::Control));
-        }
-      }
-    }
+    // Not a counted loop. Keep one safepoint.
+    bool keep_one_sfpt = true;
+    remove_safepoints(phase, keep_one_sfpt);
   }
 
   // Recursively
@@ -1870,12 +1813,10 @@ void IdealLoopTree::dump_head( ) const {
   tty->print("Loop: N%d/N%d ",_head->_idx,_tail->_idx);
   if (_irreducible) tty->print(" IRREDUCIBLE");
   Node* entry = _head->in(LoopNode::EntryControl);
-  if (LoopLimitCheck) {
-    Node* predicate = PhaseIdealLoop::find_predicate_insertion_point(entry, Deoptimization::Reason_loop_limit_check);
-    if (predicate != NULL ) {
-      tty->print(" limit_check");
-      entry = entry->in(0)->in(0);
-    }
+  Node* predicate = PhaseIdealLoop::find_predicate_insertion_point(entry, Deoptimization::Reason_loop_limit_check);
+  if (predicate != NULL ) {
+    tty->print(" limit_check");
+    entry = entry->in(0)->in(0);
   }
   if (UseLoopPredicate) {
     entry = PhaseIdealLoop::find_predicate_insertion_point(entry, Deoptimization::Reason_predicate);
@@ -1901,11 +1842,26 @@ void IdealLoopTree::dump_head( ) const {
     if (stride_con > 0) tty->print("+");
     tty->print("%d", stride_con);
 
-    tty->print(" (%d iters) ", (int)cl->profile_trip_cnt());
+    tty->print(" (%0.f iters) ", cl->profile_trip_cnt());
 
     if (cl->is_pre_loop ()) tty->print(" pre" );
     if (cl->is_main_loop()) tty->print(" main");
     if (cl->is_post_loop()) tty->print(" post");
+    if (cl->is_vectorized_loop()) tty->print(" vector");
+    if (cl->range_checks_present()) tty->print(" rc ");
+    if (cl->is_multiversioned()) tty->print(" multi ");
+  }
+  if (_has_call) tty->print(" has_call");
+  if (_has_sfpt) tty->print(" has_sfpt");
+  if (_rce_candidate) tty->print(" rce");
+  if (_safepts != NULL && _safepts->size() > 0) {
+    tty->print(" sfpts={"); _safepts->dump_simple(); tty->print(" }");
+  }
+  if (_required_safept != NULL && _required_safept->size() > 0) {
+    tty->print(" req={"); _required_safept->dump_simple(); tty->print(" }");
+  }
+  if (Verbose) {
+    tty->print(" body={"); _body.dump_simple(); tty->print(" }");
   }
   tty->cr();
 }
@@ -2231,7 +2187,7 @@ void PhaseIdealLoop::build_and_optimize(bool do_split_ifs, bool skip_loop_opts) 
   // _nodes array holds the earliest legal controlling CFG node.
 
   // Allocate stack with enough space to avoid frequent realloc
-  int stack_size = (C->unique() >> 1) + 16; // (unique>>1)+16 from Java2D stats
+  int stack_size = (C->live_nodes() >> 1) + 16; // (live_nodes>>1)+16 from Java2D stats
   Node_Stack nstack( a, stack_size );
 
   visited.Clear();
@@ -2286,9 +2242,7 @@ void PhaseIdealLoop::build_and_optimize(bool do_split_ifs, bool skip_loop_opts) 
   // Some parser-inserted loop predicates could never be used by loop
   // predication or they were moved away from loop during some optimizations.
   // For example, peeling. Eliminate them before next loop optimizations.
-  if (UseLoopPredicate || LoopLimitCheck) {
-    eliminate_useless_predicates();
-  }
+  eliminate_useless_predicates();
 
 #ifndef PRODUCT
   C->verify_graph_edges();
@@ -2304,6 +2258,11 @@ void PhaseIdealLoop::build_and_optimize(bool do_split_ifs, bool skip_loop_opts) 
 #endif
 
   if (skip_loop_opts) {
+    // restore major progress flag
+    for (int i = 0; i < old_progress; i++) {
+      C->set_major_progress();
+    }
+
     // Cleanup any modified bits
     _igvn.optimize();
 
@@ -2317,7 +2276,11 @@ void PhaseIdealLoop::build_and_optimize(bool do_split_ifs, bool skip_loop_opts) 
     // Reassociate invariants and prep for split_thru_phi
     for (LoopTreeIterator iter(_ltree_root); !iter.done(); iter.next()) {
       IdealLoopTree* lpt = iter.current();
-      if (!lpt->is_counted() || !lpt->is_inner()) continue;
+      bool is_counted = lpt->is_counted();
+      if (!is_counted || !lpt->is_inner()) continue;
+
+      // check for vectorized loops, any reassociation of invariants was already done
+      if (is_counted && lpt->_head->as_CountedLoop()->do_unroll_only()) continue;
 
       lpt->reassociate_invariants(this);
 
@@ -2393,11 +2356,9 @@ void PhaseIdealLoop::build_and_optimize(bool do_split_ifs, bool skip_loop_opts) 
   // After that switch predicates off and do more loop optimizations.
   if (!C->major_progress() && (C->predicate_count() > 0)) {
      C->cleanup_loop_predicates(_igvn);
-#ifndef PRODUCT
      if (TraceLoopOpts) {
        tty->print_cr("PredicatesOff");
      }
-#endif
      C->set_major_progress();
   }
 
@@ -2408,7 +2369,32 @@ void PhaseIdealLoop::build_and_optimize(bool do_split_ifs, bool skip_loop_opts) 
     for (LoopTreeIterator iter(_ltree_root); !iter.done(); iter.next()) {
       IdealLoopTree* lpt = iter.current();
       if (lpt->is_counted()) {
-        sw.transform_loop(lpt, true);
+        CountedLoopNode *cl = lpt->_head->as_CountedLoop();
+
+        if (PostLoopMultiversioning && cl->is_rce_post_loop() && !cl->is_vectorized_loop()) {
+          // Check that the rce'd post loop is encountered first, multiversion after all
+          // major main loop optimization are concluded
+          if (!C->major_progress()) {
+            IdealLoopTree *lpt_next = lpt->_next;
+            if (lpt_next && lpt_next->is_counted()) {
+              CountedLoopNode *cl = lpt_next->_head->as_CountedLoop();
+              has_range_checks(lpt_next);
+              if (cl->is_post_loop() && cl->range_checks_present()) {
+                if (!cl->is_multiversioned()) {
+                  if (multi_version_post_loops(lpt, lpt_next) == false) {
+                    // Cause the rce loop to be optimized away if we fail
+                    cl->mark_is_multiversioned();
+                    cl->set_slp_max_unroll(0);
+                    poison_rce_post_loop(lpt);
+                  }
+                }
+              }
+            }
+            sw.transform_loop(lpt, true);
+          }
+        } else if (cl->is_main_loop()) {
+          sw.transform_loop(lpt, true);
+        }
       }
     }
   }
@@ -2687,7 +2673,7 @@ void PhaseIdealLoop::recompute_dom_depth() {
     }
   }
   if (_dom_stk == NULL) {
-    uint init_size = C->unique() / 100; // Guess that 1/100 is a reasonable initial size.
+    uint init_size = C->live_nodes() / 100; // Guess that 1/100 is a reasonable initial size.
     if (init_size < 10) init_size = 10;
     _dom_stk = new GrowableArray<uint>(init_size);
   }
@@ -2777,8 +2763,8 @@ IdealLoopTree *PhaseIdealLoop::sort( IdealLoopTree *loop, IdealLoopTree *innermo
 // The sort is of size number-of-control-children, which generally limits
 // it to size 2 (i.e., I just choose between my 2 target loops).
 void PhaseIdealLoop::build_loop_tree() {
-  // Allocate stack of size C->unique()/2 to avoid frequent realloc
-  GrowableArray <Node *> bltstack(C->unique() >> 1);
+  // Allocate stack of size C->live_nodes()/2 to avoid frequent realloc
+  GrowableArray <Node *> bltstack(C->live_nodes() >> 1);
   Node *n = C->root();
   bltstack.push(n);
   int pre_order = 1;
@@ -3232,6 +3218,51 @@ Node* PhaseIdealLoop::compute_lca_of_uses(Node* n, Node* early, bool verify) {
   return LCA;
 }
 
+// Check the shape of the graph at the loop entry. In some cases,
+// the shape of the graph does not match the shape outlined below.
+// That is caused by the Opaque1 node "protecting" the shape of
+// the graph being removed by, for example, the IGVN performed
+// in PhaseIdealLoop::build_and_optimize().
+//
+// After the Opaque1 node has been removed, optimizations (e.g., split-if,
+// loop unswitching, and IGVN, or a combination of them) can freely change
+// the graph's shape. As a result, the graph shape outlined below cannot
+// be guaranteed anymore.
+bool PhaseIdealLoop::is_canonical_loop_entry(CountedLoopNode* cl) {
+  if (!cl->is_main_loop() && !cl->is_post_loop()) {
+    return false;
+  }
+  Node* ctrl = cl->in(LoopNode::EntryControl);
+  if (ctrl == NULL || (!ctrl->is_IfTrue() && !ctrl->is_IfFalse())) {
+    return false;
+  }
+  Node* iffm = ctrl->in(0);
+  if (iffm == NULL || !iffm->is_If()) {
+    return false;
+  }
+  Node* bolzm = iffm->in(1);
+  if (bolzm == NULL || !bolzm->is_Bool()) {
+    return false;
+  }
+  Node* cmpzm = bolzm->in(1);
+  if (cmpzm == NULL || !cmpzm->is_Cmp()) {
+    return false;
+  }
+  // compares can get conditionally flipped
+  bool found_opaque = false;
+  for (uint i = 1; i < cmpzm->req(); i++) {
+    Node* opnd = cmpzm->in(i);
+    if (opnd && opnd->Opcode() == Op_Opaque1) {
+      found_opaque = true;
+      break;
+    }
+  }
+  if (!found_opaque) {
+    return false;
+  }
+  return true;
+}
+
 //------------------------------get_late_ctrl----------------------------------
 // Compute latest legal control.
 Node *PhaseIdealLoop::get_late_ctrl( Node *n, Node *early ) {
@@ -3445,7 +3476,7 @@ void PhaseIdealLoop::build_loop_late( VectorSet &visited, Node_List &worklist, N
 // Second pass finds latest legal placement, and ideal loop placement.
 void PhaseIdealLoop::build_loop_late_post( Node *n ) {
 
-  if (n->req() == 2 && n->Opcode() == Op_ConvI2L && !C->major_progress() && !_verify_only) {
+  if (n->req() == 2 && (n->Opcode() == Op_ConvI2L || n->Opcode() == Op_CastII) && !C->major_progress() && !_verify_only) {
     _igvn._worklist.push(n);  // Maybe we'll normalize it, if no more loops.
   }
 
@@ -3490,7 +3521,9 @@ void PhaseIdealLoop::build_loop_late_post( Node *n ) {
     case Op_StrComp:            // Does a bunch of load-like effects
     case Op_StrEquals:
     case Op_StrIndexOf:
+    case Op_StrIndexOfChar:
     case Op_AryEq:
+    case Op_HasNegatives:
       pinned = false;
     }
     if( pinned ) {
@@ -3668,7 +3701,7 @@ void PhaseIdealLoop::dump_bad_graph(const char* msg, Node* n, Node* early, Node*
 void PhaseIdealLoop::dump( ) const {
   ResourceMark rm;
   Arena* arena = Thread::current()->resource_area();
-  Node_Stack stack(arena, C->unique() >> 2);
+  Node_Stack stack(arena, C->live_nodes() >> 2);
   Node_List rpo_list;
   VectorSet visited(arena);
   visited.set(C->top()->_idx);
@@ -3678,7 +3711,6 @@ void PhaseIdealLoop::dump( ) const {
 }
 
 void PhaseIdealLoop::dump( IdealLoopTree *loop, uint idx, Node_List &rpo_list ) const {
-  CloneMap& cm = C->clone_map();
   loop->dump_head();
 
   // Now scan for CFG nodes in the same loop
@@ -3710,7 +3742,6 @@ void PhaseIdealLoop::dump( IdealLoopTree *loop, uint idx, Node_List &rpo_list ) 
         cached_idom = find_non_split_ctrl(cached_idom);
       }
       tty->print(" ID:%d",computed_idom->_idx);
-      cm.dump(n->_idx);
       n->dump();
       if( cached_idom != computed_idom ) {
         tty->print_cr("*** BROKEN IDOM!  Computed as: %d, cached as: %d",
@@ -3730,7 +3761,6 @@ void PhaseIdealLoop::dump( IdealLoopTree *loop, uint idx, Node_List &rpo_list ) 
           for( uint j = 0; j < loop->_nest; j++ )
             tty->print("  ");
           tty->print(" ");
-          cm.dump(m->_idx);
           m->dump();
         }
       }

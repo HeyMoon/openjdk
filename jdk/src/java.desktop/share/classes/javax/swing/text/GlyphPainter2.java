@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -145,8 +145,9 @@ class GlyphPainter2 extends GlyphView.GlyphPainter {
 
         // vertical at the baseline, should use slope and check if glyphs
         // are being rendered vertically.
-        alloc.setRect(alloc.getX() + locs[0], alloc.getY(), 1, alloc.getHeight());
-        return alloc;
+        Rectangle2D rect = new Rectangle2D.Float();
+        rect.setRect(alloc.getX() + locs[0], alloc.getY(), 1, alloc.getHeight());
+        return rect;
     }
 
     /**
@@ -192,7 +193,7 @@ class GlyphPainter2 extends GlyphView.GlyphPainter {
      * @param v the view to find the model location to break at.
      * @param p0 the location in the model where the
      *  fragment should start it's representation >= 0.
-     * @param pos the graphic location along the axis that the
+     * @param x the graphic location along the axis that the
      *  broken view would occupy >= 0.  This may be useful for
      *  things like tab calculations.
      * @param len specifies the distance into the view

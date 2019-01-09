@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -92,6 +92,9 @@ public class TestClose2 extends AbstractProcessor implements TaskListener {
         Iterable<? extends JavaFileObject> files =
                 fm.getJavaFileObjects(new File(testSrc, TestClose2.class.getName() + ".java"));
         List<String> options = Arrays.asList(
+                "--add-exports", "jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+                "--add-exports", "jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED",
+                "--add-exports", "jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED",
                 "-processor", TestClose2.class.getName());
 
         JavacTask task = tool.getTask(null, fm, null, options, null, files);

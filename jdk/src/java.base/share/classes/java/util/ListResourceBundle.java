@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -56,7 +56,7 @@ import sun.util.ResourceBundleEnumeration;
  * that key.
  *
  * <p>
- * The following <a name="sample">example</a> shows two members of a resource
+ * The following <a id="sample">example</a> shows two members of a resource
  * bundle family with the base name "MyResources".
  * "MyResources" is the default member of the bundle family, and
  * "MyResources_fr" is the French member.
@@ -180,7 +180,7 @@ public abstract class ListResourceBundle extends ResourceBundle {
      * @return an array of an <code>Object</code> array representing a
      * key-value pair.
      */
-    abstract protected Object[][] getContents();
+    protected abstract Object[][] getContents();
 
     // ==================privates====================
 
@@ -206,5 +206,5 @@ public abstract class ListResourceBundle extends ResourceBundle {
         lookup = temp;
     }
 
-    private Map<String,Object> lookup = null;
+    private volatile Map<String,Object> lookup = null;
 }

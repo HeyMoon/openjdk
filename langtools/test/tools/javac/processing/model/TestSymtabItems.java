@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,7 @@
  * @test
  * @bug 7021183 7025809
  * @summary 269: assertion failure getting enclosing element of an undefined name
- * @modules jdk.compiler/com.sun.tools.javac.code
+ * @modules jdk.compiler/com.sun.tools.javac.code:+open
  *          jdk.compiler/com.sun.tools.javac.file
  *          jdk.compiler/com.sun.tools.javac.main
  *          jdk.compiler/com.sun.tools.javac.model
@@ -33,8 +33,10 @@
  */
 
 import java.lang.reflect.Field;
+
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.ModuleElement;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.TypeParameterElement;
@@ -83,6 +85,11 @@ public class TestSymtabItems {
             if (f.getName().toLowerCase().contains("methodhandle"))
                 continue;
 
+            //both noModule and unnamedModule claim the unnamed package, ignore noModule for now:
+            if (f.getName().equals("noModule"))
+                continue;
+
+            f.setAccessible(true);
             Class<?> ft = f.getType();
             if (TypeMirror.class.isAssignableFrom(ft))
                 print(f.getName(), (TypeMirror) f.get(syms), types);
@@ -116,6 +123,15 @@ public class TestSymtabItems {
     int errors;
 
     class ElemPrinter extends ElementScanner9<Void, Void> {
+        @Override
+        public Void visitModule(ModuleElement e, Void p) {
+            show("module", e);
+            indent(+1);
+            super.visitModule(e, p);
+            indent(-1);
+            return null;
+        }
+
         @Override
         public Void visitPackage(PackageElement e, Void p) {
             show("package", e);

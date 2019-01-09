@@ -44,11 +44,12 @@ import com.sun.tools.doclets.formats.html.markup.HtmlAttr.Role;
  *
  * @author Bhavesh Patel
  */
+@Deprecated
 public class HtmlTree extends Content {
 
     private HtmlTag htmlTag;
-    private Map<HtmlAttr,String> attrs = Collections.<HtmlAttr,String>emptyMap();
-    private List<Content> content = Collections.<Content>emptyList();
+    private Map<HtmlAttr,String> attrs = Collections.emptyMap();
+    private List<Content> content = Collections.emptyList();
     public static final Content EMPTY = new StringContent("");
 
     /**
@@ -244,6 +245,20 @@ public class HtmlTree extends Content {
     }
 
     /**
+     * Generates an HTML anchor tag with id attribute and a body.
+     *
+     * @param id id for the anchor tag
+     * @param body body for the anchor tag
+     * @return an HtmlTree object
+     */
+    public static HtmlTree A_ID(String id, Content body) {
+        HtmlTree htmltree = new HtmlTree(HtmlTag.A);
+        htmltree.addAttr(HtmlAttr.ID, nullCheck(id));
+        htmltree.addContent(nullCheck(body));
+        return htmltree;
+    }
+
+    /**
      * Generates a CAPTION tag with some content.
      *
      * @param body content for the tag
@@ -430,6 +445,22 @@ public class HtmlTree extends Content {
         htmltree.addAttr(HtmlAttr.SRC, nullCheck(src));
         htmltree.addAttr(HtmlAttr.NAME, nullCheck(name));
         htmltree.addAttr(HtmlAttr.TITLE, nullCheck(title));
+        return htmltree;
+    }
+
+    /**
+     * Generates a INPUT tag with some id.
+     *
+     * @param type the type of input
+     * @param id id for the tag
+     * @return an HtmlTree object for the INPUT tag
+     */
+    public static HtmlTree INPUT(String type, String id) {
+        HtmlTree htmltree = new HtmlTree(HtmlTag.INPUT);
+        htmltree.addAttr(HtmlAttr.TYPE, nullCheck(type));
+        htmltree.addAttr(HtmlAttr.ID, nullCheck(id));
+        htmltree.addAttr(HtmlAttr.VALUE, " ");
+        htmltree.addAttr(HtmlAttr.DISABLED, "disabled");
         return htmltree;
     }
 
@@ -850,13 +881,13 @@ public class HtmlTree extends Content {
     public boolean isValid() {
         switch (htmlTag) {
             case A :
-                return (hasAttr(HtmlAttr.NAME) || hasAttr(HtmlAttr.ID) || (hasAttr(HtmlAttr.HREF)
-                        && hasContent()));
+                return (hasAttr(HtmlAttr.NAME) || hasAttr(HtmlAttr.ID) || (hasAttr(HtmlAttr.HREF) && hasContent()));
             case BR :
                 return (!hasContent() && (!hasAttrs() || hasAttr(HtmlAttr.CLEAR)));
             case IFRAME :
                 return (hasAttr(HtmlAttr.SRC) && !hasContent());
             case HR :
+            case INPUT:
                 return (!hasContent());
             case IMG :
                 return (hasAttr(HtmlAttr.SRC) && hasAttr(HtmlAttr.ALT) && !hasContent());

@@ -26,7 +26,9 @@
 # @summary Retransform a big class.
 # @author Daniel D. Daugherty
 #
+# @key intermittent
 # @modules java.instrument
+#          java.management
 # @run shell MakeJAR4.sh RetransformBigClassAgent SimpleIdentityTransformer 'Can-Retransform-Classes: true'
 # @run build BigClass RetransformBigClassApp NMTHelper
 # @run shell/timeout=600 RetransformBigClass.sh
@@ -68,7 +70,7 @@ else
 fi
 
 "${JAVA}" ${TESTVMOPTS} \
-    -XX:TraceRedefineClasses=3 ${NMT} \
+    -Xlog:redefine+class+load=debug,redefine+class+load+exceptions=info ${NMT} \
     -javaagent:RetransformBigClassAgent.jar=BigClass.class \
     -classpath "${TESTCLASSES}" RetransformBigClassApp \
     > output.log 2>&1

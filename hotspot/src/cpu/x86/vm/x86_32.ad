@@ -104,14 +104,14 @@ reg_def FPR7H( SOC, SOC, Op_RegF, 7, as_FloatRegister(6)->as_VMReg()->next());
 //
 // Empty fill registers, which are never used, but supply alignment to xmm regs
 //
-reg_def FILL0( SOC, SOC, Op_RegF, 7, as_FloatRegister(6)->as_VMReg()->next(2));
-reg_def FILL1( SOC, SOC, Op_RegF, 7, as_FloatRegister(6)->as_VMReg()->next(3));
-reg_def FILL2( SOC, SOC, Op_RegF, 7, as_FloatRegister(6)->as_VMReg()->next(4));
-reg_def FILL3( SOC, SOC, Op_RegF, 7, as_FloatRegister(6)->as_VMReg()->next(5));
-reg_def FILL4( SOC, SOC, Op_RegF, 7, as_FloatRegister(6)->as_VMReg()->next(6));
-reg_def FILL5( SOC, SOC, Op_RegF, 7, as_FloatRegister(6)->as_VMReg()->next(7));
-reg_def FILL6( SOC, SOC, Op_RegF, 7, as_FloatRegister(6)->as_VMReg()->next(8));
-reg_def FILL7( SOC, SOC, Op_RegF, 7, as_FloatRegister(6)->as_VMReg()->next(9));
+reg_def FILL0( SOC, SOC, Op_RegF, 8, VMRegImpl::Bad());
+reg_def FILL1( SOC, SOC, Op_RegF, 9, VMRegImpl::Bad());
+reg_def FILL2( SOC, SOC, Op_RegF, 10, VMRegImpl::Bad());
+reg_def FILL3( SOC, SOC, Op_RegF, 11, VMRegImpl::Bad());
+reg_def FILL4( SOC, SOC, Op_RegF, 12, VMRegImpl::Bad());
+reg_def FILL5( SOC, SOC, Op_RegF, 13, VMRegImpl::Bad());
+reg_def FILL6( SOC, SOC, Op_RegF, 14, VMRegImpl::Bad());
+reg_def FILL7( SOC, SOC, Op_RegF, 15, VMRegImpl::Bad());
 
 // Specify priority of register selection within phases of register
 // allocation.  Highest priority is first.  A useful heuristic is to
@@ -291,9 +291,7 @@ static int pre_call_resets_size() {
     size += 6; // fldcw
   }
   if (C->max_vector_size() > 16) {
-    if(UseAVX <= 2) {
-      size += 3; // vzeroupper
-    }
+    size += 3; // vzeroupper
   }
   return size;
 }
@@ -580,7 +578,11 @@ void MachPrologNode::format(PhaseRegAlloc* ra_, outputStream* st) const {
     st->print("MOV    [ESP + #%d], EBP\t# Save EBP",framesize);
     if (PreserveFramePointer) {
       st->print("\n\t");
-      st->print("MOV    EBP, [ESP + #%d]\t# Save the caller's SP into EBP", (framesize + wordSize));
+      st->print("MOV    EBP, ESP\t# Save the caller's SP into EBP");
+      if (framesize > 0) {
+        st->print("\n\t");
+        st->print("ADD    EBP, #%d", framesize);
+      }
     }
   }
 
@@ -668,17 +670,16 @@ void MachEpilogNode::format( PhaseRegAlloc *ra_, outputStream* st ) const {
 
 void MachEpilogNode::emit(CodeBuffer &cbuf, PhaseRegAlloc *ra_) const {
   Compile *C = ra_->C;
+  MacroAssembler _masm(&cbuf);
 
   if (C->max_vector_size() > 16) {
     // Clear upper bits of YMM registers when current compiled code uses
     // wide vectors to avoid AVX <-> SSE transition penalty during call.
-    MacroAssembler masm(&cbuf);
-    masm.vzeroupper();
+    _masm.vzeroupper();
   }
   // If method set FPU control word, restore to standard control word
   if (C->in_24_bit_fp_mode()) {
-    MacroAssembler masm(&cbuf);
-    masm.fldcw(ExternalAddress(StubRoutines::addr_fpu_cntrl_wrd_std()));
+    _masm.fldcw(ExternalAddress(StubRoutines::addr_fpu_cntrl_wrd_std()));
   }
 
   int framesize = C->frame_size_in_bytes();
@@ -699,6 +700,10 @@ void MachEpilogNode::emit(CodeBuffer &cbuf, PhaseRegAlloc *ra_) const {
   }
 
   emit_opcode(cbuf, 0x58 | EBP_enc);
+
+  if (StackReservedPages > 0 && C->has_reserved_stack_access()) {
+    __ reserved_stack_check();
+  }
 
   if (do_polling() && C->is_method_compilation()) {
     cbuf.relocate(cbuf.insts_end(), relocInfo::poll_return_type, 0);
@@ -727,6 +732,7 @@ uint MachEpilogNode::size(PhaseRegAlloc *ra_) const {
   } else {
     size += framesize ? 3 : 0;
   }
+  size += 64; // added to support ReservedStackAccess
   return size;
 }
 
@@ -789,6 +795,9 @@ static int impl_x_helper( CodeBuffer *cbuf, bool do_size, bool is_load,
   }
   if (cbuf) {
     MacroAssembler _masm(cbuf);
+    // EVEX spills remain EVEX: Compressed displacemement is better than AVX on spill mem operations, 
+    //                          it maps more cases to single byte displacement
+    _masm.set_managed();
     if (reg_lo+1 == reg_hi) { // double move?
       if (is_load) {
         __ movdbl(as_XMMRegister(Matcher::_regEncode[reg_lo]), Address(rsp, offset));
@@ -839,6 +848,8 @@ static int impl_movx_helper( CodeBuffer *cbuf, bool do_size, int src_lo, int dst
                             int src_hi, int dst_hi, int size, outputStream* st ) {
   if (cbuf) {
     MacroAssembler _masm(cbuf);
+    // EVEX spills remain EVEX: logic complex between full EVEX, partial and AVX, manage EVEX spill code one way.
+    _masm.set_managed();
     if (src_lo+1 == src_hi && dst_lo+1 == dst_hi) { // double move?
       __ movdbl(as_XMMRegister(Matcher::_regEncode[dst_lo]),
                 as_XMMRegister(Matcher::_regEncode[src_lo]));
@@ -877,6 +888,8 @@ static int impl_movgpr2x_helper( CodeBuffer *cbuf, bool do_size, int src_lo, int
   // 32-bit
   if (cbuf) {
     MacroAssembler _masm(cbuf);
+    // EVEX spills remain EVEX: logic complex between full EVEX, partial and AVX, manage EVEX spill code one way.
+    _masm.set_managed();
     __ movdl(as_XMMRegister(Matcher::_regEncode[dst_lo]),
              as_Register(Matcher::_regEncode[src_lo]));
 #ifndef PRODUCT
@@ -893,6 +906,8 @@ static int impl_movx2gpr_helper( CodeBuffer *cbuf, bool do_size, int src_lo, int
   // 32-bit
   if (cbuf) {
     MacroAssembler _masm(cbuf);
+    // EVEX spills remain EVEX: logic complex between full EVEX, partial and AVX, manage EVEX spill code one way.
+    _masm.set_managed();
     __ movdl(as_Register(Matcher::_regEncode[dst_lo]),
              as_XMMRegister(Matcher::_regEncode[src_lo]));
 #ifndef PRODUCT
@@ -962,14 +977,15 @@ static int vec_stack_to_stack_helper(CodeBuffer *cbuf, bool do_size, int src_off
   case Op_VecS:
     calc_size = 3+src_offset_size + 3+dst_offset_size;
     break;
-  case Op_VecD:
+  case Op_VecD: {
     calc_size = 3+src_offset_size + 3+dst_offset_size;
-    src_offset += 4;
-    dst_offset += 4;
-    src_offset_size = (src_offset == 0) ? 0 : ((src_offset < 0x80) ? 1 : 4);
-    dst_offset_size = (dst_offset == 0) ? 0 : ((dst_offset < 0x80) ? 1 : 4);
+    int tmp_src_offset = src_offset + 4;
+    int tmp_dst_offset = dst_offset + 4;
+    src_offset_size = (tmp_src_offset == 0) ? 0 : ((tmp_src_offset < 0x80) ? 1 : 4);
+    dst_offset_size = (tmp_dst_offset == 0) ? 0 : ((tmp_dst_offset < 0x80) ? 1 : 4);
     calc_size += 3+src_offset_size + 3+dst_offset_size;
     break;
+  }   
   case Op_VecX:
   case Op_VecY:
   case Op_VecZ:
@@ -1003,17 +1019,18 @@ static int vec_stack_to_stack_helper(CodeBuffer *cbuf, bool do_size, int src_off
       __ vmovdqu(xmm0, Address(rsp, src_offset));
       __ vmovdqu(Address(rsp, dst_offset), xmm0);
       __ vmovdqu(xmm0, Address(rsp, -32));
+      break;
     case Op_VecZ:
-      __ evmovdqu(Address(rsp, -64), xmm0, 2);
-      __ evmovdqu(xmm0, Address(rsp, src_offset), 2);
-      __ evmovdqu(Address(rsp, dst_offset), xmm0, 2);
-      __ evmovdqu(xmm0, Address(rsp, -64), 2);
+      __ evmovdquq(Address(rsp, -64), xmm0, 2);
+      __ evmovdquq(xmm0, Address(rsp, src_offset), 2);
+      __ evmovdquq(Address(rsp, dst_offset), xmm0, 2);
+      __ evmovdquq(xmm0, Address(rsp, -64), 2);
       break;
     default:
       ShouldNotReachHere();
     }
     int size = __ offset() - offset;
-    assert(size == calc_size, "incorrect size calculattion");
+    assert(size == calc_size, "incorrect size calculation");
     return size;
 #ifndef PRODUCT
   } else if (!do_size) {
@@ -1043,6 +1060,7 @@ static int vec_stack_to_stack_helper(CodeBuffer *cbuf, bool do_size, int src_off
                 "vmovdqu [rsp + #%d], xmm0\n\t"
                 "vmovdqu xmm0, [rsp - #32]",
                 src_offset, dst_offset);
+      break;
     case Op_VecZ:
       st->print("vmovdqu [rsp - #64], xmm0\t# 512-bit mem-mem spill\n\t"
                 "vmovdqu xmm0, [rsp + #%d]\n\t"
@@ -1411,9 +1429,6 @@ const bool Matcher::isSimpleConstant64(jlong value) {
 // The ecx parameter to rep stos for the ClearArray node is in dwords.
 const bool Matcher::init_array_count_is_in_bytes = false;
 
-// Threshold size for cleararray.
-const int Matcher::init_array_short_size = 8 * BytesPerLong;
-
 // Needs 2 CMOV's for longs.
 const int Matcher::long_cmove_cost() { return 1; }
 
@@ -1422,11 +1437,6 @@ const int Matcher::float_cmove_cost() { return (UseSSE>=1) ? ConditionalMoveLimi
 
 // Does the CPU require late expand (see block.cpp for description of late expand)?
 const bool Matcher::require_postalloc_expand = false;
-
-// Should the Matcher clone shifts on addressing modes, expecting them to
-// be subsumed into complex addressing expressions or compute them into
-// registers?  True for Intel but false for most RISCs
-const bool Matcher::clone_shift_expressions = true;
 
 // Do we need to mask the count passed to shift instructions or does
 // the cpu only look at the lower 5/6 bits anyway?
@@ -1442,6 +1452,15 @@ bool Matcher::narrow_klass_use_complex_address() {
   return true;
 }
 
+bool Matcher::const_oop_prefer_decode() {
+  ShouldNotCallThis();
+  return true;
+}
+
+bool Matcher::const_klass_prefer_decode() {
+  ShouldNotCallThis();
+  return true;
+}
 
 // Is it better to copy float constants, or load them directly from memory?
 // Intel can load a float constant from a direct address, requiring no
@@ -1896,24 +1915,29 @@ encode %{
     // who we intended to call.
     cbuf.set_insts_mark();
     $$$emit8$primary;
+
     if (!_method) {
       emit_d32_reloc(cbuf, ($meth$$method - (int)(cbuf.insts_end()) - 4),
-                     runtime_call_Relocation::spec(), RELOC_IMM32 );
-    } else if (_optimized_virtual) {
-      emit_d32_reloc(cbuf, ($meth$$method - (int)(cbuf.insts_end()) - 4),
-                     opt_virtual_call_Relocation::spec(), RELOC_IMM32 );
+                     runtime_call_Relocation::spec(),
+                     RELOC_IMM32);
     } else {
+      int method_index = resolved_method_index(cbuf);
+      RelocationHolder rspec = _optimized_virtual ? opt_virtual_call_Relocation::spec(method_index)
+                                                  : static_call_Relocation::spec(method_index);
       emit_d32_reloc(cbuf, ($meth$$method - (int)(cbuf.insts_end()) - 4),
-                     static_call_Relocation::spec(), RELOC_IMM32 );
-    }
-    if (_method) {  // Emit stub for static call.
-      CompiledStaticCall::emit_to_interp_stub(cbuf);
+                     rspec, RELOC_DISP32);
+      // Emit stubs for static call.
+      address stub = CompiledStaticCall::emit_to_interp_stub(cbuf);
+      if (stub == NULL) {
+        ciEnv::current()->record_failure("CodeCache is full");
+        return;
+      }
     }
   %}
 
   enc_class Java_Dynamic_Call (method meth) %{    // JAVA DYNAMIC CALL
     MacroAssembler _masm(&cbuf);
-    __ ic_call((address)$meth$$method);
+    __ ic_call((address)$meth$$method, resolved_method_index(cbuf));
   %}
 
   enc_class Java_Compiled_Call (method meth) %{    // JAVA COMPILED CALL
@@ -2107,6 +2131,31 @@ encode %{
       emit_opcode(cbuf,0xF0);
 
     // CMPXCHG [Eptr]
+    emit_opcode(cbuf,0x0F);
+    emit_opcode(cbuf,0xB1);
+    emit_rm( cbuf, 0x0, 1, $mem_ptr$$reg );
+  %}
+
+  enc_class enc_cmpxchgb(eSIRegP mem_ptr) %{
+    // [Lock]
+    if( os::is_MP() )
+      emit_opcode(cbuf,0xF0);
+
+    // CMPXCHGB [Eptr]
+    emit_opcode(cbuf,0x0F);
+    emit_opcode(cbuf,0xB0);
+    emit_rm( cbuf, 0x0, 1, $mem_ptr$$reg );
+  %}
+
+  enc_class enc_cmpxchgw(eSIRegP mem_ptr) %{
+    // [Lock]
+    if( os::is_MP() )
+      emit_opcode(cbuf,0xF0);
+
+    // 16-bit mode
+    emit_opcode(cbuf, 0x66);
+
+    // CMPXCHGW [Eptr]
     emit_opcode(cbuf,0x0F);
     emit_opcode(cbuf,0xB1);
     emit_rm( cbuf, 0x0, 1, $mem_ptr$$reg );
@@ -3981,6 +4030,26 @@ operand flagsReg_long_LEGT() %{
   interface(REG_INTER);
 %}
 
+// Condition Code Register used by unsigned long compare
+operand flagsReg_ulong_LTGE() %{
+  constraint(ALLOC_IN_RC(int_flags));
+  match(RegFlags);
+  format %{ "FLAGS_U_LTGE" %}
+  interface(REG_INTER);
+%}
+operand flagsReg_ulong_EQNE() %{
+  constraint(ALLOC_IN_RC(int_flags));
+  match(RegFlags);
+  format %{ "FLAGS_U_EQNE" %}
+  interface(REG_INTER);
+%}
+operand flagsReg_ulong_LEGT() %{
+  constraint(ALLOC_IN_RC(int_flags));
+  match(RegFlags);
+  format %{ "FLAGS_U_LEGT" %}
+  interface(REG_INTER);
+%}
+
 // Float register operands
 operand regDPR() %{
   predicate( UseSSE < 2 );
@@ -4539,7 +4608,7 @@ operand cmpOp_fcmov() %{
   %}
 %}
 
-// Comparision Code used in long compares
+// Comparison Code used in long compares
 operand cmpOp_commute() %{
   match(Bool);
 
@@ -4551,6 +4620,23 @@ operand cmpOp_commute() %{
     greater_equal(0xE, "le");
     less_equal(0xD, "ge");
     greater(0xC, "l");
+    overflow(0x0, "o");
+    no_overflow(0x1, "no");
+  %}
+%}
+
+// Comparison Code used in unsigned long compares
+operand cmpOpU_commute() %{
+  match(Bool);
+
+  format %{ "" %}
+  interface(COND_INTER) %{
+    equal(0x4, "e");
+    not_equal(0x5, "ne");
+    less(0x7, "nbe");
+    greater_equal(0x6, "be");
+    less_equal(0x3, "nb");
+    greater(0x2, "b");
     overflow(0x0, "o");
     no_overflow(0x1, "no");
   %}
@@ -7222,6 +7308,7 @@ instruct storeLConditional( memory mem, eADXRegL oldval, eBCXRegL newval, eFlags
 instruct compareAndSwapL( rRegI res, eSIRegP mem_ptr, eADXRegL oldval, eBCXRegL newval, eFlagsReg cr ) %{
   predicate(VM_Version::supports_cx8());
   match(Set res (CompareAndSwapL mem_ptr (Binary oldval newval)));
+  match(Set res (WeakCompareAndSwapL mem_ptr (Binary oldval newval)));
   effect(KILL cr, KILL oldval);
   format %{ "CMPXCHG8 [$mem_ptr],$newval\t# If EDX:EAX==[$mem_ptr] Then store $newval into [$mem_ptr]\n\t"
             "MOV    $res,0\n\t"
@@ -7235,6 +7322,7 @@ instruct compareAndSwapL( rRegI res, eSIRegP mem_ptr, eADXRegL oldval, eBCXRegL 
 
 instruct compareAndSwapP( rRegI res,  pRegP mem_ptr, eAXRegP oldval, eCXRegP newval, eFlagsReg cr) %{
   match(Set res (CompareAndSwapP mem_ptr (Binary oldval newval)));
+  match(Set res (WeakCompareAndSwapP mem_ptr (Binary oldval newval)));
   effect(KILL cr, KILL oldval);
   format %{ "CMPXCHG [$mem_ptr],$newval\t# If EAX==[$mem_ptr] Then store $newval into [$mem_ptr]\n\t"
             "MOV    $res,0\n\t"
@@ -7245,8 +7333,37 @@ instruct compareAndSwapP( rRegI res,  pRegP mem_ptr, eAXRegP oldval, eCXRegP new
   ins_pipe( pipe_cmpxchg );
 %}
 
+instruct compareAndSwapB( rRegI res, pRegP mem_ptr, eAXRegI oldval, eCXRegI newval, eFlagsReg cr ) %{
+  match(Set res (CompareAndSwapB mem_ptr (Binary oldval newval)));
+  match(Set res (WeakCompareAndSwapB mem_ptr (Binary oldval newval)));
+  effect(KILL cr, KILL oldval);
+  format %{ "CMPXCHGB [$mem_ptr],$newval\t# If EAX==[$mem_ptr] Then store $newval into [$mem_ptr]\n\t"
+            "MOV    $res,0\n\t"
+            "JNE,s  fail\n\t"
+            "MOV    $res,1\n"
+          "fail:" %}
+  ins_encode( enc_cmpxchgb(mem_ptr),
+              enc_flags_ne_to_boolean(res) );
+  ins_pipe( pipe_cmpxchg );
+%}
+
+instruct compareAndSwapS( rRegI res, pRegP mem_ptr, eAXRegI oldval, eCXRegI newval, eFlagsReg cr ) %{
+  match(Set res (CompareAndSwapS mem_ptr (Binary oldval newval)));
+  match(Set res (WeakCompareAndSwapS mem_ptr (Binary oldval newval)));
+  effect(KILL cr, KILL oldval);
+  format %{ "CMPXCHGW [$mem_ptr],$newval\t# If EAX==[$mem_ptr] Then store $newval into [$mem_ptr]\n\t"
+            "MOV    $res,0\n\t"
+            "JNE,s  fail\n\t"
+            "MOV    $res,1\n"
+          "fail:" %}
+  ins_encode( enc_cmpxchgw(mem_ptr),
+              enc_flags_ne_to_boolean(res) );
+  ins_pipe( pipe_cmpxchg );
+%}
+
 instruct compareAndSwapI( rRegI res, pRegP mem_ptr, eAXRegI oldval, eCXRegI newval, eFlagsReg cr) %{
   match(Set res (CompareAndSwapI mem_ptr (Binary oldval newval)));
+  match(Set res (WeakCompareAndSwapI mem_ptr (Binary oldval newval)));
   effect(KILL cr, KILL oldval);
   format %{ "CMPXCHG [$mem_ptr],$newval\t# If EAX==[$mem_ptr] Then store $newval into [$mem_ptr]\n\t"
             "MOV    $res,0\n\t"
@@ -7254,6 +7371,94 @@ instruct compareAndSwapI( rRegI res, pRegP mem_ptr, eAXRegI oldval, eCXRegI newv
             "MOV    $res,1\n"
           "fail:" %}
   ins_encode( enc_cmpxchg(mem_ptr), enc_flags_ne_to_boolean(res) );
+  ins_pipe( pipe_cmpxchg );
+%}
+
+instruct compareAndExchangeL( eSIRegP mem_ptr, eADXRegL oldval, eBCXRegL newval, eFlagsReg cr ) %{
+  predicate(VM_Version::supports_cx8());
+  match(Set oldval (CompareAndExchangeL mem_ptr (Binary oldval newval)));
+  effect(KILL cr);
+  format %{ "CMPXCHG8 [$mem_ptr],$newval\t# If EDX:EAX==[$mem_ptr] Then store $newval into [$mem_ptr]\n\t" %}
+  ins_encode( enc_cmpxchg8(mem_ptr) );
+  ins_pipe( pipe_cmpxchg );
+%}
+
+instruct compareAndExchangeP( pRegP mem_ptr, eAXRegP oldval, eCXRegP newval, eFlagsReg cr) %{
+  match(Set oldval (CompareAndExchangeP mem_ptr (Binary oldval newval)));
+  effect(KILL cr);
+  format %{ "CMPXCHG [$mem_ptr],$newval\t# If EAX==[$mem_ptr] Then store $newval into [$mem_ptr]\n\t" %}
+  ins_encode( enc_cmpxchg(mem_ptr) );
+  ins_pipe( pipe_cmpxchg );
+%}
+
+instruct compareAndExchangeB( pRegP mem_ptr, eAXRegI oldval, eCXRegI newval, eFlagsReg cr) %{
+  match(Set oldval (CompareAndExchangeB mem_ptr (Binary oldval newval)));
+  effect(KILL cr);
+  format %{ "CMPXCHGB [$mem_ptr],$newval\t# If EAX==[$mem_ptr] Then store $newval into [$mem_ptr]\n\t" %}
+  ins_encode( enc_cmpxchgb(mem_ptr) );
+  ins_pipe( pipe_cmpxchg );
+%}
+
+instruct compareAndExchangeS( pRegP mem_ptr, eAXRegI oldval, eCXRegI newval, eFlagsReg cr) %{
+  match(Set oldval (CompareAndExchangeS mem_ptr (Binary oldval newval)));
+  effect(KILL cr);
+  format %{ "CMPXCHGW [$mem_ptr],$newval\t# If EAX==[$mem_ptr] Then store $newval into [$mem_ptr]\n\t" %}
+  ins_encode( enc_cmpxchgw(mem_ptr) );
+  ins_pipe( pipe_cmpxchg );
+%}
+
+instruct compareAndExchangeI( pRegP mem_ptr, eAXRegI oldval, eCXRegI newval, eFlagsReg cr) %{
+  match(Set oldval (CompareAndExchangeI mem_ptr (Binary oldval newval)));
+  effect(KILL cr);
+  format %{ "CMPXCHG [$mem_ptr],$newval\t# If EAX==[$mem_ptr] Then store $newval into [$mem_ptr]\n\t" %}
+  ins_encode( enc_cmpxchg(mem_ptr) );
+  ins_pipe( pipe_cmpxchg );
+%}
+
+instruct xaddB_no_res( memory mem, Universe dummy, immI add, eFlagsReg cr) %{
+  predicate(n->as_LoadStore()->result_not_used());
+  match(Set dummy (GetAndAddB mem add));
+  effect(KILL cr);
+  format %{ "ADDB  [$mem],$add" %}
+  ins_encode %{
+    if (os::is_MP()) { __ lock(); }
+    __ addb($mem$$Address, $add$$constant);
+  %}
+  ins_pipe( pipe_cmpxchg );
+%}
+
+// Important to match to xRegI: only 8-bit regs.
+instruct xaddB( memory mem, xRegI newval, eFlagsReg cr) %{
+  match(Set newval (GetAndAddB mem newval));
+  effect(KILL cr);
+  format %{ "XADDB  [$mem],$newval" %}
+  ins_encode %{
+    if (os::is_MP()) { __ lock(); }
+    __ xaddb($mem$$Address, $newval$$Register);
+  %}
+  ins_pipe( pipe_cmpxchg );
+%}
+
+instruct xaddS_no_res( memory mem, Universe dummy, immI add, eFlagsReg cr) %{
+  predicate(n->as_LoadStore()->result_not_used());
+  match(Set dummy (GetAndAddS mem add));
+  effect(KILL cr);
+  format %{ "ADDS  [$mem],$add" %}
+  ins_encode %{
+    if (os::is_MP()) { __ lock(); }
+    __ addw($mem$$Address, $add$$constant);
+  %}
+  ins_pipe( pipe_cmpxchg );
+%}
+
+instruct xaddS( memory mem, rRegI newval, eFlagsReg cr) %{
+  match(Set newval (GetAndAddS mem newval));
+  effect(KILL cr);
+  format %{ "XADDS  [$mem],$newval" %}
+  ins_encode %{
+    if (os::is_MP()) { __ lock(); }
+    __ xaddw($mem$$Address, $newval$$Register);
+  %}
   ins_pipe( pipe_cmpxchg );
 %}
 
@@ -7276,6 +7481,25 @@ instruct xaddI( memory mem, rRegI newval, eFlagsReg cr) %{
   ins_encode %{
     if (os::is_MP()) { __ lock(); }
     __ xaddl($mem$$Address, $newval$$Register);
+  %}
+  ins_pipe( pipe_cmpxchg );
+%}
+
+// Important to match to xRegI: only 8-bit regs.
+instruct xchgB( memory mem, xRegI newval) %{
+  match(Set newval (GetAndSetB mem newval));
+  format %{ "XCHGB  $newval,[$mem]" %}
+  ins_encode %{
+    __ xchgb($newval$$Register, $mem$$Address);
+  %}
+  ins_pipe( pipe_cmpxchg );
+%}
+
+instruct xchgS( memory mem, rRegI newval) %{
+  match(Set newval (GetAndSetS mem newval));
+  format %{ "XCHGW  $newval,[$mem]" %}
+  ins_encode %{
+    __ xchgw($newval$$Register, $mem$$Address);
   %}
   ins_pipe( pipe_cmpxchg );
 %}
@@ -9780,69 +10004,6 @@ instruct modD_reg(regD dst, regD src0, regD src1, eAXRegI rax, eFlagsReg cr) %{
   ins_pipe( pipe_slow );
 %}
 
-instruct sinDPR_reg(regDPR1 dst, regDPR1 src) %{
-  predicate (UseSSE<=1);
-  match(Set dst (SinD src));
-  ins_cost(1800);
-  format %{ "DSIN   $dst" %}
-  opcode(0xD9, 0xFE);
-  ins_encode( OpcP, OpcS );
-  ins_pipe( pipe_slow );
-%}
-
-instruct sinD_reg(regD dst, eFlagsReg cr) %{
-  predicate (UseSSE>=2);
-  match(Set dst (SinD dst));
-  effect(KILL cr); // Push_{Src|Result}D() uses "{SUB|ADD} ESP,8"
-  ins_cost(1800);
-  format %{ "DSIN   $dst" %}
-  opcode(0xD9, 0xFE);
-  ins_encode( Push_SrcD(dst), OpcP, OpcS, Push_ResultD(dst) );
-  ins_pipe( pipe_slow );
-%}
-
-instruct cosDPR_reg(regDPR1 dst, regDPR1 src) %{
-  predicate (UseSSE<=1);
-  match(Set dst (CosD src));
-  ins_cost(1800);
-  format %{ "DCOS   $dst" %}
-  opcode(0xD9, 0xFF);
-  ins_encode( OpcP, OpcS );
-  ins_pipe( pipe_slow );
-%}
-
-instruct cosD_reg(regD dst, eFlagsReg cr) %{
-  predicate (UseSSE>=2);
-  match(Set dst (CosD dst));
-  effect(KILL cr); // Push_{Src|Result}D() uses "{SUB|ADD} ESP,8"
-  ins_cost(1800);
-  format %{ "DCOS   $dst" %}
-  opcode(0xD9, 0xFF);
-  ins_encode( Push_SrcD(dst), OpcP, OpcS, Push_ResultD(dst) );
-  ins_pipe( pipe_slow );
-%}
-
-instruct tanDPR_reg(regDPR1 dst, regDPR1 src) %{
-  predicate (UseSSE<=1);
-  match(Set dst(TanD src));
-  format %{ "DTAN   $dst" %}
-  ins_encode( Opcode(0xD9), Opcode(0xF2),    // fptan
-              Opcode(0xDD), Opcode(0xD8));   // fstp st
-  ins_pipe( pipe_slow );
-%}
-
-instruct tanD_reg(regD dst, eFlagsReg cr) %{
-  predicate (UseSSE>=2);
-  match(Set dst(TanD dst));
-  effect(KILL cr); // Push_{Src|Result}D() uses "{SUB|ADD} ESP,8"
-  format %{ "DTAN   $dst" %}
-  ins_encode( Push_SrcD(dst),
-              Opcode(0xD9), Opcode(0xF2),    // fptan
-              Opcode(0xDD), Opcode(0xD8),   // fstp st
-              Push_ResultD(dst) );
-  ins_pipe( pipe_slow );
-%}
-
 instruct atanDPR_reg(regDPR dst, regDPR src) %{
   predicate (UseSSE<=1);
   match(Set dst(AtanD dst src));
@@ -9871,138 +10032,6 @@ instruct sqrtDPR_reg(regDPR dst, regDPR src) %{
   opcode(0xFA, 0xD9);
   ins_encode( Push_Reg_DPR(src),
               OpcS, OpcP, Pop_Reg_DPR(dst) );
-  ins_pipe( pipe_slow );
-%}
-
-instruct powDPR_reg(regDPR X, regDPR1 Y, eAXRegI rax, eDXRegI rdx, eCXRegI rcx, eFlagsReg cr) %{
-  predicate (UseSSE<=1);
-  match(Set Y (PowD X Y));  // Raise X to the Yth power
-  effect(KILL rax, KILL rdx, KILL rcx, KILL cr);
-  format %{ "fast_pow $X $Y -> $Y  // KILL $rax, $rcx, $rdx" %}
-  ins_encode %{
-    __ subptr(rsp, 8);
-    __ fld_s($X$$reg - 1);
-    __ fast_pow();
-    __ addptr(rsp, 8);
-  %}
-  ins_pipe( pipe_slow );
-%}
-
-instruct powD_reg(regD dst, regD src0, regD src1, eAXRegI rax, eDXRegI rdx, eCXRegI rcx, eFlagsReg cr) %{
-  predicate (UseSSE>=2);
-  match(Set dst (PowD src0 src1));  // Raise src0 to the src1'th power
-  effect(KILL rax, KILL rdx, KILL rcx, KILL cr);
-  format %{ "fast_pow $src0 $src1 -> $dst  // KILL $rax, $rcx, $rdx" %}
-  ins_encode %{
-    __ subptr(rsp, 8);
-    __ movdbl(Address(rsp, 0), $src1$$XMMRegister);
-    __ fld_d(Address(rsp, 0));
-    __ movdbl(Address(rsp, 0), $src0$$XMMRegister);
-    __ fld_d(Address(rsp, 0));
-    __ fast_pow();
-    __ fstp_d(Address(rsp, 0));
-    __ movdbl($dst$$XMMRegister, Address(rsp, 0));
-    __ addptr(rsp, 8);
-  %}
-  ins_pipe( pipe_slow );
-%}
-
-
-instruct expDPR_reg(regDPR1 dpr1, eAXRegI rax, eDXRegI rdx, eCXRegI rcx, eFlagsReg cr) %{
-  predicate (UseSSE<=1);
-  match(Set dpr1 (ExpD dpr1));
-  effect(KILL rax, KILL rcx, KILL rdx, KILL cr);
-  format %{ "fast_exp $dpr1 -> $dpr1  // KILL $rax, $rcx, $rdx" %}
-  ins_encode %{
-    __ fast_exp();
-  %}
-  ins_pipe( pipe_slow );
-%}
-
-instruct expD_reg(regD dst, regD src, eAXRegI rax, eDXRegI rdx, eCXRegI rcx, eFlagsReg cr) %{
-  predicate (UseSSE>=2);
-  match(Set dst (ExpD src));
-  effect(KILL rax, KILL rcx, KILL rdx, KILL cr);
-  format %{ "fast_exp $dst -> $src  // KILL $rax, $rcx, $rdx" %}
-  ins_encode %{
-    __ subptr(rsp, 8);
-    __ movdbl(Address(rsp, 0), $src$$XMMRegister);
-    __ fld_d(Address(rsp, 0));
-    __ fast_exp();
-    __ fstp_d(Address(rsp, 0));
-    __ movdbl($dst$$XMMRegister, Address(rsp, 0));
-    __ addptr(rsp, 8);
-  %}
-  ins_pipe( pipe_slow );
-%}
-
-instruct log10DPR_reg(regDPR1 dst, regDPR1 src) %{
-  predicate (UseSSE<=1);
-  // The source Double operand on FPU stack
-  match(Set dst (Log10D src));
-  // fldlg2       ; push log_10(2) on the FPU stack; full 80-bit number
-  // fxch         ; swap ST(0) with ST(1)
-  // fyl2x        ; compute log_10(2) * log_2(x)
-  format %{ "FLDLG2 \t\t\t#Log10\n\t"
-            "FXCH   \n\t"
-            "FYL2X  \t\t\t# Q=Log10*Log_2(x)"
-         %}
-  ins_encode( Opcode(0xD9), Opcode(0xEC),   // fldlg2
-              Opcode(0xD9), Opcode(0xC9),   // fxch
-              Opcode(0xD9), Opcode(0xF1));  // fyl2x
-
-  ins_pipe( pipe_slow );
-%}
-
-instruct log10D_reg(regD dst, regD src, eFlagsReg cr) %{
-  predicate (UseSSE>=2);
-  effect(KILL cr);
-  match(Set dst (Log10D src));
-  // fldlg2       ; push log_10(2) on the FPU stack; full 80-bit number
-  // fyl2x        ; compute log_10(2) * log_2(x)
-  format %{ "FLDLG2 \t\t\t#Log10\n\t"
-            "FYL2X  \t\t\t# Q=Log10*Log_2(x)"
-         %}
-  ins_encode( Opcode(0xD9), Opcode(0xEC),   // fldlg2
-              Push_SrcD(src),
-              Opcode(0xD9), Opcode(0xF1),   // fyl2x
-              Push_ResultD(dst));
-
-  ins_pipe( pipe_slow );
-%}
-
-instruct logDPR_reg(regDPR1 dst, regDPR1 src) %{
-  predicate (UseSSE<=1);
-  // The source Double operand on FPU stack
-  match(Set dst (LogD src));
-  // fldln2       ; push log_e(2) on the FPU stack; full 80-bit number
-  // fxch         ; swap ST(0) with ST(1)
-  // fyl2x        ; compute log_e(2) * log_2(x)
-  format %{ "FLDLN2 \t\t\t#Log_e\n\t"
-            "FXCH   \n\t"
-            "FYL2X  \t\t\t# Q=Log_e*Log_2(x)"
-         %}
-  ins_encode( Opcode(0xD9), Opcode(0xED),   // fldln2
-              Opcode(0xD9), Opcode(0xC9),   // fxch
-              Opcode(0xD9), Opcode(0xF1));  // fyl2x
-
-  ins_pipe( pipe_slow );
-%}
-
-instruct logD_reg(regD dst, regD src, eFlagsReg cr) %{
-  predicate (UseSSE>=2);
-  effect(KILL cr);
-  // The source and result Double operands in XMM registers
-  match(Set dst (LogD src));
-  // fldln2       ; push log_e(2) on the FPU stack; full 80-bit number
-  // fyl2x        ; compute log_e(2) * log_2(x)
-  format %{ "FLDLN2 \t\t\t#Log_e\n\t"
-            "FYL2X  \t\t\t# Q=Log_e*Log_2(x)"
-         %}
-  ins_encode( Opcode(0xD9), Opcode(0xED),   // fldln2
-              Push_SrcD(src),
-              Opcode(0xD9), Opcode(0xF1),   // fyl2x
-              Push_ResultD(dst));
   ins_pipe( pipe_slow );
 %}
 
@@ -11466,41 +11495,114 @@ instruct MoveL2D_reg_reg_sse(regD dst, eRegL src, regD tmp) %{
 // =======================================================================
 // fast clearing of an array
 instruct rep_stos(eCXRegI cnt, eDIRegP base, eAXRegI zero, Universe dummy, eFlagsReg cr) %{
-  predicate(!UseFastStosb);
+  predicate(!((ClearArrayNode*)n)->is_large());
   match(Set dummy (ClearArray cnt base));
   effect(USE_KILL cnt, USE_KILL base, KILL zero, KILL cr);
-  format %{ "XOR    EAX,EAX\t# ClearArray:\n\t"
-            "SHL    ECX,1\t# Convert doublewords to words\n\t"
-            "REP STOS\t# store EAX into [EDI++] while ECX--" %}
+
+  format %{ $$template
+    $$emit$$"XOR    EAX,EAX\t# ClearArray:\n\t"
+    $$emit$$"CMP    InitArrayShortSize,rcx\n\t"
+    $$emit$$"JG     LARGE\n\t"
+    $$emit$$"SHL    ECX, 1\n\t"
+    $$emit$$"DEC    ECX\n\t"
+    $$emit$$"JS     DONE\t# Zero length\n\t"
+    $$emit$$"MOV    EAX,(EDI,ECX,4)\t# LOOP\n\t"
+    $$emit$$"DEC    ECX\n\t"
+    $$emit$$"JGE    LOOP\n\t"
+    $$emit$$"JMP    DONE\n\t"
+    $$emit$$"# LARGE:\n\t"
+    if (UseFastStosb) {
+       $$emit$$"SHL    ECX,3\t# Convert doublewords to bytes\n\t"
+       $$emit$$"REP STOSB\t# store EAX into [EDI++] while ECX--\n\t"
+    } else {
+       $$emit$$"SHL    ECX,1\t# Convert doublewords to words\n\t"
+       $$emit$$"REP STOS\t# store EAX into [EDI++] while ECX--\n\t"
+    }
+    $$emit$$"# DONE"
+  %}
   ins_encode %{
-    __ clear_mem($base$$Register, $cnt$$Register, $zero$$Register);
+    __ clear_mem($base$$Register, $cnt$$Register, $zero$$Register, false);
   %}
   ins_pipe( pipe_slow );
 %}
 
-instruct rep_fast_stosb(eCXRegI cnt, eDIRegP base, eAXRegI zero, Universe dummy, eFlagsReg cr) %{
-  predicate(UseFastStosb);
+instruct rep_stos_large(eCXRegI cnt, eDIRegP base, eAXRegI zero, Universe dummy, eFlagsReg cr) %{
+  predicate(((ClearArrayNode*)n)->is_large());
   match(Set dummy (ClearArray cnt base));
   effect(USE_KILL cnt, USE_KILL base, KILL zero, KILL cr);
-  format %{ "XOR    EAX,EAX\t# ClearArray:\n\t"
-            "SHL    ECX,3\t# Convert doublewords to bytes\n\t"
-            "REP STOSB\t# store EAX into [EDI++] while ECX--" %}
+  format %{ $$template
+    $$emit$$"XOR    EAX,EAX\t# ClearArray:\n\t"
+    if (UseFastStosb) {
+       $$emit$$"SHL    ECX,3\t# Convert doublewords to bytes\n\t"
+       $$emit$$"REP STOSB\t# store EAX into [EDI++] while ECX--\n\t"
+    } else {
+       $$emit$$"SHL    ECX,1\t# Convert doublewords to words\n\t"
+       $$emit$$"REP STOS\t# store EAX into [EDI++] while ECX--\n\t"
+    }
+    $$emit$$"# DONE"
+  %}
   ins_encode %{
-    __ clear_mem($base$$Register, $cnt$$Register, $zero$$Register);
+    __ clear_mem($base$$Register, $cnt$$Register, $zero$$Register, true);
   %}
   ins_pipe( pipe_slow );
 %}
 
-instruct string_compare(eDIRegP str1, eCXRegI cnt1, eSIRegP str2, eDXRegI cnt2,
-                        eAXRegI result, regD tmp1, eFlagsReg cr) %{
+instruct string_compareL(eDIRegP str1, eCXRegI cnt1, eSIRegP str2, eDXRegI cnt2,
+                         eAXRegI result, regD tmp1, eFlagsReg cr) %{
+  predicate(((StrCompNode*)n)->encoding() == StrIntrinsicNode::LL);
   match(Set result (StrComp (Binary str1 cnt1) (Binary str2 cnt2)));
   effect(TEMP tmp1, USE_KILL str1, USE_KILL str2, USE_KILL cnt1, USE_KILL cnt2, KILL cr);
 
-  format %{ "String Compare $str1,$cnt1,$str2,$cnt2 -> $result   // KILL $tmp1" %}
+  format %{ "String Compare byte[] $str1,$cnt1,$str2,$cnt2 -> $result   // KILL $tmp1" %}
   ins_encode %{
     __ string_compare($str1$$Register, $str2$$Register,
                       $cnt1$$Register, $cnt2$$Register, $result$$Register,
-                      $tmp1$$XMMRegister);
+                      $tmp1$$XMMRegister, StrIntrinsicNode::LL);
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+instruct string_compareU(eDIRegP str1, eCXRegI cnt1, eSIRegP str2, eDXRegI cnt2,
+                         eAXRegI result, regD tmp1, eFlagsReg cr) %{
+  predicate(((StrCompNode*)n)->encoding() == StrIntrinsicNode::UU);
+  match(Set result (StrComp (Binary str1 cnt1) (Binary str2 cnt2)));
+  effect(TEMP tmp1, USE_KILL str1, USE_KILL str2, USE_KILL cnt1, USE_KILL cnt2, KILL cr);
+
+  format %{ "String Compare char[] $str1,$cnt1,$str2,$cnt2 -> $result   // KILL $tmp1" %}
+  ins_encode %{
+    __ string_compare($str1$$Register, $str2$$Register,
+                      $cnt1$$Register, $cnt2$$Register, $result$$Register,
+                      $tmp1$$XMMRegister, StrIntrinsicNode::UU);
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+instruct string_compareLU(eDIRegP str1, eCXRegI cnt1, eSIRegP str2, eDXRegI cnt2,
+                          eAXRegI result, regD tmp1, eFlagsReg cr) %{
+  predicate(((StrCompNode*)n)->encoding() == StrIntrinsicNode::LU);
+  match(Set result (StrComp (Binary str1 cnt1) (Binary str2 cnt2)));
+  effect(TEMP tmp1, USE_KILL str1, USE_KILL str2, USE_KILL cnt1, USE_KILL cnt2, KILL cr);
+
+  format %{ "String Compare byte[] $str1,$cnt1,$str2,$cnt2 -> $result   // KILL $tmp1" %}
+  ins_encode %{
+    __ string_compare($str1$$Register, $str2$$Register,
+                      $cnt1$$Register, $cnt2$$Register, $result$$Register,
+                      $tmp1$$XMMRegister, StrIntrinsicNode::LU);
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+instruct string_compareUL(eSIRegP str1, eDXRegI cnt1, eDIRegP str2, eCXRegI cnt2,
+                          eAXRegI result, regD tmp1, eFlagsReg cr) %{
+  predicate(((StrCompNode*)n)->encoding() == StrIntrinsicNode::UL);
+  match(Set result (StrComp (Binary str1 cnt1) (Binary str2 cnt2)));
+  effect(TEMP tmp1, USE_KILL str1, USE_KILL str2, USE_KILL cnt1, USE_KILL cnt2, KILL cr);
+
+  format %{ "String Compare byte[] $str1,$cnt1,$str2,$cnt2 -> $result   // KILL $tmp1" %}
+  ins_encode %{
+    __ string_compare($str2$$Register, $str1$$Register,
+                      $cnt2$$Register, $cnt1$$Register, $result$$Register,
+                      $tmp1$$XMMRegister, StrIntrinsicNode::UL);
   %}
   ins_pipe( pipe_slow );
 %}
@@ -11513,21 +11615,50 @@ instruct string_equals(eDIRegP str1, eSIRegP str2, eCXRegI cnt, eAXRegI result,
 
   format %{ "String Equals $str1,$str2,$cnt -> $result    // KILL $tmp1, $tmp2, $tmp3" %}
   ins_encode %{
-    __ char_arrays_equals(false, $str1$$Register, $str2$$Register,
-                          $cnt$$Register, $result$$Register, $tmp3$$Register,
-                          $tmp1$$XMMRegister, $tmp2$$XMMRegister);
+    __ arrays_equals(false, $str1$$Register, $str2$$Register,
+                     $cnt$$Register, $result$$Register, $tmp3$$Register,
+                     $tmp1$$XMMRegister, $tmp2$$XMMRegister, false /* char */);
+  %}
+
+  ins_pipe( pipe_slow );
+%}
+
+// fast search of substring with known size.
+instruct string_indexof_conL(eDIRegP str1, eDXRegI cnt1, eSIRegP str2, immI int_cnt2,
+                             eBXRegI result, regD vec, eAXRegI cnt2, eCXRegI tmp, eFlagsReg cr) %{
+  predicate(UseSSE42Intrinsics && (((StrIndexOfNode*)n)->encoding() == StrIntrinsicNode::LL));
+  match(Set result (StrIndexOf (Binary str1 cnt1) (Binary str2 int_cnt2)));
+  effect(TEMP vec, USE_KILL str1, USE_KILL str2, USE_KILL cnt1, KILL cnt2, KILL tmp, KILL cr);
+
+  format %{ "String IndexOf byte[] $str1,$cnt1,$str2,$int_cnt2 -> $result   // KILL $vec, $cnt1, $cnt2, $tmp" %}
+  ins_encode %{
+    int icnt2 = (int)$int_cnt2$$constant;
+    if (icnt2 >= 16) {
+      // IndexOf for constant substrings with size >= 16 elements
+      // which don't need to be loaded through stack.
+      __ string_indexofC8($str1$$Register, $str2$$Register,
+                          $cnt1$$Register, $cnt2$$Register,
+                          icnt2, $result$$Register,
+                          $vec$$XMMRegister, $tmp$$Register, StrIntrinsicNode::LL);
+    } else {
+      // Small strings are loaded through stack if they cross page boundary.
+      __ string_indexof($str1$$Register, $str2$$Register,
+                        $cnt1$$Register, $cnt2$$Register,
+                        icnt2, $result$$Register,
+                        $vec$$XMMRegister, $tmp$$Register, StrIntrinsicNode::LL);
+    }
   %}
   ins_pipe( pipe_slow );
 %}
 
 // fast search of substring with known size.
-instruct string_indexof_con(eDIRegP str1, eDXRegI cnt1, eSIRegP str2, immI int_cnt2,
-                            eBXRegI result, regD vec, eAXRegI cnt2, eCXRegI tmp, eFlagsReg cr) %{
-  predicate(UseSSE42Intrinsics);
+instruct string_indexof_conU(eDIRegP str1, eDXRegI cnt1, eSIRegP str2, immI int_cnt2,
+                             eBXRegI result, regD vec, eAXRegI cnt2, eCXRegI tmp, eFlagsReg cr) %{
+  predicate(UseSSE42Intrinsics && (((StrIndexOfNode*)n)->encoding() == StrIntrinsicNode::UU));
   match(Set result (StrIndexOf (Binary str1 cnt1) (Binary str2 int_cnt2)));
   effect(TEMP vec, USE_KILL str1, USE_KILL str2, USE_KILL cnt1, KILL cnt2, KILL tmp, KILL cr);
 
-  format %{ "String IndexOf $str1,$cnt1,$str2,$int_cnt2 -> $result   // KILL $vec, $cnt1, $cnt2, $tmp" %}
+  format %{ "String IndexOf char[] $str1,$cnt1,$str2,$int_cnt2 -> $result   // KILL $vec, $cnt1, $cnt2, $tmp" %}
   ins_encode %{
     int icnt2 = (int)$int_cnt2$$constant;
     if (icnt2 >= 8) {
@@ -11536,47 +11667,182 @@ instruct string_indexof_con(eDIRegP str1, eDXRegI cnt1, eSIRegP str2, immI int_c
       __ string_indexofC8($str1$$Register, $str2$$Register,
                           $cnt1$$Register, $cnt2$$Register,
                           icnt2, $result$$Register,
-                          $vec$$XMMRegister, $tmp$$Register);
+                          $vec$$XMMRegister, $tmp$$Register, StrIntrinsicNode::UU);
     } else {
       // Small strings are loaded through stack if they cross page boundary.
       __ string_indexof($str1$$Register, $str2$$Register,
                         $cnt1$$Register, $cnt2$$Register,
                         icnt2, $result$$Register,
-                        $vec$$XMMRegister, $tmp$$Register);
+                        $vec$$XMMRegister, $tmp$$Register, StrIntrinsicNode::UU);
     }
   %}
   ins_pipe( pipe_slow );
 %}
 
-instruct string_indexof(eDIRegP str1, eDXRegI cnt1, eSIRegP str2, eAXRegI cnt2,
-                        eBXRegI result, regD vec, eCXRegI tmp, eFlagsReg cr) %{
-  predicate(UseSSE42Intrinsics);
+// fast search of substring with known size.
+instruct string_indexof_conUL(eDIRegP str1, eDXRegI cnt1, eSIRegP str2, immI int_cnt2,
+                             eBXRegI result, regD vec, eAXRegI cnt2, eCXRegI tmp, eFlagsReg cr) %{
+  predicate(UseSSE42Intrinsics && (((StrIndexOfNode*)n)->encoding() == StrIntrinsicNode::UL));
+  match(Set result (StrIndexOf (Binary str1 cnt1) (Binary str2 int_cnt2)));
+  effect(TEMP vec, USE_KILL str1, USE_KILL str2, USE_KILL cnt1, KILL cnt2, KILL tmp, KILL cr);
+
+  format %{ "String IndexOf char[] $str1,$cnt1,$str2,$int_cnt2 -> $result   // KILL $vec, $cnt1, $cnt2, $tmp" %}
+  ins_encode %{
+    int icnt2 = (int)$int_cnt2$$constant;
+    if (icnt2 >= 8) {
+      // IndexOf for constant substrings with size >= 8 elements
+      // which don't need to be loaded through stack.
+      __ string_indexofC8($str1$$Register, $str2$$Register,
+                          $cnt1$$Register, $cnt2$$Register,
+                          icnt2, $result$$Register,
+                          $vec$$XMMRegister, $tmp$$Register, StrIntrinsicNode::UL);
+    } else {
+      // Small strings are loaded through stack if they cross page boundary.
+      __ string_indexof($str1$$Register, $str2$$Register,
+                        $cnt1$$Register, $cnt2$$Register,
+                        icnt2, $result$$Register,
+                        $vec$$XMMRegister, $tmp$$Register, StrIntrinsicNode::UL);
+    }
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+instruct string_indexofL(eDIRegP str1, eDXRegI cnt1, eSIRegP str2, eAXRegI cnt2,
+                         eBXRegI result, regD vec, eCXRegI tmp, eFlagsReg cr) %{
+  predicate(UseSSE42Intrinsics && (((StrIndexOfNode*)n)->encoding() == StrIntrinsicNode::LL));
   match(Set result (StrIndexOf (Binary str1 cnt1) (Binary str2 cnt2)));
   effect(TEMP vec, USE_KILL str1, USE_KILL str2, USE_KILL cnt1, USE_KILL cnt2, KILL tmp, KILL cr);
 
-  format %{ "String IndexOf $str1,$cnt1,$str2,$cnt2 -> $result   // KILL all" %}
+  format %{ "String IndexOf byte[] $str1,$cnt1,$str2,$cnt2 -> $result   // KILL all" %}
   ins_encode %{
     __ string_indexof($str1$$Register, $str2$$Register,
                       $cnt1$$Register, $cnt2$$Register,
                       (-1), $result$$Register,
-                      $vec$$XMMRegister, $tmp$$Register);
+                      $vec$$XMMRegister, $tmp$$Register, StrIntrinsicNode::LL);
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+instruct string_indexofU(eDIRegP str1, eDXRegI cnt1, eSIRegP str2, eAXRegI cnt2,
+                         eBXRegI result, regD vec, eCXRegI tmp, eFlagsReg cr) %{
+  predicate(UseSSE42Intrinsics && (((StrIndexOfNode*)n)->encoding() == StrIntrinsicNode::UU));
+  match(Set result (StrIndexOf (Binary str1 cnt1) (Binary str2 cnt2)));
+  effect(TEMP vec, USE_KILL str1, USE_KILL str2, USE_KILL cnt1, USE_KILL cnt2, KILL tmp, KILL cr);
+
+  format %{ "String IndexOf char[] $str1,$cnt1,$str2,$cnt2 -> $result   // KILL all" %}
+  ins_encode %{
+    __ string_indexof($str1$$Register, $str2$$Register,
+                      $cnt1$$Register, $cnt2$$Register,
+                      (-1), $result$$Register,
+                      $vec$$XMMRegister, $tmp$$Register, StrIntrinsicNode::UU);
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+instruct string_indexofUL(eDIRegP str1, eDXRegI cnt1, eSIRegP str2, eAXRegI cnt2,
+                         eBXRegI result, regD vec, eCXRegI tmp, eFlagsReg cr) %{
+  predicate(UseSSE42Intrinsics && (((StrIndexOfNode*)n)->encoding() == StrIntrinsicNode::UL));
+  match(Set result (StrIndexOf (Binary str1 cnt1) (Binary str2 cnt2)));
+  effect(TEMP vec, USE_KILL str1, USE_KILL str2, USE_KILL cnt1, USE_KILL cnt2, KILL tmp, KILL cr);
+
+  format %{ "String IndexOf char[] $str1,$cnt1,$str2,$cnt2 -> $result   // KILL all" %}
+  ins_encode %{
+    __ string_indexof($str1$$Register, $str2$$Register,
+                      $cnt1$$Register, $cnt2$$Register,
+                      (-1), $result$$Register,
+                      $vec$$XMMRegister, $tmp$$Register, StrIntrinsicNode::UL);
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+instruct string_indexofU_char(eDIRegP str1, eDXRegI cnt1, eAXRegI ch,
+                              eBXRegI result, regD vec1, regD vec2, regD vec3, eCXRegI tmp, eFlagsReg cr) %{
+  predicate(UseSSE42Intrinsics);
+  match(Set result (StrIndexOfChar (Binary str1 cnt1) ch));
+  effect(TEMP vec1, TEMP vec2, TEMP vec3, USE_KILL str1, USE_KILL cnt1, USE_KILL ch, TEMP tmp, KILL cr);
+  format %{ "String IndexOf char[] $str1,$cnt1,$ch -> $result   // KILL all" %}
+  ins_encode %{
+    __ string_indexof_char($str1$$Register, $cnt1$$Register, $ch$$Register, $result$$Register,
+                           $vec1$$XMMRegister, $vec2$$XMMRegister, $vec3$$XMMRegister, $tmp$$Register);
   %}
   ins_pipe( pipe_slow );
 %}
 
 // fast array equals
-instruct array_equals(eDIRegP ary1, eSIRegP ary2, eAXRegI result,
-                      regD tmp1, regD tmp2, eCXRegI tmp3, eBXRegI tmp4, eFlagsReg cr)
+instruct array_equalsB(eDIRegP ary1, eSIRegP ary2, eAXRegI result,
+                       regD tmp1, regD tmp2, eCXRegI tmp3, eBXRegI tmp4, eFlagsReg cr)
 %{
+  predicate(((AryEqNode*)n)->encoding() == StrIntrinsicNode::LL);
   match(Set result (AryEq ary1 ary2));
   effect(TEMP tmp1, TEMP tmp2, USE_KILL ary1, USE_KILL ary2, KILL tmp3, KILL tmp4, KILL cr);
   //ins_cost(300);
 
-  format %{ "Array Equals $ary1,$ary2 -> $result   // KILL $tmp1, $tmp2, $tmp3, $tmp4" %}
+  format %{ "Array Equals byte[] $ary1,$ary2 -> $result   // KILL $tmp1, $tmp2, $tmp3, $tmp4" %}
   ins_encode %{
-    __ char_arrays_equals(true, $ary1$$Register, $ary2$$Register,
-                          $tmp3$$Register, $result$$Register, $tmp4$$Register,
-                          $tmp1$$XMMRegister, $tmp2$$XMMRegister);
+    __ arrays_equals(true, $ary1$$Register, $ary2$$Register,
+                     $tmp3$$Register, $result$$Register, $tmp4$$Register,
+                     $tmp1$$XMMRegister, $tmp2$$XMMRegister, false /* char */);
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+instruct array_equalsC(eDIRegP ary1, eSIRegP ary2, eAXRegI result,
+                       regD tmp1, regD tmp2, eCXRegI tmp3, eBXRegI tmp4, eFlagsReg cr)
+%{
+  predicate(((AryEqNode*)n)->encoding() == StrIntrinsicNode::UU);
+  match(Set result (AryEq ary1 ary2));
+  effect(TEMP tmp1, TEMP tmp2, USE_KILL ary1, USE_KILL ary2, KILL tmp3, KILL tmp4, KILL cr);
+  //ins_cost(300);
+
+  format %{ "Array Equals char[] $ary1,$ary2 -> $result   // KILL $tmp1, $tmp2, $tmp3, $tmp4" %}
+  ins_encode %{
+    __ arrays_equals(true, $ary1$$Register, $ary2$$Register,
+                     $tmp3$$Register, $result$$Register, $tmp4$$Register,
+                     $tmp1$$XMMRegister, $tmp2$$XMMRegister, true /* char */);
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+instruct has_negatives(eSIRegP ary1, eCXRegI len, eAXRegI result,
+                      regD tmp1, regD tmp2, eBXRegI tmp3, eFlagsReg cr)
+%{
+  match(Set result (HasNegatives ary1 len));
+  effect(TEMP tmp1, TEMP tmp2, USE_KILL ary1, USE_KILL len, KILL tmp3, KILL cr);
+
+  format %{ "has negatives byte[] $ary1,$len -> $result   // KILL $tmp1, $tmp2, $tmp3" %}
+  ins_encode %{
+    __ has_negatives($ary1$$Register, $len$$Register,
+                     $result$$Register, $tmp3$$Register,
+                     $tmp1$$XMMRegister, $tmp2$$XMMRegister);
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+// fast char[] to byte[] compression
+instruct string_compress(eSIRegP src, eDIRegP dst, eDXRegI len, regD tmp1, regD tmp2, regD tmp3, regD tmp4,
+                         eCXRegI tmp5, eAXRegI result, eFlagsReg cr) %{
+  match(Set result (StrCompressedCopy src (Binary dst len)));
+  effect(TEMP tmp1, TEMP tmp2, TEMP tmp3, TEMP tmp4, USE_KILL src, USE_KILL dst, USE_KILL len, KILL tmp5, KILL cr);
+
+  format %{ "String Compress $src,$dst -> $result    // KILL RAX, RCX, RDX" %}
+  ins_encode %{
+    __ char_array_compress($src$$Register, $dst$$Register, $len$$Register,
+                           $tmp1$$XMMRegister, $tmp2$$XMMRegister, $tmp3$$XMMRegister,
+                           $tmp4$$XMMRegister, $tmp5$$Register, $result$$Register);
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+// fast byte[] to char[] inflation
+instruct string_inflate(Universe dummy, eSIRegP src, eDIRegP dst, eDXRegI len,
+                        regD tmp1, eCXRegI tmp2, eFlagsReg cr) %{
+  match(Set dummy (StrInflatedCopy src (Binary dst len)));
+  effect(TEMP tmp1, TEMP tmp2, USE_KILL src, USE_KILL dst, USE_KILL len, KILL cr);
+
+  format %{ "String Inflate $src,$dst    // KILL $tmp1, $tmp2" %}
+  ins_encode %{
+    __ byte_array_inflate($src$$Register, $dst$$Register, $len$$Register,
+                          $tmp1$$XMMRegister, $tmp2$$Register);
   %}
   ins_pipe( pipe_slow );
 %}
@@ -11957,6 +12223,7 @@ instruct jmpCon(cmpOp cop, eFlagsReg cr, label labl) %{
 
 // Jump Direct Conditional - Label defines a relative address from Jcc+1
 instruct jmpLoopEnd(cmpOp cop, eFlagsReg cr, label labl) %{
+  predicate(!n->has_vector_mask_set());
   match(CountedLoopEnd cop cr);
   effect(USE labl);
 
@@ -11972,6 +12239,7 @@ instruct jmpLoopEnd(cmpOp cop, eFlagsReg cr, label labl) %{
 
 // Jump Direct Conditional - Label defines a relative address from Jcc+1
 instruct jmpLoopEndU(cmpOpU cop, eFlagsRegU cmp, label labl) %{
+  predicate(!n->has_vector_mask_set());
   match(CountedLoopEnd cop cmp);
   effect(USE labl);
 
@@ -11986,6 +12254,7 @@ instruct jmpLoopEndU(cmpOpU cop, eFlagsRegU cmp, label labl) %{
 %}
 
 instruct jmpLoopEndUCF(cmpOpUCF cop, eFlagsRegUCF cmp, label labl) %{
+  predicate(!n->has_vector_mask_set());
   match(CountedLoopEnd cop cmp);
   effect(USE labl);
 
@@ -11995,6 +12264,60 @@ instruct jmpLoopEndUCF(cmpOpUCF cop, eFlagsRegUCF cmp, label labl) %{
   ins_encode %{
     Label* L = $labl$$label;
     __ jcc((Assembler::Condition)($cop$$cmpcode), *L, false); // Always long jump
+  %}
+  ins_pipe( pipe_jcc );
+%}
+
+// mask version
+// Jump Direct Conditional - Label defines a relative address from Jcc+1
+instruct jmpLoopEnd_and_restoreMask(cmpOp cop, eFlagsReg cr, label labl) %{
+  predicate(n->has_vector_mask_set());
+  match(CountedLoopEnd cop cr);
+  effect(USE labl);
+
+  ins_cost(400);
+  format %{ "J$cop    $labl\t# Loop end\n\t"
+            "restorevectmask \t# vector mask restore for loops" %}
+  size(10);
+  ins_encode %{
+    Label* L = $labl$$label;
+    __ jcc((Assembler::Condition)($cop$$cmpcode), *L, false); // Always long jump
+    __ restorevectmask();
+  %}
+  ins_pipe( pipe_jcc );
+%}
+
+// Jump Direct Conditional - Label defines a relative address from Jcc+1
+instruct jmpLoopEndU_and_restoreMask(cmpOpU cop, eFlagsRegU cmp, label labl) %{
+  predicate(n->has_vector_mask_set());
+  match(CountedLoopEnd cop cmp);
+  effect(USE labl);
+
+  ins_cost(400);
+  format %{ "J$cop,u  $labl\t# Loop end\n\t"
+            "restorevectmask \t# vector mask restore for loops" %}
+  size(10);
+  ins_encode %{
+    Label* L = $labl$$label;
+    __ jcc((Assembler::Condition)($cop$$cmpcode), *L, false); // Always long jump
+    __ restorevectmask();
+  %}
+  ins_pipe( pipe_jcc );
+%}
+
+instruct jmpLoopEndUCF_and_restoreMask(cmpOpUCF cop, eFlagsRegUCF cmp, label labl) %{
+  predicate(n->has_vector_mask_set());
+  match(CountedLoopEnd cop cmp);
+  effect(USE labl);
+
+  ins_cost(300);
+  format %{ "J$cop,u  $labl\t# Loop end\n\t"
+            "restorevectmask \t# vector mask restore for loops" %}
+  size(10);
+  ins_encode %{
+    Label* L = $labl$$label;
+    __ jcc((Assembler::Condition)($cop$$cmpcode), *L, false); // Always long jump
+    __ restorevectmask();
   %}
   ins_pipe( pipe_jcc );
 %}
@@ -12353,6 +12676,44 @@ instruct cmpL_LTGE(cmpOp cmp, flagsReg_long_LTGE flags, label labl) %{
   %}
 %}
 
+//======
+// Manifest a CmpUL result in the normal flags.  Only good for LT or GE
+// compares.  Can be used for LE or GT compares by reversing arguments.
+// NOT GOOD FOR EQ/NE tests.
+instruct cmpUL_zero_flags_LTGE(flagsReg_ulong_LTGE flags, eRegL src, immL0 zero) %{
+  match(Set flags (CmpUL src zero));
+  ins_cost(100);
+  format %{ "TEST   $src.hi,$src.hi" %}
+  opcode(0x85);
+  ins_encode(OpcP, RegReg_Hi2(src, src));
+  ins_pipe(ialu_cr_reg_reg);
+%}
+
+// Manifest a CmpUL result in the normal flags.  Only good for LT or GE
+// compares.  Can be used for LE or GT compares by reversing arguments.
+// NOT GOOD FOR EQ/NE tests.
+instruct cmpUL_reg_flags_LTGE(flagsReg_ulong_LTGE flags, eRegL src1, eRegL src2, rRegI tmp) %{
+  match(Set flags (CmpUL src1 src2));
+  effect(TEMP tmp);
+  ins_cost(300);
+  format %{ "CMP    $src1.lo,$src2.lo\t! Unsigned long compare; set flags for low bits\n\t"
+            "MOV    $tmp,$src1.hi\n\t"
+            "SBB    $tmp,$src2.hi\t! Compute flags for unsigned long compare" %}
+  ins_encode(long_cmp_flags2(src1, src2, tmp));
+  ins_pipe(ialu_cr_reg_reg);
+%}
+
+// Unsigned long compares reg < zero/req OR reg >= zero/req.
+// Just a wrapper for a normal branch, plus the predicate test.
+instruct cmpUL_LTGE(cmpOpU cmp, flagsReg_ulong_LTGE flags, label labl) %{
+  match(If cmp flags);
+  effect(USE labl);
+  predicate(_kids[0]->_leaf->as_Bool()->_test._test == BoolTest::lt || _kids[0]->_leaf->as_Bool()->_test._test == BoolTest::ge);
+  expand %{
+    jmpCon(cmp, flags, labl);    // JLT or JGE...
+  %}
+%}
+
 // Compare 2 longs and CMOVE longs.
 instruct cmovLL_reg_LTGE(cmpOp cmp, flagsReg_long_LTGE flags, eRegL dst, eRegL src) %{
   match(Set dst (CMoveL (Binary cmp flags) (Binary dst src)));
@@ -12478,6 +12839,41 @@ instruct cmpL_EQNE(cmpOp cmp, flagsReg_long_EQNE flags, label labl) %{
   predicate( _kids[0]->_leaf->as_Bool()->_test._test == BoolTest::eq || _kids[0]->_leaf->as_Bool()->_test._test == BoolTest::ne );
   expand %{
     jmpCon(cmp,flags,labl);    // JEQ or JNE...
+  %}
+%}
+
+//======
+// Manifest a CmpUL result in the normal flags.  Only good for EQ/NE compares.
+instruct cmpUL_zero_flags_EQNE(flagsReg_ulong_EQNE flags, eRegL src, immL0 zero, rRegI tmp) %{
+  match(Set flags (CmpUL src zero));
+  effect(TEMP tmp);
+  ins_cost(200);
+  format %{ "MOV    $tmp,$src.lo\n\t"
+            "OR     $tmp,$src.hi\t! Unsigned long is EQ/NE 0?" %}
+  ins_encode(long_cmp_flags0(src, tmp));
+  ins_pipe(ialu_reg_reg_long);
+%}
+
+// Manifest a CmpUL result in the normal flags.  Only good for EQ/NE compares.
+instruct cmpUL_reg_flags_EQNE(flagsReg_ulong_EQNE flags, eRegL src1, eRegL src2) %{
+  match(Set flags (CmpUL src1 src2));
+  ins_cost(200+300);
+  format %{ "CMP    $src1.lo,$src2.lo\t! Unsigned long compare; set flags for low bits\n\t"
+            "JNE,s  skip\n\t"
+            "CMP    $src1.hi,$src2.hi\n\t"
+     "skip:\t" %}
+  ins_encode(long_cmp_flags1(src1, src2));
+  ins_pipe(ialu_cr_reg_reg);
+%}
+
+// Unsigned long compare reg == zero/reg OR reg != zero/reg
+// Just a wrapper for a normal branch, plus the predicate test.
+instruct cmpUL_EQNE(cmpOpU cmp, flagsReg_ulong_EQNE flags, label labl) %{
+  match(If cmp flags);
+  effect(USE labl);
+  predicate(_kids[0]->_leaf->as_Bool()->_test._test == BoolTest::eq || _kids[0]->_leaf->as_Bool()->_test._test == BoolTest::ne);
+  expand %{
+    jmpCon(cmp, flags, labl);    // JEQ or JNE...
   %}
 %}
 
@@ -12611,6 +13007,46 @@ instruct cmpL_LEGT(cmpOp_commute cmp, flagsReg_long_LEGT flags, label labl) %{
   ins_cost(300);
   expand %{
     jmpCon(cmp,flags,labl);    // JGT or JLE...
+  %}
+%}
+
+//======
+// Manifest a CmpUL result in the normal flags.  Only good for LE or GT compares.
+// Same as cmpUL_reg_flags_LEGT except must negate src
+instruct cmpUL_zero_flags_LEGT(flagsReg_ulong_LEGT flags, eRegL src, immL0 zero, rRegI tmp) %{
+  match(Set flags (CmpUL src zero));
+  effect(TEMP tmp);
+  ins_cost(300);
+  format %{ "XOR    $tmp,$tmp\t# Unsigned long compare for -$src < 0, use commuted test\n\t"
+            "CMP    $tmp,$src.lo\n\t"
+            "SBB    $tmp,$src.hi\n\t" %}
+  ins_encode(long_cmp_flags3(src, tmp));
+  ins_pipe(ialu_reg_reg_long);
+%}
+
+// Manifest a CmpUL result in the normal flags.  Only good for LE or GT compares.
+// Same as cmpUL_reg_flags_LTGE except operands swapped.  Swapping operands
+// requires a commuted test to get the same result.
+instruct cmpUL_reg_flags_LEGT(flagsReg_ulong_LEGT flags, eRegL src1, eRegL src2, rRegI tmp) %{
+  match(Set flags (CmpUL src1 src2));
+  effect(TEMP tmp);
+  ins_cost(300);
+  format %{ "CMP    $src2.lo,$src1.lo\t! Unsigned long compare, swapped operands, use with commuted test\n\t"
+            "MOV    $tmp,$src2.hi\n\t"
+            "SBB    $tmp,$src1.hi\t! Compute flags for unsigned long compare" %}
+  ins_encode(long_cmp_flags2( src2, src1, tmp));
+  ins_pipe(ialu_cr_reg_reg);
+%}
+
+// Unsigned long compares reg < zero/req OR reg >= zero/req.
+// Just a wrapper for a normal branch, plus the predicate test
+instruct cmpUL_LEGT(cmpOpU_commute cmp, flagsReg_ulong_LEGT flags, label labl) %{
+  match(If cmp flags);
+  effect(USE labl);
+  predicate(_kids[0]->_leaf->as_Bool()->_test._test == BoolTest::gt || _kids[0]->_leaf->as_Bool()->_test._test == BoolTest::le);
+  ins_cost(300);
+  expand %{
+    jmpCon(cmp, flags, labl);    // JGT or JLE...
   %}
 %}
 

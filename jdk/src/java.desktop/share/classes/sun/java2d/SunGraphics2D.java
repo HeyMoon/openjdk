@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -61,7 +61,6 @@ import java.awt.FontMetrics;
 import java.awt.Rectangle;
 import java.text.AttributedCharacterIterator;
 import java.awt.Font;
-import java.awt.Point;
 import java.awt.image.ImageObserver;
 import java.awt.Transparency;
 import java.awt.font.GlyphVector;
@@ -89,16 +88,17 @@ import java.awt.font.FontRenderContext;
 import sun.java2d.loops.XORComposite;
 import sun.awt.ConstrainableGraphics;
 import sun.awt.SunHints;
+import sun.awt.util.PerformanceLogger;
 import java.util.Map;
 import java.util.Iterator;
-import sun.misc.PerformanceLogger;
 
 import java.lang.annotation.Native;
-import sun.awt.image.MultiResolutionImage;
+import java.awt.image.MultiResolutionImage;
 
 import static java.awt.geom.AffineTransform.TYPE_FLIP;
 import static java.awt.geom.AffineTransform.TYPE_MASK_SCALE;
 import static java.awt.geom.AffineTransform.TYPE_TRANSLATION;
+import java.awt.image.VolatileImage;
 import sun.awt.image.MultiResolutionToolkitImage;
 import sun.awt.image.ToolkitImage;
 
@@ -252,7 +252,7 @@ public final class SunGraphics2D
     private FontInfo glyphVectorFontInfo;
     private FontRenderContext glyphVectorFRC;
 
-    private final static int slowTextTransformMask =
+    private static final int slowTextTransformMask =
                             AffineTransform.TYPE_GENERAL_TRANSFORM
                         |   AffineTransform.TYPE_MASK_ROTATION
                         |   AffineTransform.TYPE_FLIP;
@@ -1902,11 +1902,7 @@ public final class SunGraphics2D
             clipRegion = devClip;
         } else if (usrClip instanceof Rectangle2D) {
             clipState = CLIP_RECTANGULAR;
-            if (usrClip instanceof Rectangle) {
-                clipRegion = devClip.getIntersection((Rectangle)usrClip);
-            } else {
-                clipRegion = devClip.getIntersection(usrClip.getBounds());
-            }
+            clipRegion = devClip.getIntersection((Rectangle2D) usrClip);
         } else {
             PathIterator cpi = usrClip.getPathIterator(null);
             int box[] = new int[4];
@@ -1915,8 +1911,7 @@ public final class SunGraphics2D
                 sr.setOutputArea(devClip);
                 sr.appendPath(cpi);
                 sr.getPathBox(box);
-                Region r = Region.getInstance(box);
-                r.appendSpans(sr);
+                Region r = Region.getInstance(box, sr);
                 clipRegion = r;
                 clipState =
                     r.isRectangular() ? CLIP_RECTANGULAR : CLIP_SHAPE;
@@ -2101,13 +2096,39 @@ public final class SunGraphics2D
         if (w <= 0 || h <= 0) {
             return;
         }
+
+        if (transformState == SunGraphics2D.TRANSFORM_ISIDENT) {
+            // do nothing
+        } else if (transformState <= SunGraphics2D.TRANSFORM_ANY_TRANSLATE) {
+            x += transX;
+            y += transY;
+        } else if (transformState == SunGraphics2D.TRANSFORM_TRANSLATESCALE) {
+            final double[] coords = {x, y, x + w, y + h, x + dx, y + dy};
+            transform.transform(coords, 0, coords, 0, 3);
+            x = (int) Math.ceil(coords[0] - 0.5);
+            y = (int) Math.ceil(coords[1] - 0.5);
+            w = ((int) Math.ceil(coords[2] - 0.5)) - x;
+            h = ((int) Math.ceil(coords[3] - 0.5)) - y;
+            dx = ((int) Math.ceil(coords[4] - 0.5)) - x;
+            dy = ((int) Math.ceil(coords[5] - 0.5)) - y;
+            // In case of negative scale transform, reflect the rect coords.
+            if (w < 0) {
+                w = -w;
+                x -= w;
+            }
+            if (h < 0) {
+                h = -h;
+                y -= h;
+            }
+        } else {
+            throw new InternalError("transformed copyArea not implemented yet");
+        }
+
         SurfaceData theData = surfaceData;
         if (theData.copyArea(this, x, y, w, h, dx, dy)) {
             return;
         }
-        if (transformState > TRANSFORM_TRANSLATESCALE) {
-            throw new InternalError("transformed copyArea not implemented yet");
-        }
+
         // REMIND: This method does not deal with missing data from the
         // source object (i.e. it does not send exposure events...)
 
@@ -2124,26 +2145,6 @@ public final class SunGraphics2D
             }
             lastCAblit = Blit.locate(dsttype, comptype, dsttype);
             lastCAcomp = comp;
-        }
-
-        double[] coords = {x, y, x + w, y + h, x + dx, y + dy};
-        transform.transform(coords, 0, coords, 0, 3);
-
-        x = (int)Math.ceil(coords[0] - 0.5);
-        y = (int)Math.ceil(coords[1] - 0.5);
-        w = ((int)Math.ceil(coords[2] - 0.5)) - x;
-        h = ((int)Math.ceil(coords[3] - 0.5)) - y;
-        dx = ((int)Math.ceil(coords[4] - 0.5)) - x;
-        dy = ((int)Math.ceil(coords[5] - 0.5)) - y;
-
-        // In case of negative scale transform, reflect the rect coords.
-        if (w < 0) {
-            w *= -1;
-            x -= w;
-        }
-        if (h < 0) {
-            h *= -1;
-            y -= h;
         }
 
         Blit ob = lastCAblit;
@@ -2167,7 +2168,7 @@ public final class SunGraphics2D
             }
             return;
         }
-        ob.Blit(theData, theData, comp, clip, x, y, x+dx, y+dy, w, h);
+            ob.Blit(theData, theData, comp, clip, x, y, x+dx, y+dy, w, h);
     }
 
     /*
@@ -2759,8 +2760,8 @@ public final class SunGraphics2D
     }
 
     /**
-     * Intersects <code>destRect</code> with <code>clip</code> and
-     * overwrites <code>destRect</code> with the result.
+     * Intersects {@code destRect} with {@code clip} and
+     * overwrites {@code destRect} with the result.
      * Returns false if the intersection was empty, true otherwise.
      */
     private boolean clipTo(Rectangle destRect, Rectangle clip) {
@@ -3086,31 +3087,49 @@ public final class SunGraphics2D
     }
 // end of text rendering methods
 
-    private boolean isHiDPIImage(final Image img) {
-        return (SurfaceManager.getImageScale(img) != 1) ||
-               (resolutionVariantHint != SunHints.INTVAL_RESOLUTION_VARIANT_OFF
-                    && img instanceof MultiResolutionImage);
-    }
+    private Boolean drawHiDPIImage(Image img,
+                                   int dx1, int dy1, int dx2, int dy2,
+                                   int sx1, int sy1, int sx2, int sy2,
+                                   Color bgcolor, ImageObserver observer,
+                                   AffineTransform xform) {
 
-    private boolean drawHiDPIImage(Image img, int dx1, int dy1, int dx2,
-                                   int dy2, int sx1, int sy1, int sx2, int sy2,
-                                   Color bgcolor, ImageObserver observer) {
+        if (img instanceof VolatileImage) {
+            final SurfaceData sd = SurfaceManager.getManager(img)
+                    .getPrimarySurfaceData();
+            final double scaleX = sd.getDefaultScaleX();
+            final double scaleY = sd.getDefaultScaleY();
+            if (scaleX == 1 && scaleY == 1) {
+                return null;
+            }
+            sx1 = Region.clipRound(sx1 * scaleX);
+            sx2 = Region.clipRound(sx2 * scaleX);
+            sy1 = Region.clipRound(sy1 * scaleY);
+            sy2 = Region.clipRound(sy2 * scaleY);
 
-        if (SurfaceManager.getImageScale(img) != 1) {  // Volatile Image
-            final int scale = SurfaceManager.getImageScale(img);
-            sx1 = Region.clipScale(sx1, scale);
-            sx2 = Region.clipScale(sx2, scale);
-            sy1 = Region.clipScale(sy1, scale);
-            sy2 = Region.clipScale(sy2, scale);
+            AffineTransform tx = null;
+            if (xform != null) {
+                tx = new AffineTransform(transform);
+                transform(xform);
+            }
+            boolean result = scaleImage(img, dx1, dy1, dx2, dy2,
+                                        sx1, sy1, sx2, sy2,
+                                        bgcolor, observer);
+            if (tx != null) {
+                transform.setTransform(tx);
+                invalidateTransform();
+            }
+            return result;
         } else if (img instanceof MultiResolutionImage) {
             // get scaled destination image size
 
             int width = img.getWidth(observer);
             int height = img.getHeight(observer);
 
-            Image resolutionVariant = getResolutionVariant(
-                    (MultiResolutionImage) img, width, height,
-                    dx1, dy1, dx2, dy2, sx1, sy1, sx2, sy2);
+            MultiResolutionImage mrImage = (MultiResolutionImage) img;
+            Image resolutionVariant = getResolutionVariant(mrImage, width, height,
+                                                           dx1, dy1, dx2, dy2,
+                                                           sx1, sy1, sx2, sy2,
+                                                           xform);
 
             if (resolutionVariant != img && resolutionVariant != null) {
                 // recalculate source region for the resolution variant
@@ -3124,8 +3143,8 @@ public final class SunGraphics2D
 
                 if (0 < width && 0 < height && 0 < rvWidth && 0 < rvHeight) {
 
-                    float widthScale = ((float) rvWidth) / width;
-                    float heightScale = ((float) rvHeight) / height;
+                    double widthScale = ((double) rvWidth) / width;
+                    double heightScale = ((double) rvHeight) / height;
 
                     sx1 = Region.clipScale(sx1, widthScale);
                     sy1 = Region.clipScale(sy1, heightScale);
@@ -3134,10 +3153,29 @@ public final class SunGraphics2D
 
                     observer = rvObserver;
                     img = resolutionVariant;
+
+                    if (xform != null) {
+                        assert dx1 == 0 && dy1 == 0;
+                        assert dx2 == img.getWidth(observer);
+                        assert dy2 == img.getHeight(observer);
+                        AffineTransform renderTX = new AffineTransform(xform);
+                        renderTX.scale(1 / widthScale, 1 / heightScale);
+                        return transformImage(img, renderTX, observer);
+                    }
+
+                    return scaleImage(img, dx1, dy1, dx2, dy2,
+                                      sx1, sy1, sx2, sy2,
+                                      bgcolor, observer);
                 }
             }
         }
+        return null;
+    }
 
+    private boolean scaleImage(Image img, int dx1, int dy1, int dx2, int dy2,
+                               int sx1, int sy1, int sx2, int sy2,
+                               Color bgcolor, ImageObserver observer)
+    {
         try {
             return imagepipe.scaleImage(this, img, dx1, dy1, dx2, dy2, sx1, sy1,
                                         sx2, sy2, bgcolor, observer);
@@ -3157,9 +3195,30 @@ public final class SunGraphics2D
         }
     }
 
+    private boolean transformImage(Image img,
+                                   AffineTransform xform,
+                                   ImageObserver observer)
+    {
+        try {
+            return imagepipe.transformImage(this, img, xform, observer);
+        } catch (InvalidPipeException e) {
+            try {
+                revalidateAll();
+                return imagepipe.transformImage(this, img, xform, observer);
+            } catch (InvalidPipeException e2) {
+                // Still catching the exception; we are not yet ready to
+                // validate the surfaceData correctly.  Fail for now and
+                // try again next time around.
+                return false;
+            }
+        } finally {
+            surfaceData.markDirty();
+        }
+    }
+
     private Image getResolutionVariant(MultiResolutionImage img,
             int srcWidth, int srcHeight, int dx1, int dy1, int dx2, int dy2,
-            int sx1, int sy1, int sx2, int sy2) {
+            int sx1, int sy1, int sx2, int sy2, AffineTransform xform) {
 
         if (srcWidth <= 0 || srcHeight <= 0) {
             return null;
@@ -3172,27 +3231,53 @@ public final class SunGraphics2D
             return null;
         }
 
-        int type = transform.getType();
-        int dw = dx2 - dx1;
-        int dh = dy2 - dy1;
-        double destRegionWidth;
-        double destRegionHeight;
+        AffineTransform tx;
 
-        if ((type & ~(TYPE_TRANSLATION | TYPE_FLIP)) == 0) {
-            destRegionWidth = dw;
-            destRegionHeight = dh;
-        } else if ((type & ~(TYPE_TRANSLATION | TYPE_FLIP | TYPE_MASK_SCALE)) == 0) {
-            destRegionWidth = dw * transform.getScaleX();
-            destRegionHeight = dh * transform.getScaleY();
+        if (xform == null) {
+            tx = transform;
         } else {
-            destRegionWidth = dw * Math.hypot(
-                    transform.getScaleX(), transform.getShearY());
-            destRegionHeight = dh * Math.hypot(
-                    transform.getShearX(), transform.getScaleY());
+            tx = new AffineTransform(transform);
+            tx.concatenate(xform);
         }
 
-        int destImageWidth = (int) Math.abs(srcWidth * destRegionWidth / sw);
-        int destImageHeight = (int) Math.abs(srcHeight * destRegionHeight / sh);
+        int type = tx.getType();
+        int dw = dx2 - dx1;
+        int dh = dy2 - dy1;
+
+        double destImageWidth;
+        double destImageHeight;
+
+        if (resolutionVariantHint == SunHints.INTVAL_RESOLUTION_VARIANT_BASE) {
+            destImageWidth = srcWidth;
+            destImageHeight = srcHeight;
+        } else if (resolutionVariantHint == SunHints.INTVAL_RESOLUTION_VARIANT_DPI_FIT) {
+            AffineTransform configTransform = getDefaultTransform();
+            if (configTransform.isIdentity()) {
+                destImageWidth = srcWidth;
+                destImageHeight = srcHeight;
+            } else {
+                destImageWidth = srcWidth * configTransform.getScaleX();
+                destImageHeight = srcHeight * configTransform.getScaleY();
+            }
+        } else {
+            double destRegionWidth;
+            double destRegionHeight;
+
+            if ((type & ~(TYPE_TRANSLATION | TYPE_FLIP)) == 0) {
+                destRegionWidth = dw;
+                destRegionHeight = dh;
+            } else if ((type & ~(TYPE_TRANSLATION | TYPE_FLIP | TYPE_MASK_SCALE)) == 0) {
+                destRegionWidth = dw * tx.getScaleX();
+                destRegionHeight = dh * tx.getScaleY();
+            } else {
+                destRegionWidth = dw * Math.hypot(
+                        tx.getScaleX(), tx.getShearY());
+                destRegionHeight = dh * Math.hypot(
+                        tx.getShearX(), tx.getScaleY());
+            }
+            destImageWidth = Math.abs(srcWidth * destRegionWidth / sw);
+            destImageHeight = Math.abs(srcHeight * destRegionHeight / sh);
+        }
 
         Image resolutionVariant
                 = img.getResolutionVariant(destImageWidth, destImageHeight);
@@ -3261,9 +3346,11 @@ public final class SunGraphics2D
 
         final int imgW = img.getWidth(null);
         final int imgH = img.getHeight(null);
-        if (isHiDPIImage(img)) {
-            return drawHiDPIImage(img, x, y, x + width, y + height, 0, 0, imgW,
-                                  imgH, bg, observer);
+        Boolean hidpiImageDrawn = drawHiDPIImage(img, x, y, x + width, y + height,
+                                                 0, 0, imgW, imgH, bg, observer,
+                                                 null);
+        if (hidpiImageDrawn != null) {
+            return hidpiImageDrawn;
         }
 
         if (width == imgW && height == imgH) {
@@ -3307,11 +3394,13 @@ public final class SunGraphics2D
             return true;
         }
 
-        if (isHiDPIImage(img)) {
-            final int imgW = img.getWidth(null);
-            final int imgH = img.getHeight(null);
-            return drawHiDPIImage(img, x, y, x + imgW, y + imgH, 0, 0, imgW,
-                                  imgH, bg, observer);
+        final int imgW = img.getWidth(null);
+        final int imgH = img.getHeight(null);
+        Boolean hidpiImageDrawn = drawHiDPIImage(img, x, y, x + imgW, y + imgH,
+                                                 0, 0, imgW, imgH, bg, observer,
+                                                 null);
+        if (hidpiImageDrawn != null) {
+            return hidpiImageDrawn;
         }
 
         try {
@@ -3362,9 +3451,12 @@ public final class SunGraphics2D
             return true;
         }
 
-        if (isHiDPIImage(img)) {
-            return drawHiDPIImage(img, dx1, dy1, dx2, dy2, sx1, sy1, sx2, sy2,
-                                  bgcolor, observer);
+        Boolean hidpiImageDrawn = drawHiDPIImage(img, dx1, dy1, dx2, dy2,
+                                                 sx1, sy1, sx2, sy2,
+                                                 bgcolor, observer, null);
+
+        if (hidpiImageDrawn != null) {
+            return hidpiImageDrawn;
         }
 
         if (((sx2 - sx1) == (dx2 - dx1)) &&
@@ -3445,33 +3537,16 @@ public final class SunGraphics2D
             return drawImage(img, 0, 0, null, observer);
         }
 
-        if (isHiDPIImage(img)) {
-            final int w = img.getWidth(null);
-            final int h = img.getHeight(null);
-            final AffineTransform tx = new AffineTransform(transform);
-            transform(xform);
-            boolean result = drawHiDPIImage(img, 0, 0, w, h, 0, 0, w, h, null,
-                                            observer);
-            transform.setTransform(tx);
-            invalidateTransform();
-            return result;
+        final int w = img.getWidth(null);
+        final int h = img.getHeight(null);
+        Boolean hidpiImageDrawn = drawHiDPIImage(img, 0, 0, w, h, 0, 0, w, h,
+                                                 null, observer, xform);
+
+        if (hidpiImageDrawn != null) {
+            return hidpiImageDrawn;
         }
 
-        try {
-            return imagepipe.transformImage(this, img, xform, observer);
-        } catch (InvalidPipeException e) {
-            try {
-                revalidateAll();
-                return imagepipe.transformImage(this, img, xform, observer);
-            } catch (InvalidPipeException e2) {
-                // Still catching the exception; we are not yet ready to
-                // validate the surfaceData correctly.  Fail for now and
-                // try again next time around.
-                return false;
-            }
-        } finally {
-            surfaceData.markDirty();
-        }
+        return transformImage(img, xform, observer);
     }
 
     public void drawImage(BufferedImage bImg,
@@ -3558,6 +3633,7 @@ public final class SunGraphics2D
      * enough to know that if our override is empty then it should not
      * mark us as finalizeable.
      */
+    @SuppressWarnings("deprecation")
     public void finalize() {
         // DO NOT REMOVE THIS METHOD
     }

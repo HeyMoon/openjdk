@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,13 +35,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
+import jdk.internal.misc.JavaAWTAccess;
+import jdk.internal.misc.SharedSecrets;
 
 /**
  * @test
  * @bug 8065991
  * @summary check that when LogManager is initialized, a deadlock similar
  *          to that described in 8065709 will not occur.
- * @modules java.base/sun.misc
+ * @modules java.base/jdk.internal.misc
+ *          java.logging
+ *          java.management
  * @run main/othervm LogManagerAppContextDeadlock UNSECURE
  * @run main/othervm LogManagerAppContextDeadlock SECURE
  *
@@ -63,7 +67,7 @@ public class LogManagerAppContextDeadlock {
     // Emulate AppContext
     static class FakeAppContext {
 
-        final static AtomicInteger numAppContexts = new AtomicInteger(0);
+        static final AtomicInteger numAppContexts = new AtomicInteger(0);
         static final class FakeAppContextLock {}
         static final FakeAppContextLock lock = new FakeAppContextLock();
         static volatile FakeAppContext appContext;
@@ -97,7 +101,7 @@ public class LogManagerAppContextDeadlock {
         }
 
         static {
-            sun.misc.SharedSecrets.setJavaAWTAccess(new sun.misc.JavaAWTAccess() {
+            SharedSecrets.setJavaAWTAccess(new JavaAWTAccess() {
                 @Override
                 public Object getAppletContext() {
                     if (numAppContexts.get() == 0) return null;
@@ -137,6 +141,7 @@ public class LogManagerAppContextDeadlock {
         t1.setDaemon(true);
         t1.start();
         Thread t2 = new Thread() {
+            public Object logger;
             public void run() {
                 sem3.release();
                 try {
@@ -147,7 +152,10 @@ public class LogManagerAppContextDeadlock {
                     Thread.interrupted();
                 }
                 System.out.println("Logger.getLogger(name).info(name)");
-                Logger.getLogger(test.name());//.info(name);
+                // stick the logger in an instance variable to prevent it
+                // from being garbage collected before the main thread
+                // calls LogManager.getLogger() below.
+                logger = Logger.getLogger(test.name());//.info(name);
                 System.out.println("Done: Logger.getLogger(name).info(name)");
             }
         };
@@ -220,7 +228,7 @@ public class LogManagerAppContextDeadlock {
     }
 
     // A thread that detect deadlocks.
-    final static class DeadlockDetector extends Thread {
+    static final class DeadlockDetector extends Thread {
 
         public DeadlockDetector() {
             this.setDaemon(true);
@@ -302,7 +310,7 @@ public class LogManagerAppContextDeadlock {
     }
 
     // A Helper class to build a set of permissions.
-    final static class PermissionsBuilder {
+    static final class PermissionsBuilder {
         final Permissions perms;
         public PermissionsBuilder() {
             this(new Permissions());
@@ -341,7 +349,7 @@ public class LogManagerAppContextDeadlock {
             // FileHandlers because we're passing invalid parameters
             // which will make the creation fail...
             permissions = new Permissions();
-            permissions.add(new RuntimePermission("accessClassInPackage.sun.misc"));
+            permissions.add(new RuntimePermission("accessClassInPackage.jdk.internal.misc"));
 
             // these are used for configuring the test itself...
             allPermissions = new Permissions();

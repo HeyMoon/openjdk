@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,8 +28,9 @@
 #include "gc/g1/g1StringDedup.hpp"
 #include "gc/g1/g1StringDedupQueue.hpp"
 #include "gc/shared/gcLocker.hpp"
+#include "logging/log.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "utilities/stack.inline.hpp"
 
@@ -95,7 +96,7 @@ void G1StringDedupQueue::push(uint worker_id, oop java_string) {
 
 oop G1StringDedupQueue::pop() {
   assert(!SafepointSynchronize::is_at_safepoint(), "Must not be at safepoint");
-  No_Safepoint_Verifier nsv;
+  NoSafepointVerifier nsv;
 
   // Try all queues before giving up
   for (size_t tries = 0; tries < _queue->_nqueues; tries++) {
@@ -152,10 +153,9 @@ void G1StringDedupQueue::unlink_or_oops_do(G1StringDedupUnlinkOrOopsDoClosure* c
   }
 }
 
-void G1StringDedupQueue::print_statistics(outputStream* st) {
-  st->print_cr(
-    "   [Queue]\n"
-    "      [Dropped: " UINTX_FORMAT "]", _queue->_dropped);
+void G1StringDedupQueue::print_statistics() {
+  log_debug(gc, stringdedup)("  Queue");
+  log_debug(gc, stringdedup)("    Dropped: " UINTX_FORMAT, _queue->_dropped);
 }
 
 void G1StringDedupQueue::verify() {

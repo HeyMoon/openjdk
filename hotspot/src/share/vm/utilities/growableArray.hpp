@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,6 @@
 #include "memory/allocation.inline.hpp"
 #include "utilities/debug.hpp"
 #include "utilities/globalDefinitions.hpp"
-#include "utilities/top.hpp"
 
 // A growable array.
 
@@ -169,7 +168,9 @@ template<class E> class GrowableArray : public GenericGrowableArray {
     : GenericGrowableArray(initial_size, 0, C_heap, F) {
     _data = (E*)raw_allocate(sizeof(E));
 // Needed for Visual Studio 2012 and older
+#ifdef _MSC_VER
 #pragma warning(suppress: 4345)
+#endif
     for (int i = 0; i < _max; i++) ::new ((void*)&_data[i]) E();
   }
 
@@ -246,6 +247,10 @@ template<class E> class GrowableArray : public GenericGrowableArray {
   E top() const {
     assert(_len > 0, "empty list");
     return _data[_len-1];
+  }
+
+  E last() const {
+    return top();
   }
 
   GrowableArrayIterator<E> begin() const {
@@ -361,6 +366,24 @@ template<class E> class GrowableArray : public GenericGrowableArray {
     _data[idx] = elem;
   }
 
+  void insert_before(const int idx, const GrowableArray<E>* array) {
+    assert(0 <= idx && idx <= _len, "illegal index");
+    check_nesting();
+    int array_len = array->length();
+    int new_len = _len + array_len;
+    if (new_len >= _max) grow(new_len);
+
+    for (int j = _len - 1; j >= idx; j--) {
+      _data[j + array_len] = _data[j];
+    }
+
+    for (int j = 0; j < array_len; j++) {
+      _data[idx + j] = array->_data[j];
+    }
+
+    _len += array_len;
+  }
+
   void appendAll(const GrowableArray<E>* l) {
     for (int i = 0; i < l->_len; i++) {
       raw_at_put_grow(_len, l->_data[i], E());
@@ -373,6 +396,40 @@ template<class E> class GrowableArray : public GenericGrowableArray {
   // sort by fixed-stride sub arrays:
   void sort(int f(E*,E*), int stride) {
     qsort(_data, length() / stride, sizeof(E) * stride, (_sort_Fn)f);
+  }
+
+  // Binary search and insertion utility.  Search array for element
+  // matching key according to the static compare function.  Insert
+  // that element is not already in the list.  Assumes the list is
+  // already sorted according to compare function.
+  template <int compare(const E&, const E&)> E insert_sorted(E& key) {
+    bool found;
+    int location = find_sorted<E, compare>(key, found);
+    if (!found) {
+      insert_before(location, key);
+    }
+    return at(location);
+  }
+
+  template <typename K, int compare(const K&, const E&)> int find_sorted(const K& key, bool& found) {
+    found = false;
+    int min = 0;
+    int max = length() - 1;
+
+    while (max >= min) {
+      int mid = (int)(((uint)max + min) / 2);
+      E value = at(mid);
+      int diff = compare(key, value);
+      if (diff > 0) {
+        min = mid + 1;
+      } else if (diff < 0) {
+        max = mid - 1;
+      } else {
+        found = true;
+        return mid;
+      }
+    }
+    return min;
   }
 };
 
@@ -388,7 +445,9 @@ template<class E> void GrowableArray<E>::grow(int j) {
     int i = 0;
     for (     ; i < _len; i++) ::new ((void*)&newData[i]) E(_data[i]);
 // Needed for Visual Studio 2012 and older
+#ifdef _MSC_VER
 #pragma warning(suppress: 4345)
+#endif
     for (     ; i < _max; i++) ::new ((void*)&newData[i]) E();
     for (i = 0; i < old_max; i++) _data[i].~E();
     if (on_C_heap() && _data != NULL) {
@@ -444,6 +503,7 @@ template<class E> class GrowableArrayIterator : public StackObj {
   }
 
  public:
+  GrowableArrayIterator() : _array(NULL), _position(0) { }
   GrowableArrayIterator<E>& operator++()  { ++_position; return *this; }
   E operator*()                           { return _array->at(_position); }
 

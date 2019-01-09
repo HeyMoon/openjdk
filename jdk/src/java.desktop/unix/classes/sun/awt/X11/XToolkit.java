@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 package sun.awt.X11;
 
+import java.awt.peer.TaskbarPeer;
 import java.awt.*;
 import java.awt.event.InputEvent;
 import java.awt.event.MouseEvent;
@@ -39,7 +40,6 @@ import java.awt.dnd.peer.DragSourceContextPeer;
 import java.awt.font.TextAttribute;
 import java.awt.im.InputMethodHighlight;
 import java.awt.im.spi.InputMethodDescriptor;
-import java.awt.image.ColorModel;
 import java.awt.peer.*;
 import java.beans.PropertyChangeListener;
 import java.security.AccessController;
@@ -51,12 +51,13 @@ import sun.awt.*;
 import sun.awt.datatransfer.DataTransferer;
 import sun.font.FontConfigManager;
 import sun.java2d.SunGraphicsEnvironment;
-import sun.misc.*;
+import sun.awt.util.PerformanceLogger;
 import sun.awt.util.ThreadGroupUtils;
 import sun.print.PrintJob2D;
 import sun.security.action.GetPropertyAction;
 import sun.security.action.GetBooleanAction;
 import sun.util.logging.PlatformLogger;
+import static sun.awt.X11.XlibUtil.scaleDown;
 
 public final class XToolkit extends UNIXToolkit implements Runnable {
     private static final PlatformLogger log = PlatformLogger.getLogger("sun.awt.X11.XToolkit");
@@ -67,7 +68,7 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
 
     //There is 400 ms is set by default on Windows and 500 by default on KDE and GNOME.
     //We use the same hardcoded constant.
-    private final static int AWT_MULTICLICK_DEFAULT_TIME = 500;
+    private static final int AWT_MULTICLICK_DEFAULT_TIME = 500;
 
     static final boolean PRIMARY_LOOP = false;
     static final boolean SECONDARY_LOOP = true;
@@ -106,12 +107,17 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
     static UIDefaults uidefaults;
     static final X11GraphicsEnvironment localEnv;
     private static final X11GraphicsDevice device;
-    private static final X11GraphicsConfig config;
     private static final long display;
     static int awt_multiclick_time;
     static boolean securityWarningEnabled;
 
-    private static volatile int screenWidth = -1, screenHeight = -1; // Dimensions of default screen
+    /**
+     * Dimensions of default virtual screen in pixels. These values are used to
+     * limit the maximum size of the window.
+     */
+    private static volatile int maxWindowWidthInPixels = -1;
+    private static volatile int maxWindowHeightInPixels = -1;
+
     static long awt_defaultFg; // Pixel
     private static XMouseInfoPeer xPeer;
 
@@ -120,13 +126,11 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
         if (GraphicsEnvironment.isHeadless()) {
             localEnv = null;
             device = null;
-            config = null;
             display = 0;
         } else {
             localEnv = (X11GraphicsEnvironment) GraphicsEnvironment
                 .getLocalGraphicsEnvironment();
             device = (X11GraphicsDevice) localEnv.getDefaultScreenDevice();
-            config = (X11GraphicsConfig) device.getDefaultConfiguration();
             display = device.getDisplay();
             setupModifierMap();
             initIDs();
@@ -140,8 +144,8 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
      */
     static native long getTrayIconDisplayTimeout();
 
-    private native static void initIDs();
-    native static void waitForEvents(long nextTaskTime);
+    private static native void initIDs();
+    static native void waitForEvents(long nextTaskTime);
     static Thread toolkitThread;
     static boolean isToolkitThread() {
         return Thread.currentThread() == toolkitThread;
@@ -281,8 +285,8 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
                 }
             };
             String name = "XToolkt-Shutdown-Thread";
-            Thread shutdownThread = new ManagedLocalsThread(
-                    ThreadGroupUtils.getRootThreadGroup(), r, name);
+            Thread shutdownThread = new Thread(
+                    ThreadGroupUtils.getRootThreadGroup(), r, name, 0, false);
             shutdownThread.setContextClassLoader(null);
             Runtime.getRuntime().addShutdownHook(shutdownThread);
             return null;
@@ -329,8 +333,9 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
 
             toolkitThread = AccessController.doPrivileged((PrivilegedAction<Thread>) () -> {
                 String name = "AWT-XAWT";
-                Thread thread = new ManagedLocalsThread(
-                        ThreadGroupUtils.getRootThreadGroup(), this, name);
+                Thread thread = new Thread(
+                        ThreadGroupUtils.getRootThreadGroup(), this, name,
+                        0, false);
                 thread.setContextClassLoader(null);
                 thread.setPriority(Thread.NORM_PRIORITY + 1);
                 thread.setDaemon(true);
@@ -405,7 +410,7 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
     /**
      * Returns whether there is last remembered cursor position.  The
      * position is remembered from X mouse events on our peers.  The
-     * position is stored in <code>p</code>.
+     * position is stored in {@code p}.
      * @return true, if there is remembered last cursor position,
      * false otherwise
      */
@@ -422,7 +427,7 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
         }
     }
 
-    private void processGlobalMotionEvent(XEvent e) {
+    private void processGlobalMotionEvent(XEvent e, XBaseWindow win) {
         // Only our windows guaranteely generate MotionNotify, so we
         // should track enter/leave, to catch the moment when to
         // switch to XQueryPointer
@@ -431,9 +436,11 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
             awtLock();
             try {
                 if (lastCursorPos == null) {
-                    lastCursorPos = new Point(ev.get_x_root(), ev.get_y_root());
+                    lastCursorPos = new Point(win.scaleDown(ev.get_x_root()),
+                                              win.scaleDown(ev.get_y_root()));
                 } else {
-                    lastCursorPos.setLocation(ev.get_x_root(), ev.get_y_root());
+                    lastCursorPos.setLocation(win.scaleDown(ev.get_x_root()),
+                                              win.scaleDown(ev.get_y_root()));
                 }
             } finally {
                 awtUnlock();
@@ -452,9 +459,11 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
             awtLock();
             try {
                 if (lastCursorPos == null) {
-                    lastCursorPos = new Point(ev.get_x_root(), ev.get_y_root());
+                    lastCursorPos = new Point(win.scaleDown(ev.get_x_root()),
+                                              win.scaleDown(ev.get_y_root()));
                 } else {
-                    lastCursorPos.setLocation(ev.get_x_root(), ev.get_y_root());
+                    lastCursorPos.setLocation(win.scaleDown(ev.get_x_root()),
+                                              win.scaleDown(ev.get_y_root()));
                 }
             } finally {
                 awtUnlock();
@@ -492,10 +501,11 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
     private void dispatchEvent(XEvent ev) {
         final XAnyEvent xany = ev.get_xany();
 
-        if (windowToXWindow(xany.get_window()) != null &&
-             (ev.get_type() == XConstants.MotionNotify || ev.get_type() == XConstants.EnterNotify || ev.get_type() == XConstants.LeaveNotify))
-        {
-            processGlobalMotionEvent(ev);
+        XBaseWindow baseWindow = windowToXWindow(xany.get_window());
+        if (baseWindow != null && (ev.get_type() == XConstants.MotionNotify
+                || ev.get_type() == XConstants.EnterNotify
+                || ev.get_type() == XConstants.LeaveNotify)) {
+            processGlobalMotionEvent(ev, baseWindow);
         }
 
         if( ev.get_type() == XConstants.MappingNotify ) {
@@ -644,8 +654,8 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
                 @Override
                 public void displayChanged() {
                     // 7045370: Reset the cached values
-                    XToolkit.screenWidth = -1;
-                    XToolkit.screenHeight = -1;
+                    XToolkit.maxWindowWidthInPixels = -1;
+                    XToolkit.maxWindowHeightInPixels = -1;
                 }
 
                 @Override
@@ -662,7 +672,7 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
     }
 
     private static void initScreenSize() {
-        if (screenWidth == -1 || screenHeight == -1) {
+        if (maxWindowWidthInPixels == -1 || maxWindowHeightInPixels == -1) {
             awtLock();
             try {
                 XWindowAttributes pattr = new XWindowAttributes();
@@ -670,8 +680,8 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
                     XlibWrapper.XGetWindowAttributes(XToolkit.getDisplay(),
                                                      XToolkit.getDefaultRootWindow(),
                                                      pattr.pData);
-                    screenWidth  = pattr.get_width();
-                    screenHeight = pattr.get_height();
+                    maxWindowWidthInPixels = pattr.get_width();
+                    maxWindowHeightInPixels = pattr.get_height();
                 } finally {
                     pattr.dispose();
                 }
@@ -681,27 +691,17 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
         }
     }
 
-    static int getDefaultScreenWidth() {
+    static int getMaxWindowWidthInPixels() {
         initScreenSize();
-        return screenWidth;
+        return maxWindowWidthInPixels;
     }
 
-    static int getDefaultScreenHeight() {
+    static int getMaxWindowHeightInPixels() {
         initScreenSize();
-        return screenHeight;
+        return maxWindowHeightInPixels;
     }
 
-    @Override
-    protected int getScreenWidth() {
-        return getDefaultScreenWidth();
-    }
-
-    @Override
-    protected int getScreenHeight() {
-        return getDefaultScreenHeight();
-    }
-
-    private static Rectangle getWorkArea(long root)
+    private static Rectangle getWorkArea(long root, int scale)
     {
         XAtom XA_NET_WORKAREA = XAtom.get("_NET_WORKAREA");
 
@@ -717,7 +717,10 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
                 int rootWidth = (int)Native.getLong(native_ptr, 2);
                 int rootHeight = (int)Native.getLong(native_ptr, 3);
 
-                return new Rectangle(rootX, rootY, rootWidth, rootHeight);
+                return new Rectangle(scaleDown(rootX, scale),
+                                     scaleDown(rootY, scale),
+                                     scaleDown(rootWidth, scale),
+                                     scaleDown(rootHeight, scale));
             }
         }
         finally
@@ -750,30 +753,44 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
         try
         {
             X11GraphicsConfig x11gc = (X11GraphicsConfig)gc;
-            X11GraphicsDevice x11gd = (X11GraphicsDevice)x11gc.getDevice();
+            X11GraphicsDevice x11gd = x11gc.getDevice();
             long root = XlibUtil.getRootWindow(x11gd.getScreen());
-            Rectangle rootBounds = XlibUtil.getWindowGeometry(root);
+            int scale = x11gc.getScale();
+            Rectangle rootBounds = XlibUtil.getWindowGeometry(root, scale);
 
             X11GraphicsEnvironment x11ge = (X11GraphicsEnvironment)
                 GraphicsEnvironment.getLocalGraphicsEnvironment();
             if (!x11ge.runningXinerama())
             {
-                Rectangle workArea = XToolkit.getWorkArea(root);
-                if (workArea != null)
-                {
-                    return new Insets(workArea.y,
-                                      workArea.x,
-                                      rootBounds.height - workArea.height - workArea.y,
-                                      rootBounds.width - workArea.width - workArea.x);
-                }
+                Insets screenInsets = getInsets(root, rootBounds, scale);
+                if (screenInsets != null) return screenInsets;
             }
 
-            return getScreenInsetsManually(root, rootBounds, gc.getBounds());
+            Insets insets = getScreenInsetsManually(root, rootBounds,
+                    gc.getBounds(), scale);
+            if ((insets.left | insets.top | insets.bottom | insets.right) == 0
+                    && rootBounds != null ) {
+                root = XlibWrapper.RootWindow(XToolkit.getDisplay(),
+                        x11gd.getScreen());
+                Insets screenInsets = getInsets(root, rootBounds, scale);
+                if (screenInsets != null) return screenInsets;
+            }
+            return insets;
         }
         finally
         {
             XToolkit.awtUnlock();
         }
+    }
+
+    private Insets getInsets(long root, Rectangle rootBounds, int scale) {
+        Rectangle workArea = XToolkit.getWorkArea(root, scale);
+        if (workArea == null) {
+            return null;
+        }
+        return new Insets(workArea.y, workArea.x,
+                rootBounds.height - workArea.height - workArea.y,
+                rootBounds.width - workArea.width - workArea.x);
     }
 
     /*
@@ -783,7 +800,8 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
      *
      * This method should be called under XToolkit.awtLock()
      */
-    private Insets getScreenInsetsManually(long root, Rectangle rootBounds, Rectangle screenBounds)
+    private Insets getScreenInsetsManually(long root, Rectangle rootBounds,
+                                           Rectangle screenBounds, int scale)
     {
         /*
          * During the manual calculation of screen insets we iterate
@@ -831,20 +849,23 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
                 if (strutPresent)
                 {
                     // second, verify that window is located on the proper screen
-                    Rectangle windowBounds = XlibUtil.getWindowGeometry(window);
+                    Rectangle windowBounds = XlibUtil.getWindowGeometry(window,
+                                                                        scale);
                     if (windowLevel > 1)
                     {
-                        windowBounds = XlibUtil.translateCoordinates(window, root, windowBounds);
+                        windowBounds = XlibUtil.translateCoordinates(window, root,
+                                                                     windowBounds,
+                                                                     scale);
                     }
                     // if _NET_WM_STRUT_PARTIAL is present, we should use its values to detect
                     // if the struts area intersects with screenBounds, however some window
                     // managers don't set this hint correctly, so we just get intersection with windowBounds
                     if (windowBounds != null && windowBounds.intersects(screenBounds))
                     {
-                        int left = (int)Native.getLong(native_ptr, 0);
-                        int right = (int)Native.getLong(native_ptr, 1);
-                        int top = (int)Native.getLong(native_ptr, 2);
-                        int bottom = (int)Native.getLong(native_ptr, 3);
+                        int left = scaleDown((int)Native.getLong(native_ptr, 0), scale);
+                        int right = scaleDown((int)Native.getLong(native_ptr, 1), scale);
+                        int top = scaleDown((int)Native.getLong(native_ptr, 2), scale);
+                        int bottom = scaleDown((int)Native.getLong(native_ptr, 3), scale);
 
                         /*
                          * struts could be relative to root window bounds, so
@@ -1102,7 +1123,7 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
      * Returns the value of "sun.awt.disableGtkFileDialogs" property. Default
      * value is {@code false}.
      */
-    public synchronized static boolean getSunAwtDisableGtkFileDialogs() {
+    public static synchronized boolean getSunAwtDisableGtkFileDialogs() {
         if (sunAwtDisableGtkFileDialogs == null) {
             sunAwtDisableGtkFileDialogs = AccessController.doPrivileged(
                                               new GetBooleanAction("sun.awt.disableGtkFileDialogs"));
@@ -1114,7 +1135,8 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
     public FileDialogPeer createFileDialog(FileDialog target) {
         FileDialogPeer peer = null;
         // The current GtkFileChooser is available from GTK+ 2.4
-        if (!getSunAwtDisableGtkFileDialogs() && checkGtkVersion(2, 4, 0)) {
+        if (!getSunAwtDisableGtkFileDialogs() &&
+                      (checkGtkVersion(2, 4, 0) || checkGtkVersion(3, 0, 0))) {
             peer = new GtkFileDialogPeer(target);
         } else {
             peer = new XFileDialogPeer(target);
@@ -1343,20 +1365,6 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
     static native long getDefaultXColormap();
     static native long getDefaultScreenData();
 
-    static ColorModel screenmodel;
-
-    static ColorModel getStaticColorModel() {
-        if (screenmodel == null) {
-            screenmodel = config.getColorModel ();
-        }
-        return screenmodel;
-    }
-
-    @Override
-    public ColorModel getColorModel() {
-        return getStaticColorModel();
-    }
-
     /**
      * Returns a new input method adapter descriptor for native input methods.
      */
@@ -1540,6 +1548,10 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
                                   Integer.valueOf(getMultiClickTime()));
             desktopProperties.put("awt.mouse.numButtons",
                                   Integer.valueOf(getNumberOfButtons()));
+            if(SunGraphicsEnvironment.isUIScaleEnabled()) {
+                addPropertyChangeListener("gnome.Xft/DPI", evt ->
+                                                     localEnv.displayChanged());
+            }
         }
     }
 
@@ -1579,8 +1591,8 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
         return Math.min(XConstants.MAX_BUTTONS, ((SunToolkit) (Toolkit.getDefaultToolkit())).getNumberOfButtons());
     }
 
-    private final static String prefix  = "DnD.Cursor.";
-    private final static String postfix = ".32x32";
+    private static final String prefix  = "DnD.Cursor.";
+    private static final String postfix = ".32x32";
     private static final String dndPrefix  = "DnD.";
 
     @Override
@@ -1665,11 +1677,11 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
     /**
      * Callback from the native side indicating some, or all, of the
      * desktop properties have changed and need to be reloaded.
-     * <code>data</code> is the byte array directly from the x server and
+     * {@code data} is the byte array directly from the x server and
      * may be in little endian format.
      * <p>
      * NB: This could be called from any thread if triggered by
-     * <code>loadXSettings</code>.  It is called from the System EDT
+     * {@code loadXSettings}.  It is called from the System EDT
      * if triggered by an XSETTINGS change.
      */
     void parseXSettings(int screen_XXX_ignored,Map<String, Object> updatedSettings) {
@@ -1926,16 +1938,16 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
     static native void wakeup_poll();
 
     /**
-     * Registers a Runnable which <code>run()</code> method will be called
+     * Registers a Runnable which {@code run()} method will be called
      * once on the toolkit thread when a specified interval of time elapses.
      *
-     * @param task a Runnable which <code>run</code> method will be called
-     *        on the toolkit thread when <code>interval</code> milliseconds
+     * @param task a Runnable which {@code run} method will be called
+     *        on the toolkit thread when {@code interval} milliseconds
      *        elapse
      * @param interval an interal in milliseconds
      *
-     * @throws NullPointerException if <code>task</code> is <code>null</code>
-     * @throws IllegalArgumentException if <code>interval</code> is not positive
+     * @throws NullPointerException if {@code task} is {@code null}
+     * @throws IllegalArgumentException if {@code interval} is not positive
      */
     static void schedule(Runnable task, long interval) {
         if (task == null) {
@@ -2487,7 +2499,8 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
             oops_updated = false;
             long event_number = getEventNumber();
             // Generate OOPS ConfigureNotify event
-            XlibWrapper.XMoveWindow(getDisplay(), win.getWindow(), ++oops_position, 0);
+            XlibWrapper.XMoveWindow(getDisplay(), win.getWindow(),
+                                    win.scaleUp(++oops_position), 0);
             // Change win position each time to avoid system optimization
             if (oops_position > 50) {
                 oops_position = 0;
@@ -2549,6 +2562,16 @@ public final class XToolkit extends UNIXToolkit implements Runnable {
     @Override
     public DesktopPeer createDesktopPeer(Desktop target){
         return new XDesktopPeer();
+    }
+
+    @Override
+    public boolean isTaskbarSupported(){
+        return XTaskbarPeer.isTaskbarSupported();
+    }
+
+    @Override
+    public TaskbarPeer createTaskbarPeer(Taskbar target){
+        return new XTaskbarPeer();
     }
 
     @Override

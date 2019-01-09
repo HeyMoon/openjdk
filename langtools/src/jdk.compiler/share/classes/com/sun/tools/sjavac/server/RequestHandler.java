@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,20 +22,21 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package com.sun.tools.sjavac.server;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.io.PrintWriter;
-import java.io.StringWriter;
-import java.net.Socket;
-import java.net.URI;
-import java.util.List;
-import java.util.Set;
-
+import com.sun.tools.javac.main.Main;
 import com.sun.tools.sjavac.Log;
+import com.sun.tools.sjavac.Util;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.net.Socket;
+import java.nio.file.Path;
+
+import static com.sun.tools.sjavac.server.SjavacServer.LINE_TYPE_RC;
+
 
 /**
  * A RequestHandler handles requests performed over a socket. Specifically it
@@ -53,7 +54,7 @@ import com.sun.tools.sjavac.Log;
  *  This code and its internal interfaces are subject to change or
  *  deletion without notice.</b>
  */
-public class RequestHandler implements Runnable {
+public class RequestHandler extends Thread {
 
     private final Socket socket;
     private final Sjavac sjavac;
@@ -65,56 +66,63 @@ public class RequestHandler implements Runnable {
 
     @Override
     public void run() {
-        try (ObjectOutputStream oout = new ObjectOutputStream(socket.getOutputStream());
-             ObjectInputStream oin = new ObjectInputStream(socket.getInputStream())) {
-            String id = (String) oin.readObject();
-            String cmd = (String) oin.readObject();
-            Log.info("Handling request, id: " + id + " cmd: " + cmd);
-            switch (cmd) {
-            case SjavacServer.CMD_SYS_INFO: handleSysInfoRequest(oin, oout); break;
-            case SjavacServer.CMD_COMPILE:  handleCompileRequest(oin, oout); break;
-            default: Log.error("Unknown command: " + cmd);
+
+        try (BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+             PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
+
+            // Set up logging for this thread. Stream back logging messages to
+            // client on the format format "level:msg".
+            Log.setLogForCurrentThread(new Log(out, out) {
+                @Override
+                protected boolean isLevelLogged(Level l) {
+                    // Make sure it is up to the client to decide whether or
+                    // not this message should be displayed.
+                    return true;
+                }
+
+                @Override
+                protected void printLogMsg(Level msgLevel, String msg) {
+                    // Follow sjavac server/client protocol: Send one line
+                    // at a time and prefix with message with "level:".
+                    Util.getLines(msg)
+                        .map(line -> msgLevel + ":" + line)
+                        .forEach(line -> super.printLogMsg(msgLevel, line));
+                }
+            });
+
+            // Read argument array
+            int n = Integer.parseInt(in.readLine());
+            String[] args = new String[n];
+            for (int i = 0; i < n; i++) {
+                args[i] = in.readLine();
             }
+
+            // If there has been any internal errors, notify client
+            checkInternalErrorLog();
+
+            // Perform compilation
+            Main.Result rc = sjavac.compile(args);
+
+            // Send return code back to client
+            out.println(LINE_TYPE_RC + ":" + rc.name());
+
+            // Check for internal errors again.
+            checkInternalErrorLog();
         } catch (Exception ex) {
             // Not much to be done at this point. The client side request
             // code will most likely throw an IOException and the
             // compilation will fail.
-            StringWriter sw = new StringWriter();
-            ex.printStackTrace(new PrintWriter(sw));
-            Log.error(sw.toString());
+            Log.error(ex);
+        } finally {
+            Log.setLogForCurrentThread(null);
         }
     }
 
-    private void handleSysInfoRequest(ObjectInputStream oin,
-                                      ObjectOutputStream oout) throws IOException {
-        oout.writeObject(sjavac.getSysInfo());
-        oout.flush();
-    }
-
-    @SuppressWarnings("unchecked")
-    private void handleCompileRequest(ObjectInputStream oin,
-                                      ObjectOutputStream oout) throws IOException {
-        try {
-            // Read request arguments
-            String protocolId = (String) oin.readObject();
-            String invocationId = (String) oin.readObject();
-            String[] args = (String[]) oin.readObject();
-            List<File> explicitSources = (List<File>) oin.readObject();
-            Set<URI> sourcesToCompile = (Set<URI>) oin.readObject();
-            Set<URI> visibleSources = (Set<URI>) oin.readObject();
-
-            // Perform compilation
-            CompilationResult cr = sjavac.compile(protocolId,
-                                                  invocationId,
-                                                  args,
-                                                  explicitSources,
-                                                  sourcesToCompile,
-                                                  visibleSources);
-            // Write request response
-            oout.writeObject(cr);
-            oout.flush();
-        } catch (ClassNotFoundException cnfe) {
-            throw new IOException(cnfe);
+    private void checkInternalErrorLog() {
+        Path errorLog = ServerMain.getErrorLog().getLogDestination();
+        if (errorLog != null) {
+            Log.error("Server has encountered an internal error. See " + errorLog.toAbsolutePath()
+                    + " for details.");
         }
     }
 }

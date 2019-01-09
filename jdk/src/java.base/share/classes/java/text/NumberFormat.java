@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -166,7 +166,7 @@ import sun.util.locale.provider.LocaleServiceProviderPool;
  *      numbers: "(12)" for -12.
  * </ol>
  *
- * <h3><a name="synchronization">Synchronization</a></h3>
+ * <h3><a id="synchronization">Synchronization</a></h3>
  *
  * <p>
  * Number formats are generally not synchronized.
@@ -174,10 +174,18 @@ import sun.util.locale.provider.LocaleServiceProviderPool;
  * If multiple threads access a format concurrently, it must be synchronized
  * externally.
  *
+ * @implSpec The {@link #format(double, StringBuffer, FieldPosition)},
+ * {@link #format(long, StringBuffer, FieldPosition)} and
+ * {@link #parse(String, ParsePosition)} methods may throw
+ * {@code NullPointerException}, if any of their parameter is {@code null}.
+ * The subclass may provide its own implementation and specification about
+ * {@code NullPointerException}.
+ *
  * @see          DecimalFormat
  * @see          ChoiceFormat
  * @author       Mark Davis
  * @author       Helena Shih
+ * @since 1.1
  */
 public abstract class NumberFormat extends Format  {
 
@@ -271,7 +279,7 @@ public abstract class NumberFormat extends Format  {
      *            index information as described above.
      * @return A <code>Number</code> parsed from the string. In case of
      *         error, returns null.
-     * @exception NullPointerException if <code>pos</code> is null.
+     * @throws NullPointerException if {@code source} or {@code pos} is null.
      */
     @Override
     public final Object parseObject(String source, ParsePosition pos) {
@@ -425,7 +433,7 @@ public abstract class NumberFormat extends Format  {
      * @return the {@code NumberFormat} instance for general-purpose number
      * formatting
      */
-    public final static NumberFormat getInstance() {
+    public static final NumberFormat getInstance() {
         return getInstance(Locale.getDefault(Locale.Category.FORMAT), NUMBERSTYLE);
     }
 
@@ -454,7 +462,7 @@ public abstract class NumberFormat extends Format  {
      * @see java.util.Locale#getDefault(java.util.Locale.Category)
      * @see java.util.Locale.Category#FORMAT
      */
-    public final static NumberFormat getNumberInstance() {
+    public static final NumberFormat getNumberInstance() {
         return getInstance(Locale.getDefault(Locale.Category.FORMAT), NUMBERSTYLE);
     }
 
@@ -487,7 +495,7 @@ public abstract class NumberFormat extends Format  {
      * @return a number format for integer values
      * @since 1.4
      */
-    public final static NumberFormat getIntegerInstance() {
+    public static final NumberFormat getIntegerInstance() {
         return getInstance(Locale.getDefault(Locale.Category.FORMAT), INTEGERSTYLE);
     }
 
@@ -519,7 +527,7 @@ public abstract class NumberFormat extends Format  {
      * @see java.util.Locale#getDefault(java.util.Locale.Category)
      * @see java.util.Locale.Category#FORMAT
      */
-    public final static NumberFormat getCurrencyInstance() {
+    public static final NumberFormat getCurrencyInstance() {
         return getInstance(Locale.getDefault(Locale.Category.FORMAT), CURRENCYSTYLE);
     }
 
@@ -544,7 +552,7 @@ public abstract class NumberFormat extends Format  {
      * @see java.util.Locale#getDefault(java.util.Locale.Category)
      * @see java.util.Locale.Category#FORMAT
      */
-    public final static NumberFormat getPercentInstance() {
+    public static final NumberFormat getPercentInstance() {
         return getInstance(Locale.getDefault(Locale.Category.FORMAT), PERCENTSTYLE);
     }
 

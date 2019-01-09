@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,10 +31,13 @@ import javax.tools.JavaFileManager;
 
 import com.sun.tools.javac.code.*;
 import com.sun.tools.javac.code.Attribute.Compound;
+import com.sun.tools.javac.code.Directive.ExportsDirective;
+import com.sun.tools.javac.code.Directive.RequiresDirective;
 import com.sun.tools.javac.comp.Annotate.AnnotationTypeMetadata;
 import com.sun.tools.javac.jvm.*;
 import com.sun.tools.javac.resources.CompilerProperties.Errors;
 import com.sun.tools.javac.resources.CompilerProperties.Fragments;
+import com.sun.tools.javac.resources.CompilerProperties.Warnings;
 import com.sun.tools.javac.tree.*;
 import com.sun.tools.javac.util.*;
 import com.sun.tools.javac.util.JCDiagnostic.DiagnosticFlag;
@@ -43,16 +46,12 @@ import com.sun.tools.javac.util.List;
 
 import com.sun.tools.javac.code.Lint;
 import com.sun.tools.javac.code.Lint.LintCategory;
-import com.sun.tools.javac.code.Scope.CompoundScope;
-import com.sun.tools.javac.code.Scope.NamedImportScope;
 import com.sun.tools.javac.code.Scope.WriteableScope;
 import com.sun.tools.javac.code.Type.*;
 import com.sun.tools.javac.code.Symbol.*;
 import com.sun.tools.javac.comp.DeferredAttr.DeferredAttrContext;
-import com.sun.tools.javac.comp.Infer.InferenceContext;
 import com.sun.tools.javac.comp.Infer.FreeTypeListener;
 import com.sun.tools.javac.tree.JCTree.*;
-import com.sun.tools.javac.tree.JCTree.JCPolyExpression.*;
 
 import static com.sun.tools.javac.code.Flags.*;
 import static com.sun.tools.javac.code.Flags.ANNOTATION;
@@ -85,13 +84,10 @@ public class Check {
     private final Types types;
     private final TypeAnnotations typeAnnotations;
     private final JCDiagnostic.Factory diags;
-    private boolean warnOnSyntheticConflicts;
-    private boolean suppressAbortOnBadClassFile;
-    private boolean enableSunApiLintControl;
     private final JavaFileManager fileManager;
     private final Source source;
     private final Profile profile;
-    private final boolean warnOnAccessToSensitiveMembers;
+    private final boolean warnOnAnyAccessToMembers;
 
     // The set of lint options currently in effect. It is initialized
     // from the context, and then is set/reset as needed by Attr as it
@@ -135,11 +131,7 @@ public class Check {
         allowStrictMethodClashCheck = source.allowStrictMethodClashCheck();
         allowPrivateSafeVarargs = source.allowPrivateSafeVarargs();
         allowDiamondWithAnonymousClassCreation = source.allowDiamondWithAnonymousClassCreation();
-        complexInference = options.isSet("complexinference");
-        warnOnSyntheticConflicts = options.isSet("warnOnSyntheticConflicts");
-        suppressAbortOnBadClassFile = options.isSet("suppressAbortOnBadClassFile");
-        enableSunApiLintControl = options.isSet("enableSunApiLintControl");
-        warnOnAccessToSensitiveMembers = options.isSet("warnOnAccessToSensitiveMembers");
+        warnOnAnyAccessToMembers = options.isSet("warnOnAccessToMembers");
 
         Target target = Target.instance(context);
         syntheticNameChar = target.syntheticNameChar();
@@ -147,15 +139,17 @@ public class Check {
         profile = Profile.instance(context);
 
         boolean verboseDeprecated = lint.isEnabled(LintCategory.DEPRECATION);
+        boolean verboseRemoval = lint.isEnabled(LintCategory.REMOVAL);
         boolean verboseUnchecked = lint.isEnabled(LintCategory.UNCHECKED);
-        boolean verboseSunApi = lint.isEnabled(LintCategory.SUNAPI);
         boolean enforceMandatoryWarnings = true;
 
         deprecationHandler = new MandatoryWarningHandler(log, verboseDeprecated,
                 enforceMandatoryWarnings, "deprecated", LintCategory.DEPRECATION);
+        removalHandler = new MandatoryWarningHandler(log, verboseRemoval,
+                enforceMandatoryWarnings, "removal", LintCategory.REMOVAL);
         uncheckedHandler = new MandatoryWarningHandler(log, verboseUnchecked,
                 enforceMandatoryWarnings, "unchecked", LintCategory.UNCHECKED);
-        sunApiHandler = new MandatoryWarningHandler(log, verboseSunApi,
+        sunApiHandler = new MandatoryWarningHandler(log, false,
                 enforceMandatoryWarnings, "sunapi", null);
 
         deferredLintHandler = DeferredLintHandler.instance(context);
@@ -181,22 +175,22 @@ public class Check {
      */
     boolean allowDiamondWithAnonymousClassCreation;
 
-    /** Switch: -complexinference option set?
-     */
-    boolean complexInference;
-
     /** Character for synthetic names
      */
     char syntheticNameChar;
 
-    /** A table mapping flat names of all compiled classes in this run to their
-     *  symbols; maintained from outside.
+    /** A table mapping flat names of all compiled classes for each module in this run
+     *  to their symbols; maintained from outside.
      */
-    public Map<Name,ClassSymbol> compiled = new HashMap<>();
+    private Map<Pair<ModuleSymbol, Name>,ClassSymbol> compiled = new HashMap<>();
 
     /** A handler for messages about deprecated usage.
      */
     private MandatoryWarningHandler deprecationHandler;
+
+    /** A handler for messages about deprecated-for-removal usage.
+     */
+    private MandatoryWarningHandler removalHandler;
 
     /** A handler for messages about unchecked or unsafe usage.
      */
@@ -231,8 +225,21 @@ public class Check {
      *  @param sym        The deprecated symbol.
      */
     void warnDeprecated(DiagnosticPosition pos, Symbol sym) {
-        if (!lint.isSuppressed(LintCategory.DEPRECATION))
-            deprecationHandler.report(pos, "has.been.deprecated", sym, sym.location());
+        if (sym.isDeprecatedForRemoval()) {
+            if (!lint.isSuppressed(LintCategory.REMOVAL)) {
+                if (sym.kind == MDL) {
+                    removalHandler.report(pos, "has.been.deprecated.for.removal.module", sym);
+                } else {
+                    removalHandler.report(pos, "has.been.deprecated.for.removal", sym, sym.location());
+                }
+            }
+        } else if (!lint.isSuppressed(LintCategory.DEPRECATION)) {
+            if (sym.kind == MDL) {
+                deprecationHandler.report(pos, "has.been.deprecated.module", sym);
+            } else {
+                deprecationHandler.report(pos, "has.been.deprecated", sym, sym.location());
+            }
+        }
     }
 
     /** Warn about unchecked operation.
@@ -250,15 +257,6 @@ public class Check {
     void warnUnsafeVararg(DiagnosticPosition pos, String key, Object... args) {
         if (lint.isEnabled(LintCategory.VARARGS) && allowSimplifiedVarargs)
             log.warning(LintCategory.VARARGS, pos, key, args);
-    }
-
-    /** Warn about using proprietary API.
-     *  @param pos        Position to be used for error reporting.
-     *  @param msg        A string describing the problem.
-     */
-    public void warnSunApi(DiagnosticPosition pos, String msg, Object... args) {
-        if (!lint.isSuppressed(LintCategory.SUNAPI))
-            sunApiHandler.report(pos, msg, args);
     }
 
     public void warnStatic(DiagnosticPosition pos, String msg, Object... args) {
@@ -279,6 +277,7 @@ public class Check {
      */
     public void reportDeferredDiagnostics() {
         deprecationHandler.reportDeferredDiagnostic();
+        removalHandler.reportDeferredDiagnostic();
         uncheckedHandler.reportDeferredDiagnostic();
         sunApiHandler.reportDeferredDiagnostic();
     }
@@ -290,8 +289,7 @@ public class Check {
      */
     public Type completionError(DiagnosticPosition pos, CompletionFailure ex) {
         log.error(JCDiagnostic.DiagnosticFlag.NON_DEFERRABLE, pos, "cant.access", ex.sym, ex.getDetailValue());
-        if (ex instanceof ClassFinder.BadClassFile
-                && !suppressAbortOnBadClassFile) throw new Abort();
+        if (ex instanceof ClassFinder.BadClassFile) throw new Abort();
         else return syms.errType;
     }
 
@@ -413,6 +411,9 @@ public class Check {
  * Class name generation
  **************************************************************************/
 
+
+    private Map<Pair<Name, Name>, Integer> localClassNameIndexes = new HashMap<>();
+
     /** Return name of local class.
      *  This is of the form   {@code <enclClass> $ n <classname> }
      *  where
@@ -420,17 +421,46 @@ public class Check {
      *    classname is the simple name of the local class
      */
     Name localClassName(ClassSymbol c) {
-        for (int i=1; ; i++) {
-            Name flatname = names.
-                fromString("" + c.owner.enclClass().flatname +
-                           syntheticNameChar + i +
-                           c.name);
-            if (compiled.get(flatname) == null) return flatname;
+        Name enclFlatname = c.owner.enclClass().flatname;
+        String enclFlatnameStr = enclFlatname.toString();
+        Pair<Name, Name> key = new Pair<>(enclFlatname, c.name);
+        Integer index = localClassNameIndexes.get(key);
+        for (int i = (index == null) ? 1 : index; ; i++) {
+            Name flatname = names.fromString(enclFlatnameStr
+                    + syntheticNameChar + i + c.name);
+            if (getCompiled(c.packge().modle, flatname) == null) {
+                localClassNameIndexes.put(key, i + 1);
+                return flatname;
+            }
+        }
+    }
+
+    void clearLocalClassNameIndexes(ClassSymbol c) {
+        if (c.owner != null && c.owner.kind != NIL) {
+            localClassNameIndexes.remove(new Pair<>(
+                    c.owner.enclClass().flatname, c.name));
         }
     }
 
     public void newRound() {
         compiled.clear();
+        localClassNameIndexes.clear();
+    }
+
+    public void putCompiled(ClassSymbol csym) {
+        compiled.put(Pair.of(csym.packge().modle, csym.flatname), csym);
+    }
+
+    public ClassSymbol getCompiled(ClassSymbol csym) {
+        return compiled.get(Pair.of(csym.packge().modle, csym.flatname));
+    }
+
+    public ClassSymbol getCompiled(ModuleSymbol msym, Name flatname) {
+        return compiled.get(Pair.of(msym, flatname));
+    }
+
+    public void removeCompiled(ClassSymbol csym) {
+        compiled.remove(Pair.of(csym.packge().modle, csym.flatname));
     }
 
 /* *************************************************************************
@@ -456,7 +486,7 @@ public class Check {
          */
         public Warner checkWarner(DiagnosticPosition pos, Type found, Type req);
 
-        public Infer.InferenceContext inferenceContext();
+        public InferenceContext inferenceContext();
 
         public DeferredAttr.DeferredAttrContext deferredAttrContext();
     }
@@ -486,7 +516,7 @@ public class Check {
             return enclosingContext.checkWarner(pos, found, req);
         }
 
-        public Infer.InferenceContext inferenceContext() {
+        public InferenceContext inferenceContext() {
             return enclosingContext.inferenceContext();
         }
 
@@ -535,14 +565,10 @@ public class Check {
     }
 
     Type checkType(final DiagnosticPosition pos, final Type found, final Type req, final CheckContext checkContext) {
-        final Infer.InferenceContext inferenceContext = checkContext.inferenceContext();
+        final InferenceContext inferenceContext = checkContext.inferenceContext();
         if (inferenceContext.free(req) || inferenceContext.free(found)) {
-            inferenceContext.addFreeTypeListener(List.of(req, found), new FreeTypeListener() {
-                @Override
-                public void typesInferred(InferenceContext inferenceContext) {
-                    checkType(pos, inferenceContext.asInstType(found), inferenceContext.asInstType(req), checkContext);
-                }
-            });
+            inferenceContext.addFreeTypeListener(List.of(req, found),
+                    solvedContext -> checkType(pos, solvedContext.asInstType(found), solvedContext.asInstType(req), checkContext));
         }
         if (req.hasTag(ERROR))
             return req;
@@ -586,13 +612,10 @@ public class Check {
                 && types.isSameType(tree.expr.type, tree.clazz.type)
                 && !(ignoreAnnotatedCasts && TreeInfo.containsTypeAnnotation(tree.clazz))
                 && !is292targetTypeCast(tree)) {
-            deferredLintHandler.report(new DeferredLintHandler.LintLogger() {
-                @Override
-                public void report() {
-                    if (lint.isEnabled(Lint.LintCategory.CAST))
-                        log.warning(Lint.LintCategory.CAST,
-                                tree.pos(), "redundant.cast", tree.clazz.type);
-                }
+            deferredLintHandler.report(() -> {
+                if (lint.isEnabled(LintCategory.CAST))
+                    log.warning(LintCategory.CAST,
+                            tree.pos(), "redundant.cast", tree.clazz.type);
             });
         }
     }
@@ -785,23 +808,25 @@ public class Check {
         if (!TreeInfo.isDiamond(tree) ||
                 t.isErroneous()) {
             return checkClassType(tree.clazz.pos(), t, true);
-        } else if (tree.def != null && !allowDiamondWithAnonymousClassCreation) {
-            log.error(tree.clazz.pos(),
-                    Errors.CantApplyDiamond1(t, Fragments.DiamondAndAnonClassNotSupportedInSource(source.name)));
-            return types.createErrorType(t);
-        } else if (t.tsym.type.getTypeArguments().isEmpty()) {
-            log.error(tree.clazz.pos(),
-                "cant.apply.diamond.1",
-                t, diags.fragment("diamond.non.generic", t));
-            return types.createErrorType(t);
-        } else if (tree.typeargs != null &&
-                tree.typeargs.nonEmpty()) {
-            log.error(tree.clazz.pos(),
-                "cant.apply.diamond.1",
-                t, diags.fragment("diamond.and.explicit.params", t));
-            return types.createErrorType(t);
         } else {
-            return t;
+            if (tree.def != null && !allowDiamondWithAnonymousClassCreation) {
+                log.error(DiagnosticFlag.SOURCE_LEVEL, tree.clazz.pos(),
+                        Errors.CantApplyDiamond1(t, Fragments.DiamondAndAnonClassNotSupportedInSource(source.name)));
+            }
+            if (t.tsym.type.getTypeArguments().isEmpty()) {
+                log.error(tree.clazz.pos(),
+                    "cant.apply.diamond.1",
+                    t, diags.fragment("diamond.non.generic", t));
+                return types.createErrorType(t);
+            } else if (tree.typeargs != null &&
+                    tree.typeargs.nonEmpty()) {
+                log.error(tree.clazz.pos(),
+                    "cant.apply.diamond.1",
+                    t, diags.fragment("diamond.and.explicit.params", t));
+                return types.createErrorType(t);
+            } else {
+                return t;
+            }
         }
     }
 
@@ -812,7 +837,7 @@ public class Check {
      */
     List<Type> checkDiamondDenotable(ClassType t) {
         ListBuffer<Type> buf = new ListBuffer<>();
-        for (Type arg : t.getTypeArguments()) {
+        for (Type arg : t.allparams()) {
             if (!diamondTypeChecker.visit(arg, null)) {
                 buf.append(arg);
             }
@@ -835,7 +860,7 @@ public class Check {
                 if (t.isCompound()) {
                     return false;
                 }
-                for (Type targ : t.getTypeArguments()) {
+                for (Type targ : t.allparams()) {
                     if (!visit(targ, s)) {
                         return false;
                     }
@@ -846,13 +871,16 @@ public class Check {
             @Override
             public Boolean visitTypeVar(TypeVar t, Void s) {
                 /* Any type variable mentioned in the inferred type must have been declared as a type parameter
-                  (i.e cannot have been produced by capture conversion (5.1.10) or by inference (18.4)
+                  (i.e cannot have been produced by inference (18.4))
                 */
                 return t.tsym.owner.type.getTypeArguments().contains(t);
             }
 
             @Override
             public Boolean visitCapturedType(CapturedType t, Void s) {
+                /* Any type variable mentioned in the inferred type must have been declared as a type parameter
+                  (i.e cannot have been produced by capture conversion (5.1.10))
+                */
                 return false;
             }
 
@@ -920,11 +948,8 @@ public class Check {
         // System.out.println("method : " + owntype);
         // System.out.println("actuals: " + argtypes);
         if (inferenceContext.free(mtype)) {
-            inferenceContext.addFreeTypeListener(List.of(mtype), new FreeTypeListener() {
-                public void typesInferred(InferenceContext inferenceContext) {
-                    checkMethod(inferenceContext.asInstType(mtype), sym, env, argtrees, argtypes, useVarargs, inferenceContext);
-                }
-            });
+            inferenceContext.addFreeTypeListener(List.of(mtype),
+                    solvedContext -> checkMethod(solvedContext.asInstType(mtype), sym, env, argtrees, argtypes, useVarargs, solvedContext));
             return mtype;
         }
         Type owntype = mtype;
@@ -979,10 +1004,6 @@ public class Check {
                 TreeInfo.setVarargsElement(env.tree, types.elemtype(argtype));
             }
          }
-         PolyKind pkind = (sym.type.hasTag(FORALL) &&
-                 sym.type.getReturnType().containsAny(((ForAll)sym.type).tvars)) ?
-                 PolyKind.POLY : PolyKind.STANDALONE;
-         TreeInfo.setPolyKind(env.tree, pkind);
          return owntype;
     }
     //where
@@ -1149,10 +1170,6 @@ public class Check {
         case TYP:
             if (sym.isLocal()) {
                 mask = LocalClassFlags;
-                if (sym.name.isEmpty()) { // Anonymous class
-                    // JLS: Anonymous classes are final.
-                    implicit |= FINAL;
-                }
                 if ((sym.owner.flags_field & STATIC) == 0 &&
                     (flags & ENUM) != 0)
                     log.error(pos, "enums.must.be.static");
@@ -1721,11 +1738,18 @@ public class Check {
         boolean resultTypesOK =
             types.returnTypeSubstitutable(mt, ot, otres, overrideWarner);
         if (!resultTypesOK) {
-            log.error(TreeInfo.diagnosticPositionFor(m, tree),
-                      "override.incompatible.ret",
-                      cannotOverride(m, other),
-                      mtres, otres);
-            m.flags_field |= BAD_OVERRIDE;
+            if ((m.flags() & STATIC) != 0 && (other.flags() & STATIC) != 0) {
+                log.error(TreeInfo.diagnosticPositionFor(m, tree),
+                        Errors.OverrideIncompatibleRet(Fragments.CantHide(m, m.location(), other,
+                                        other.location()), mtres, otres));
+                m.flags_field |= BAD_OVERRIDE;
+            } else {
+                log.error(TreeInfo.diagnosticPositionFor(m, tree),
+                        "override.incompatible.ret",
+                        cannotOverride(m, other),
+                        mtres, otres);
+                m.flags_field |= BAD_OVERRIDE;
+            }
             return;
         } else if (overrideWarner.hasNonSilentLint(LintCategory.UNCHECKED)) {
             warnUnchecked(TreeInfo.diagnosticPositionFor(m, tree),
@@ -2007,10 +2031,11 @@ public class Check {
             }
         }
 
+        final boolean explicitOverride = m.attribute(syms.overrideType.tsym) != null;
         // Check if this method must override a super method due to being annotated with @Override
         // or by virtue of being a member of a diamond inferred anonymous class. Latter case is to
         // be treated "as if as they were annotated" with @Override.
-        boolean mustOverride = m.attribute(syms.overrideType.tsym) != null ||
+        boolean mustOverride = explicitOverride ||
                 (env.info.isAnonymousDiamond && !m.isConstructor() && !m.isPrivate());
         if (mustOverride && !isOverrider(m)) {
             DiagnosticPosition pos = tree.pos();
@@ -2020,7 +2045,9 @@ public class Check {
                     break;
                 }
             }
-            log.error(pos, "method.does.not.override.superclass");
+            log.error(pos,
+                      explicitOverride ? Errors.MethodDoesNotOverrideSuperclass :
+                                Errors.AnonymousDiamondMethodDoesNotOverrideSuperclass(Fragments.DiamondAnonymousMethodsImplicitlyOverride));
         }
     }
 
@@ -2035,13 +2062,8 @@ public class Check {
         }
     }
 
-    private Filter<Symbol> equalsHasCodeFilter = new Filter<Symbol>() {
-        public boolean accepts(Symbol s) {
-            return MethodSymbol.implementation_filter.accepts(s) &&
-                    (s.flags() & BAD_OVERRIDE) == 0;
-
-        }
-    };
+    private Filter<Symbol> equalsHasCodeFilter = s -> MethodSymbol.implementation_filter.accepts(s) &&
+            (s.flags() & BAD_OVERRIDE) == 0;
 
     public void checkClassOverrideEqualsAndHashIfNeeded(DiagnosticPosition pos,
             ClassSymbol someClass) {
@@ -2077,6 +2099,40 @@ public class Check {
             if (overridesEquals && !overridesHashCode) {
                 log.warning(LintCategory.OVERRIDES, pos,
                         "override.equals.but.not.hashcode", someClass);
+            }
+        }
+    }
+
+    public void checkModuleName (JCModuleDecl tree) {
+        Name moduleName = tree.sym.name;
+        Assert.checkNonNull(moduleName);
+        if (lint.isEnabled(LintCategory.MODULE)) {
+            JCExpression qualId = tree.qualId;
+            while (qualId != null) {
+                Name componentName;
+                DiagnosticPosition pos;
+                switch (qualId.getTag()) {
+                    case SELECT:
+                        JCFieldAccess selectNode = ((JCFieldAccess) qualId);
+                        componentName = selectNode.name;
+                        pos = selectNode.pos();
+                        qualId = selectNode.selected;
+                        break;
+                    case IDENT:
+                        componentName = ((JCIdent) qualId).name;
+                        pos = qualId.pos();
+                        qualId = null;
+                        break;
+                    default:
+                        throw new AssertionError("Unexpected qualified identifier: " + qualId.toString());
+                }
+                if (componentName != null) {
+                    String moduleNameComponentString = componentName.toString();
+                    int nameLength = moduleNameComponentString.length();
+                    if (nameLength > 0 && Character.isDigit(moduleNameComponentString.charAt(nameLength - 1))) {
+                        log.warning(Lint.LintCategory.MODULE, pos, Warnings.PoorChoiceForModuleName(componentName));
+                    }
+                }
             }
         }
     }
@@ -2131,7 +2187,7 @@ public class Check {
                         log.useSource(prevSource.getFile());
                     }
                 } else if (sym.kind == TYP) {
-                    checkClass(pos, sym, List.<JCTree>nil());
+                    checkClass(pos, sym, List.nil());
                 }
             } else {
                 //not completed yet
@@ -2223,7 +2279,7 @@ public class Check {
 
 
     void checkNonCyclic(DiagnosticPosition pos, TypeVar t) {
-        checkNonCyclic1(pos, t, List.<TypeVar>nil());
+        checkNonCyclic1(pos, t, List.nil());
     }
 
     private void checkNonCyclic1(DiagnosticPosition pos, Type t, List<TypeVar> seen) {
@@ -2362,7 +2418,6 @@ public class Check {
                     types.isSameType(types.erasure(sym.type), types.erasure(sym2.type)) &&
                     sym != sym2 &&
                     (sym.flags() & Flags.SYNTHETIC) != (sym2.flags() & Flags.SYNTHETIC) &&
-                    (sym.flags() & IPROXY) == 0 && (sym2.flags() & IPROXY) == 0 &&
                     (sym.flags() & BRIDGE) == 0 && (sym2.flags() & BRIDGE) == 0) {
                     syntheticError(pos, (sym2.flags() & SYNTHETIC) == 0 ? sym2 : sym);
                     return;
@@ -2592,8 +2647,11 @@ public class Check {
         }
     }
 
-    void checkElemAccessFromSerializableLambda(final JCTree tree) {
-        if (warnOnAccessToSensitiveMembers) {
+    void checkAccessFromSerializableElement(final JCTree tree, boolean isLambda) {
+        if (warnOnAnyAccessToMembers ||
+            (lint.isEnabled(LintCategory.SERIAL) &&
+            !lint.isSuppressed(LintCategory.SERIAL) &&
+            isLambda)) {
             Symbol sym = TreeInfo.symbol(tree);
             if (!sym.kind.matches(KindSelector.VAL_MTH)) {
                 return;
@@ -2609,9 +2667,16 @@ public class Check {
             }
 
             if (!types.isSubtype(sym.owner.type, syms.serializableType) &&
-                    isEffectivelyNonPublic(sym)) {
-                log.warning(tree.pos(),
-                        "access.to.sensitive.member.from.serializable.element", sym);
+                isEffectivelyNonPublic(sym)) {
+                if (isLambda) {
+                    if (belongsToRestrictedPackage(sym)) {
+                        log.warning(LintCategory.SERIAL, tree.pos(),
+                            "access.to.member.from.serializable.lambda", sym);
+                    }
+                } else {
+                    log.warning(tree.pos(),
+                        "access.to.member.from.serializable.element", sym);
+                }
             }
         }
     }
@@ -2630,16 +2695,19 @@ public class Check {
         return false;
     }
 
+    private boolean belongsToRestrictedPackage(Symbol sym) {
+        String fullName = sym.packge().fullname.toString();
+        return fullName.startsWith("java.") ||
+                fullName.startsWith("javax.") ||
+                fullName.startsWith("sun.") ||
+                fullName.contains(".internal.");
+    }
+
     /** Report a conflict between a user symbol and a synthetic symbol.
      */
     private void syntheticError(DiagnosticPosition pos, Symbol sym) {
         if (!sym.type.isErroneous()) {
-            if (warnOnSyntheticConflicts) {
-                log.warning(pos, "synthetic.name.conflict", sym, sym.location());
-            }
-            else {
-                log.error(pos, "synthetic.name.conflict", sym, sym.location());
-            }
+            log.error(pos, "synthetic.name.conflict", sym, sym.location());
         }
     }
 
@@ -2774,7 +2842,7 @@ public class Check {
     private void validateAnnotation(JCAnnotation a, Symbol s) {
         validateAnnotationTree(a);
 
-        if (!annotationApplicable(a, s))
+        if (a.type.tsym.isAnnotationType() && !annotationApplicable(a, s))
             log.error(a.pos(), "annotation.type.not.applicable");
 
         if (a.annotationType.type.tsym == syms.functionalInterfaceType.tsym) {
@@ -3187,37 +3255,34 @@ public class Check {
     }
 
     void checkDeprecatedAnnotation(DiagnosticPosition pos, Symbol s) {
-        if (lint.isEnabled(LintCategory.DEP_ANN) &&
+        if (lint.isEnabled(LintCategory.DEP_ANN) && s.isDeprecatableViaAnnotation() &&
             (s.flags() & DEPRECATED) != 0 &&
             !syms.deprecatedType.isErroneous() &&
             s.attribute(syms.deprecatedType.tsym) == null) {
             log.warning(LintCategory.DEP_ANN,
                     pos, "missing.deprecated.annotation");
         }
+        // Note: @Deprecated has no effect on local variables, parameters and package decls.
+        if (lint.isEnabled(LintCategory.DEPRECATION) && !s.isDeprecatableViaAnnotation()) {
+            if (!syms.deprecatedType.isErroneous() && s.attribute(syms.deprecatedType.tsym) != null) {
+                log.warning(LintCategory.DEPRECATION, pos,
+                        "deprecated.annotation.has.no.effect", Kinds.kindName(s));
+            }
+        }
     }
 
     void checkDeprecated(final DiagnosticPosition pos, final Symbol other, final Symbol s) {
-        if ((s.flags() & DEPRECATED) != 0 &&
-                (other.flags() & DEPRECATED) == 0 &&
-                s.outermostClass() != other.outermostClass()) {
-            deferredLintHandler.report(new DeferredLintHandler.LintLogger() {
-                @Override
-                public void report() {
-                    warnDeprecated(pos, s);
-                }
-            });
+        if ( (s.isDeprecatedForRemoval()
+                || s.isDeprecated() && !other.isDeprecated())
+                && (s.outermostClass() != other.outermostClass() || s.outermostClass() == null)) {
+            deferredLintHandler.report(() -> warnDeprecated(pos, s));
         }
     }
 
     void checkSunAPI(final DiagnosticPosition pos, final Symbol s) {
         if ((s.flags() & PROPRIETARY) != 0) {
-            deferredLintHandler.report(new DeferredLintHandler.LintLogger() {
-                public void report() {
-                    if (enableSunApiLintControl)
-                      warnSunApi(pos, "sun.proprietary", s);
-                    else
-                      log.mandatoryWarning(pos, "sun.proprietary", s);
-                }
+            deferredLintHandler.report(() -> {
+                log.mandatoryWarning(pos, "sun.proprietary", s);
             });
         }
     }
@@ -3349,12 +3414,7 @@ public class Check {
             int opc = ((OperatorSymbol)operator).opcode;
             if (opc == ByteCodes.idiv || opc == ByteCodes.imod
                 || opc == ByteCodes.ldiv || opc == ByteCodes.lmod) {
-                deferredLintHandler.report(new DeferredLintHandler.LintLogger() {
-                    @Override
-                    public void report() {
-                        warnDivZero(pos);
-                    }
-                });
+                deferredLintHandler.report(() -> warnDivZero(pos));
             }
         }
     }
@@ -3487,7 +3547,7 @@ public class Check {
         private boolean isCanonical(JCTree tree) {
             while (tree.hasTag(SELECT)) {
                 JCFieldAccess s = (JCFieldAccess) tree;
-                if (s.sym.owner != TreeInfo.symbol(s.selected))
+                if (s.sym.owner.name != TreeInfo.symbol(s.selected).name)
                     return false;
                 tree = s.selected;
             }
@@ -3590,9 +3650,19 @@ public class Check {
 
     // Check that packages imported are in scope (JLS 7.4.3, 6.3, 6.5.3.1, 6.5.3.2)
     public void checkImportedPackagesObservable(final JCCompilationUnit toplevel) {
-        for (JCImport imp : toplevel.getImports()) {
+        OUTER: for (JCImport imp : toplevel.getImports()) {
             if (!imp.staticImport && TreeInfo.name(imp.qualid) == names.asterisk) {
                 TypeSymbol tsym = ((JCFieldAccess)imp.qualid).selected.type.tsym;
+                if (toplevel.modle.visiblePackages != null) {
+                    //TODO - unclear: selects like javax.* will get resolved from the current module
+                    //(as javax is not an exported package from any module). And as javax in the current
+                    //module typically does not contain any classes or subpackages, we need to go through
+                    //the visible packages to find a sub-package:
+                    for (PackageSymbol known : toplevel.modle.visiblePackages.values()) {
+                        if (Convert.packagePart(known.fullname) == tsym.flatName())
+                            continue OUTER;
+                    }
+                }
                 if (tsym.kind == PCK && tsym.members().isEmpty() && !tsym.exists()) {
                     log.error(DiagnosticFlag.RESOLVE_ERROR, imp.pos, "doesnt.exist", tsym);
                 }
@@ -3641,6 +3711,212 @@ public class Check {
             throw err;
         } catch (CompletionFailure ex) {
             return false;
+        }
+    }
+
+    public void checkLeaksNotAccessible(Env<AttrContext> env, JCClassDecl check) {
+        JCCompilationUnit toplevel = env.toplevel;
+
+        if (   toplevel.modle == syms.unnamedModule
+            || toplevel.modle == syms.noModule
+            || (check.sym.flags() & COMPOUND) != 0) {
+            return ;
+        }
+
+        ExportsDirective currentExport = findExport(toplevel.packge);
+
+        if (   currentExport == null //not exported
+            || currentExport.modules != null) //don't check classes in qualified export
+            return ;
+
+        new TreeScanner() {
+            Lint lint = env.info.lint;
+            boolean inSuperType;
+
+            @Override
+            public void visitBlock(JCBlock tree) {
+            }
+            @Override
+            public void visitMethodDef(JCMethodDecl tree) {
+                if (!isAPISymbol(tree.sym))
+                    return;
+                Lint prevLint = lint;
+                try {
+                    lint = lint.augment(tree.sym);
+                    if (lint.isEnabled(LintCategory.EXPORTS)) {
+                        super.visitMethodDef(tree);
+                    }
+                } finally {
+                    lint = prevLint;
+                }
+            }
+            @Override
+            public void visitVarDef(JCVariableDecl tree) {
+                if (!isAPISymbol(tree.sym) && tree.sym.owner.kind != MTH)
+                    return;
+                Lint prevLint = lint;
+                try {
+                    lint = lint.augment(tree.sym);
+                    if (lint.isEnabled(LintCategory.EXPORTS)) {
+                        scan(tree.mods);
+                        scan(tree.vartype);
+                    }
+                } finally {
+                    lint = prevLint;
+                }
+            }
+            @Override
+            public void visitClassDef(JCClassDecl tree) {
+                if (tree != check)
+                    return ;
+
+                if (!isAPISymbol(tree.sym))
+                    return ;
+
+                Lint prevLint = lint;
+                try {
+                    lint = lint.augment(tree.sym);
+                    if (lint.isEnabled(LintCategory.EXPORTS)) {
+                        scan(tree.mods);
+                        scan(tree.typarams);
+                        try {
+                            inSuperType = true;
+                            scan(tree.extending);
+                            scan(tree.implementing);
+                        } finally {
+                            inSuperType = false;
+                        }
+                        scan(tree.defs);
+                    }
+                } finally {
+                    lint = prevLint;
+                }
+            }
+            @Override
+            public void visitTypeApply(JCTypeApply tree) {
+                scan(tree.clazz);
+                boolean oldInSuperType = inSuperType;
+                try {
+                    inSuperType = false;
+                    scan(tree.arguments);
+                } finally {
+                    inSuperType = oldInSuperType;
+                }
+            }
+            @Override
+            public void visitIdent(JCIdent tree) {
+                Symbol sym = TreeInfo.symbol(tree);
+                if (sym.kind == TYP && !sym.type.hasTag(TYPEVAR)) {
+                    checkVisible(tree.pos(), sym, toplevel.packge, inSuperType);
+                }
+            }
+
+            @Override
+            public void visitSelect(JCFieldAccess tree) {
+                Symbol sym = TreeInfo.symbol(tree);
+                Symbol sitesym = TreeInfo.symbol(tree.selected);
+                if (sym.kind == TYP && sitesym.kind == PCK) {
+                    checkVisible(tree.pos(), sym, toplevel.packge, inSuperType);
+                } else {
+                    super.visitSelect(tree);
+                }
+            }
+
+            @Override
+            public void visitAnnotation(JCAnnotation tree) {
+                if (tree.attribute.type.tsym.getAnnotation(java.lang.annotation.Documented.class) != null)
+                    super.visitAnnotation(tree);
+            }
+
+        }.scan(check);
+    }
+        //where:
+        private ExportsDirective findExport(PackageSymbol pack) {
+            for (ExportsDirective d : pack.modle.exports) {
+                if (d.packge == pack)
+                    return d;
+            }
+
+            return null;
+        }
+        private boolean isAPISymbol(Symbol sym) {
+            while (sym.kind != PCK) {
+                if ((sym.flags() & Flags.PUBLIC) == 0 && (sym.flags() & Flags.PROTECTED) == 0) {
+                    return false;
+                }
+                sym = sym.owner;
+            }
+            return true;
+        }
+        private void checkVisible(DiagnosticPosition pos, Symbol what, PackageSymbol inPackage, boolean inSuperType) {
+            if (!isAPISymbol(what) && !inSuperType) { //package private/private element
+                log.warning(LintCategory.EXPORTS, pos, Warnings.LeaksNotAccessible(kindName(what), what, what.packge().modle));
+                return ;
+            }
+
+            PackageSymbol whatPackage = what.packge();
+            ExportsDirective whatExport = findExport(whatPackage);
+            ExportsDirective inExport = findExport(inPackage);
+
+            if (whatExport == null) { //package not exported:
+                log.warning(LintCategory.EXPORTS, pos, Warnings.LeaksNotAccessibleUnexported(kindName(what), what, what.packge().modle));
+                return ;
+            }
+
+            if (whatExport.modules != null) {
+                if (inExport.modules == null || !whatExport.modules.containsAll(inExport.modules)) {
+                    log.warning(LintCategory.EXPORTS, pos, Warnings.LeaksNotAccessibleUnexportedQualified(kindName(what), what, what.packge().modle));
+                }
+            }
+
+            if (whatPackage.modle != inPackage.modle && whatPackage.modle != syms.java_base) {
+                //check that relativeTo.modle requires transitive what.modle, somehow:
+                List<ModuleSymbol> todo = List.of(inPackage.modle);
+
+                while (todo.nonEmpty()) {
+                    ModuleSymbol current = todo.head;
+                    todo = todo.tail;
+                    if (current == whatPackage.modle)
+                        return ; //OK
+                    for (RequiresDirective req : current.requires) {
+                        if (req.isTransitive()) {
+                            todo = todo.prepend(req.module);
+                        }
+                    }
+                }
+
+                log.warning(LintCategory.EXPORTS, pos, Warnings.LeaksNotAccessibleNotRequiredTransitive(kindName(what), what, what.packge().modle));
+            }
+        }
+
+    void checkModuleExists(final DiagnosticPosition pos, ModuleSymbol msym) {
+        if (msym.kind != MDL) {
+            deferredLintHandler.report(() -> {
+                if (lint.isEnabled(LintCategory.MODULE))
+                    log.warning(LintCategory.MODULE, pos, Warnings.ModuleNotFound(msym));
+            });
+        }
+    }
+
+    void checkPackageExistsForOpens(final DiagnosticPosition pos, PackageSymbol packge) {
+        if (packge.members().isEmpty() &&
+            ((packge.flags() & Flags.HAS_RESOURCE) == 0)) {
+            deferredLintHandler.report(() -> {
+                if (lint.isEnabled(LintCategory.OPENS))
+                    log.warning(pos, Warnings.PackageEmptyOrNotFound(packge));
+            });
+        }
+    }
+
+    void checkModuleRequires(final DiagnosticPosition pos, final RequiresDirective rd) {
+        if ((rd.module.flags() & Flags.AUTOMATIC_MODULE) != 0) {
+            deferredLintHandler.report(() -> {
+                if (rd.isTransitive() && lint.isEnabled(LintCategory.REQUIRES_TRANSITIVE_AUTOMATIC)) {
+                    log.warning(pos, Warnings.RequiresTransitiveAutomatic);
+                } else if (lint.isEnabled(LintCategory.REQUIRES_AUTOMATIC)) {
+                    log.warning(pos, Warnings.RequiresAutomatic);
+                }
+            });
         }
     }
 

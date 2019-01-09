@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -331,7 +331,8 @@ const char * isJar(const char * path) {
                 off_t end   = start  + xlen;
 
                 if (end <= count) {
-                    while (start < end) {
+                    end -= 4; // make sure there are 4 bytes to read at start
+                    while (start <= end) {
                         off_t xhid  = SH(buf, start);
                         off_t xdlen = SH(buf, start + 2);
 

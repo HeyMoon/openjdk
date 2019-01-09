@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,11 +23,11 @@
 
 /*
  * @test
- * @bug 7004029
+ * @bug 7004029 8131915
  * @summary Ensure Scope impl can cope with hash collisions
  * @library /tools/javac/lib
  * @modules jdk.compiler/com.sun.tools.javac.api
- *          jdk.compiler/com.sun.tools.javac.code
+ *          jdk.compiler/com.sun.tools.javac.code:+open
  *          jdk.compiler/com.sun.tools.javac.file
  *          jdk.compiler/com.sun.tools.javac.tree
  *          jdk.compiler/com.sun.tools.javac.util
@@ -37,6 +37,7 @@
 
 import java.lang.reflect.*;
 import java.io.*;
+import java.util.function.BiConsumer;
 
 import com.sun.source.util.Trees;
 import com.sun.tools.javac.api.JavacTrees;
@@ -45,6 +46,8 @@ import com.sun.tools.javac.code.*;
 import com.sun.tools.javac.code.Scope.*;
 import com.sun.tools.javac.code.Symbol.*;
 import com.sun.tools.javac.file.JavacFileManager;
+import com.sun.tools.javac.tree.JCTree.JCImport;
+import com.sun.tools.javac.tree.TreeMaker;
 
 import static com.sun.tools.javac.code.Kinds.Kind.*;
 
@@ -57,13 +60,14 @@ public class HashCollisionTest {
         // set up basic environment for test
         Context context = new Context();
         JavacFileManager.preRegister(context); // required by ClassReader which is required by Symtab
+        make = TreeMaker.instance(context);
         names = Names.instance(context);       // Name.Table impls tied to an instance of Names
         symtab = Symtab.instance(context);
         trees = JavacTrees.instance(context);
         types = Types.instance(context);
 
         // determine hashMask for an empty scope
-        Scope emptyScope = WriteableScope.create(symtab.unnamedPackage); // any owner will do
+        Scope emptyScope = WriteableScope.create(symtab.unnamedModule.unnamedPackage); // any owner will do
         Field field = emptyScope.getClass().getDeclaredField("hashMask");
         field.setAccessible(true);
         scopeHashMask = field.getInt(emptyScope);
@@ -101,7 +105,7 @@ public class HashCollisionTest {
          */
 
         // 3. Create a nested class named Entry
-        ClassSymbol cc = createClass(names.fromString("C"), symtab.unnamedPackage);
+        ClassSymbol cc = createClass(names.fromString("C"), symtab.unnamedModule.unnamedPackage);
         ClassSymbol ce = createClass(entry, cc);
 
         // 4. Create a package containing a nested class using the name from 2
@@ -127,12 +131,14 @@ public class HashCollisionTest {
                 return sym.kind == TYP;
             }
         };
-        starImportScope.importAll(types, fromScope, typeFilter, false);
+        BiConsumer<JCImport, CompletionFailure> noCompletionFailure =
+                (imp, cf) -> { throw new IllegalStateException(); };
+        starImportScope.importAll(types, fromScope, typeFilter, make.Import(null, false), noCompletionFailure);
 
         dump("imported p", starImportScope);
 
         // 7. Insert the class from 3.
-        starImportScope.importAll(types, cc.members_field, typeFilter, false);
+        starImportScope.importAll(types, cc.members_field, typeFilter, make.Import(null, false), noCompletionFailure);
         dump("imported ce", starImportScope);
 
         /*
@@ -168,7 +174,7 @@ public class HashCollisionTest {
     ClassSymbol createClass(Name name, Symbol owner) {
         ClassSymbol sym = new ClassSymbol(0, name, owner);
         sym.members_field = WriteableScope.create(sym);
-        if (owner != symtab.unnamedPackage)
+        if (owner != symtab.unnamedModule.unnamedPackage)
             owner.members().enter(sym);
         return sym;
     }
@@ -199,6 +205,7 @@ public class HashCollisionTest {
     int MAX_TRIES = 100; // max tries to find a hash clash before giving up.
     int scopeHashMask;
 
+    TreeMaker make;
     Names names;
     Symtab symtab;
     Trees trees;

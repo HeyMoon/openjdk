@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -19,19 +19,16 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
 package sun.hotspot;
 
 import java.lang.management.MemoryUsage;
 import java.lang.reflect.Executable;
-import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Function;
-import java.util.stream.Stream;
 import java.security.BasicPermission;
 import java.util.Objects;
 
@@ -85,6 +82,8 @@ public class WhiteBox {
   public native int  getVMPageSize();
   public native long getVMAllocationGranularity();
   public native long getVMLargePageSize();
+  public native long getHeapSpaceAlignment();
+  public native long getHeapAlignment();
 
   private native boolean isObjectInOldGen0(Object o);
   public         boolean isObjectInOldGen(Object o) {
@@ -113,6 +112,34 @@ public class WhiteBox {
 
   public native void forceSafepoint();
 
+  private native long getConstantPool0(Class<?> aClass);
+  public         long getConstantPool(Class<?> aClass) {
+    Objects.requireNonNull(aClass);
+    return getConstantPool0(aClass);
+  }
+
+  private native int getConstantPoolCacheIndexTag0();
+  public         int getConstantPoolCacheIndexTag() {
+    return getConstantPoolCacheIndexTag0();
+  }
+
+  private native int getConstantPoolCacheLength0(Class<?> aClass);
+  public         int getConstantPoolCacheLength(Class<?> aClass) {
+    Objects.requireNonNull(aClass);
+    return getConstantPoolCacheLength0(aClass);
+  }
+
+  private native int remapInstructionOperandFromCPCache0(Class<?> aClass, int index);
+  public         int remapInstructionOperandFromCPCache(Class<?> aClass, int index) {
+    Objects.requireNonNull(aClass);
+    return remapInstructionOperandFromCPCache0(aClass, index);
+  }
+
+  private native int encodeConstantPoolIndyIndex0(int index);
+  public         int encodeConstantPoolIndyIndex(int index) {
+    return encodeConstantPoolIndyIndex0(index);
+  }
+
   // JVMTI
   private native void addToBootstrapClassLoaderSearch0(String segment);
   public         void addToBootstrapClassLoaderSearch(String segment){
@@ -134,6 +161,23 @@ public class WhiteBox {
     return g1IsHumongous0(o);
   }
 
+  private native boolean g1BelongsToHumongousRegion0(long adr);
+  public         boolean g1BelongsToHumongousRegion(long adr) {
+    if (adr == 0) {
+      throw new IllegalArgumentException("adr argument should not be null");
+    }
+    return g1BelongsToHumongousRegion0(adr);
+  }
+
+
+  private native boolean g1BelongsToFreeRegion0(long adr);
+  public         boolean g1BelongsToFreeRegion(long adr) {
+    if (adr == 0) {
+      throw new IllegalArgumentException("adr argument should not be null");
+    }
+    return g1BelongsToFreeRegion0(adr);
+  }
+
   public native long    g1NumMaxRegions();
   public native long    g1NumFreeRegions();
   public native int     g1RegionSize();
@@ -143,6 +187,20 @@ public class WhiteBox {
     Objects.requireNonNull(args);
     return parseCommandLine0(commandline, delim, args);
   }
+
+  // Parallel GC
+  public native long psVirtualSpaceAlignment();
+  public native long psHeapGenerationAlignment();
+
+  /**
+   * Enumerates old regions with liveness less than specified and produces some statistics
+   * @param liveness percent of region's liveness (live_objects / total_region_size * 100).
+   * @return long[3] array where long[0] - total count of old regions
+   *                             long[1] - total memory of old regions
+   *                             long[2] - lowest estimation of total memory of old regions to be freed (non-full
+   *                             regions are not included)
+   */
+  public native long[] g1GetMixedGCInfo(int liveness);
 
   // NMT
   public native long NMTMalloc(long size);
@@ -156,8 +214,12 @@ public class WhiteBox {
   public native int NMTGetHashSize();
 
   // Compiler
+  public native int     matchesMethod(Executable method, String pattern);
+  public native int     matchesInline(Executable method, String pattern);
+  public native boolean shouldPrintAssembly(Executable method, int comp_level);
   public native int     deoptimizeFrames(boolean makeNotEntrant);
   public native void    deoptimizeAll();
+
   public        boolean isMethodCompiled(Executable method) {
     return isMethodCompiled(method, false /*not osr*/);
   }
@@ -167,7 +229,7 @@ public class WhiteBox {
     return isMethodCompiled0(method, isOsr);
   }
   public        boolean isMethodCompilable(Executable method) {
-    return isMethodCompilable(method, -1 /*any*/);
+    return isMethodCompilable(method, -2 /*any*/);
   }
   public        boolean isMethodCompilable(Executable method, int compLevel) {
     return isMethodCompilable(method, compLevel, false /*not osr*/);
@@ -182,6 +244,30 @@ public class WhiteBox {
     Objects.requireNonNull(method);
     return isMethodQueuedForCompilation0(method);
   }
+  // Determine if the compiler corresponding to the compilation level 'compLevel'
+  // and to the compilation context 'compilation_context' provides an intrinsic
+  // for the method 'method'. An intrinsic is available for method 'method' if:
+  //  - the intrinsic is enabled (by using the appropriate command-line flag) and
+  //  - the platform on which the VM is running provides the instructions necessary
+  //    for the compiler to generate the intrinsic code.
+  //
+  // The compilation context is related to using the DisableIntrinsic flag on a
+  // per-method level, see hotspot/src/share/vm/compiler/abstractCompiler.hpp
+  // for more details.
+  public boolean isIntrinsicAvailable(Executable method,
+                                      Executable compilationContext,
+                                      int compLevel) {
+      Objects.requireNonNull(method);
+      return isIntrinsicAvailable0(method, compilationContext, compLevel);
+  }
+  // If usage of the DisableIntrinsic flag is not expected (or the usage can be ignored),
+  // use the below method that does not require the compilation context as argument.
+  public boolean isIntrinsicAvailable(Executable method, int compLevel) {
+      return isIntrinsicAvailable(method, null, compLevel);
+  }
+  private native boolean isIntrinsicAvailable0(Executable method,
+                                               Executable compilationContext,
+                                               int compLevel);
   public        int     deoptimizeMethod(Executable method) {
     return deoptimizeMethod(method, false /*not osr*/);
   }
@@ -191,7 +277,7 @@ public class WhiteBox {
     return deoptimizeMethod0(method, isOsr);
   }
   public        void    makeMethodNotCompilable(Executable method) {
-    makeMethodNotCompilable(method, -1 /*any*/);
+    makeMethodNotCompilable(method, -2 /*any*/);
   }
   public        void    makeMethodNotCompilable(Executable method, int compLevel) {
     makeMethodNotCompilable(method, compLevel, false /*not osr*/);
@@ -215,7 +301,7 @@ public class WhiteBox {
     return testSetDontInlineMethod0(method, value);
   }
   public        int     getCompileQueuesSize() {
-    return getCompileQueueSize(-1 /*any*/);
+    return getCompileQueueSize(-2 /*any*/);
   }
   public native int     getCompileQueueSize(int compLevel);
   private native boolean testSetForceInlineMethod0(Executable method, boolean value);
@@ -230,6 +316,11 @@ public class WhiteBox {
   public  boolean enqueueMethodForCompilation(Executable method, int compLevel, int entry_bci) {
     Objects.requireNonNull(method);
     return enqueueMethodForCompilation0(method, compLevel, entry_bci);
+  }
+  private native boolean enqueueInitializerForCompilation0(Class<?> aClass, int compLevel);
+  public  boolean enqueueInitializerForCompilation(Class<?> aClass, int compLevel) {
+    Objects.requireNonNull(aClass);
+    return enqueueInitializerForCompilation0(aClass, compLevel);
   }
   private native void    clearMethodState0(Executable method);
   public         void    clearMethodState(Executable method) {
@@ -261,7 +352,20 @@ public class WhiteBox {
   public native void    forceNMethodSweep();
   public native Object[] getCodeHeapEntries(int type);
   public native int     getCompilationActivityMode();
+  private native long getMethodData0(Executable method);
+  public         long getMethodData(Executable method) {
+    Objects.requireNonNull(method);
+    return getMethodData0(method);
+  }
   public native Object[] getCodeBlob(long addr);
+
+  private native void clearInlineCaches0(boolean preserve_static_stubs);
+  public void clearInlineCaches() {
+    clearInlineCaches0(false);
+  }
+  public void clearInlineCaches(boolean preserve_static_stubs) {
+    clearInlineCaches0(preserve_static_stubs);
+  }
 
   // Intered strings
   public native boolean isInStringTable(String str);
@@ -272,6 +376,13 @@ public class WhiteBox {
   public native void freeMetaspace(ClassLoader classLoader, long addr, long size);
   public native long incMetaspaceCapacityUntilGC(long increment);
   public native long metaspaceCapacityUntilGC();
+  public native boolean metaspaceShouldConcurrentCollect();
+
+  // Don't use these methods directly
+  // Use sun.hotspot.gc.GC class instead.
+  public native int currentGC();
+  public native int allSupportedGC();
+  public native boolean gcSelectedByErgo();
 
   // Force Young GC
   public native void youngGC();
@@ -336,6 +447,16 @@ public class WhiteBox {
                        .findAny()
                        .orElse(null);
   }
+
+  // Jigsaw
+  public native void DefineModule(Object module, String version, String location,
+                                  Object[] packages);
+  public native void AddModuleExports(Object from_module, String pkg, Object to_module);
+  public native void AddReadsModule(Object from_module, Object source_module);
+  public native void AddModuleExportsToAllUnnamed(Object module, String pkg);
+  public native void AddModuleExportsToAll(Object module, String pkg);
+  public native Object GetModuleByPackageName(Object ldr, String pkg);
+
   public native int getOffsetForName0(String name);
   public int getOffsetForName(String name) throws Exception {
     int offset = getOffsetForName0(name);
@@ -362,27 +483,15 @@ public class WhiteBox {
                               .orElse(null);
   }
 
-  public native boolean readImageFile(String imagePath);
-  public native long imageOpenImage(String imagePath, boolean bigEndian);
-  public native void imageCloseImage(long id);
-  public native long imageGetIndexAddress(long id);
-  public native long imageGetDataAddress(long id);
-  public native boolean imageReadCompressed(long id, long offset,
-    ByteBuffer compressedBuffer, long compressedSize,
-    ByteBuffer uncompressedBuffer, long uncompressedSize);
-  public native boolean imageRead(long id, long offset,
-    ByteBuffer uncompressedBuffer, long uncompressedSize);
-  public native byte[] imageGetStringBytes(long id, int offset);
-  public native long imageGetStringsSize(long id);
-  public native long[] imageGetAttributes(long id, int offset);
-  public native long[] imageFindAttributes(long id, byte[] path);
-  public native int[] imageAttributeOffsets(long id);
-  public native int imageGetIntAtAddress(long address, int offset, boolean big_endian);
-
   // Safepoint Checking
   public native void assertMatchingSafepointCalls(boolean mutexSafepointValue, boolean attemptedNoSafepointValue);
 
   // Sharing
   public native boolean isShared(Object o);
+  public native boolean isSharedClass(Class<?> c);
   public native boolean areSharedStringsIgnored();
+
+  // Compiler Directive
+  public native int addCompilerDirective(String compDirect);
+  public native void removeCompilerDirective(int count);
 }

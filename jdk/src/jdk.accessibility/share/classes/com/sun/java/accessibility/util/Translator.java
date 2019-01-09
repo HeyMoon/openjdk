@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,12 +26,11 @@
 
 package com.sun.java.accessibility.util;
 
-import java.lang.*;
+import com.sun.java.accessibility.util.internal.*;
 import java.beans.*;
 import java.util.*;
 import java.awt.*;
 import java.awt.event.*;
-import java.awt.image.*;
 // Do not import Swing classes.  This module is intended to work
 // with both Swing and AWT.
 // import javax.swing.*;
@@ -58,7 +57,6 @@ import javax.accessibility.*;
  * to implement accessibility features for a toolkit.  Instead of relying upon this
  * code, a toolkit's components should implement interface {@code Accessible} directly.
  */
-@jdk.Exported
 public class Translator extends AccessibleContext
         implements Accessible, AccessibleComponent {
 
@@ -77,12 +75,26 @@ public class Translator extends AccessibleContext
         if (c == null) {
             return null;
         }
-        try {
-            t = Class.forName("com.sun.java.accessibility.util."
-                              + c.getName()
-                              + "Translator");
+        switch (c.getSimpleName()) {
+            case "Button":
+                t = ButtonTranslator.class;
+                break;
+            case "Checkbox":
+                t = CheckboxTranslator.class;
+                break;
+            case "Label":
+                t = LabelTranslator.class;
+                break;
+            case "List":
+                t = ListTranslator.class;
+                break;
+            case "TextComponent":
+                t = TextComponentTranslator.class;
+                break;
+        }
+        if (t != null) {
             return t;
-        } catch (Exception e) {
+        } else {
             return getTranslatorClass(c.getSuperclass());
         }
     }
@@ -109,6 +121,7 @@ public class Translator extends AccessibleContext
             Class<?> translatorClass = getTranslatorClass(o.getClass());
             if (translatorClass != null) {
                 try {
+                    @SuppressWarnings("deprecation")
                     Translator t = (Translator)translatorClass.newInstance();
                     t.setSource(o);
                     a = t;

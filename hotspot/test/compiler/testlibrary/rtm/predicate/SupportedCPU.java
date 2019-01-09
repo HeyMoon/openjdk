@@ -19,16 +19,14 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
-package rtm.predicate;
+package compiler.testlibrary.rtm.predicate;
 
+import jdk.test.lib.Platform;
 import sun.hotspot.cpuinfo.CPUInfo;
 
 import java.util.function.BooleanSupplier;
-
-import jdk.test.lib.Platform;
 
 public class SupportedCPU implements BooleanSupplier {
     @Override

@@ -50,7 +50,6 @@ import jdk.internal.org.objectweb.asm.ClassWriter;
 import jdk.internal.org.objectweb.asm.FieldVisitor;
 import jdk.internal.org.objectweb.asm.MethodVisitor;
 import jdk.internal.org.objectweb.asm.util.CheckClassAdapter;
-import jdk.nashorn.internal.objects.annotations.Where;
 import jdk.nashorn.internal.tools.nasgen.MemberInfo.Kind;
 
 /**
@@ -170,7 +169,7 @@ public class ScriptClassInstrumentor extends ClassVisitor {
 
                             if (memInfo.isInstanceFunction()) {
                                 super.visitVarInsn(ALOAD, 0);
-                                ClassGenerator.newFunction(delegateMV, scriptClassInfo.getJavaName(), memInfo, scriptClassInfo.findSpecializations(memInfo.getJavaName()));
+                                ClassGenerator.newFunction(delegateMV, scriptClassInfo.getName(), scriptClassInfo.getJavaName(), memInfo, scriptClassInfo.findSpecializations(memInfo.getJavaName()));
                                 super.visitFieldInsn(PUTFIELD, scriptClassInfo.getJavaName(),
                                     memInfo.getJavaName(), OBJECT_DESC);
                             }

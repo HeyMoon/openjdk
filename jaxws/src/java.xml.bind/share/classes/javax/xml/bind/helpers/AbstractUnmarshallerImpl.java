@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,13 +47,11 @@ import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.sax.SAXSource;
 import javax.xml.transform.stream.StreamSource;
 import javax.xml.validation.Schema;
-import java.io.File;
-import java.io.Reader;
-import java.net.MalformedURLException;
+import java.io.*;
 import java.net.URL;
 
 /**
- * Partial default <tt>Unmarshaller</tt> implementation.
+ * Partial default {@code Unmarshaller} implementation.
  *
  * <p>
  * This class provides a partial default implementation for the
@@ -178,16 +176,8 @@ public abstract class AbstractUnmarshallerImpl implements Unmarshaller
         }
 
         try {
-            // copied from JAXP
-            String path = f.getAbsolutePath();
-            if (File.separatorChar != '/')
-                path = path.replace(File.separatorChar, '/');
-            if (!path.startsWith("/"))
-                path = "/" + path;
-            if (!path.endsWith("/") && f.isDirectory())
-                path = path + "/";
-            return unmarshal(new URL("file", "", path));
-        } catch( MalformedURLException e ) {
+            return unmarshal(new BufferedInputStream(new FileInputStream(f)));
+        } catch( FileNotFoundException e ) {
             throw new IllegalArgumentException(e.getMessage());
         }
     }
@@ -246,7 +236,7 @@ public abstract class AbstractUnmarshallerImpl implements Unmarshaller
      * <p>
      * The validation event handler will be called by the JAXB Provider if any
      * validation errors are encountered during calls to any of the
-     * <tt>unmarshal</tt> methods.  If the client application does not register
+     * {@code unmarshal} methods.  If the client application does not register
      * a validation event handler before invoking the unmarshal methods, then
      * all validation events will be silently ignored and may result in
      * unexpected behaviour.
@@ -267,7 +257,7 @@ public abstract class AbstractUnmarshallerImpl implements Unmarshaller
 
     /**
      * Specifies whether or not the Unmarshaller should validate during
-     * unmarshal operations.  By default, the <tt>Unmarshaller</tt> does
+     * unmarshal operations. By default, the {@code Unmarshaller} does
      * not validate.
      * <p>
      * This method may only be invoked before or after calling one of the

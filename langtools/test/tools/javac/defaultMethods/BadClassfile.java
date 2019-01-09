@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@
  * @modules jdk.jdeps/com.sun.tools.classfile
  *          jdk.compiler/com.sun.tools.javac.api
  *          jdk.compiler/com.sun.tools.javac.code
+ *          jdk.compiler/com.sun.tools.javac.comp
  *          jdk.compiler/com.sun.tools.javac.jvm
  *          jdk.compiler/com.sun.tools.javac.main
  *          jdk.compiler/com.sun.tools.javac.util
@@ -40,6 +41,7 @@ import com.sun.tools.classfile.*;
 import com.sun.tools.javac.api.JavacTaskImpl;
 import com.sun.tools.javac.code.ClassFinder.BadClassFile;
 import com.sun.tools.javac.code.Symbol;
+import com.sun.tools.javac.code.Symtab;
 import com.sun.tools.javac.jvm.Target;
 import com.sun.tools.javac.util.Assert;
 import com.sun.tools.javac.util.JCDiagnostic;
@@ -68,9 +70,12 @@ public class BadClassfile {
 
         JavaCompiler c = ToolProvider.getSystemJavaCompiler();
         JavacTaskImpl task = (JavacTaskImpl) c.getTask(null, null, null, Arrays.asList("-classpath", System.getProperty("test.classes", ".")), null, null);
+        Symtab syms = Symtab.instance(task.getContext());
+
+        task.ensureEntered();
 
         try {
-            Symbol clazz = com.sun.tools.javac.main.JavaCompiler.instance(task.getContext()).resolveIdent(classname);
+            Symbol clazz = com.sun.tools.javac.main.JavaCompiler.instance(task.getContext()).resolveIdent(syms.unnamedModule, classname);
 
             clazz.complete();
         } catch (BadClassFile f) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -60,7 +60,7 @@ void NativeInstruction::verify_data64_sethi(address instaddr, intptr_t x) {
   masm.patchable_sethi(x, destreg);
   int len = buffer - masm.pc();
   for (int i = 0; i < len; i++) {
-    assert(instaddr[i] == buffer[i], "instructions must match");
+    guarantee(instaddr[i] == buffer[i], "instructions must match");
   }
 }
 
@@ -131,8 +131,9 @@ bool NativeInstruction::is_load_store_with_small_offset(Register reg) {
 void NativeCall::verify() {
   NativeInstruction::verify();
   // make sure code pattern is actually a call instruction
-  if (!is_op(long_at(0), Assembler::call_op)) {
-    fatal("not a call");
+  int x = long_at(0);
+  if (!is_op(x, Assembler::call_op)) {
+    fatal("not a call: 0x%x @ " INTPTR_FORMAT, x, p2i(instruction_address()));
   }
 }
 
@@ -417,6 +418,67 @@ void NativeMovConstReg::test() {
 
 //-------------------------------------------------------------------
 
+void NativeMovConstReg32::verify() {
+  NativeInstruction::verify();
+  // make sure code pattern is actually a "set_metadata" synthetic instruction
+  // see MacroAssembler::set_oop()
+  int i0 = long_at(sethi_offset);
+  int i1 = long_at(add_offset);
+
+  // verify the pattern "sethi %hi22(imm), reg ;  add reg, %lo10(imm), reg"
+  Register rd = inv_rd(i0);
+  if (!is_op2(i0, Assembler::sethi_op2) && rd != G0 ) {
+    fatal("not a set_metadata");
+  }
+}
+
+
+void NativeMovConstReg32::print() {
+  tty->print_cr(INTPTR_FORMAT ": mov reg, " INTPTR_FORMAT, p2i(instruction_address()), data());
+}
+
+
+intptr_t NativeMovConstReg32::data() const {
+  return data32(long_at(sethi_offset), long_at(add_offset));
+}
+
+
+void NativeMovConstReg32::set_data(intptr_t x) {
+  set_long_at(sethi_offset, set_data32_sethi(  long_at(sethi_offset), x));
+  set_long_at(add_offset,   set_data32_simm13( long_at(add_offset),   x));
+
+  // also store the value into an oop_Relocation cell, if any
+  CodeBlob* cb = CodeCache::find_blob(instruction_address());
+  nmethod*  nm = cb ? cb->as_nmethod_or_null() : NULL;
+  if (nm != NULL) {
+    RelocIterator iter(nm, instruction_address(), next_instruction_address());
+    oop* oop_addr = NULL;
+    Metadata** metadata_addr = NULL;
+    while (iter.next()) {
+      if (iter.type() == relocInfo::oop_type) {
+        oop_Relocation *r = iter.oop_reloc();
+        if (oop_addr == NULL) {
+          oop_addr = r->oop_addr();
+          *oop_addr = cast_to_oop(x);
+        } else {
+          assert(oop_addr == r->oop_addr(), "must be only one set-oop here");
+        }
+      }
+      if (iter.type() == relocInfo::metadata_type) {
+        metadata_Relocation *r = iter.metadata_reloc();
+        if (metadata_addr == NULL) {
+          metadata_addr = r->metadata_addr();
+          *metadata_addr = (Metadata*)x;
+        } else {
+          assert(metadata_addr == r->metadata_addr(), "must be only one set-metadata here");
+        }
+      }
+    }
+  }
+}
+
+//-------------------------------------------------------------------
+
 void NativeMovConstRegPatching::verify() {
   NativeInstruction::verify();
   // Make sure code pattern is sethi/nop/add.
@@ -698,8 +760,7 @@ void NativeJump::verify() {
   Register rd = inv_rd(i0);
 #ifndef _LP64
   if (!(is_op2(i0, Assembler::sethi_op2) && rd != G0 &&
-        (is_op3(i1, Assembler::jmpl_op3, Assembler::arith_op) ||
-        (TraceJumps && is_op3(i1, Assembler::add_op3, Assembler::arith_op))) &&
+        (is_op3(i1, Assembler::jmpl_op3, Assembler::arith_op)) &&
         inv_immed(i1) && (unsigned)get_simm13(i1) < (1 << 10) &&
         rd == inv_rs1(i1))) {
     fatal("not a jump_to instruction");

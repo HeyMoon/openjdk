@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,6 @@ import java.io.IOException;
 import java.nio.channels.*;
 import java.nio.channels.spi.*;
 import java.util.*;
-import sun.misc.*;
 
 
 /**
@@ -68,9 +67,23 @@ class DevPollSelectorImpl
         long pipeFds = IOUtil.makePipe(false);
         fd0 = (int) (pipeFds >>> 32);
         fd1 = (int) pipeFds;
-        pollWrapper = new DevPollArrayWrapper();
-        pollWrapper.initInterrupt(fd0, fd1);
-        fdToKey = new HashMap<Integer,SelectionKeyImpl>();
+        try {
+            pollWrapper = new DevPollArrayWrapper();
+            pollWrapper.initInterrupt(fd0, fd1);
+            fdToKey = new HashMap<>();
+        } catch (Throwable t) {
+            try {
+                FileDispatcherImpl.closeIntFD(fd0);
+            } catch (IOException ioe0) {
+                t.addSuppressed(ioe0);
+            }
+            try {
+                FileDispatcherImpl.closeIntFD(fd1);
+            } catch (IOException ioe1) {
+                t.addSuppressed(ioe1);
+            }
+            throw t;
+        }
     }
 
     protected int doSelect(long timeout)

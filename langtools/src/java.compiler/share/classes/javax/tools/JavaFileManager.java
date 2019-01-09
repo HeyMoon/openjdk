@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,9 @@ import java.io.Closeable;
 import java.io.Flushable;
 import java.io.IOException;
 import java.util.Iterator;
+import java.util.ServiceLoader;
 import java.util.Set;
+
 import static javax.tools.JavaFileObject.Kind;
 
 /**
@@ -68,7 +70,7 @@ import static javax.tools.JavaFileObject.Kind;
  * java.io.File#getCanonicalFile} or similar means.  If the system is
  * not case-aware, file objects must use other means to preserve case.
  *
- * <p><em><a name="relative_name">Relative names</a>:</em> some
+ * <p><em><a id="relative_name">Relative names</a>:</em> some
  * methods in this interface use relative names.  A relative name is a
  * non-null, non-empty sequence of path segments separated by '/'.
  * '.' or '..'  are invalid path segments.  A valid relative name must
@@ -107,6 +109,28 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
     /**
      * Interface for locations of file objects.  Used by file managers
      * to determine where to place or search for file objects.
+     *
+     * <p>Informally, a {@code Location} corresponds to a "search path", such as a class
+     * path or module path, as used by command-line tools that use the default file system.
+     *
+     * <p>Some locations are typically used to identify a place in which
+     * a tool can find files to be read; others are typically used to identify
+     * a place where a tool can write files. If a location is used to identify
+     * a place for reading files, those files may be organized in a simple
+     * <em>package/class</em> hierarchy: such locations are described as
+     * <strong>package-oriented</strong>.
+     * Alternatively, the files may be organized in a <em>module/package/class</em>
+     * hierarchy: such locations are described as <strong>module-oriented</strong>.
+     * If a location is typically used to identify a place where a tool can write files,
+     * it is up to the tool that writes the files to specify how those files will be
+     * organized.
+     *
+     * <p>You can access the classes in a package-oriented location using methods like
+     * {@link JavaFileManager#getJavaFileForInput} or {@link JavaFileManager#list}.
+     * It is not possible to directly list the classes in a module-oriented
+     * location. Instead, you can get a package-oriented location for any specific module
+     * using methods like {@link JavaFileManager#getLocationForModule} or
+     * {@link JavaFileManager#listLocationsForModules}.
      */
     interface Location {
         /**
@@ -117,19 +141,42 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
         String getName();
 
         /**
-         * Determines if this is an output location.  An output
-         * location is a location that is conventionally used for
+         * Determines if this is an output location.
+         * An output location is a location that is conventionally used for
          * output.
+         *
+         * @apiNote An output location may be used to write files in either
+         * a package-oriented organization or in a module-oriented organization.
          *
          * @return true if this is an output location, false otherwise
          */
         boolean isOutputLocation();
+
+        /**
+         * Indicates if this location is module-oriented location, and therefore
+         * expected to contain classes in a <em>module/package/class</em>
+         * hierarchy, as compared to a package-oriented location, which
+         * is expected to contain classes in a <em>package/class</em> hierarchy.
+         * The result of this method is undefined if this is an output
+         * location.
+         *
+         * @implNote This implementation returns true if the name includes
+         * the word "MODULE".
+         *
+         * @return true if this location is expected to contain modules
+         * @since 9
+         * @spec JPMS
+         */
+        default boolean isModuleOrientedLocation() {
+            return getName().matches("\\bMODULE\\b");
+        }
     }
 
     /**
      * Returns a class loader for loading plug-ins from the given
-     * location.  For example, to load annotation processors, a
-     * compiler will request a class loader for the {@link
+     * package-oriented location.
+     * For example, to load annotation processors,
+     * a compiler will request a class loader for the {@link
      * StandardLocation#ANNOTATION_PROCESSOR_PATH
      * ANNOTATION_PROCESSOR_PATH} location.
      *
@@ -141,13 +188,14 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
      * in the current security context
      * @throws IllegalStateException if {@link #close} has been called
      * and this file manager cannot be reopened
+     * @throws IllegalArgumentException if the location is a module-oriented location
      */
     ClassLoader getClassLoader(Location location);
 
     /**
      * Lists all file objects matching the given criteria in the given
-     * location.  List file objects in "subpackages" if recurse is
-     * true.
+     * package-oriented location.
+     * List file objects in "subpackages" if recurse is true.
      *
      * <p>Note: even if the given location is unknown to this file
      * manager, it may not return {@code null}.  Also, an unknown
@@ -161,6 +209,7 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
      * @throws IOException if an I/O error occurred, or if {@link
      * #close} has been called and this file manager cannot be
      * reopened
+     * @throws IllegalArgumentException if the location is a module-oriented location
      * @throws IllegalStateException if {@link #close} has been called
      * and this file manager cannot be reopened
      */
@@ -171,14 +220,15 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
         throws IOException;
 
     /**
-     * Infers a binary name of a file object based on a location.  The
-     * binary name returned might not be a valid binary name according to
+     * Infers a binary name of a file object based on a package-oriented location.
+     * The binary name returned might not be a valid binary name according to
      * <cite>The Java&trade; Language Specification</cite>.
      *
      * @param location a location
      * @param file a file object
      * @return a binary name or {@code null} the file object is not
      * found in the given location
+     * @throws IllegalArgumentException if the location is a module-oriented location
      * @throws IllegalStateException if {@link #close} has been called
      * and this file manager cannot be reopened
      */
@@ -226,7 +276,7 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
     /**
      * Returns a {@linkplain JavaFileObject file object} for input
      * representing the specified class of the specified kind in the
-     * given location.
+     * given package-oriented location.
      *
      * @param location a location
      * @param className the name of a class
@@ -237,7 +287,8 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
      * file does not exist
      * @throws IllegalArgumentException if the location is not known
      * to this file manager and the file manager does not support
-     * unknown locations, or if the kind is not valid
+     * unknown locations, or if the kind is not valid, or if the
+     * location is a module-oriented location
      * @throws IOException if an I/O error occurred, or if {@link
      * #close} has been called and this file manager cannot be
      * reopened
@@ -252,7 +303,7 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
     /**
      * Returns a {@linkplain JavaFileObject file object} for output
      * representing the specified class of the specified kind in the
-     * given location.
+     * given package-oriented location.
      *
      * <p>Optionally, this file manager might consider the sibling as
      * a hint for where to place the output.  The exact semantics of
@@ -263,7 +314,7 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
      * the originating source file as sibling when calling this
      * method.
      *
-     * @param location a location
+     * @param location a package-oriented location
      * @param className the name of a class
      * @param kind the kind of file, must be one of {@link
      * JavaFileObject.Kind#SOURCE SOURCE} or {@link
@@ -274,7 +325,8 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
      * @throws IllegalArgumentException if sibling is not known to
      * this file manager, or if the location is not known to this file
      * manager and the file manager does not support unknown
-     * locations, or if the kind is not valid
+     * locations, or if the kind is not valid, or if the location is
+     * not an output location
      * @throws IOException if an I/O error occurred, or if {@link
      * #close} has been called and this file manager cannot be
      * reopened
@@ -290,7 +342,7 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
     /**
      * Returns a {@linkplain FileObject file object} for input
      * representing the specified <a href="JavaFileManager.html#relative_name">relative
-     * name</a> in the specified package in the given location.
+     * name</a> in the specified package in the given package-oriented location.
      *
      * <p>If the returned object represents a {@linkplain
      * JavaFileObject.Kind#SOURCE source} or {@linkplain
@@ -312,14 +364,15 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
      * a valid result would be a file object representing the file
      * <code>"C:\Documents&nbsp;and&nbsp;Settings\UncleBob\src\share\classes\com\sun\tools\javac\resources\compiler.properties"</code>.
      *
-     * @param location a location
+     * @param location a package-oriented location
      * @param packageName a package name
      * @param relativeName a relative name
      * @return a file object, might return {@code null} if the file
      * does not exist
      * @throws IllegalArgumentException if the location is not known
      * to this file manager and the file manager does not support
-     * unknown locations, or if {@code relativeName} is not valid
+     * unknown locations, or if {@code relativeName} is not valid,
+     * or if the location is a module-oriented location
      * @throws IOException if an I/O error occurred, or if {@link
      * #close} has been called and this file manager cannot be
      * reopened
@@ -355,7 +408,7 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
      * relative name or next to the sibling argument.  See {@link
      * #getFileForInput getFileForInput} for an example.
      *
-     * @param location a location
+     * @param location an output location
      * @param packageName a package name
      * @param relativeName a relative name
      * @param sibling a file object to be used as hint for placement;
@@ -364,7 +417,8 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
      * @throws IllegalArgumentException if sibling is not known to
      * this file manager, or if the location is not known to this file
      * manager and the file manager does not support unknown
-     * locations, or if {@code relativeName} is not valid
+     * locations, or if {@code relativeName} is not valid,
+     * or if the location is not an output location
      * @throws IOException if an I/O error occurred, or if {@link
      * #close} has been called and this file manager cannot be
      * reopened
@@ -385,6 +439,7 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
      * @throws IOException if an I/O error occurred
      * @see #close
      */
+    @Override
     void flush() throws IOException;
 
     /**
@@ -398,5 +453,151 @@ public interface JavaFileManager extends Closeable, Flushable, OptionChecker {
      * @throws IOException if an I/O error occurred
      * @see #flush
      */
+    @Override
     void close() throws IOException;
+
+    /**
+     * Gets a location for a named module within a location, which may be either
+     * a module-oriented location or an output location.
+     * The result will be an output location if the given location is
+     * an output location, or it will be a package-oriented location.
+     *
+     * @implSpec This implementation throws {@code UnsupportedOperationException}.
+     *
+     * @param location the module-oriented location
+     * @param moduleName the name of the module to be found
+     * @return the location for the named module
+     *
+     * @throws IOException if an I/O error occurred
+     * @throws UnsupportedOperationException if this operation if not supported by this file manager
+     * @throws IllegalArgumentException if the location is neither an output location nor a
+     * module-oriented location
+     * @since 9
+     * @spec JPMS
+     */ // TODO: describe failure modes
+    default Location getLocationForModule(Location location, String moduleName) throws IOException {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Gets a location for the module containing a specific file
+     * to be found within a location, which may be either
+     * a module-oriented location or an output location.
+     * The result will be an output location if the given location is
+     * an output location, or it will be a package-oriented location.
+     *
+     * @implSpec This implementation throws {@code UnsupportedOperationException}.
+     *
+     * @param location the module-oriented location
+     * @param fo the file
+     * @return the module containing the file
+     *
+     * @throws IOException if an I/O error occurred
+     * @throws UnsupportedOperationException if this operation if not supported by this file manager
+     * @throws IllegalArgumentException if the location is neither an output location nor a
+     * module-oriented location
+     * @since 9
+     * @spec JPMS
+     */
+    default Location getLocationForModule(Location location, JavaFileObject fo) throws IOException {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Get a service loader for a specific service class from a given location.
+     *
+     * If the location is a module-oriented location, the service loader will use the
+     * service declarations in the modules found in that location. Otherwise, a service loader
+     * is created using the package-oriented location, in which case, the services are
+     * determined using the provider-configuration files in {@code META-INF/services}.
+     *
+     * @implSpec This implementation throws {@code UnsupportedOperationException}.
+     *
+     * @param location the module-oriented location
+     * @param service  the {@code Class} object of the service class
+     * @param <S> the service class
+     * @return a service loader for the given service class
+     *
+     * @throws IOException if an I/O error occurred
+     * @throws UnsupportedOperationException if this operation if not supported by this file manager
+     * @since 9
+     * @spec JPMS
+     */ // TODO: describe failure modes
+    default <S> ServiceLoader<S> getServiceLoader(Location location, Class<S> service) throws  IOException {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Infer the name of the module from its location, as returned by
+     * {@code getLocationForModule} or {@code listModuleLocations}.
+     *
+     * @implSpec This implementation throws {@code UnsupportedOperationException}.
+     *
+     * @param location a package-oriented location representing a module
+     * @return the name of the module
+     *
+     * @throws IOException if an I/O error occurred
+     * @throws UnsupportedOperationException if this operation if not supported by this file manager
+     * @throws IllegalArgumentException if the location is not one known to this file manager
+     * @since 9
+     * @spec JPMS
+     */ // TODO: describe failure modes
+    default String inferModuleName(Location location) throws IOException {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Lists the locations for all the modules in a module-oriented location or an output location.
+     * The locations that are returned will be output locations if the given location is an output,
+     * or it will be a package-oriented locations.
+     *
+     * @implSpec This implementation throws {@code UnsupportedOperationException}.
+     *
+     * @param location  the module-oriented location for which to list the modules
+     * @return  a series of sets of locations containing modules
+     *
+     * @throws IOException if an I/O error occurred
+     * @throws UnsupportedOperationException if this operation if not supported by this file manager
+     * @throws IllegalArgumentException if the location is not a module-oriented location
+     * @since 9
+     * @spec JPMS
+     */ // TODO: describe failure modes
+    default Iterable<Set<Location>> listLocationsForModules(Location location) throws IOException {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Determines whether or not a given file object is "contained in" a specified location.
+     *
+     * <p>For a package-oriented location, a file object is contained in the location if there exist
+     * values for <i>packageName</i> and <i>relativeName</i> such that either of the following
+     * calls would return the {@link #isSameFile same} file object:
+     * <pre>
+     *     getFileForInput(location, <i>packageName</i>, <i>relativeName</i>)
+     *     getFileForOutput(location, <i>packageName</i>, <i>relativeName</i>, null)
+     * </pre>
+     *
+     * <p>For a module-oriented location, a file object is contained in the location if there exists
+     * a module that may be obtained by the call:
+     * <pre>
+     *     getLocationForModule(location, <i>moduleName</i>)
+     * </pre>
+     * such that the file object is contained in the (package-oriented) location for that module.
+     *
+     * @implSpec This implementation throws {@code UnsupportedOperationException}.
+     *
+     * @param location the location
+     * @param fo the file object
+     * @return whether or not the file is contained in the location
+     *
+     * @throws IOException if there is a problem determining the result
+     * @throws UnsupportedOperationException if the method is not supported
+     *
+     * @since 9
+     */
+
+    default boolean contains(Location location, FileObject fo) throws IOException {
+        throw new UnsupportedOperationException();
+    }
+
 }

@@ -48,7 +48,7 @@ import com.apple.laf.AquaUtils.RecyclableSingletonFromDefaultConstructor;
 public class AquaRootPaneUI extends BasicRootPaneUI implements AncestorListener, WindowListener, ContainerListener {
     private static final RecyclableSingleton<AquaRootPaneUI> sRootPaneUI = new RecyclableSingletonFromDefaultConstructor<AquaRootPaneUI>(AquaRootPaneUI.class);
 
-    final static int kDefaultButtonPaintDelayBetweenFrames = 50;
+    static final int kDefaultButtonPaintDelayBetweenFrames = 50;
     JButton fCurrentDefaultButton = null;
     Timer fTimer = null;
     static final boolean sUseScreenMenuBar = AquaMenuBarUI.getScreenMenuBarProperty();
@@ -164,7 +164,7 @@ public class AquaRootPaneUI extends BasicRootPaneUI implements AncestorListener,
 
     /**
      * Invoked when a property changes on the root pane. If the event
-     * indicates the <code>defaultButton</code> has changed, this will
+     * indicates the {@code defaultButton} has changed, this will
      * update the animation.
      * If the enabled state changed, it will start or stop the animation
      */

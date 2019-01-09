@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,14 +25,13 @@
  * @key gc
  * @bug 8010463 8011343 8011898
  * @summary Simple test run with -XX:+VerifyDuringStartup -XX:-UseTLAB to verify 8010463
- * @library /testlibrary
- * @modules java.base/sun.misc
- *          java.management
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  */
 
 import jdk.test.lib.JDKToolFinder;
-import jdk.test.lib.OutputAnalyzer;
-import jdk.test.lib.ProcessTools;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 import java.util.ArrayList;
 import java.util.Collections;
 
@@ -48,6 +47,7 @@ public class TestVerifyDuringStartup {
     Collections.addAll(vmOpts, new String[] {"-XX:-UseTLAB",
                                              "-XX:+UnlockDiagnosticVMOptions",
                                              "-XX:+VerifyDuringStartup",
+                                             "-Xlog:gc+verify=debug",
                                              "-version"});
 
     System.out.print("Testing:\n" + JDKToolFinder.getJDKTool("java"));
@@ -62,7 +62,7 @@ public class TestVerifyDuringStartup {
 
     System.out.println("Output:\n" + output.getOutput());
 
-    output.shouldContain("[Verifying");
+    output.shouldContain("Verifying");
     output.shouldHaveExitValue(0);
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -113,7 +113,6 @@ typedef struct {
     char* property_java_vm_name;          /* UTF8 java.vm.name */
     char* property_java_vm_info;          /* UTF8 java.vm.info */
     char* property_java_class_path;       /* UTF8 java.class.path */
-    char* property_sun_boot_class_path;   /* UTF8 sun.boot.class.path */
     char* property_sun_boot_library_path; /* UTF8 sun.boot.library.path */
     char* property_path_separator;        /* UTF8 path.separator */
     char* property_user_dir;              /* UTF8 user.dir */
@@ -194,6 +193,7 @@ typedef enum {
 #define AGENT_ERROR_INVALID_EVENT_TYPE          _AGENT_ERROR(24)
 #define AGENT_ERROR_INVALID_OBJECT              _AGENT_ERROR(25)
 #define AGENT_ERROR_NO_MORE_FRAMES              _AGENT_ERROR(26)
+#define AGENT_ERROR_INVALID_MODULE              _AGENT_ERROR(27)
 
 /* Combined event information */
 
@@ -278,18 +278,6 @@ typedef struct ObjectBatch {
 #define MOD_SYNTHETIC    0xf0000000  /* not in source code */
 
 /*
- * jlong conversion macros
- */
-#define jlong_zero       ((jlong) 0)
-#define jlong_one        ((jlong) 1)
-
-#define jlong_to_ptr(a)  ((void*)(intptr_t)(a))
-#define ptr_to_jlong(a)  ((jlong)(intptr_t)(a))
-#define jint_to_jlong(a) ((jlong)(a))
-#define jlong_to_jint(a) ((jint)(a))
-
-
-/*
  * util funcs
  */
 void util_initialize(JNIEnv *env);
@@ -366,6 +354,9 @@ jthread *allThreads(jint *count);
 
 void threadGroupInfo(jthreadGroup, jvmtiThreadGroupInfo *info);
 
+jclass findClass(JNIEnv *env, const char * name);
+jmethodID getMethod(JNIEnv *env, jclass clazz, const char * name, const char *signature);
+char *getModuleName(jclass);
 char *getClassname(jclass);
 jvmtiError classSignature(jclass, char**, char**);
 jint classStatus(jclass);

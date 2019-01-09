@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,10 +27,9 @@ package java.lang.ref;
 
 import java.security.PrivilegedAction;
 import java.security.AccessController;
-import sun.misc.JavaLangAccess;
-import sun.misc.ManagedLocalsThread;
-import sun.misc.SharedSecrets;
-import sun.misc.VM;
+import jdk.internal.misc.JavaLangAccess;
+import jdk.internal.misc.SharedSecrets;
+import jdk.internal.misc.VM;
 
 final class Finalizer extends FinalReference<Object> { /* Package-private; must be in
                                                           same package as the Reference
@@ -83,6 +82,10 @@ final class Finalizer extends FinalReference<Object> { /* Package-private; must 
         add();
     }
 
+    static ReferenceQueue<Object> getQueue() {
+        return queue;
+    }
+
     /* Invoked by VM */
     static void register(Object finalizee) {
         new Finalizer(finalizee);
@@ -127,7 +130,7 @@ final class Finalizer extends FinalReference<Object> { /* Package-private; must 
                     for (ThreadGroup tgn = tg;
                          tgn != null;
                          tg = tgn, tgn = tg.getParent());
-                    Thread sft = new ManagedLocalsThread(tg, proc, "Secondary finalizer");
+                    Thread sft = new Thread(tg, proc, "Secondary finalizer", 0, false);
                     sft.start();
                     try {
                         sft.join();
@@ -140,7 +143,7 @@ final class Finalizer extends FinalReference<Object> { /* Package-private; must 
 
     /* Called by Runtime.runFinalization() */
     static void runFinalization() {
-        if (!VM.isBooted()) {
+        if (VM.initLevel() == 0) {
             return;
         }
 
@@ -163,7 +166,7 @@ final class Finalizer extends FinalReference<Object> { /* Package-private; must 
 
     /* Invoked by java.lang.Shutdown */
     static void runAllFinalizers() {
-        if (!VM.isBooted()) {
+        if (VM.initLevel() == 0) {
             return;
         }
 
@@ -186,10 +189,10 @@ final class Finalizer extends FinalReference<Object> { /* Package-private; must 
                 }}});
     }
 
-    private static class FinalizerThread extends ManagedLocalsThread {
+    private static class FinalizerThread extends Thread {
         private volatile boolean running;
         FinalizerThread(ThreadGroup g) {
-            super(g, "Finalizer");
+            super(g, null, "Finalizer", 0, false);
         }
         public void run() {
             // in case of recursive call to run()
@@ -198,10 +201,10 @@ final class Finalizer extends FinalReference<Object> { /* Package-private; must 
 
             // Finalizer thread starts before System.initializeSystemClass
             // is called.  Wait until JavaLangAccess is available
-            while (!VM.isBooted()) {
+            while (VM.initLevel() == 0) {
                 // delay until VM completes initialization
                 try {
-                    VM.awaitBooted();
+                    VM.awaitInitLevel(1);
                 } catch (InterruptedException x) {
                     // ignore and continue
                 }

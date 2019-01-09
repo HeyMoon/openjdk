@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 package javax.xml.validation;
 
+import com.sun.org.apache.xerces.internal.jaxp.validation.XMLSchemaFactory;
 import java.io.File;
 import java.net.URL;
 import javax.xml.transform.Source;
@@ -57,7 +58,7 @@ import org.xml.sax.SAXParseException;
  * may not attempt to recursively invoke the {@code newSchema} method,
  * even from the same thread.
  *
- * <h2><a name="schemaLanguage"></a>Schema Language</h2>
+ * <h2><a id="schemaLanguage"></a>Schema Language</h2>
  * <p>
  * This spec uses a namespace URI to designate a schema language.
  * The following table shows the values defined by this specification.
@@ -83,7 +84,8 @@ import org.xml.sax.SAXParseException;
  * validation implemented on this interface necessarily deviate from
  * the XML DTD semantics as defined in the XML 1.0</em>.
  *
- * <table border="1" cellpadding="2">
+ * <table class="striped">
+ *   <caption>URIs for Supported Schema languages</caption>
  *   <thead>
  *     <tr>
  *       <th>value</th>
@@ -121,6 +123,24 @@ public abstract class SchemaFactory {
      * {@code null} {@link LSResourceResolver}.
      */
     protected SchemaFactory() {
+    }
+
+    /**
+     * Creates a new instance of the {@code SchemaFactory} builtin
+     * system-default implementation.
+     *
+     * @implSpec The {@code SchemaFactory} builtin
+     * system-default implementation is only required to support the
+     * <a href="http://www.w3.org/TR/xmlschema-1">W3C XML Schema 1.0</a>,
+     * but may support additional <a href="#schemaLanguage">schema languages</a>.
+     *
+     * @return A new instance of the {@code SchemaFactory} builtin
+     *         system-default implementation.
+     *
+     * @since 9
+     */
+    public static SchemaFactory newDefaultInstance() {
+        return XMLSchemaFactory.newXMLSchemaFactoryNoServiceLoader();
     }
 
     /**
@@ -179,7 +199,8 @@ public abstract class SchemaFactory {
      *   <li>
      *     <p>
      *     Platform default {@code SchemaFactory} is located
-     *     in a implementation specific way. There must be a platform default
+     *     in an implementation specific way. There must be a
+     *     {@linkplain #newDefaultInstance() platform default}
      *     {@code SchemaFactory} for W3C XML Schema.
      *   </li>
      * </ol>

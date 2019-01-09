@@ -25,53 +25,64 @@
 #ifndef SHARE_VM_GC_SHARED_CARDTABLERS_HPP
 #define SHARE_VM_GC_SHARED_CARDTABLERS_HPP
 
-#include "gc/shared/cardTableModRefBS.hpp"
-#include "gc/shared/genRemSet.hpp"
+#include "gc/shared/cardTableModRefBSForCTRS.hpp"
 #include "memory/memRegion.hpp"
 
 class Space;
 class OopsInGenClosure;
 
-// This kind of "GenRemSet" uses a card table both as shared data structure
+// Helper to remember modified oops in all klasses.
+class KlassRemSet {
+  bool _accumulate_modified_oops;
+ public:
+  KlassRemSet() : _accumulate_modified_oops(false) {}
+  void set_accumulate_modified_oops(bool value) { _accumulate_modified_oops = value; }
+  bool accumulate_modified_oops() { return _accumulate_modified_oops; }
+  bool mod_union_is_clear();
+  void clear_mod_union();
+};
+
+// This RemSet uses a card table both as shared data structure
 // for a mod ref barrier set and for the rem set information.
 
-class CardTableRS: public GenRemSet {
+class CardTableRS: public CHeapObj<mtGC> {
   friend class VMStructs;
   // Below are private classes used in impl.
   friend class VerifyCTSpaceClosure;
   friend class ClearNoncleanCardWrapper;
 
   static jbyte clean_card_val() {
-    return CardTableModRefBS::clean_card;
+    return CardTableModRefBSForCTRS::clean_card;
   }
 
   static intptr_t clean_card_row() {
-    return CardTableModRefBS::clean_card_row;
+    return CardTableModRefBSForCTRS::clean_card_row;
   }
 
   static bool
   card_is_dirty_wrt_gen_iter(jbyte cv) {
-    return CardTableModRefBS::card_is_dirty_wrt_gen_iter(cv);
+    return CardTableModRefBSForCTRS::card_is_dirty_wrt_gen_iter(cv);
   }
 
-  CardTableModRefBSForCTRS* _ct_bs;
+  KlassRemSet _klass_rem_set;
+  BarrierSet* _bs;
 
-  virtual void younger_refs_in_space_iterate(Space* sp, OopsInGenClosure* cl, uint n_threads);
+  CardTableModRefBSForCTRS* _ct_bs;
 
   void verify_space(Space* s, HeapWord* gen_start);
 
   enum ExtendedCardValue {
-    youngergen_card   = CardTableModRefBS::CT_MR_BS_last_reserved + 1,
+    youngergen_card   = CardTableModRefBSForCTRS::CT_MR_BS_last_reserved + 1,
     // These are for parallel collection.
     // There are three P (parallel) youngergen card values.  In general, this
     // needs to be more than the number of generations (including the perm
     // gen) that might have younger_refs_do invoked on them separately.  So
     // if we add more gens, we have to add more values.
-    youngergenP1_card  = CardTableModRefBS::CT_MR_BS_last_reserved + 2,
-    youngergenP2_card  = CardTableModRefBS::CT_MR_BS_last_reserved + 3,
-    youngergenP3_card  = CardTableModRefBS::CT_MR_BS_last_reserved + 4,
+    youngergenP1_card  = CardTableModRefBSForCTRS::CT_MR_BS_last_reserved + 2,
+    youngergenP2_card  = CardTableModRefBSForCTRS::CT_MR_BS_last_reserved + 3,
+    youngergenP3_card  = CardTableModRefBSForCTRS::CT_MR_BS_last_reserved + 4,
     cur_youngergen_and_prev_nonclean_card =
-      CardTableModRefBS::CT_MR_BS_last_reserved + 5
+      CardTableModRefBSForCTRS::CT_MR_BS_last_reserved + 5
   };
 
   // An array that contains, for each generation, the card table value last
@@ -104,10 +115,17 @@ public:
   CardTableRS(MemRegion whole_heap);
   ~CardTableRS();
 
-  // *** GenRemSet functions.
-  CardTableRS* as_CardTableRS() { return this; }
+  // Return the barrier set associated with "this."
+  BarrierSet* bs() { return _bs; }
 
-  CardTableModRefBS* ct_bs() { return _ct_bs; }
+  // Set the barrier set.
+  void set_bs(BarrierSet* bs) { _bs = bs; }
+
+  KlassRemSet* klass_rem_set() { return &_klass_rem_set; }
+
+  CardTableModRefBSForCTRS* ct_bs() { return _ct_bs; }
+
+  void younger_refs_in_space_iterate(Space* sp, OopsInGenClosure* cl, uint n_threads);
 
   // Override.
   void prepare_for_younger_refs_iterate(bool parallel);
@@ -141,13 +159,13 @@ public:
   void clear(MemRegion mr) { _ct_bs->clear(mr); }
   void clear_into_younger(Generation* old_gen);
 
-  void invalidate(MemRegion mr, bool whole_heap = false) {
-    _ct_bs->invalidate(mr, whole_heap);
+  void invalidate(MemRegion mr) {
+    _ct_bs->invalidate(mr);
   }
   void invalidate_or_clear(Generation* old_gen);
 
   static uintx ct_max_alignment_constraint() {
-    return CardTableModRefBS::ct_max_alignment_constraint();
+    return CardTableModRefBSForCTRS::ct_max_alignment_constraint();
   }
 
   jbyte* byte_for(void* p)     { return _ct_bs->byte_for(p); }

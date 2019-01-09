@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,7 @@
 #include "compiler/compileBroker.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/method.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/compilationPolicy.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "runtime/orderAccess.inline.hpp"
@@ -42,8 +42,6 @@
 #include "utilities/events.hpp"
 #include "utilities/ticks.inline.hpp"
 #include "utilities/xmlstream.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 #ifdef ASSERT
 
@@ -62,12 +60,12 @@ class SweeperRecord {
 
   void print() {
       tty->print_cr("traversal = %d compile_id = %d %s uep = " PTR_FORMAT " vep = "
-                    PTR_FORMAT " state = %d traversal_mark %d line = %d",
+                    PTR_FORMAT " state = %d traversal_mark %ld line = %d",
                     traversal,
                     compile_id,
                     kind == NULL ? "" : kind,
-                    uep,
-                    vep,
+                    p2i(uep),
+                    p2i(vep),
                     state,
                     traversal_mark,
                     line);
@@ -111,13 +109,13 @@ void NMethodSweeper::report_events() {
   }
 }
 
-void NMethodSweeper::record_sweep(nmethod* nm, int line) {
+void NMethodSweeper::record_sweep(CompiledMethod* nm, int line) {
   if (_records != NULL) {
     _records[_sweep_index].traversal = _traversals;
-    _records[_sweep_index].traversal_mark = nm->_stack_traversal_mark;
+    _records[_sweep_index].traversal_mark = nm->is_nmethod() ? ((nmethod*)nm)->_stack_traversal_mark : 0;
     _records[_sweep_index].compile_id = nm->compile_id();
     _records[_sweep_index].kind = nm->compile_kind();
-    _records[_sweep_index].state = nm->_state;
+    _records[_sweep_index].state = nm->get_state();
     _records[_sweep_index].vep = nm->verified_entry_point();
     _records[_sweep_index].uep = nm->entry_point();
     _records[_sweep_index].line = line;
@@ -136,7 +134,7 @@ void NMethodSweeper::init_sweeper_log() {
 #define SWEEP(nm)
 #endif
 
-NMethodIterator NMethodSweeper::_current;                      // Current nmethod
+CompiledMethodIterator NMethodSweeper::_current;               // Current compiled method
 long     NMethodSweeper::_traversals                   = 0;    // Stack scan count, also sweep ID.
 long     NMethodSweeper::_total_nof_code_cache_sweeps  = 0;    // Total number of full sweeps of the code cache
 long     NMethodSweeper::_time_counter                 = 0;    // Virtual time used to periodically invoke sweeper
@@ -148,7 +146,6 @@ volatile bool NMethodSweeper::_force_sweep             = false;// Indicates if w
 volatile int  NMethodSweeper::_bytes_changed           = 0;    // Counts the total nmethod size if the nmethod changed from:
                                                                //   1) alive       -> not_entrant
                                                                //   2) not_entrant -> zombie
-                                                               //   3) zombie      -> marked_for_reclamation
 int    NMethodSweeper::_hotness_counter_reset_val       = 0;
 
 long   NMethodSweeper::_total_nof_methods_reclaimed     = 0;   // Accumulated nof methods flushed
@@ -213,17 +210,26 @@ void NMethodSweeper::mark_active_nmethods() {
   _time_counter++;
 
   // Check for restart
-  assert(CodeCache::find_blob_unsafe(_current.method()) == _current.method(), "Sweeper nmethod cached state invalid");
+  if (_current.method() != NULL) {
+    if (_current.method()->is_nmethod()) {
+      assert(CodeCache::find_blob_unsafe(_current.method()) == _current.method(), "Sweeper nmethod cached state invalid");
+    } else if (_current.method()->is_aot()) {
+      assert(CodeCache::find_blob_unsafe(_current.method()->code_begin()) == _current.method(), "Sweeper AOT method cached state invalid");
+    } else {
+      ShouldNotReachHere();
+    }
+  }
+
   if (wait_for_stack_scanning()) {
     _seen = 0;
-    _current = NMethodIterator();
+    _current = CompiledMethodIterator();
     // Initialize to first nmethod
     _current.next();
     _traversals += 1;
     _total_time_this_sweep = Tickspan();
 
     if (PrintMethodFlushing) {
-      tty->print_cr("### Sweep: stack traversal %d", _traversals);
+      tty->print_cr("### Sweep: stack traversal %ld", _traversals);
     }
     Threads::nmethods_do(&mark_activation_closure);
 
@@ -299,7 +305,7 @@ void NMethodSweeper::force_sweep() {
 void NMethodSweeper::handle_safepoint_request() {
   if (SafepointSynchronize::is_synchronizing()) {
     if (PrintMethodFlushing && Verbose) {
-      tty->print_cr("### Sweep at %d out of %d, yielding to safepoint", _seen, CodeCache::nof_nmethods());
+      tty->print_cr("### Sweep at %d out of %d, yielding to safepoint", _seen, CodeCache::nmethod_count());
     }
     MutexUnlockerEx mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
 
@@ -357,8 +363,8 @@ void NMethodSweeper::possibly_sweep() {
   bool forced = _force_sweep;
 
   // Force stack scanning if there is only 10% free space in the code cache.
-  // We force stack scanning only non-profiled code heap gets full, since critical
-  // allocation go to the non-profiled heap and we must be make sure that there is
+  // We force stack scanning only if the non-profiled code heap gets full, since critical
+  // allocations go to the non-profiled heap and we must be make sure that there is
   // enough space.
   double free_percent = 1 / CodeCache::reverse_free_ratio(CodeBlobType::MethodNonProfiled) * 100;
   if (free_percent <= StartAggressiveSweepingAt) {
@@ -399,11 +405,10 @@ void NMethodSweeper::sweep_code_cache() {
 
   int flushed_count                = 0;
   int zombified_count              = 0;
-  int marked_for_reclamation_count = 0;
   int flushed_c2_count     = 0;
 
   if (PrintMethodFlushing && Verbose) {
-    tty->print_cr("### Sweep at %d out of %d", _seen, CodeCache::nof_nmethods());
+    tty->print_cr("### Sweep at %d out of %d", _seen, CodeCache::nmethod_count());
   }
 
   int swept_count = 0;
@@ -419,28 +424,34 @@ void NMethodSweeper::sweep_code_cache() {
       // Since we will give up the CodeCache_lock, always skip ahead
       // to the next nmethod.  Other blobs can be deleted by other
       // threads but nmethods are only reclaimed by the sweeper.
-      nmethod* nm = _current.method();
+      CompiledMethod* nm = _current.method();
       _current.next();
 
       // Now ready to process nmethod and give up CodeCache_lock
       {
         MutexUnlockerEx mu(CodeCache_lock, Mutex::_no_safepoint_check_flag);
-        int size = nm->total_size();
+        // Save information before potentially flushing the nmethod
+        // Only flushing nmethods so size only matters for them.
+        int size = nm->is_nmethod() ? ((nmethod*)nm)->total_size() : 0;
         bool is_c2_method = nm->is_compiled_by_c2();
+        bool is_osr = nm->is_osr_method();
+        int compile_id = nm->compile_id();
+        intptr_t address = p2i(nm);
+        const char* state_before = nm->state();
+        const char* state_after = "";
 
-        MethodStateChange type = process_nmethod(nm);
+        MethodStateChange type = process_compiled_method(nm);
         switch (type) {
           case Flushed:
+            state_after = "flushed";
             freed_memory += size;
             ++flushed_count;
             if (is_c2_method) {
               ++flushed_c2_count;
             }
             break;
-          case MarkedForReclamation:
-            ++marked_for_reclamation_count;
-            break;
           case MadeZombie:
+            state_after = "made zombie";
             ++zombified_count;
             break;
           case None:
@@ -448,7 +459,11 @@ void NMethodSweeper::sweep_code_cache() {
           default:
            ShouldNotReachHere();
         }
+        if (PrintMethodFlushing && Verbose && type != None) {
+          tty->print_cr("### %s nmethod %3d/" PTR_FORMAT " (%s) %s", is_osr ? "osr" : "", compile_id, address, state_before, state_after);
+        }
       }
+
       _seen++;
       handle_safepoint_request();
     }
@@ -472,17 +487,16 @@ void NMethodSweeper::sweep_code_cache() {
   if (event.should_commit()) {
     event.set_starttime(sweep_start_counter);
     event.set_endtime(sweep_end_counter);
-    event.set_sweepIndex(_traversals);
+    event.set_sweepId(_traversals);
     event.set_sweptCount(swept_count);
     event.set_flushedCount(flushed_count);
-    event.set_markedCount(marked_for_reclamation_count);
     event.set_zombifiedCount(zombified_count);
     event.commit();
   }
 
 #ifdef ASSERT
   if(PrintMethodFlushing) {
-    tty->print_cr("### sweeper:      sweep time(%d): ", (jlong)sweep_time.value());
+    tty->print_cr("### sweeper:      sweep time(" JLONG_FORMAT "): ", sweep_time.value());
   }
 #endif
 
@@ -528,25 +542,29 @@ void NMethodSweeper::possibly_enable_sweeper() {
   }
 }
 
-class NMethodMarker: public StackObj {
+class CompiledMethodMarker: public StackObj {
  private:
   CodeCacheSweeperThread* _thread;
  public:
-  NMethodMarker(nmethod* nm) {
+  CompiledMethodMarker(CompiledMethod* cm) {
     JavaThread* current = JavaThread::current();
     assert (current->is_Code_cache_sweeper_thread(), "Must be");
-    _thread = (CodeCacheSweeperThread*)JavaThread::current();
-    if (!nm->is_zombie() && !nm->is_unloaded()) {
+    _thread = (CodeCacheSweeperThread*)current;
+    if (!cm->is_zombie() && !cm->is_unloaded()) {
       // Only expose live nmethods for scanning
-      _thread->set_scanned_nmethod(nm);
+      _thread->set_scanned_compiled_method(cm);
     }
   }
-  ~NMethodMarker() {
-    _thread->set_scanned_nmethod(NULL);
+  ~CompiledMethodMarker() {
+    _thread->set_scanned_compiled_method(NULL);
   }
 };
 
-void NMethodSweeper::release_nmethod(nmethod* nm) {
+void NMethodSweeper::release_compiled_method(CompiledMethod* nm) {
+  // Make sure the released nmethod is no longer referenced by the sweeper thread
+  CodeCacheSweeperThread* thread = (CodeCacheSweeperThread*)JavaThread::current();
+  thread->set_scanned_compiled_method(NULL);
+
   // Clean up any CompiledICHolders
   {
     ResourceMark rm;
@@ -554,7 +572,7 @@ void NMethodSweeper::release_nmethod(nmethod* nm) {
     RelocIterator iter(nm);
     while (iter.next()) {
       if (iter.type() == relocInfo::virtual_call_type) {
-        CompiledIC::cleanup_call_site(iter.virtual_call_reloc());
+        CompiledIC::cleanup_call_site(iter.virtual_call_reloc(), nm);
       }
     }
   }
@@ -563,105 +581,100 @@ void NMethodSweeper::release_nmethod(nmethod* nm) {
   nm->flush();
 }
 
-NMethodSweeper::MethodStateChange NMethodSweeper::process_nmethod(nmethod* nm) {
-  assert(nm != NULL, "sanity");
+NMethodSweeper::MethodStateChange NMethodSweeper::process_compiled_method(CompiledMethod* cm) {
+  assert(cm != NULL, "sanity");
   assert(!CodeCache_lock->owned_by_self(), "just checking");
 
   MethodStateChange result = None;
   // Make sure this nmethod doesn't get unloaded during the scan,
   // since safepoints may happen during acquired below locks.
-  NMethodMarker nmm(nm);
-  SWEEP(nm);
+  CompiledMethodMarker nmm(cm);
+  SWEEP(cm);
 
   // Skip methods that are currently referenced by the VM
-  if (nm->is_locked_by_vm()) {
+  if (cm->is_locked_by_vm()) {
     // But still remember to clean-up inline caches for alive nmethods
-    if (nm->is_alive()) {
-      // Clean inline caches that point to zombie/non-entrant methods
+    if (cm->is_alive()) {
+      // Clean inline caches that point to zombie/non-entrant/unloaded nmethods
       MutexLocker cl(CompiledIC_lock);
-      nm->cleanup_inline_caches();
-      SWEEP(nm);
+      cm->cleanup_inline_caches();
+      SWEEP(cm);
     }
     return result;
   }
 
-  if (nm->is_zombie()) {
-    // If it is the first time we see nmethod then we mark it. Otherwise,
-    // we reclaim it. When we have seen a zombie method twice, we know that
-    // there are no inline caches that refer to it.
-    if (nm->is_marked_for_reclamation()) {
-      assert(!nm->is_locked_by_vm(), "must not flush locked nmethods");
-      if (PrintMethodFlushing && Verbose) {
-        tty->print_cr("### Nmethod %3d/" PTR_FORMAT " (marked for reclamation) being flushed", nm->compile_id(), nm);
-      }
-      release_nmethod(nm);
-      assert(result == None, "sanity");
-      result = Flushed;
-    } else {
-      if (PrintMethodFlushing && Verbose) {
-        tty->print_cr("### Nmethod %3d/" PTR_FORMAT " (zombie) being marked for reclamation", nm->compile_id(), nm);
-      }
-      nm->mark_for_reclamation();
-      // Keep track of code cache state change
-      _bytes_changed += nm->total_size();
-      SWEEP(nm);
-      assert(result == None, "sanity");
-      result = MarkedForReclamation;
-    }
-  } else if (nm->is_not_entrant()) {
+  if (cm->is_zombie()) {
+    // All inline caches that referred to this nmethod were cleaned in the
+    // previous sweeper cycle. Now flush the nmethod from the code cache.
+    assert(!cm->is_locked_by_vm(), "must not flush locked Compiled Methods");
+    release_compiled_method(cm);
+    assert(result == None, "sanity");
+    result = Flushed;
+  } else if (cm->is_not_entrant()) {
     // If there are no current activations of this method on the
     // stack we can safely convert it to a zombie method
-    if (nm->can_not_entrant_be_converted()) {
-      // Clear ICStubs to prevent back patching stubs of zombie or unloaded
+    if (cm->can_convert_to_zombie()) {
+      // Clear ICStubs to prevent back patching stubs of zombie or flushed
       // nmethods during the next safepoint (see ICStub::finalize).
       {
         MutexLocker cl(CompiledIC_lock);
-        nm->clear_ic_stubs();
+        cm->clear_ic_stubs();
       }
-      // Acquiring the CompiledIC_lock may block for a safepoint and set the
-      // nmethod to zombie (see 'CodeCache::make_marked_nmethods_zombies').
-      // Check if nmethod is still non-entrant at this point.
-      if (nm->is_not_entrant()) {
-        if (PrintMethodFlushing && Verbose) {
-          tty->print_cr("### Nmethod %3d/" PTR_FORMAT " (not entrant) being made zombie", nm->compile_id(), nm);
-        }
-        // Code cache state change is tracked in make_zombie()
-        nm->make_zombie();
-        SWEEP(nm);
+      // Code cache state change is tracked in make_zombie()
+      cm->make_zombie();
+      SWEEP(cm);
+      // The nmethod may have been locked by JVMTI after being made zombie (see
+      // JvmtiDeferredEvent::compiled_method_unload_event()). If so, we cannot
+      // flush the osr nmethod directly but have to wait for a later sweeper cycle.
+      if (cm->is_osr_method() && !cm->is_locked_by_vm()) {
+        // No inline caches will ever point to osr methods, so we can just remove it.
+        // Make sure that we unregistered the nmethod with the heap and flushed all
+        // dependencies before removing the nmethod (done in make_zombie()).
+        assert(cm->is_zombie(), "nmethod must be unregistered");
+        release_compiled_method(cm);
+        assert(result == None, "sanity");
+        result = Flushed;
+      } else {
         assert(result == None, "sanity");
         result = MadeZombie;
+        assert(cm->is_zombie(), "nmethod must be zombie");
       }
-      assert(nm->is_zombie(), "nmethod must be zombie");
     } else {
       // Still alive, clean up its inline caches
       MutexLocker cl(CompiledIC_lock);
-      nm->cleanup_inline_caches();
-      SWEEP(nm);
+      cm->cleanup_inline_caches();
+      SWEEP(cm);
     }
-  } else if (nm->is_unloaded()) {
-    // Unloaded code, just make it a zombie
-    if (PrintMethodFlushing && Verbose) {
-      tty->print_cr("### Nmethod %3d/" PTR_FORMAT " (unloaded) being made zombie", nm->compile_id(), nm);
+  } else if (cm->is_unloaded()) {
+    // Code is unloaded, so there are no activations on the stack.
+    // Convert the nmethod to zombie or flush it directly in the OSR case.
+    {
+      // Clean ICs of unloaded nmethods as well because they may reference other
+      // unloaded nmethods that may be flushed earlier in the sweeper cycle.
+      MutexLocker cl(CompiledIC_lock);
+      cm->cleanup_inline_caches();
     }
-    if (nm->is_osr_method()) {
-      SWEEP(nm);
+    if (cm->is_osr_method()) {
+      SWEEP(cm);
       // No inline caches will ever point to osr methods, so we can just remove it
-      release_nmethod(nm);
+      release_compiled_method(cm);
       assert(result == None, "sanity");
       result = Flushed;
     } else {
       // Code cache state change is tracked in make_zombie()
-      nm->make_zombie();
-      SWEEP(nm);
+      cm->make_zombie();
+      SWEEP(cm);
       assert(result == None, "sanity");
       result = MadeZombie;
     }
   } else {
-    possibly_flush(nm);
-    // Clean-up all inline caches that point to zombie/non-reentrant methods
+    if (cm->is_nmethod()) {
+      possibly_flush((nmethod*)cm);
+    }
+    // Clean inline caches that point to zombie/non-entrant/unloaded nmethods
     MutexLocker cl(CompiledIC_lock);
-    nm->cleanup_inline_caches();
-    SWEEP(nm);
+    cm->cleanup_inline_caches();
+    SWEEP(cm);
   }
   return result;
 }
@@ -669,10 +682,10 @@ NMethodSweeper::MethodStateChange NMethodSweeper::process_nmethod(nmethod* nm) {
 
 void NMethodSweeper::possibly_flush(nmethod* nm) {
   if (UseCodeCacheFlushing) {
-    if (!nm->is_locked_by_vm() && !nm->is_osr_method() && !nm->is_native_method()) {
+    if (!nm->is_locked_by_vm() && !nm->is_native_method()) {
       bool make_not_entrant = false;
 
-      // Do not make native methods and OSR-methods not-entrant
+      // Do not make native methods not-entrant
       nm->dec_hotness_counter();
       // Get the initial value of the hotness counter. This value depends on the
       // ReservedCodeCacheSize
@@ -742,7 +755,7 @@ void NMethodSweeper::possibly_flush(nmethod* nm) {
         // Code cache state change is tracked in make_not_entrant()
         if (PrintMethodFlushing && Verbose) {
           tty->print_cr("### Nmethod %d/" PTR_FORMAT "made not-entrant: hotness counter %d/%d threshold %f",
-              nm->compile_id(), nm, nm->hotness_counter(), reset_val, threshold);
+              nm->compile_id(), p2i(nm), nm->hotness_counter(), reset_val, threshold);
         }
       }
     }

@@ -44,9 +44,6 @@ public class VirtualMachineImpl extends HotSpotVirtualMachine {
     // Any changes to this needs to be synchronized with HotSpot.
     private static final String tmpdir = "/tmp";
 
-    // Indicates if this machine uses the old LinuxThreads
-    static boolean isLinuxThreads;
-
     // The patch to the socket file created by the target VM
     String path;
 
@@ -73,44 +70,37 @@ public class VirtualMachineImpl extends HotSpotVirtualMachine {
         if (path == null) {
             File f = createAttachFile(pid);
             try {
-                // On LinuxThreads each thread is a process and we don't have the
-                // pid of the VMThread which has SIGQUIT unblocked. To workaround
-                // this we get the pid of the "manager thread" that is created
-                // by the first call to pthread_create. This is parent of all
-                // threads (except the initial thread).
-                if (isLinuxThreads) {
-                    int mpid;
-                    try {
-                        mpid = getLinuxThreadsManager(pid);
-                    } catch (IOException x) {
-                        throw new AttachNotSupportedException(x.getMessage());
-                    }
-                    assert(mpid >= 1);
-                    sendQuitToChildrenOf(mpid);
-                } else {
-                    sendQuitTo(pid);
-                }
+                sendQuitTo(pid);
 
                 // give the target VM time to start the attach mechanism
-                int i = 0;
-                long delay = 200;
-                int retries = (int)(attachTimeout() / delay);
+                final int delay_step = 100;
+                final long timeout = attachTimeout();
+                long time_spend = 0;
+                long delay = 0;
                 do {
+                    // Increase timeout on each attempt to reduce polling
+                    delay += delay_step;
                     try {
                         Thread.sleep(delay);
                     } catch (InterruptedException x) { }
                     path = findSocketFile(pid);
-                    i++;
-                } while (i <= retries && path == null);
+
+                    time_spend += delay;
+                    if (time_spend > timeout/2 && path == null) {
+                        // Send QUIT again to give target VM the last chance to react
+                        sendQuitTo(pid);
+                    }
+                } while (time_spend <= timeout && path == null);
                 if (path == null) {
                     throw new AttachNotSupportedException(
-                        "Unable to open socket file: target process not responding " +
-                        "or HotSpot VM not loaded");
+                        String.format("Unable to open socket file %s: " +
+                          "target process %d doesn't respond within %dms " +
+                          "or HotSpot VM not loaded", f.getPath(), pid, time_spend));
                 }
             } finally {
                 f.delete();
             }
-        }
+      }
 
         // Check that the file owner/permission to avoid attaching to
         // bogus process
@@ -221,13 +211,14 @@ public class VirtualMachineImpl extends HotSpotVirtualMachine {
             // Special-case the "load" command so that the right exception is
             // thrown.
             if (cmd.equals("load")) {
-                throw new AgentLoadException("Failed to load agent library");
+                String msg = "Failed to load agent library";
+                if (!message.isEmpty())
+                    msg += ": " + message;
+                throw new AgentLoadException(msg);
             } else {
-                if (message == null) {
-                    throw new AttachOperationFailedException("Command failed in target VM");
-                } else {
-                    throw new AttachOperationFailedException(message);
-                }
+                if (message.isEmpty())
+                    message = "Command failed in target VM";
+                throw new AttachOperationFailedException(message);
             }
         }
 
@@ -318,10 +309,6 @@ public class VirtualMachineImpl extends HotSpotVirtualMachine {
 
     //-- native methods
 
-    static native boolean isLinuxThreads();
-
-    static native int getLinuxThreadsManager(int pid) throws IOException;
-
     static native void sendQuitToChildrenOf(int pid) throws IOException;
 
     static native void sendQuitTo(int pid) throws IOException;
@@ -340,6 +327,5 @@ public class VirtualMachineImpl extends HotSpotVirtualMachine {
 
     static {
         System.loadLibrary("attach");
-        isLinuxThreads = isLinuxThreads();
     }
 }

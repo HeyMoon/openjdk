@@ -66,6 +66,8 @@ import sun.font.FontManager;
 import sun.font.FontManagerFactory;
 import sun.font.FontManagerForSGE;
 import sun.font.NativeFont;
+import java.security.AccessController;
+import sun.security.action.GetPropertyAction;
 
 /**
  * This is an implementation of a GraphicsEnvironment object for the
@@ -80,10 +82,21 @@ public abstract class SunGraphicsEnvironment extends GraphicsEnvironment
     public static boolean isOpenSolaris;
     private static Font defaultFont;
 
+    private static final boolean uiScaleEnabled;
+    private static final double debugScale;
+
+    static {
+        uiScaleEnabled = "true".equals(AccessController.doPrivileged(
+                new GetPropertyAction("sun.java2d.uiScale.enabled", "true")));
+        debugScale = uiScaleEnabled ? getScaleFactor("sun.java2d.uiScale") : -1;
+    }
+
     public SunGraphicsEnvironment() {
         java.security.AccessController.doPrivileged(
                                     new java.security.PrivilegedAction<Object>() {
             public Object run() {
+                String osName = System.getProperty("os.name");
+                if ("SunOS".equals(osName)) {
                     String version = System.getProperty("os.version", "0.0");
                     try {
                         float ver = Float.parseFloat(version);
@@ -117,7 +130,7 @@ public abstract class SunGraphicsEnvironment extends GraphicsEnvironment
                         }
                     } catch (Exception e) {
                     }
-
+                }
                 /* Establish the default font to be used by SG2D etc */
                 defaultFont = new Font(Font.DIALOG, Font.PLAIN, 12);
 
@@ -153,7 +166,7 @@ public abstract class SunGraphicsEnvironment extends GraphicsEnvironment
 
     /**
      * Create and return the screen device with the specified number. The
-     * device with number <code>0</code> will be the default device (returned
+     * device with number {@code 0} will be the default device (returned
      * by {@link #getDefaultScreenDevice()}.
      *
      * @param screennum the number of the screen to create
@@ -195,9 +208,9 @@ public abstract class SunGraphicsEnvironment extends GraphicsEnvironment
      * to use Mincho instead of Gothic for dialoginput in JA locales
      * on windows. Not needed on other platforms.
      *
-     * DO NOT MOVE OR RENAME OR OTHERWISE ALTER THIS METHOD.
-     * ITS USED BY SOME NON-JRE INTERNAL CODE.
+     * @deprecated as of JDK9. To be removed in a future release
      */
+    @Deprecated
     public static void useAlternateFontforJALocales() {
         getFontManagerForSGE().useAlternateFontforJALocales();
     }
@@ -338,5 +351,42 @@ public abstract class SunGraphicsEnvironment extends GraphicsEnvironment
      */
     public boolean isFlipStrategyPreferred(ComponentPeer peer) {
         return false;
+    }
+
+    public static boolean isUIScaleEnabled() {
+        return uiScaleEnabled;
+    }
+
+    public static double getDebugScale() {
+        return debugScale;
+    }
+
+    public static double getScaleFactor(String propertyName) {
+
+        String scaleFactor = AccessController.doPrivileged(
+                new GetPropertyAction(propertyName, "-1"));
+
+        if (scaleFactor == null || scaleFactor.equals("-1")) {
+            return -1;
+        }
+
+        try {
+            double units = 1.0;
+
+            if (scaleFactor.endsWith("x")) {
+                scaleFactor = scaleFactor.substring(0, scaleFactor.length() - 1);
+            } else if (scaleFactor.endsWith("dpi")) {
+                units = 96;
+                scaleFactor = scaleFactor.substring(0, scaleFactor.length() - 3);
+            } else if (scaleFactor.endsWith("%")) {
+                units = 100;
+                scaleFactor = scaleFactor.substring(0, scaleFactor.length() - 1);
+            }
+
+            double scale = Double.parseDouble(scaleFactor);
+            return scale <= 0 ? -1 : scale / units;
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
     }
 }

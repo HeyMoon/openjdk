@@ -38,7 +38,7 @@ public class BigBinarySearch {
         extends AbstractList<Integer>
         implements RandomAccess
     {
-        private Map<Integer,Integer> m = new HashMap<Integer,Integer>();
+        private Map<Integer,Integer> m = new HashMap<>();
 
         public Integer get(int i) {
             if (i < 0) throw new IndexOutOfBoundsException(""+i);
@@ -61,13 +61,13 @@ public class BigBinarySearch {
         }
     }
 
-    /** Check that binarySearch finds an element where we got it */
+    /** Checks that binarySearch finds an element where we got it. */
     private static void checkBinarySearch(List<Integer> l, int i) {
         try { equal(i, Collections.binarySearch(l, l.get(i))); }
         catch (Throwable t) { unexpected(t); }
     }
 
-    /** Check that binarySearch finds an element where we got it */
+    /** Checks that binarySearch finds an element where we got it. */
     private static void checkBinarySearch(List<Integer> l, int i,
                                           Comparator<Integer> comparator) {
         try { equal(i, Collections.binarySearch(l, l.get(i), comparator)); }

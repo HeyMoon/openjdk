@@ -34,27 +34,32 @@
 /*
  * @test
  * @bug 8005696
+ * @summary Basic tests for CompletableFuture
+ * @library /lib/testlibrary/
  * @run main Basic
  * @run main/othervm -Djava.util.concurrent.ForkJoinPool.common.parallelism=0 Basic
- * @summary Basic tests for CompletableFuture
  * @author Chris Hegarty
  */
 
+import static java.util.concurrent.CompletableFuture.runAsync;
+import static java.util.concurrent.CompletableFuture.supplyAsync;
+import static java.util.concurrent.ForkJoinPool.commonPool;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
+
 import java.lang.reflect.Array;
 import java.util.concurrent.Phaser;
-import static java.util.concurrent.TimeUnit.*;
 import java.util.concurrent.CompletableFuture;
-import static java.util.concurrent.CompletableFuture.*;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import static java.util.concurrent.ForkJoinPool.*;
 import java.util.concurrent.atomic.AtomicInteger;
-
+import jdk.testlibrary.Utils;
 
 public class Basic {
+    static final long LONG_DELAY_MS = Utils.adjustTimeout(10_000);
 
     static void checkCompletedNormally(CompletableFuture<?> cf, Object value) {
         checkCompletedNormally(cf, value == null ? null : new Object[] { value });
@@ -66,6 +71,7 @@ public class Basic {
         try { equalAnyOf(cf.get(), values); } catch (Throwable x) { unexpected(x); }
         try { equalAnyOf(cf.get(0L, SECONDS), values); } catch (Throwable x) { unexpected(x); }
         check(cf.isDone(), "Expected isDone to be true, got:" + cf);
+        check(!cf.isCompletedExceptionally(), "Expected isCompletedExceptionally to return false");
         check(!cf.isCancelled(), "Expected isCancelled to be false");
         check(!cf.cancel(true), "Expected cancel to return false");
         check(cf.toString().contains("[Completed normally]"));
@@ -97,6 +103,7 @@ public class Basic {
         catch (CancellationException x) { if (cancelled) pass(); else fail(); }
         catch (ExecutionException x) { if (cancelled) check(x.getCause() instanceof CancellationException); else pass(); }
         check(cf.isDone(), "Expected isDone to be true, got:" + cf);
+        check(cf.isCompletedExceptionally(), "Expected isCompletedExceptionally");
         check(cf.isCancelled() == cancelled, "Expected isCancelled: " + cancelled + ", got:"  + cf.isCancelled());
         check(cf.cancel(true) == cancelled, "Expected cancel: " + cancelled + ", got:"  + cf.cancel(true));
         check(cf.toString().contains("[Completed exceptionally]"));  // ## TODO: 'E'xceptionally
@@ -106,12 +113,13 @@ public class Basic {
     }
 
     private static void realMain(String[] args) throws Throwable {
-        ExecutorService executor = Executors.newFixedThreadPool(2);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            test(executor);
+            test(pool);
         } finally {
-            executor.shutdown();
-            executor.awaitTermination(30, SECONDS);
+            pool.shutdown();
+            if (! pool.awaitTermination(LONG_DELAY_MS, MILLISECONDS))
+                throw new Error();
         }
     }
 
@@ -805,6 +813,49 @@ public class Basic {
             cf2 = cf1.handle((x,t) -> { check(t.getCause() == ex); return 2;});
             checkCompletedExceptionally(cf1);
             checkCompletedNormally(cf2, 2);
+
+            cf1 = supplyAsync(() -> 1);
+            cf2 = cf1.handleAsync((x,t) -> x+1);
+            checkCompletedNormally(cf1, 1);
+            checkCompletedNormally(cf2, 2);
+
+            cf1 = supplyAsync(() -> { throw ex; });
+            cf2 = cf1.handleAsync((x,t) -> { check(t.getCause() == ex); return 2;});
+            checkCompletedExceptionally(cf1);
+            checkCompletedNormally(cf2, 2);
+        } catch (Throwable t) { unexpected(t); }
+
+        //----------------------------------------------------------------
+        // whenComplete tests
+        //----------------------------------------------------------------
+        try {
+            AtomicInteger count = new AtomicInteger();
+            CompletableFuture<Integer> cf2;
+            CompletableFuture<Integer> cf1 = supplyAsync(() -> 1);
+            cf2 = cf1.whenComplete((x,t) -> count.getAndIncrement());
+            checkCompletedNormally(cf1, 1);
+            checkCompletedNormally(cf2, 1);
+            check(count.get() == 1, "action count should be incremented");
+
+            final RuntimeException ex = new RuntimeException();
+            cf1 = supplyAsync(() -> { throw ex; });
+            cf2 = cf1.whenComplete((x,t) -> count.getAndIncrement());
+            checkCompletedExceptionally(cf1);
+            checkCompletedExceptionally(cf2);
+            check(count.get() == 2, "action count should be incremented");
+
+            cf1 = supplyAsync(() -> 1);
+            cf2 = cf1.whenCompleteAsync((x,t) -> count.getAndIncrement());
+            checkCompletedNormally(cf1, 1);
+            checkCompletedNormally(cf2, 1);
+            check(count.get() == 3, "action count should be incremented");
+
+            cf1 = supplyAsync(() -> { throw ex; });
+            cf2 = cf1.whenCompleteAsync((x,t) -> count.getAndIncrement());
+            checkCompletedExceptionally(cf1);
+            checkCompletedExceptionally(cf2);
+            check(count.get() == 4, "action count should be incremented");
+
         } catch (Throwable t) { unexpected(t); }
 
     }

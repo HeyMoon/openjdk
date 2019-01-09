@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,12 +25,13 @@
  * @test
  * @bug 8066670
  * @summary Testing -XX:+PrintSharedArchiveAndExit option
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 
 public class PrintSharedArchiveAndExit {
   public static void main(String[] args) throws Exception {
@@ -60,24 +61,6 @@ public class PrintSharedArchiveAndExit {
       output.shouldNotContain("Usage:");           // Should not print JVM help message
       output.shouldHaveExitValue(0);               // Should report success in error code.
 
-      // (2) With an invalid archive (boot class path has been prepended)
-      pb = ProcessTools.createJavaProcessBuilder(
-          "-Xbootclasspath/p:foo.jar",
-          "-XX:+UnlockDiagnosticVMOptions", "-XX:SharedArchiveFile=" + filename,
-          "-XX:+PrintSharedArchiveAndExit", "-version");
-      output = new OutputAnalyzer(pb.start());
-      output.shouldContain("archive is invalid");
-      output.shouldNotContain("java version");     // Should not print JVM version
-      output.shouldHaveExitValue(1);               // Should report failure in error code.
-
-      pb = ProcessTools.createJavaProcessBuilder(
-          "-Xbootclasspath/p:foo.jar",
-          "-XX:+UnlockDiagnosticVMOptions", "-XX:SharedArchiveFile=" + filename,
-          "-XX:+PrintSharedArchiveAndExit");
-      output = new OutputAnalyzer(pb.start());
-      output.shouldContain("archive is invalid");
-      output.shouldNotContain("Usage:");           // Should not print JVM help message
-      output.shouldHaveExitValue(1);               // Should report failure in error code.
     } catch (RuntimeException e) {
       e.printStackTrace();
       output.shouldContain("Unable to use shared archive");

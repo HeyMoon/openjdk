@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,7 @@
 #include "gc/parallel/mutableSpace.hpp"
 #include "gc/shared/spaceDecorator.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/safepoint.hpp"
 #include "runtime/thread.hpp"
 #include "utilities/macros.hpp"
@@ -58,7 +58,7 @@ void MutableSpace::numa_setup_pages(MemRegion mr, bool clear_space) {
 }
 
 void MutableSpace::pretouch_pages(MemRegion mr) {
-  os::pretouch_memory((char*)mr.start(), (char*)mr.end());
+  os::pretouch_memory(mr.start(), mr.end());
 }
 
 void MutableSpace::initialize(MemRegion mr,
@@ -211,15 +211,6 @@ HeapWord* MutableSpace::cas_allocate(size_t size) {
 bool MutableSpace::cas_deallocate(HeapWord *obj, size_t size) {
   HeapWord* expected_top = obj + size;
   return (HeapWord*)Atomic::cmpxchg_ptr(obj, top_addr(), expected_top) == expected_top;
-}
-
-void MutableSpace::oop_iterate(ExtendedOopClosure* cl) {
-  HeapWord* obj_addr = bottom();
-  HeapWord* t = top();
-  // Could call objects iterate, but this is easier.
-  while (obj_addr < t) {
-    obj_addr += oop(obj_addr)->oop_iterate(cl);
-  }
 }
 
 void MutableSpace::oop_iterate_no_header(OopClosure* cl) {

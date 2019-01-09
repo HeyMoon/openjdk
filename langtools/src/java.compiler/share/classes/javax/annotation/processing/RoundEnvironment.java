@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2007, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,8 @@ package javax.annotation.processing;
 
 import javax.lang.model.element.Element;
 import javax.lang.model.element.TypeElement;
+import java.util.LinkedHashSet;
+import java.util.Collections;
 import java.util.Set;
 import java.lang.annotation.Annotation;
 
@@ -63,7 +65,7 @@ public interface RoundEnvironment {
     boolean errorRaised();
 
     /**
-     * Returns the root elements for annotation processing generated
+     * Returns the {@linkplain Processor root elements} for annotation processing generated
      * by the prior round.
      *
      * @return the root elements for annotation processing generated
@@ -74,14 +76,17 @@ public interface RoundEnvironment {
     /**
      * Returns the elements annotated with the given annotation type.
      * The annotation may appear directly or be inherited.  Only
-     * package elements and type elements <i>included</i> in this
+     * package elements, module elements, and type elements <i>included</i> in this
      * round of annotation processing, or declarations of members,
      * constructors, parameters, or type parameters declared within
      * those, are returned.  Included type elements are {@linkplain
      * #getRootElements root types} and any member types nested within
-     * them.  Elements in a package are not considered included simply
+     * them.  Elements of a package are not considered included simply
      * because a {@code package-info} file for that package was
      * created.
+     * Likewise, elements of a module are not considered included
+     * simply because a {@code module-info} file for that module was
+     * created
      *
      * @param a  annotation type being requested
      * @return the elements annotated with the given annotation type,
@@ -92,9 +97,41 @@ public interface RoundEnvironment {
     Set<? extends Element> getElementsAnnotatedWith(TypeElement a);
 
     /**
+     * Returns the elements annotated with one or more of the given
+     * annotation types.
+     *
+     * @apiNote This method may be useful when processing repeating
+     * annotations by looking for an annotation type and its
+     * containing annotation type at the same time.
+     *
+     * @implSpec The default implementation of this method creates an
+     * empty result set, iterates over the annotations in the argument
+     * array calling {@link #getElementsAnnotatedWith(TypeElement)} on
+     * each annotation and adding those results to the result
+     * set. Finally, the contents of the result set are returned as an
+     * unmodifiable set.
+     *
+     * @param annotations  annotation types being requested
+     * @return the elements annotated with one or more of the given
+     * annotation types, or an empty set if there are none
+     * @throws IllegalArgumentException if the any elements of the
+     * argument set do not represent an annotation type
+     * @jls 9.6.3 Repeatable Annotation Types
+     * @since 9
+     */
+    default Set<? extends Element> getElementsAnnotatedWithAny(TypeElement... annotations){
+        // Use LinkedHashSet rather than HashSet for predictability
+        Set<Element> result = new LinkedHashSet<>();
+        for (TypeElement annotation : annotations) {
+            result.addAll(getElementsAnnotatedWith(annotation));
+        }
+        return Collections.unmodifiableSet(result);
+    }
+
+    /**
      * Returns the elements annotated with the given annotation type.
      * The annotation may appear directly or be inherited.  Only
-     * package elements and type elements <i>included</i> in this
+     * package elements, module elements, and type elements <i>included</i> in this
      * round of annotation processing, or declarations of members,
      * constructors, parameters, or type parameters declared within
      * those, are returned.  Included type elements are {@linkplain
@@ -102,6 +139,9 @@ public interface RoundEnvironment {
      * them.  Elements in a package are not considered included simply
      * because a {@code package-info} file for that package was
      * created.
+     * Likewise, elements of a module are not considered included
+     * simply because a {@code module-info} file for that module was
+     * created
      *
      * @param a  annotation type being requested
      * @return the elements annotated with the given annotation type,
@@ -110,4 +150,36 @@ public interface RoundEnvironment {
      * represent an annotation type
      */
     Set<? extends Element> getElementsAnnotatedWith(Class<? extends Annotation> a);
+
+    /**
+     * Returns the elements annotated with one or more of the given
+     * annotation types.
+     *
+     * @apiNote This method may be useful when processing repeating
+     * annotations by looking for an annotation type and its
+     * containing annotation type at the same time.
+     *
+     * @implSpec The default implementation of this method creates an
+     * empty result set, iterates over the annotations in the argument
+     * set calling {@link #getElementsAnnotatedWith(Class)} on
+     * each annotation and adding those results to the result
+     * set. Finally, the contents of the result set are returned as an
+     * unmodifiable set.
+     *
+     * @param annotations  annotation types being requested
+     * @return the elements annotated with one or more of the given
+     * annotation types, or an empty set if there are none
+     * @throws IllegalArgumentException if the any elements of the
+     * argument set do not represent an annotation type
+     * @jls 9.6.3 Repeatable Annotation Types
+     * @since 9
+     */
+    default Set<? extends Element> getElementsAnnotatedWithAny(Set<Class<? extends Annotation>> annotations){
+        // Use LinkedHashSet rather than HashSet for predictability
+        Set<Element> result = new LinkedHashSet<>();
+        for (Class<? extends Annotation> annotation : annotations) {
+            result.addAll(getElementsAnnotatedWith(annotation));
+        }
+        return Collections.unmodifiableSet(result);
+    }
 }

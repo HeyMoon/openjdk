@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@
 #include "ci/ciEnv.hpp"
 #include "ci/ciMethodData.hpp"
 #include "code/exceptionHandlerTable.hpp"
+#include "compiler/compilerDirectives.hpp"
 #include "memory/resourceArea.hpp"
 #include "runtime/deoptimization.hpp"
 
@@ -52,12 +53,9 @@ class C1_MacroAssembler;
 class CFGPrinter;
 typedef LIR_OprDesc* LIR_Opr;
 
-
-define_array(BasicTypeArray, BasicType)
-define_stack(BasicTypeList, BasicTypeArray)
-
-define_array(ExceptionInfoArray, ExceptionInfo*)
-define_stack(ExceptionInfoList,  ExceptionInfoArray)
+typedef GrowableArray<BasicType> BasicTypeArray;
+typedef GrowableArray<BasicType> BasicTypeList;
+typedef GrowableArray<ExceptionInfo*> ExceptionInfoList;
 
 class Compilation: public StackObj {
   friend class CompilationResourceObj;
@@ -67,6 +65,7 @@ class Compilation: public StackObj {
   int _next_id;
   int _next_block_id;
   AbstractCompiler*  _compiler;
+  DirectiveSet*      _directive;
   ciEnv*             _env;
   CompileLog*        _log;
   ciMethod*          _method;
@@ -80,6 +79,7 @@ class Compilation: public StackObj {
   bool               _has_unsafe_access;
   bool               _would_profile;
   bool               _has_method_handle_invokes;  // True if this method has MethodHandle invokes.
+  bool               _has_reserved_stack_access;
   const char*        _bailout_msg;
   ExceptionInfoList* _exception_info_list;
   ExceptionHandlerTable _exception_handler_table;
@@ -118,7 +118,7 @@ class Compilation: public StackObj {
  public:
   // creation
   Compilation(AbstractCompiler* compiler, ciEnv* env, ciMethod* method,
-              int osr_bci, BufferBlob* buffer_blob);
+              int osr_bci, BufferBlob* buffer_blob, DirectiveSet* directive);
   ~Compilation();
 
 
@@ -128,6 +128,7 @@ class Compilation: public StackObj {
 
   // accessors
   ciEnv* env() const                             { return _env; }
+  DirectiveSet* directive() const                { return _directive; }
   CompileLog* log() const                        { return _log; }
   AbstractCompiler* compiler() const             { return _compiler; }
   bool has_exception_handlers() const            { return _has_exception_handlers; }
@@ -169,6 +170,9 @@ class Compilation: public StackObj {
   bool     has_method_handle_invokes() const { return _has_method_handle_invokes;     }
   void set_has_method_handle_invokes(bool z) {        _has_method_handle_invokes = z; }
 
+  bool     has_reserved_stack_access() const { return _has_reserved_stack_access; }
+  void set_has_reserved_stack_access(bool z) { _has_reserved_stack_access = z; }
+
   DebugInformationRecorder* debug_info_recorder() const; // = _env->debug_info();
   Dependencies* dependency_recorder() const; // = _env->dependencies()
   ImplicitExceptionTable* implicit_exception_table()     { return &_implicit_exception_table; }
@@ -190,12 +194,7 @@ class Compilation: public StackObj {
   const char* bailout_msg() const                { return _bailout_msg; }
 
   static int desired_max_code_buffer_size() {
-#ifndef PPC
-    return (int) NMethodSizeLimit;  // default 256K or 512K
-#else
-    // conditional branches on PPC are restricted to 16 bit signed
-    return MIN2((unsigned int)NMethodSizeLimit,32*K);
-#endif
+    return (int)NMethodSizeLimit;  // default 64K
   }
   static int desired_max_constant_size() {
     return desired_max_code_buffer_size() / 10;

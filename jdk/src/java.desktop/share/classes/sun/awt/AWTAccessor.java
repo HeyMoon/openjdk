@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,14 +25,16 @@
 
 package sun.awt;
 
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 import javax.accessibility.AccessibleContext;
 import java.awt.*;
+import java.awt.event.FocusEvent.Cause;
 import java.awt.dnd.DragSourceContext;
 import java.awt.dnd.DropTargetContext;
 import java.awt.dnd.peer.DragSourceContextPeer;
 import java.awt.dnd.peer.DropTargetContextPeer;
+import java.awt.event.AWTEventListener;
 import java.awt.event.InputEvent;
 import java.awt.event.InvocationEvent;
 import java.awt.event.KeyEvent;
@@ -47,6 +49,7 @@ import java.security.AccessControlContext;
 import java.io.File;
 import java.util.ResourceBundle;
 import java.util.Vector;
+import javax.accessibility.AccessibleBundle;
 
 /**
  * The AWTAccessor utility class.
@@ -85,17 +88,11 @@ public final class AWTAccessor {
         /*
          *
          * Gets the bounds of this component in the form of a
-         * <code>Rectangle</code> object. The bounds specify this
+         * {@code Rectangle} object. The bounds specify this
          * component's width, height, and location relative to
          * its parent.
          */
         Rectangle getBounds(Component comp);
-        /*
-         * Sets the shape of a lw component to cut out from hw components.
-         *
-         * See 6797587, 6776743, 6768307, and 6768332 for details
-         */
-        void setMixingCutoutShape(Component comp, Shape shape);
 
         /**
          * Sets GraphicsConfiguration value for the component.
@@ -104,7 +101,7 @@ public final class AWTAccessor {
         /*
          * Requests focus to the component.
          */
-        boolean requestFocus(Component comp, CausedFocusEvent.Cause cause);
+        void requestFocus(Component comp, Cause cause);
         /*
          * Determines if the component can gain focus.
          */
@@ -357,6 +354,12 @@ public final class AWTAccessor {
          * Marks the specified window as an utility window for TrayIcon.
          */
         void setTrayIconWindow(Window w, boolean isTrayIconWindow);
+
+        /**
+         * Return an array containing all the windows this
+         * window currently owns.
+         */
+        Window[] getOwnedWindows(Window w);
     }
 
     /**
@@ -405,6 +408,8 @@ public final class AWTAccessor {
          * Accessor for InputEvent.canAccessSystemClipboard field
          */
         boolean canAccessSystemClipboard(InputEvent event);
+        void setCanAccessSystemClipboard(InputEvent event,
+                boolean canAccessSystemClipboard);
     }
 
     /*
@@ -438,7 +443,7 @@ public final class AWTAccessor {
                                            boolean temporary,
                                            boolean focusedWindowChangeAllowed,
                                            long time,
-                                           CausedFocusEvent.Cause cause);
+                                           Cause cause);
         /**
          * Delivers focus for the lightweight descendant of the heavyweight
          * synchronously.
@@ -452,6 +457,11 @@ public final class AWTAccessor {
          * Removes the last focus request for the heavyweight from the queue.
          */
         void removeLastFocusRequest(Component heavyweight);
+
+        /**
+         * Gets the most recent focus owner in the window.
+         */
+        Component getMostRecentFocusOwner(Window window);
 
         /**
          * Sets the most recent focus owner in the window.
@@ -707,6 +717,11 @@ public final class AWTAccessor {
          * Gets original source for KeyEvent
          */
         Component getOriginalSource(KeyEvent ev);
+
+        /**
+         * Gets isProxyActive field for KeyEvent
+         */
+        boolean isProxyActive(KeyEvent ev);
     }
 
     /**
@@ -757,6 +772,11 @@ public final class AWTAccessor {
          * Returns true if the event is an instances of SequencedEvent.
          */
         boolean isSequencedEvent(AWTEvent event);
+
+        /*
+         * Creates SequencedEvent with the given nested event
+         */
+        AWTEvent create(AWTEvent event);
     }
 
     /*
@@ -786,6 +806,15 @@ public final class AWTAccessor {
     public interface AccessibleContextAccessor {
         void setAppContext(AccessibleContext accessibleContext, AppContext appContext);
         AppContext getAppContext(AccessibleContext accessibleContext);
+        Object getNativeAXResource(AccessibleContext accessibleContext);
+        void setNativeAXResource(AccessibleContext accessibleContext, Object value);
+    }
+
+    /*
+     * An accessor object for the AccessibleContext class
+     */
+    public interface AccessibleBundleAccessor {
+        String getKey(AccessibleBundle accessibleBundle);
     }
 
     /*
@@ -844,6 +873,7 @@ public final class AWTAccessor {
     private static InvocationEventAccessor invocationEventAccessor;
     private static SystemColorAccessor systemColorAccessor;
     private static AccessibleContextAccessor accessibleContextAccessor;
+    private static AccessibleBundleAccessor accessibleBundleAccessor;
     private static DragSourceContextAccessor dragSourceContextAccessor;
     private static DropTargetContextAccessor dropTargetContextAccessor;
 
@@ -1234,9 +1264,13 @@ public final class AWTAccessor {
      * Get the accessor object for the java.awt.SequencedEvent class.
      */
     public static SequencedEventAccessor getSequencedEventAccessor() {
-        // The class is not public. So we can't ensure it's initialized.
-        // Null returned value means it's not initialized
-        // (so not a single instance of the event has been created).
+        if (sequencedEventAccessor == null) {
+            try {
+                unsafe.ensureClassInitialized(
+                        Class.forName("java.awt.SequencedEvent"));
+            } catch (ClassNotFoundException ignore) {
+            }
+        }
         return sequencedEventAccessor;
     }
 
@@ -1298,6 +1332,23 @@ public final class AWTAccessor {
             unsafe.ensureClassInitialized(AccessibleContext.class);
         }
         return accessibleContextAccessor;
+    }
+
+   /*
+    * Set the accessor object for the javax.accessibility.AccessibleBundle class.
+    */
+    public static void setAccessibleBundleAccessor(AccessibleBundleAccessor accessor) {
+        AWTAccessor.accessibleBundleAccessor = accessor;
+    }
+
+    /*
+     * Get the accessor object for the javax.accessibility.AccessibleBundle class.
+     */
+    public static AccessibleBundleAccessor getAccessibleBundleAccessor() {
+        if (accessibleBundleAccessor == null) {
+            unsafe.ensureClassInitialized(AccessibleBundle.class);
+        }
+        return accessibleBundleAccessor;
     }
 
    /*

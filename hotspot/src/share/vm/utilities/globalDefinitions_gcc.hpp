@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -160,17 +160,6 @@ typedef uint32_t juint;
 typedef uint64_t julong;
 
 
-//----------------------------------------------------------------------------------------------------
-// Constant for jlong (specifying an long long canstant is C++ compiler specific)
-
-// Build a 64bit integer constant
-#define CONST64(x)  (x ## LL)
-#define UCONST64(x) (x ## ULL)
-
-const jlong min_jlong = CONST64(0x8000000000000000);
-const jlong max_jlong = CONST64(0x7fffffffffffffff);
-
-
 #ifdef SOLARIS
 //----------------------------------------------------------------------------------------------------
 // ANSI C++ fixes
@@ -212,16 +201,8 @@ extern "C" {
 
 #define DEBUG_EXCEPTION ::abort();
 
-#ifdef ARM32
-#ifdef SOLARIS
-#define BREAKPOINT __asm__ volatile (".long 0xe1200070")
-#else
-#define BREAKPOINT __asm__ volatile (".long 0xe7f001f0")
-#endif
-#else
 extern "C" void breakpoint();
 #define BREAKPOINT ::breakpoint()
-#endif
 
 // checking for nanness
 #ifdef SOLARIS
@@ -287,8 +268,6 @@ inline int wcslen(const jchar* x) { return wcslen((const wchar_t*)x); }
 // Tested to work with clang version 3.1 and better.
 #define PRAGMA_DIAG_PUSH             _Pragma("GCC diagnostic push")
 #define PRAGMA_DIAG_POP              _Pragma("GCC diagnostic pop")
-#define PRAGMA_FORMAT_NONLITERAL_IGNORED_EXTERNAL
-#define PRAGMA_FORMAT_NONLITERAL_IGNORED_INTERNAL PRAGMA_FORMAT_NONLITERAL_IGNORED
 
 // Hack to deal with gcc yammering about non-security format stuff
 #else
@@ -297,12 +276,6 @@ inline int wcslen(const jchar* x) { return wcslen((const wchar_t*)x); }
 // versions of the macro-pragma to obtain better checking with newer compilers.
 #define PRAGMA_DIAG_PUSH
 #define PRAGMA_DIAG_POP
-#define PRAGMA_FORMAT_NONLITERAL_IGNORED_EXTERNAL PRAGMA_FORMAT_NONLITERAL_IGNORED
-#define PRAGMA_FORMAT_NONLITERAL_IGNORED_INTERNAL
-#endif
-
-#ifndef __clang_major__
-#define PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC _Pragma("GCC diagnostic ignored \"-Wformat\"") _Pragma("GCC diagnostic error \"-Wformat-nonliteral\"") _Pragma("GCC diagnostic error \"-Wformat-security\"")
 #endif
 
 #if (__GNUC__ == 2) && (__GNUC_MINOR__ < 95)
@@ -333,5 +306,13 @@ inline int wcslen(const jchar* x) { return wcslen((const wchar_t*)x); }
 #if defined(_LP64) && defined(__APPLE__)
 #define JLONG_FORMAT           "%ld"
 #endif // _LP64 && __APPLE__
+
+#ifndef USE_LIBRARY_BASED_TLS_ONLY
+#define THREAD_LOCAL_DECL __thread
+#endif
+
+// Inlining support
+#define NOINLINE     __attribute__ ((noinline))
+#define ALWAYSINLINE inline __attribute__ ((always_inline))
 
 #endif // SHARE_VM_UTILITIES_GLOBALDEFINITIONS_GCC_HPP

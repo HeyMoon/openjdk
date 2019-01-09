@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,19 +26,13 @@
 package com.sun.media.sound;
 
 import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URL;
 
-import javax.sound.sampled.AudioFileFormat;
+import javax.sound.sampled.AudioFileFormat.Type;
 import javax.sound.sampled.AudioFormat;
-import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.UnsupportedAudioFileException;
-
 
 /**
  * AIFF file reader and writer.
@@ -49,183 +43,11 @@ import javax.sound.sampled.UnsupportedAudioFileException;
  */
 public final class AiffFileReader extends SunFileReader {
 
-    private static final int MAX_READ_LENGTH = 8;
+    @Override
+    StandardFileFormat getAudioFileFormatImpl(final InputStream stream)
+            throws UnsupportedAudioFileException, IOException {
+        DataInputStream dis = new DataInputStream(stream);
 
-    // METHODS TO IMPLEMENT AudioFileReader
-
-    /**
-     * Obtains the audio file format of the input stream provided.  The stream must
-     * point to valid audio file data.  In general, audio file providers may
-     * need to read some data from the stream before determining whether they
-     * support it.  These parsers must
-     * be able to mark the stream, read enough data to determine whether they
-     * support the stream, and, if not, reset the stream's read pointer to its original
-     * position.  If the input stream does not support this, this method may fail
-     * with an IOException.
-     * @param stream the input stream from which file format information should be
-     * extracted
-     * @return an <code>AudioFileFormat</code> object describing the audio file format
-     * @throws UnsupportedAudioFileException if the stream does not point to valid audio
-     * file data recognized by the system
-     * @throws IOException if an I/O exception occurs
-     * @see InputStream#markSupported
-     * @see InputStream#mark
-     */
-    public AudioFileFormat getAudioFileFormat(InputStream stream) throws UnsupportedAudioFileException, IOException {
-        // fix for 4489272: AudioSystem.getAudioFileFormat() fails for InputStream, but works for URL
-        AudioFileFormat aff = getCOMM(stream, true);
-        // the following is not strictly necessary - but was implemented like that in 1.3.0 - 1.4.1
-        // so I leave it as it was. May remove this for 1.5.0
-        stream.reset();
-        return aff;
-    }
-
-
-    /**
-     * Obtains the audio file format of the URL provided.  The URL must
-     * point to valid audio file data.
-     * @param url the URL from which file format information should be
-     * extracted
-     * @return an <code>AudioFileFormat</code> object describing the audio file format
-     * @throws UnsupportedAudioFileException if the URL does not point to valid audio
-     * file data recognized by the system
-     * @throws IOException if an I/O exception occurs
-     */
-    public AudioFileFormat getAudioFileFormat(URL url) throws UnsupportedAudioFileException, IOException {
-        AudioFileFormat fileFormat = null;
-        InputStream urlStream = url.openStream();       // throws IOException
-        try {
-            fileFormat = getCOMM(urlStream, false);
-        } finally {
-            urlStream.close();
-        }
-        return fileFormat;
-    }
-
-
-    /**
-     * Obtains the audio file format of the File provided.  The File must
-     * point to valid audio file data.
-     * @param file the File from which file format information should be
-     * extracted
-     * @return an <code>AudioFileFormat</code> object describing the audio file format
-     * @throws UnsupportedAudioFileException if the File does not point to valid audio
-     * file data recognized by the system
-     * @throws IOException if an I/O exception occurs
-     */
-    public AudioFileFormat getAudioFileFormat(File file) throws UnsupportedAudioFileException, IOException {
-        AudioFileFormat fileFormat = null;
-        FileInputStream fis = new FileInputStream(file);       // throws IOException
-        // part of fix for 4325421
-        try {
-            fileFormat = getCOMM(fis, false);
-        } finally {
-            fis.close();
-        }
-
-        return fileFormat;
-    }
-
-
-
-
-    /**
-     * Obtains an audio stream from the input stream provided.  The stream must
-     * point to valid audio file data.  In general, audio file providers may
-     * need to read some data from the stream before determining whether they
-     * support it.  These parsers must
-     * be able to mark the stream, read enough data to determine whether they
-     * support the stream, and, if not, reset the stream's read pointer to its original
-     * position.  If the input stream does not support this, this method may fail
-     * with an IOException.
-     * @param stream the input stream from which the <code>AudioInputStream</code> should be
-     * constructed
-     * @return an <code>AudioInputStream</code> object based on the audio file data contained
-     * in the input stream.
-     * @throws UnsupportedAudioFileException if the stream does not point to valid audio
-     * file data recognized by the system
-     * @throws IOException if an I/O exception occurs
-     * @see InputStream#markSupported
-     * @see InputStream#mark
-     */
-    public AudioInputStream getAudioInputStream(InputStream stream) throws UnsupportedAudioFileException, IOException {
-        // getCOMM leaves the input stream at the beginning of the audio data
-        AudioFileFormat fileFormat = getCOMM(stream, true);     // throws UnsupportedAudioFileException, IOException
-
-        // we've got everything, and the stream is at the
-        // beginning of the audio data, so return an AudioInputStream.
-        return new AudioInputStream(stream, fileFormat.getFormat(), fileFormat.getFrameLength());
-    }
-
-
-    /**
-     * Obtains an audio stream from the URL provided.  The URL must
-     * point to valid audio file data.
-     * @param url the URL for which the <code>AudioInputStream</code> should be
-     * constructed
-     * @return an <code>AudioInputStream</code> object based on the audio file data pointed
-     * to by the URL
-     * @throws UnsupportedAudioFileException if the URL does not point to valid audio
-     * file data recognized by the system
-     * @throws IOException if an I/O exception occurs
-     */
-    public AudioInputStream getAudioInputStream(URL url) throws UnsupportedAudioFileException, IOException {
-        InputStream urlStream = url.openStream();  // throws IOException
-        AudioFileFormat fileFormat = null;
-        try {
-            fileFormat = getCOMM(urlStream, false);
-        } finally {
-            if (fileFormat == null) {
-                urlStream.close();
-            }
-        }
-        return new AudioInputStream(urlStream, fileFormat.getFormat(), fileFormat.getFrameLength());
-    }
-
-
-    /**
-     * Obtains an audio stream from the File provided.  The File must
-     * point to valid audio file data.
-     * @param file the File for which the <code>AudioInputStream</code> should be
-     * constructed
-     * @return an <code>AudioInputStream</code> object based on the audio file data pointed
-     * to by the File
-     * @throws UnsupportedAudioFileException if the File does not point to valid audio
-     * file data recognized by the system
-     * @throws IOException if an I/O exception occurs
-     */
-    public AudioInputStream getAudioInputStream(File file)
-        throws UnsupportedAudioFileException, IOException {
-
-        FileInputStream fis = new FileInputStream(file); // throws IOException
-        AudioFileFormat fileFormat = null;
-        // part of fix for 4325421
-        try {
-            fileFormat = getCOMM(fis, false);
-        } finally {
-            if (fileFormat == null) {
-                fis.close();
-            }
-        }
-        return new AudioInputStream(fis, fileFormat.getFormat(), fileFormat.getFrameLength());
-    }
-
-    //--------------------------------------------------------------------
-
-    private AudioFileFormat getCOMM(InputStream is, boolean doReset)
-        throws UnsupportedAudioFileException, IOException {
-
-        DataInputStream dis = new DataInputStream(is);
-
-        if (doReset) {
-            dis.mark(MAX_READ_LENGTH);
-        }
-
-        // assumes a stream at the beginning of the file which has already
-        // passed the magic number test...
-        // leaves the input stream at the beginning of the audio data
-        int fileRead = 0;
-        int dataLength = 0;
         AudioFormat format = null;
 
         // Read the magic number
@@ -234,17 +56,14 @@ public final class AiffFileReader extends SunFileReader {
         // $$fb: fix for 4369044: javax.sound.sampled.AudioSystem.getAudioInputStream() works wrong with Cp037
         if (magic != AiffFileFormat.AIFF_MAGIC) {
             // not AIFF, throw exception
-            if (doReset) {
-                dis.reset();
-            }
             throw new UnsupportedAudioFileException("not an AIFF file");
         }
 
+        long /* unsigned 32bit */ frameLength = 0;
         int length = dis.readInt();
         int iffType = dis.readInt();
-        fileRead += 12;
 
-        int totallength;
+        final long totallength;
         if(length <= 0 ) {
             length = AudioSystem.NOT_SPECIFIED;
             totallength = AudioSystem.NOT_SPECIFIED;
@@ -266,7 +85,6 @@ public final class AiffFileReader extends SunFileReader {
             // Read the chunk name
             int chunkName = dis.readInt();
             int chunkLen = dis.readInt();
-            fileRead += 8;
 
             int chunkRead = 0;
 
@@ -287,7 +105,8 @@ public final class AiffFileReader extends SunFileReader {
                 if (channels <= 0) {
                     throw new UnsupportedAudioFileException("Invalid number of channels");
                 }
-                dis.readInt(); // numSampleFrames
+                frameLength = dis.readInt() & 0xffffffffL; // numSampleFrames
+
                 int sampleSizeInBits = dis.readUnsignedShort();
                 if (sampleSizeInBits < 1 || sampleSizeInBits > 32) {
                     throw new UnsupportedAudioFileException("Invalid AIFF/COMM sampleSize");
@@ -324,38 +143,17 @@ public final class AiffFileReader extends SunFileReader {
                 break;
             case AiffFileFormat.SSND_MAGIC:
                 // Data chunk.
-                // we are getting *weird* numbers for chunkLen sometimes;
-                // this really should be the size of the data chunk....
-                int dataOffset = dis.readInt();
-                int blocksize = dis.readInt();
+                int dataOffset = dis.readInt(); // for now unused in javasound
+                int blocksize = dis.readInt();  // for now unused in javasound
                 chunkRead += 8;
-
-                // okay, now we are done reading the header.  we need to set the size
-                // of the data segment.  we know that sometimes the value we get for
-                // the chunksize is absurd.  this is the best i can think of:if the
-                // value seems okay, use it.  otherwise, we get our value of
-                // length by assuming that everything left is the data segment;
-                // its length should be our original length (for all AIFF data chunks)
-                // minus what we've read so far.
-                // $$kk: we should be able to get length for the data chunk right after
-                // we find "SSND."  however, some aiff files give *weird* numbers.  what
-                // is going on??
-
-                if (chunkLen < length) {
-                    dataLength = chunkLen - chunkRead;
-                } else {
-                    // $$kk: 11.03.98: this seems dangerous!
-                    dataLength = length - (fileRead + chunkRead);
-                }
                 ssndFound = true;
                 break;
             } // switch
-            fileRead += chunkRead;
             // skip the remainder of this chunk
             if (!ssndFound) {
                 int toSkip = chunkLen - chunkRead;
                 if (toSkip > 0) {
-                    fileRead += dis.skipBytes(toSkip);
+                    dis.skipBytes(toSkip);
                 }
             }
         } // while
@@ -363,36 +161,12 @@ public final class AiffFileReader extends SunFileReader {
         if (format == null) {
             throw new UnsupportedAudioFileException("missing COMM chunk");
         }
-        AudioFileFormat.Type type = aifc?AudioFileFormat.Type.AIFC:AudioFileFormat.Type.AIFF;
+        Type type = aifc ? Type.AIFC : Type.AIFF;
 
-        return new AiffFileFormat(type, totallength, format, dataLength / format.getFrameSize());
+        return new AiffFileFormat(type, totallength, format, frameLength);
     }
 
     // HELPER METHODS
-    /** write_ieee_extended(DataOutputStream dos, double f) throws IOException {
-     * Extended precision IEEE floating-point conversion routine.
-     * @argument DataOutputStream
-     * @argument double
-     * @return void
-     * @exception IOException
-     */
-    private void write_ieee_extended(DataOutputStream dos, double f) throws IOException {
-
-        int exponent = 16398;
-        double highMantissa = f;
-
-        // For now write the integer portion of f
-        // $$jb: 03.30.99: stay in synch with JMF on this!!!!
-        while (highMantissa < 44000) {
-            highMantissa *= 2;
-            exponent--;
-        }
-        dos.writeShort(exponent);
-        dos.writeInt( ((int) highMantissa) << 16);
-        dos.writeInt(0); // low Mantissa
-    }
-
-
     /**
      * read_ieee_extended
      * Extended precision IEEE floating-point conversion routine.

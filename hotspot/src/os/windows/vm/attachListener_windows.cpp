@@ -191,7 +191,8 @@ int Win32AttachListener::enqueue(char* cmd, char* arg0, char* arg1, char* arg2, 
   // check that all paramteres to the operation
   if (strlen(cmd) > AttachOperation::name_length_max) return ATTACH_ERROR_ILLEGALARG;
   if (strlen(arg0) > AttachOperation::arg_length_max) return ATTACH_ERROR_ILLEGALARG;
-  if (strlen(arg0) > AttachOperation::arg_length_max) return ATTACH_ERROR_ILLEGALARG;
+  if (strlen(arg1) > AttachOperation::arg_length_max) return ATTACH_ERROR_ILLEGALARG;
+  if (strlen(arg2) > AttachOperation::arg_length_max) return ATTACH_ERROR_ILLEGALARG;
   if (strlen(pipename) > Win32AttachOperation::pipe_name_max) return ATTACH_ERROR_ILLEGALARG;
 
   // check for a well-formed pipename
@@ -377,9 +378,8 @@ int AttachListener::pd_init() {
   return Win32AttachListener::init();
 }
 
-// always startup on Windows NT/2000/XP
 bool AttachListener::init_at_startup() {
-  return os::win32::is_nt();
+  return true;
 }
 
 // no trigger mechanism on Windows to start Attach Listener lazily

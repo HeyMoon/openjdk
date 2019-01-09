@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,16 +34,15 @@ import jdk.testlibrary.ProcessTools;
 
 /*
  * @test
- * @bug 6321286
  * @summary Unit test for jmap utility
+ * @key intermittent
  * @library /lib/testlibrary
- * @library /../../test/lib/share/classes
- * @modules java.management
+ * @library /test/lib
  * @build jdk.testlibrary.*
  * @build jdk.test.lib.hprof.*
- * @build jdk.test.lib.hprof.module.*
+ * @build jdk.test.lib.hprof.model.*
  * @build jdk.test.lib.hprof.parser.*
- * @build jdk.test.lib.hprof.utils.*
+ * @build jdk.test.lib.hprof.util.*
  * @run main/timeout=240 BasicJMapTest
  */
 public class BasicJMapTest {
@@ -53,6 +52,8 @@ public class BasicJMapTest {
     public static void main(String[] args) throws Exception {
         testHisto();
         testHistoLive();
+        testFinalizerInfo();
+        testClstats();
         testDump();
         testDumpLive();
     }
@@ -64,6 +65,16 @@ public class BasicJMapTest {
 
     private static void testHistoLive() throws Exception {
         OutputAnalyzer output = jmap("-histo:live");
+        output.shouldHaveExitValue(0);
+    }
+
+    private static void testFinalizerInfo() throws Exception {
+        OutputAnalyzer output = jmap("-finalizerinfo");
+        output.shouldHaveExitValue(0);
+    }
+
+    private static void testClstats() throws Exception {
+        OutputAnalyzer output = jmap("-clstats");
         output.shouldHaveExitValue(0);
     }
 
@@ -104,13 +115,12 @@ public class BasicJMapTest {
 
     private static OutputAnalyzer jmap(String... toolArgs) throws Exception {
         JDKToolLauncher launcher = JDKToolLauncher.createUsingTestJDK("jmap");
-        launcher.addVMArg("-XX:+UsePerfData");
         if (toolArgs != null) {
             for (String toolArg : toolArgs) {
                 launcher.addToolArg(toolArg);
             }
         }
-        launcher.addToolArg(Integer.toString(ProcessTools.getProcessId()));
+        launcher.addToolArg(Long.toString(ProcessTools.getProcessId()));
 
         processBuilder.command(launcher.getCommand());
         System.out.println(Arrays.toString(processBuilder.command().toArray()).replace(",", ""));

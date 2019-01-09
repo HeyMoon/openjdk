@@ -53,14 +53,14 @@ import java.util.Queue;
  * and the fourth blocks for only a given maximum time limit before giving
  * up.  These methods are summarized in the following table:
  *
- * <table BORDER CELLPADDING=3 CELLSPACING=1>
+ * <table class="plain">
  * <caption>Summary of BlockingQueue methods</caption>
  *  <tr>
  *    <td></td>
- *    <td ALIGN=CENTER><em>Throws exception</em></td>
- *    <td ALIGN=CENTER><em>Special value</em></td>
- *    <td ALIGN=CENTER><em>Blocks</em></td>
- *    <td ALIGN=CENTER><em>Times out</em></td>
+ *    <td style="text-align:center"><em>Throws exception</em></td>
+ *    <td style="text-align:center"><em>Special value</em></td>
+ *    <td style="text-align:center"><em>Blocks</em></td>
+ *    <td style="text-align:center"><em>Times out</em></td>
  *  </tr>
  *  <tr>
  *    <td><b>Insert</b></td>
@@ -127,7 +127,7 @@ import java.util.Queue;
  * Usage example, based on a typical producer-consumer scenario.
  * Note that a {@code BlockingQueue} can safely be used with multiple
  * producers and multiple consumers.
- *  <pre> {@code
+ * <pre> {@code
  * class Producer implements Runnable {
  *   private final BlockingQueue queue;
  *   Producer(BlockingQueue q) { queue = q; }
@@ -170,12 +170,12 @@ import java.util.Queue;
  * the {@code BlockingQueue} in another thread.
  *
  * <p>This interface is a member of the
- * <a href="{@docRoot}/../technotes/guides/collections/index.html">
+ * <a href="{@docRoot}/java/util/package-summary.html#CollectionsFramework">
  * Java Collections Framework</a>.
  *
  * @since 1.5
  * @author Doug Lea
- * @param <E> the type of elements held in this collection
+ * @param <E> the type of elements held in this queue
  */
 public interface BlockingQueue<E> extends Queue<E> {
     /**
@@ -303,9 +303,9 @@ public interface BlockingQueue<E> extends Queue<E> {
      * @return {@code true} if this queue changed as a result of the call
      * @throws ClassCastException if the class of the specified element
      *         is incompatible with this queue
-     *         (<a href="../Collection.html#optional-restrictions">optional</a>)
+     * (<a href="{@docRoot}/java/util/Collection.html#optional-restrictions">optional</a>)
      * @throws NullPointerException if the specified element is null
-     *         (<a href="../Collection.html#optional-restrictions">optional</a>)
+     * (<a href="{@docRoot}/java/util/Collection.html#optional-restrictions">optional</a>)
      */
     boolean remove(Object o);
 
@@ -318,11 +318,11 @@ public interface BlockingQueue<E> extends Queue<E> {
      * @return {@code true} if this queue contains the specified element
      * @throws ClassCastException if the class of the specified element
      *         is incompatible with this queue
-     *         (<a href="../Collection.html#optional-restrictions">optional</a>)
+     * (<a href="{@docRoot}/java/util/Collection.html#optional-restrictions">optional</a>)
      * @throws NullPointerException if the specified element is null
-     *         (<a href="../Collection.html#optional-restrictions">optional</a>)
+     * (<a href="{@docRoot}/java/util/Collection.html#optional-restrictions">optional</a>)
      */
-    public boolean contains(Object o);
+    boolean contains(Object o);
 
     /**
      * Removes all available elements from this queue and adds them

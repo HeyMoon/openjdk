@@ -24,12 +24,18 @@
 /*
  * @test
  * @bug 6215625 7161229
+ * @modules java.base/java.util.concurrent:open
  * @summary Check correct behavior when last element is removed.
  * @author Martin Buchholz
  */
 
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.Iterator;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.LinkedTransferQueue;
+import java.util.concurrent.PriorityBlockingQueue;
 
 public class LastElement {
     void test(String[] args) throws Throwable {

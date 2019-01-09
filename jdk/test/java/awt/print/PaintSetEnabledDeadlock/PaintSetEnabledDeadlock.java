@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,16 +23,29 @@
 
 /*
  * @test
- * @bug 7108598
+ * @key headful
+ * @bug 7108598 8172009
  * @summary Container.paint/KeyboardFocusManager.clearMostRecentFocusOwner methods deadlock
  * @library ../../regtesthelpers
  * @author Oleg Pekhovskiy
  * @build Util
- * @run main/timeout=20 PaintSetEnabledDeadlock
+ * @run main PaintSetEnabledDeadlock
  */
 
-import java.awt.*;
-import java.awt.event.*;
+import java.awt.Button;
+import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Frame;
+import java.awt.Graphics;
+import java.awt.GridLayout;
+import java.awt.Image;
+import java.awt.Panel;
+import java.awt.Rectangle;
+import java.awt.Robot;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import test.java.awt.regtesthelpers.Util;
 
 public class PaintSetEnabledDeadlock extends Frame {

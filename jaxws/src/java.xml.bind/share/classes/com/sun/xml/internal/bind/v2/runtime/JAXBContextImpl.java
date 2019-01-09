@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -242,6 +242,16 @@ public final class JAXBContextImpl extends JAXBRIContext {
     private Set<XmlNs> xmlNsSet = null;
 
     /**
+     * If true, despite the specification, unmarshall child element with parent namespace, if child namespace is not specified.
+     * The default value is null for System {code}com.sun.xml.internal.bind.backupWithParentNamespace{code} property to be used,
+     * and false is assumed if it's not set either.
+     *
+     * Boolean
+     * @since 2.3.0
+     */
+    public Boolean backupWithParentNamespace = null;
+
+    /**
      * Returns declared XmlNs annotations (from package-level annotation XmlSchema
      *
      * @return set of all present XmlNs annotations
@@ -263,6 +273,7 @@ public final class JAXBContextImpl extends JAXBRIContext {
         this.supressAccessorWarnings = builder.supressAccessorWarnings;
         this.improvedXsiTypeHandling = builder.improvedXsiTypeHandling;
         this.disableSecurityProcessing = builder.disableSecurityProcessing;
+        this.backupWithParentNamespace = builder.backupWithParentNamespace;
 
         Collection<TypeReference> typeRefs = builder.typeRefs;
 
@@ -533,7 +544,7 @@ public final class JAXBContextImpl extends JAXBRIContext {
      * This method traverses the base classes of the given object.
      *
      * @return null
-     *      if <tt>c</tt> isn't a JAXB-bound class and <tt>fatal==false</tt>.
+     *      if {@code c} isn't a JAXB-bound class and {@code fatal==false}.
      */
     public final JaxBeanInfo getBeanInfo(Object o) {
         // don't allow xs:anyType beanInfo to handle all the unbound objects
@@ -577,7 +588,7 @@ public final class JAXBContextImpl extends JAXBRIContext {
      * This method doesn't look for base classes.
      *
      * @return null
-     *      if <tt>c</tt> isn't a JAXB-bound class and <tt>fatal==false</tt>.
+     *      if {@code c} isn't a JAXB-bound class and {@code fatal==false}.
      */
     public final <T> JaxBeanInfo<T> getBeanInfo(Class<T> clazz) {
         return (JaxBeanInfo<T>)beanInfoMap.get(clazz);
@@ -1024,6 +1035,7 @@ public final class JAXBContextImpl extends JAXBRIContext {
         private boolean allNillable;
         private boolean improvedXsiTypeHandling = true;
         private boolean disableSecurityProcessing = true;
+        private Boolean backupWithParentNamespace = null; // null for System property to be used
 
         public JAXBContextBuilder() {};
 
@@ -1039,6 +1051,7 @@ public final class JAXBContextImpl extends JAXBRIContext {
             this.xmlAccessorFactorySupport = baseImpl.xmlAccessorFactorySupport;
             this.allNillable = baseImpl.allNillable;
             this.disableSecurityProcessing = baseImpl.disableSecurityProcessing;
+            this.backupWithParentNamespace = baseImpl.backupWithParentNamespace;
         }
 
         public JAXBContextBuilder setRetainPropertyInfo(boolean val) {
@@ -1098,6 +1111,11 @@ public final class JAXBContextImpl extends JAXBRIContext {
 
         public JAXBContextBuilder setDisableSecurityProcessing(boolean val) {
             this.disableSecurityProcessing = val;
+            return this;
+        }
+
+        public JAXBContextBuilder setBackupWithParentNamespace(Boolean backupWithParentNamespace) {
+            this.backupWithParentNamespace = backupWithParentNamespace;
             return this;
         }
 

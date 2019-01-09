@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -19,19 +19,20 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
 /**
  * @test
  * @bug 8031320
  * @summary Verify processing of RTMSpinLoopCount option.
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
  *          java.management
- * @build TestRTMSpinLoopCountOption
- * @run main/othervm TestRTMSpinLoopCountOption
+ *
+ * @run main/othervm compiler.rtm.cli.TestRTMSpinLoopCountOption
  */
+
+package compiler.rtm.cli;
 
 public class TestRTMSpinLoopCountOption
         extends RTMGenericCommandLineOptionTest {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,20 +29,12 @@
 // constants required by the Serviceability Agent. This file is
 // referenced by vmStructs.cpp.
 
-#define VM_STRUCTS_CPU(nonstatic_field, static_field, unchecked_nonstatic_field, volatile_nonstatic_field, nonproduct_nonstatic_field, c2_nonstatic_field, unchecked_c1_static_field, unchecked_c2_static_field)            \
- \
-  /******************************/                                                                                                   \
-  /* JavaCallWrapper            */                                                                                                   \
-  /******************************/                                                                                                   \
-  /******************************/                                                                                                   \
-  /* JavaFrameAnchor            */                                                                                                   \
-  /******************************/                                                                                                   \
-  volatile_nonstatic_field(JavaFrameAnchor,     _flags,                                          int)
+#define VM_STRUCTS_CPU(nonstatic_field, static_field, unchecked_nonstatic_field, volatile_nonstatic_field, nonproduct_nonstatic_field, c2_nonstatic_field, unchecked_c1_static_field, unchecked_c2_static_field) \
+  volatile_nonstatic_field(JavaFrameAnchor, _flags, int)
 
-#define VM_TYPES_CPU(declare_type, declare_toplevel_type, declare_oop_type, declare_integer_type, declare_unsigned_integer_type, declare_c1_toplevel_type, declare_c2_type, declare_c2_toplevel_type)
+#define VM_TYPES_CPU(declare_type, declare_toplevel_type, declare_oop_type, declare_integer_type, declare_unsigned_integer_type, declare_c1_toplevel_type, declare_c2_type, declare_c2_toplevel_type) \
 
-
-#define VM_INT_CONSTANTS_CPU(declare_constant, declare_preprocessor_constant, declare_c1_constant, declare_c2_constant, declare_c2_preprocessor_constant)                                                              \
+#define VM_INT_CONSTANTS_CPU(declare_constant, declare_preprocessor_constant, declare_c1_constant, declare_c2_constant, declare_c2_preprocessor_constant) \
   /******************************/                                        \
   /* Register numbers (C2 only) */                                        \
   /******************************/                                        \
@@ -78,7 +70,29 @@
   declare_c2_constant(R_G4_num)                                           \
   declare_c2_constant(R_G5_num)                                           \
   declare_c2_constant(R_G6_num)                                           \
-  declare_c2_constant(R_G7_num)
+  declare_c2_constant(R_G7_num)                                           \
+  declare_constant(VM_Version::vis1_instructions_m)                       \
+  declare_constant(VM_Version::vis2_instructions_m)                       \
+  declare_constant(VM_Version::vis3_instructions_m)                       \
+  declare_constant(VM_Version::cbcond_instructions_m)                     \
+  declare_constant(VM_Version::v8_instructions_m)                         \
+  declare_constant(VM_Version::hardware_mul32_m)                          \
+  declare_constant(VM_Version::hardware_div32_m)                          \
+  declare_constant(VM_Version::hardware_fsmuld_m)                         \
+  declare_constant(VM_Version::hardware_popc_m)                           \
+  declare_constant(VM_Version::v9_instructions_m)                         \
+  declare_constant(VM_Version::sun4v_m)                                   \
+  declare_constant(VM_Version::blk_init_instructions_m)                   \
+  declare_constant(VM_Version::fmaf_instructions_m)                       \
+  declare_constant(VM_Version::sparc64_family_m)                          \
+  declare_constant(VM_Version::M_family_m)                                \
+  declare_constant(VM_Version::T_family_m)                                \
+  declare_constant(VM_Version::T1_model_m)                                \
+  declare_constant(VM_Version::sparc5_instructions_m)                     \
+  declare_constant(VM_Version::aes_instructions_m)                        \
+  declare_constant(VM_Version::sha1_instruction_m)                        \
+  declare_constant(VM_Version::sha256_instruction_m)                      \
+  declare_constant(VM_Version::sha512_instruction_m)
 
 #define VM_LONG_CONSTANTS_CPU(declare_constant, declare_preprocessor_constant, declare_c1_constant, declare_c2_constant, declare_c2_preprocessor_constant)
 

@@ -78,6 +78,12 @@ public enum CompilerConstants {
     /** function prefix for anonymous functions */
     ANON_FUNCTION_PREFIX("L:"),
 
+    /** separator for method names of nested functions */
+    NESTED_FUNCTION_SEPARATOR("#"),
+
+    /** separator for making method names unique by appending numeric ids */
+    ID_FUNCTION_SEPARATOR("-"),
+
     /** method name for Java method that is the program entry point */
     PROGRAM(":program"),
 
@@ -192,7 +198,7 @@ public enum CompilerConstants {
     private static Set<String> symbolNames;
 
     /**
-     * Prefix used for internal methods generated in script clases.
+     * Prefix used for internal methods generated in script classes.
      */
     private static final String INTERNAL_METHOD_PREFIX = ":";
 
@@ -225,7 +231,7 @@ public enum CompilerConstants {
     }
 
     /**
-     * Check whether a name is that of a reserved compiler constnat
+     * Check whether a name is that of a reserved compiler constant
      * @param name name
      * @return true if compiler constant name
      */

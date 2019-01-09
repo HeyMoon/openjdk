@@ -33,7 +33,7 @@ import javax.crypto.BadPaddingException;
 
 import javax.net.ssl.*;
 
-import sun.misc.HexDumpEncoder;
+import sun.security.util.HexDumpEncoder;
 
 
 /**
@@ -123,7 +123,7 @@ class InputRecord implements Record, Closeable {
      * and flag the record as holding no data.
      */
     @Override
-    synchronized public void close() throws IOException {
+    public synchronized void close() throws IOException {
         if (!isClosed) {
             isClosed = true;
             readCipher.dispose();
@@ -242,8 +242,9 @@ class InputRecord implements Record, Closeable {
         //  2: ClientHello.client_version
         // 32: ClientHello.random
         //  1: length byte of ClientHello.session_id
+        //  2: length bytes of ClientHello.cipher_suites
         //  2: empty ClientHello.compression_methods
-        int requiredSize = 46 + sessionIdLen + ((cipherSpecLen * 2 ) / 3 );
+        int requiredSize = 48 + sessionIdLen + ((cipherSpecLen * 2 ) / 3 );
         byte[] converted = new byte[requiredSize];
 
         /*

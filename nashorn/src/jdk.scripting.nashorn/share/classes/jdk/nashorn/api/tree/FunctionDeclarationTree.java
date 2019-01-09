@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,7 +28,7 @@ package jdk.nashorn.api.tree;
 import java.util.List;
 
 /**
- * A tree node for a function declaration.
+ * A tree node for a <a href="http://www.ecma-international.org/ecma-262/6.0/#sec-function-definitions">function declaration</a>.
  *
  * For example:
  * <pre>
@@ -37,16 +37,21 @@ import java.util.List;
  *      <em>body</em>
  * </pre>
  *
- * @since 1.9
+ * <pre>
+ *   <em>function*</em> <em>name</em>
+ *      ( <em>parameters</em> )
+ *      <em>body</em>
+ * </pre>
+ *
+ * @since 9
  */
-@jdk.Exported
 public interface FunctionDeclarationTree extends StatementTree {
     /**
      * Returns the name of the function being declared.
      *
      * @return name the function declared
      */
-    String getName();
+    IdentifierTree getName();
 
     /**
      * Returns the parameters of this function.
@@ -68,4 +73,11 @@ public interface FunctionDeclarationTree extends StatementTree {
      * @return true if this function is strict
      */
     boolean isStrict();
+
+    /**
+     * Is this a generator function?
+     *
+     * @return true if this is a generator function
+     */
+    boolean isGenerator();
 }

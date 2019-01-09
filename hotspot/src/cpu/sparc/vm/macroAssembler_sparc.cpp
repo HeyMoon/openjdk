@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@
 #include "interpreter/interpreter.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
+#include "oops/klass.inline.hpp"
 #include "prims/methodHandles.hpp"
 #include "runtime/biasedLocking.hpp"
 #include "runtime/interfaceSupport.hpp"
@@ -43,6 +44,9 @@
 #include "gc/g1/g1SATBCardTableModRefBS.hpp"
 #include "gc/g1/heapRegion.hpp"
 #endif // INCLUDE_ALL_GCS
+#ifdef COMPILER2
+#include "opto/intrinsicnode.hpp"
+#endif
 
 #ifdef PRODUCT
 #define BLOCK_COMMENT(str) /* nothing */
@@ -177,88 +181,13 @@ void MacroAssembler::null_check(Register reg, int offset) {
 
 // Ring buffer jumps
 
-#ifndef PRODUCT
-void MacroAssembler::ret(  bool trace )   { if (trace) {
-                                                    mov(I7, O7); // traceable register
-                                                    JMP(O7, 2 * BytesPerInstWord);
-                                                  } else {
-                                                    jmpl( I7, 2 * BytesPerInstWord, G0 );
-                                                  }
-                                                }
-
-void MacroAssembler::retl( bool trace )  { if (trace) JMP(O7, 2 * BytesPerInstWord);
-                                                 else jmpl( O7, 2 * BytesPerInstWord, G0 ); }
-#endif /* PRODUCT */
-
 
 void MacroAssembler::jmp2(Register r1, Register r2, const char* file, int line ) {
   assert_not_delayed();
-  // This can only be traceable if r1 & r2 are visible after a window save
-  if (TraceJumps) {
-#ifndef PRODUCT
-    save_frame(0);
-    verify_thread();
-    ld(G2_thread, in_bytes(JavaThread::jmp_ring_index_offset()), O0);
-    add(G2_thread, in_bytes(JavaThread::jmp_ring_offset()), O1);
-    sll(O0, exact_log2(4*sizeof(intptr_t)), O2);
-    add(O2, O1, O1);
-
-    add(r1->after_save(), r2->after_save(), O2);
-    set((intptr_t)file, O3);
-    set(line, O4);
-    Label L;
-    // get nearby pc, store jmp target
-    call(L, relocInfo::none);  // No relocation for call to pc+0x8
-    delayed()->st(O2, O1, 0);
-    bind(L);
-
-    // store nearby pc
-    st(O7, O1, sizeof(intptr_t));
-    // store file
-    st(O3, O1, 2*sizeof(intptr_t));
-    // store line
-    st(O4, O1, 3*sizeof(intptr_t));
-    add(O0, 1, O0);
-    and3(O0, JavaThread::jump_ring_buffer_size  - 1, O0);
-    st(O0, G2_thread, in_bytes(JavaThread::jmp_ring_index_offset()));
-    restore();
-#endif /* PRODUCT */
-  }
   jmpl(r1, r2, G0);
 }
 void MacroAssembler::jmp(Register r1, int offset, const char* file, int line ) {
   assert_not_delayed();
-  // This can only be traceable if r1 is visible after a window save
-  if (TraceJumps) {
-#ifndef PRODUCT
-    save_frame(0);
-    verify_thread();
-    ld(G2_thread, in_bytes(JavaThread::jmp_ring_index_offset()), O0);
-    add(G2_thread, in_bytes(JavaThread::jmp_ring_offset()), O1);
-    sll(O0, exact_log2(4*sizeof(intptr_t)), O2);
-    add(O2, O1, O1);
-
-    add(r1->after_save(), offset, O2);
-    set((intptr_t)file, O3);
-    set(line, O4);
-    Label L;
-    // get nearby pc, store jmp target
-    call(L, relocInfo::none);  // No relocation for call to pc+0x8
-    delayed()->st(O2, O1, 0);
-    bind(L);
-
-    // store nearby pc
-    st(O7, O1, sizeof(intptr_t));
-    // store file
-    st(O3, O1, 2*sizeof(intptr_t));
-    // store line
-    st(O4, O1, 3*sizeof(intptr_t));
-    add(O0, 1, O0);
-    and3(O0, JavaThread::jump_ring_buffer_size  - 1, O0);
-    st(O0, G2_thread, in_bytes(JavaThread::jmp_ring_index_offset()));
-    restore();
-#endif /* PRODUCT */
-  }
   jmp(r1, offset);
 }
 
@@ -269,44 +198,7 @@ void MacroAssembler::jumpl(const AddressLiteral& addrlit, Register temp, Registe
   // variable length instruction streams.
   patchable_sethi(addrlit, temp);
   Address a(temp, addrlit.low10() + offset);  // Add the offset to the displacement.
-  if (TraceJumps) {
-#ifndef PRODUCT
-    // Must do the add here so relocation can find the remainder of the
-    // value to be relocated.
-    add(a.base(), a.disp(), a.base(), addrlit.rspec(offset));
-    save_frame(0);
-    verify_thread();
-    ld(G2_thread, in_bytes(JavaThread::jmp_ring_index_offset()), O0);
-    add(G2_thread, in_bytes(JavaThread::jmp_ring_offset()), O1);
-    sll(O0, exact_log2(4*sizeof(intptr_t)), O2);
-    add(O2, O1, O1);
-
-    set((intptr_t)file, O3);
-    set(line, O4);
-    Label L;
-
-    // get nearby pc, store jmp target
-    call(L, relocInfo::none);  // No relocation for call to pc+0x8
-    delayed()->st(a.base()->after_save(), O1, 0);
-    bind(L);
-
-    // store nearby pc
-    st(O7, O1, sizeof(intptr_t));
-    // store file
-    st(O3, O1, 2*sizeof(intptr_t));
-    // store line
-    st(O4, O1, 3*sizeof(intptr_t));
-    add(O0, 1, O0);
-    and3(O0, JavaThread::jump_ring_buffer_size  - 1, O0);
-    st(O0, G2_thread, in_bytes(JavaThread::jmp_ring_index_offset()));
-    restore();
-    jmpl(a.base(), G0, d);
-#else
-    jmpl(a.base(), a.disp(), d);
-#endif /* PRODUCT */
-  } else {
-    jmpl(a.base(), a.disp(), d);
-  }
+  jmpl(a.base(), a.disp(), d);
 }
 
 void MacroAssembler::jump(const AddressLiteral& addrlit, Register temp, int offset, const char* file, int line) {
@@ -356,10 +248,10 @@ void MacroAssembler::leave() {
 #ifdef ASSERT
 // a hook for debugging
 static Thread* reinitialize_thread() {
-  return ThreadLocalStorage::thread();
+  return Thread::current();
 }
 #else
-#define reinitialize_thread ThreadLocalStorage::thread
+#define reinitialize_thread Thread::current
 #endif
 
 #ifdef ASSERT
@@ -389,7 +281,7 @@ void MacroAssembler::get_thread() {
 }
 
 static Thread* verify_thread_subroutine(Thread* gthread_value) {
-  Thread* correct_value = ThreadLocalStorage::thread();
+  Thread* correct_value = Thread::current();
   guarantee(gthread_value == correct_value, "G2_thread value must be the thread");
   return correct_value;
 }
@@ -397,9 +289,6 @@ static Thread* verify_thread_subroutine(Thread* gthread_value) {
 void MacroAssembler::verify_thread() {
   if (VerifyThread) {
     // NOTE: this chops off the heads of the 64-bit O registers.
-#ifdef CC_INTERP
-    save_frame(0);
-#else
     // make sure G2_thread contains the right value
     save_frame_and_mov(0, Lmethod, Lmethod);   // to avoid clobbering O0 (and propagate Lmethod for -Xprof)
     mov(G1, L1);                // avoid clobbering G1
@@ -407,7 +296,6 @@ void MacroAssembler::verify_thread() {
     mov(G3, L3);                // avoid clobbering G3
     mov(G4, L4);                // avoid clobbering G4
     mov(G5_method, L5);         // avoid clobbering G5_method
-#endif /* CC_INTERP */
 #if defined(COMPILER2) && !defined(_LP64)
     // Save & restore possible 64-bit Long arguments in G-regs
     srlx(G1,32,L0);
@@ -526,11 +414,7 @@ void MacroAssembler::reset_last_Java_frame(void) {
 
 #ifdef ASSERT
   // check that it WAS previously set
-#ifdef CC_INTERP
-    save_frame(0);
-#else
     save_frame_and_mov(0, Lmethod, Lmethod);     // Propagate Lmethod to helper frame for -Xprof
-#endif /* CC_INTERP */
     ld_ptr(sp_addr, L0);
     tst(L0);
     breakpoint_trap(Assembler::zero, Assembler::ptr_cc);
@@ -750,11 +634,7 @@ void MacroAssembler::set_vm_result(Register oop_result) {
 
 # ifdef ASSERT
     // Check that we are not overwriting any other oop.
-#ifdef CC_INTERP
-    save_frame(0);
-#else
     save_frame_and_mov(0, Lmethod, Lmethod);     // Propagate Lmethod for -Xprof
-#endif /* CC_INTERP */
     ld_ptr(vm_result_addr, L0);
     tst(L0);
     restore();
@@ -766,8 +646,8 @@ void MacroAssembler::set_vm_result(Register oop_result) {
 }
 
 
-void MacroAssembler::ic_call(address entry, bool emit_delay) {
-  RelocationHolder rspec = virtual_call_Relocation::spec(pc());
+void MacroAssembler::ic_call(address entry, bool emit_delay, jint method_index) {
+  RelocationHolder rspec = virtual_call_Relocation::spec(pc(), method_index);
   patchable_set((intptr_t)Universe::non_oop_word(), G5_inline_cache_reg);
   relocate(rspec);
   call(entry, relocInfo::none);
@@ -775,7 +655,6 @@ void MacroAssembler::ic_call(address entry, bool emit_delay) {
     delayed()->nop();
   }
 }
-
 
 void MacroAssembler::card_table_write(jbyte* byte_map_base,
                                       Register tmp, Register obj) {
@@ -1595,7 +1474,7 @@ void MacroAssembler::debug(char* msg, RegistersForDebugging* regs) {
   else {
      ::tty->print_cr("=============== DEBUG MESSAGE: %s ================\n", msg);
   }
-  assert(false, err_msg("DEBUG MESSAGE: %s", msg));
+  assert(false, "DEBUG MESSAGE: %s", msg);
 }
 
 
@@ -2210,30 +2089,18 @@ void MacroAssembler::lookup_interface_method(Register recv_klass,
   }
 
   // Compute start of first itableOffsetEntry (which is at the end of the vtable)
-  int vtable_base = InstanceKlass::vtable_start_offset() * wordSize;
+  int vtable_base = in_bytes(Klass::vtable_start_offset());
   int scan_step   = itableOffsetEntry::size() * wordSize;
-  int vte_size    = vtableEntry::size() * wordSize;
+  int vte_size    = vtableEntry::size_in_bytes();
 
-  lduw(recv_klass, InstanceKlass::vtable_length_offset() * wordSize, scan_temp);
+  lduw(recv_klass, in_bytes(Klass::vtable_length_offset()), scan_temp);
   // %%% We should store the aligned, prescaled offset in the klassoop.
   // Then the next several instructions would fold away.
 
-  int round_to_unit = ((HeapWordsPerLong > 1) ? BytesPerLong : 0);
   int itb_offset = vtable_base;
-  if (round_to_unit != 0) {
-    // hoist first instruction of round_to(scan_temp, BytesPerLong):
-    itb_offset += round_to_unit - wordSize;
-  }
-  int itb_scale = exact_log2(vtableEntry::size() * wordSize);
+  int itb_scale = exact_log2(vtableEntry::size_in_bytes());
   sll(scan_temp, itb_scale,  scan_temp);
   add(scan_temp, itb_offset, scan_temp);
-  if (round_to_unit != 0) {
-    // Round up to align_object_offset boundary
-    // see code for InstanceKlass::start_of_itable!
-    // Was: round_to(scan_temp, BytesPerLong);
-    // Hoisted: add(scan_temp, BytesPerLong-1, scan_temp);
-    and3(scan_temp, -round_to_unit, scan_temp);
-  }
   add(recv_klass, scan_temp, scan_temp);
 
   // Adjust recv_klass by scaled itable_index, so we can free itable_index.
@@ -2302,16 +2169,16 @@ void MacroAssembler::lookup_virtual_method(Register recv_klass,
                                            Register method_result) {
   assert_different_registers(recv_klass, method_result, vtable_index.register_or_noreg());
   Register sethi_temp = method_result;
-  const int base = (InstanceKlass::vtable_start_offset() * wordSize +
-                    // method pointer offset within the vtable entry:
-                    vtableEntry::method_offset_in_bytes());
+  const int base = in_bytes(Klass::vtable_start_offset()) +
+                   // method pointer offset within the vtable entry:
+                   vtableEntry::method_offset_in_bytes();
   RegisterOrConstant vtable_offset = vtable_index;
   // Each of the following three lines potentially generates an instruction.
   // But the total number of address formation instructions will always be
   // at most two, and will often be zero.  In any case, it will be optimal.
   // If vtable_index is a register, we will have (sll_ptr N,x; inc_ptr B,x; ld_ptr k,x).
   // If vtable_index is a constant, we will have at most (set B+X<<N,t; ld_ptr k,t).
-  vtable_offset = regcon_sll_ptr(vtable_index, exact_log2(vtableEntry::size() * wordSize), vtable_offset);
+  vtable_offset = regcon_sll_ptr(vtable_index, exact_log2(vtableEntry::size_in_bytes()), vtable_offset);
   vtable_offset = regcon_inc_ptr(vtable_offset, base, vtable_offset, sethi_temp);
   Address vtable_entry_addr(recv_klass, ensure_simm13_or_reg(vtable_offset, sethi_temp));
   ld_ptr(vtable_entry_addr, method_result);
@@ -3291,12 +3158,12 @@ void MacroAssembler::eden_allocate(
     if (var_size_in_bytes->is_valid()) {
       // size is unknown at compile time
       cmp(free, var_size_in_bytes);
-      br(Assembler::lessUnsigned, false, Assembler::pn, slow_case); // if there is not enough space go the slow case
+      brx(Assembler::lessUnsigned, false, Assembler::pn, slow_case); // if there is not enough space go the slow case
       delayed()->add(obj, var_size_in_bytes, end);
     } else {
       // size is known at compile time
       cmp(free, con_size_in_bytes);
-      br(Assembler::lessUnsigned, false, Assembler::pn, slow_case); // if there is not enough space go the slow case
+      brx(Assembler::lessUnsigned, false, Assembler::pn, slow_case); // if there is not enough space go the slow case
       delayed()->add(obj, con_size_in_bytes, end);
     }
     // Compare obj with the value at top_addr; if still equal, swap the value of
@@ -3408,10 +3275,20 @@ void MacroAssembler::tlab_refill(Label& retry, Label& try_eden, Label& slow_case
   // Retain tlab and allocate object in shared space if
   // the amount free in the tlab is too large to discard.
   cmp(t1, t2);
-  brx(Assembler::lessEqual, false, Assembler::pt, discard_tlab);
 
+  brx(Assembler::lessEqual, false, Assembler::pt, discard_tlab);
   // increment waste limit to prevent getting stuck on this slow path
-  delayed()->add(t2, ThreadLocalAllocBuffer::refill_waste_limit_increment(), t2);
+  if (Assembler::is_simm13(ThreadLocalAllocBuffer::refill_waste_limit_increment())) {
+    delayed()->add(t2, ThreadLocalAllocBuffer::refill_waste_limit_increment(), t2);
+  } else {
+    delayed()->nop();
+    // set64 does not use the temp register if the given constant is 32 bit. So
+    // we can just use any register; using G0 results in ignoring of the upper 32 bit
+    // of that value.
+    set64(ThreadLocalAllocBuffer::refill_waste_limit_increment(), t3, G0);
+    add(t2, t3, t2);
+  }
+
   st_ptr(t2, G2_thread, in_bytes(JavaThread::tlab_refill_waste_limit_offset()));
   if (TLABStats) {
     // increment number of slow_allocations
@@ -3481,9 +3358,25 @@ void MacroAssembler::tlab_refill(Label& retry, Label& try_eden, Label& slow_case
   add(top, t1, top); // t1 is tlab_size
   sub(top, ThreadLocalAllocBuffer::alignment_reserve_in_bytes(), top);
   st_ptr(top, G2_thread, in_bytes(JavaThread::tlab_end_offset()));
+
+  if (ZeroTLAB) {
+    // This is a fast TLAB refill, therefore the GC is not notified of it.
+    // So compiled code must fill the new TLAB with zeroes.
+    ld_ptr(G2_thread, in_bytes(JavaThread::tlab_start_offset()), t2);
+    zero_memory(t2, t1);
+  }
   verify_tlab();
   ba(retry);
   delayed()->nop();
+}
+
+void MacroAssembler::zero_memory(Register base, Register index) {
+  assert_different_registers(base, index);
+  Label loop;
+  bind(loop);
+  subcc(index, HeapWordSize, index);
+  brx(Assembler::greaterEqual, true, Assembler::pt, loop);
+  delayed()->st_ptr(G0, base, index);
 }
 
 void MacroAssembler::incr_allocated_bytes(RegisterOrConstant size_in_bytes,
@@ -3591,10 +3484,28 @@ void MacroAssembler::bang_stack_size(Register Rsize, Register Rtsp,
   // was post-decremented.)  Skip this address by starting at i=1, and
   // touch a few more pages below.  N.B.  It is important to touch all
   // the way down to and including i=StackShadowPages.
-  for (int i = 1; i < StackShadowPages; i++) {
+  for (int i = 1; i < JavaThread::stack_shadow_zone_size() / os::vm_page_size(); i++) {
     set((-i*offset)+STACK_BIAS, Rscratch);
     st(G0, Rtsp, Rscratch);
   }
+}
+
+void MacroAssembler::reserved_stack_check() {
+  // testing if reserved zone needs to be enabled
+  Label no_reserved_zone_enabling;
+
+  ld_ptr(G2_thread, JavaThread::reserved_stack_activation_offset(), G4_scratch);
+  cmp_and_brx_short(SP, G4_scratch, Assembler::lessUnsigned, Assembler::pt, no_reserved_zone_enabling);
+
+  call_VM_leaf(L0, CAST_FROM_FN_PTR(address, SharedRuntime::enable_stack_reserved_zone), G2_thread);
+
+  AddressLiteral stub(StubRoutines::throw_delayed_StackOverflowError_entry());
+  jump_to(stub, G4_scratch);
+  delayed()->restore();
+
+  should_not_reach_here();
+
+  bind(no_reserved_zone_enabling);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////
@@ -3628,19 +3539,19 @@ static void generate_satb_log_enqueue(bool with_frame) {
 
   int satb_q_index_byte_offset =
     in_bytes(JavaThread::satb_mark_queue_offset() +
-             PtrQueue::byte_offset_of_index());
+             SATBMarkQueue::byte_offset_of_index());
 
   int satb_q_buf_byte_offset =
     in_bytes(JavaThread::satb_mark_queue_offset() +
-             PtrQueue::byte_offset_of_buf());
+             SATBMarkQueue::byte_offset_of_buf());
 
-  assert(in_bytes(PtrQueue::byte_width_of_index()) == sizeof(intptr_t) &&
-         in_bytes(PtrQueue::byte_width_of_buf()) == sizeof(intptr_t),
+  assert(in_bytes(SATBMarkQueue::byte_width_of_index()) == sizeof(intptr_t) &&
+         in_bytes(SATBMarkQueue::byte_width_of_buf()) == sizeof(intptr_t),
          "check sizes in assembly below");
 
   __ bind(restart);
 
-  // Load the index into the SATB buffer. PtrQueue::_index is a size_t
+  // Load the index into the SATB buffer. SATBMarkQueue::_index is a size_t
   // so ld_ptr is appropriate.
   __ ld_ptr(G2_thread, satb_q_index_byte_offset, L0);
 
@@ -3732,17 +3643,17 @@ void MacroAssembler::g1_write_barrier_pre(Register obj,
   }
 
   // Is marking active?
-  if (in_bytes(PtrQueue::byte_width_of_active()) == 4) {
+  if (in_bytes(SATBMarkQueue::byte_width_of_active()) == 4) {
     ld(G2,
        in_bytes(JavaThread::satb_mark_queue_offset() +
-                PtrQueue::byte_offset_of_active()),
+                SATBMarkQueue::byte_offset_of_active()),
        tmp);
   } else {
-    guarantee(in_bytes(PtrQueue::byte_width_of_active()) == 1,
+    guarantee(in_bytes(SATBMarkQueue::byte_width_of_active()) == 1,
               "Assumption");
     ldsb(G2,
          in_bytes(JavaThread::satb_mark_queue_offset() +
-                  PtrQueue::byte_offset_of_active()),
+                  SATBMarkQueue::byte_offset_of_active()),
          tmp);
   }
 
@@ -3843,13 +3754,13 @@ static void generate_dirty_card_log_enqueue(jbyte* byte_map_base) {
 
   int dirty_card_q_index_byte_offset =
     in_bytes(JavaThread::dirty_card_queue_offset() +
-             PtrQueue::byte_offset_of_index());
+             DirtyCardQueue::byte_offset_of_index());
   int dirty_card_q_buf_byte_offset =
     in_bytes(JavaThread::dirty_card_queue_offset() +
-             PtrQueue::byte_offset_of_buf());
+             DirtyCardQueue::byte_offset_of_buf());
   __ bind(restart);
 
-  // Load the index into the update buffer. PtrQueue::_index is
+  // Load the index into the update buffer. DirtyCardQueue::_index is
   // a size_t so ld_ptr is appropriate here.
   __ ld_ptr(G2_thread, dirty_card_q_index_byte_offset, L0);
 
@@ -3957,9 +3868,17 @@ void MacroAssembler::card_write_barrier_post(Register store_addr, Register new_v
   if (new_val == G0) return;
   CardTableModRefBS* bs =
     barrier_set_cast<CardTableModRefBS>(Universe::heap()->barrier_set());
-  assert(bs->kind() == BarrierSet::CardTableModRef ||
+  assert(bs->kind() == BarrierSet::CardTableForRS ||
          bs->kind() == BarrierSet::CardTableExtension, "wrong barrier");
   card_table_write(bs->byte_map_base, tmp, store_addr);
+}
+
+void MacroAssembler::load_mirror(Register mirror, Register method) {
+  const int mirror_offset = in_bytes(Klass::java_mirror_offset());
+  ld_ptr(method, in_bytes(Method::const_offset()), mirror);
+  ld_ptr(mirror, in_bytes(ConstMethod::constants_offset()), mirror);
+  ld_ptr(mirror, ConstantPool::pool_holder_offset_in_bytes(), mirror);
+  ld_ptr(mirror, mirror_offset, mirror);
 }
 
 void MacroAssembler::load_klass(Register src_oop, Register klass) {
@@ -4252,57 +4171,504 @@ void MacroAssembler::reinit_heapbase() {
   }
 }
 
-// Compare char[] arrays aligned to 4 bytes.
-void MacroAssembler::char_arrays_equals(Register ary1, Register ary2,
-                                        Register limit, Register result,
-                                        Register chr1, Register chr2, Label& Ldone) {
-  Label Lvector, Lloop;
-  assert(chr1 == result, "should be the same");
+#ifdef COMPILER2
 
-  // Note: limit contains number of bytes (2*char_elements) != 0.
-  andcc(limit, 0x2, chr1); // trailing character ?
-  br(Assembler::zero, false, Assembler::pt, Lvector);
+// Compress char[] to byte[] by compressing 16 bytes at once. Return 0 on failure.
+void MacroAssembler::string_compress_16(Register src, Register dst, Register cnt, Register result,
+                                        Register tmp1, Register tmp2, Register tmp3, Register tmp4,
+                                        FloatRegister ftmp1, FloatRegister ftmp2, FloatRegister ftmp3, Label& Ldone) {
+  Label Lloop, Lslow;
+  assert(UseVIS >= 3, "VIS3 is required");
+  assert_different_registers(src, dst, cnt, tmp1, tmp2, tmp3, tmp4, result);
+  assert_different_registers(ftmp1, ftmp2, ftmp3);
+
+  // Check if cnt >= 8 (= 16 bytes)
+  cmp(cnt, 8);
+  br(Assembler::less, false, Assembler::pn, Lslow);
+  delayed()->mov(cnt, result); // copy count
+
+  // Check for 8-byte alignment of src and dst
+  or3(src, dst, tmp1);
+  andcc(tmp1, 7, G0);
+  br(Assembler::notZero, false, Assembler::pn, Lslow);
   delayed()->nop();
 
-  // compare the trailing char
-  sub(limit, sizeof(jchar), limit);
-  lduh(ary1, limit, chr1);
-  lduh(ary2, limit, chr2);
-  cmp(chr1, chr2);
-  br(Assembler::notEqual, true, Assembler::pt, Ldone);
-  delayed()->mov(G0, result);     // not equal
+  // Set mask for bshuffle instruction
+  Register mask = tmp4;
+  set(0x13579bdf, mask);
+  bmask(mask, G0, G0);
 
-  // only one char ?
-  cmp_zero_and_br(zero, limit, Ldone, true, Assembler::pn);
-  delayed()->add(G0, 1, result); // zero-length arrays are equal
+  // Set mask to 0xff00 ff00 ff00 ff00 to check for non-latin1 characters
+  Assembler::sethi(0xff00fc00, mask); // mask = 0x0000 0000 ff00 fc00
+  add(mask, 0x300, mask);             // mask = 0x0000 0000 ff00 ff00
+  sllx(mask, 32, tmp1);               // tmp1 = 0xff00 ff00 0000 0000
+  or3(mask, tmp1, mask);              // mask = 0xff00 ff00 ff00 ff00
 
-  // word by word compare, dont't need alignment check
-  bind(Lvector);
+  // Load first 8 bytes
+  ldx(src, 0, tmp1);
+
+  bind(Lloop);
+  // Load next 8 bytes
+  ldx(src, 8, tmp2);
+
+  // Check for non-latin1 character by testing if the most significant byte of a char is set.
+  // Although we have to move the data between integer and floating point registers, this is
+  // still faster than the corresponding VIS instructions (ford/fand/fcmpd).
+  or3(tmp1, tmp2, tmp3);
+  btst(tmp3, mask);
+  // annul zeroing if branch is not taken to preserve original count
+  brx(Assembler::notZero, true, Assembler::pn, Ldone);
+  delayed()->mov(G0, result); // 0 - failed
+
+  // Move bytes into float register
+  movxtod(tmp1, ftmp1);
+  movxtod(tmp2, ftmp2);
+
+  // Compress by copying one byte per char from ftmp1 and ftmp2 to ftmp3
+  bshuffle(ftmp1, ftmp2, ftmp3);
+  stf(FloatRegisterImpl::D, ftmp3, dst, 0);
+
+  // Increment addresses and decrement count
+  inc(src, 16);
+  inc(dst, 8);
+  dec(cnt, 8);
+
+  cmp(cnt, 8);
+  // annul LDX if branch is not taken to prevent access past end of string
+  br(Assembler::greaterEqual, true, Assembler::pt, Lloop);
+  delayed()->ldx(src, 0, tmp1);
+
+  // Fallback to slow version
+  bind(Lslow);
+}
+
+// Compress char[] to byte[]. Return 0 on failure.
+void MacroAssembler::string_compress(Register src, Register dst, Register cnt, Register result, Register tmp, Label& Ldone) {
+  Label Lloop;
+  assert_different_registers(src, dst, cnt, tmp, result);
+
+  lduh(src, 0, tmp);
+
+  bind(Lloop);
+  inc(src, sizeof(jchar));
+  cmp(tmp, 0xff);
+  // annul zeroing if branch is not taken to preserve original count
+  br(Assembler::greater, true, Assembler::pn, Ldone); // don't check xcc
+  delayed()->mov(G0, result); // 0 - failed
+  deccc(cnt);
+  stb(tmp, dst, 0);
+  inc(dst);
+  // annul LDUH if branch is not taken to prevent access past end of string
+  br(Assembler::notZero, true, Assembler::pt, Lloop);
+  delayed()->lduh(src, 0, tmp); // hoisted
+}
+
+// Inflate byte[] to char[] by inflating 16 bytes at once.
+void MacroAssembler::string_inflate_16(Register src, Register dst, Register cnt, Register tmp,
+                                       FloatRegister ftmp1, FloatRegister ftmp2, FloatRegister ftmp3, FloatRegister ftmp4, Label& Ldone) {
+  Label Lloop, Lslow;
+  assert(UseVIS >= 3, "VIS3 is required");
+  assert_different_registers(src, dst, cnt, tmp);
+  assert_different_registers(ftmp1, ftmp2, ftmp3, ftmp4);
+
+  // Check if cnt >= 8 (= 16 bytes)
+  cmp(cnt, 8);
+  br(Assembler::less, false, Assembler::pn, Lslow);
+  delayed()->nop();
+
+  // Check for 8-byte alignment of src and dst
+  or3(src, dst, tmp);
+  andcc(tmp, 7, G0);
+  br(Assembler::notZero, false, Assembler::pn, Lslow);
+  // Initialize float register to zero
+  FloatRegister zerof = ftmp4;
+  delayed()->fzero(FloatRegisterImpl::D, zerof);
+
+  // Load first 8 bytes
+  ldf(FloatRegisterImpl::D, src, 0, ftmp1);
+
+  bind(Lloop);
+  inc(src, 8);
+  dec(cnt, 8);
+
+  // Inflate the string by interleaving each byte from the source array
+  // with a zero byte and storing the result in the destination array.
+  fpmerge(zerof, ftmp1->successor(), ftmp2);
+  stf(FloatRegisterImpl::D, ftmp2, dst, 8);
+  fpmerge(zerof, ftmp1, ftmp3);
+  stf(FloatRegisterImpl::D, ftmp3, dst, 0);
+
+  inc(dst, 16);
+
+  cmp(cnt, 8);
+  // annul LDX if branch is not taken to prevent access past end of string
+  br(Assembler::greaterEqual, true, Assembler::pt, Lloop);
+  delayed()->ldf(FloatRegisterImpl::D, src, 0, ftmp1);
+
+  // Fallback to slow version
+  bind(Lslow);
+}
+
+// Inflate byte[] to char[].
+void MacroAssembler::string_inflate(Register src, Register dst, Register cnt, Register tmp, Label& Ldone) {
+  Label Loop;
+  assert_different_registers(src, dst, cnt, tmp);
+
+  ldub(src, 0, tmp);
+  bind(Loop);
+  inc(src);
+  deccc(cnt);
+  sth(tmp, dst, 0);
+  inc(dst, sizeof(jchar));
+  // annul LDUB if branch is not taken to prevent access past end of string
+  br(Assembler::notZero, true, Assembler::pt, Loop);
+  delayed()->ldub(src, 0, tmp); // hoisted
+}
+
+void MacroAssembler::string_compare(Register str1, Register str2,
+                                    Register cnt1, Register cnt2,
+                                    Register tmp1, Register tmp2,
+                                    Register result, int ae) {
+  Label Ldone, Lloop;
+  assert_different_registers(str1, str2, cnt1, cnt2, tmp1, result);
+  int stride1, stride2;
+
+  // Note: Making use of the fact that compareTo(a, b) == -compareTo(b, a)
+  // we interchange str1 and str2 in the UL case and negate the result.
+  // Like this, str1 is always latin1 encoded, expect for the UU case.
+
+  if (ae == StrIntrinsicNode::LU || ae == StrIntrinsicNode::UL) {
+    srl(cnt2, 1, cnt2);
+  }
+
+  // See if the lengths are different, and calculate min in cnt1.
+  // Save diff in case we need it for a tie-breaker.
+  Label Lskip;
+  Register diff = tmp1;
+  subcc(cnt1, cnt2, diff);
+  br(Assembler::greater, true, Assembler::pt, Lskip);
+  // cnt2 is shorter, so use its count:
+  delayed()->mov(cnt2, cnt1);
+  bind(Lskip);
+
+  // Rename registers
+  Register limit1 = cnt1;
+  Register limit2 = limit1;
+  Register chr1   = result;
+  Register chr2   = cnt2;
+  if (ae == StrIntrinsicNode::LU || ae == StrIntrinsicNode::UL) {
+    // We need an additional register to keep track of two limits
+    assert_different_registers(str1, str2, cnt1, cnt2, tmp1, tmp2, result);
+    limit2 = tmp2;
+  }
+
+  // Is the minimum length zero?
+  cmp(limit1, (int)0); // use cast to resolve overloading ambiguity
+  br(Assembler::equal, true, Assembler::pn, Ldone);
+  // result is difference in lengths
+  if (ae == StrIntrinsicNode::UU) {
+    delayed()->sra(diff, 1, result);  // Divide by 2 to get number of chars
+  } else {
+    delayed()->mov(diff, result);
+  }
+
+  // Load first characters
+  if (ae == StrIntrinsicNode::LL) {
+    stride1 = stride2 = sizeof(jbyte);
+    ldub(str1, 0, chr1);
+    ldub(str2, 0, chr2);
+  } else if (ae == StrIntrinsicNode::UU) {
+    stride1 = stride2 = sizeof(jchar);
+    lduh(str1, 0, chr1);
+    lduh(str2, 0, chr2);
+  } else {
+    stride1 = sizeof(jbyte);
+    stride2 = sizeof(jchar);
+    ldub(str1, 0, chr1);
+    lduh(str2, 0, chr2);
+  }
+
+  // Compare first characters
+  subcc(chr1, chr2, chr1);
+  br(Assembler::notZero, false, Assembler::pt, Ldone);
+  assert(chr1 == result, "result must be pre-placed");
+  delayed()->nop();
+
+  // Check if the strings start at same location
+  cmp(str1, str2);
+  brx(Assembler::equal, true, Assembler::pn, Ldone);
+  delayed()->mov(G0, result);  // result is zero
+
+  // We have no guarantee that on 64 bit the higher half of limit is 0
+  signx(limit1);
+
+  // Get limit
+  if (ae == StrIntrinsicNode::LU || ae == StrIntrinsicNode::UL) {
+    sll(limit1, 1, limit2);
+    subcc(limit2, stride2, chr2);
+  }
+  subcc(limit1, stride1, chr1);
+  br(Assembler::zero, true, Assembler::pn, Ldone);
+  // result is difference in lengths
+  if (ae == StrIntrinsicNode::UU) {
+    delayed()->sra(diff, 1, result);  // Divide by 2 to get number of chars
+  } else {
+    delayed()->mov(diff, result);
+  }
+
+  // Shift str1 and str2 to the end of the arrays, negate limit
+  add(str1, limit1, str1);
+  add(str2, limit2, str2);
+  neg(chr1, limit1);  // limit1 = -(limit1-stride1)
+  if (ae == StrIntrinsicNode::LU || ae == StrIntrinsicNode::UL) {
+    neg(chr2, limit2);  // limit2 = -(limit2-stride2)
+  }
+
+  // Compare the rest of the characters
+  load_sized_value(Address(str1, limit1), chr1, (ae == StrIntrinsicNode::UU) ? 2 : 1, false);
+
+  bind(Lloop);
+  load_sized_value(Address(str2, limit2), chr2, (ae == StrIntrinsicNode::LL) ? 1 : 2, false);
+
+  subcc(chr1, chr2, chr1);
+  br(Assembler::notZero, false, Assembler::pt, Ldone);
+  assert(chr1 == result, "result must be pre-placed");
+  delayed()->inccc(limit1, stride1);
+  if (ae == StrIntrinsicNode::LU || ae == StrIntrinsicNode::UL) {
+    inccc(limit2, stride2);
+  }
+
+  // annul LDUB if branch is not taken to prevent access past end of string
+  br(Assembler::notZero, true, Assembler::pt, Lloop);
+  delayed()->load_sized_value(Address(str1, limit1), chr1, (ae == StrIntrinsicNode::UU) ? 2 : 1, false);
+
+  // If strings are equal up to min length, return the length difference.
+  if (ae == StrIntrinsicNode::UU) {
+    // Divide by 2 to get number of chars
+    sra(diff, 1, result);
+  } else {
+    mov(diff, result);
+  }
+
+  // Otherwise, return the difference between the first mismatched chars.
+  bind(Ldone);
+  if(ae == StrIntrinsicNode::UL) {
+    // Negate result (see note above)
+    neg(result);
+  }
+}
+
+void MacroAssembler::array_equals(bool is_array_equ, Register ary1, Register ary2,
+                                  Register limit, Register tmp, Register result, bool is_byte) {
+  Label Ldone, Lloop, Lremaining;
+  assert_different_registers(ary1, ary2, limit, tmp, result);
+
+  int length_offset  = arrayOopDesc::length_offset_in_bytes();
+  int base_offset    = arrayOopDesc::base_offset_in_bytes(is_byte ? T_BYTE : T_CHAR);
+  assert(base_offset % 8 == 0, "Base offset must be 8-byte aligned");
+
+  if (is_array_equ) {
+    // return true if the same array
+    cmp(ary1, ary2);
+    brx(Assembler::equal, true, Assembler::pn, Ldone);
+    delayed()->mov(1, result);  // equal
+
+    br_null(ary1, true, Assembler::pn, Ldone);
+    delayed()->clr(result);     // not equal
+
+    br_null(ary2, true, Assembler::pn, Ldone);
+    delayed()->clr(result);     // not equal
+
+    // load the lengths of arrays
+    ld(Address(ary1, length_offset), limit);
+    ld(Address(ary2, length_offset), tmp);
+
+    // return false if the two arrays are not equal length
+    cmp(limit, tmp);
+    br(Assembler::notEqual, true, Assembler::pn, Ldone);
+    delayed()->clr(result);     // not equal
+  }
+
+  cmp_zero_and_br(Assembler::zero, limit, Ldone, true, Assembler::pn);
+  delayed()->mov(1, result); // zero-length arrays are equal
+
+  if (is_array_equ) {
+    // load array addresses
+    add(ary1, base_offset, ary1);
+    add(ary2, base_offset, ary2);
+    // set byte count
+    if (!is_byte) {
+      sll(limit, exact_log2(sizeof(jchar)), limit);
+    }
+  } else {
+    // We have no guarantee that on 64 bit the higher half of limit is 0
+    signx(limit);
+  }
+
+#ifdef ASSERT
+  // Sanity check for doubleword (8-byte) alignment of ary1 and ary2.
+  // Guaranteed on 64-bit systems (see arrayOopDesc::header_size_in_bytes()).
+  Label Laligned;
+  or3(ary1, ary2, tmp);
+  andcc(tmp, 7, tmp);
+  br_null_short(tmp, Assembler::pn, Laligned);
+  STOP("First array element is not 8-byte aligned.");
+  should_not_reach_here();
+  bind(Laligned);
+#endif
+
   // Shift ary1 and ary2 to the end of the arrays, negate limit
   add(ary1, limit, ary1);
   add(ary2, limit, ary2);
   neg(limit, limit);
 
-  lduw(ary1, limit, chr1);
+  // MAIN LOOP
+  // Load and compare array elements of size 'byte_width' until the elements are not
+  // equal or we reached the end of the arrays. If the size of the arrays is not a
+  // multiple of 'byte_width', we simply read over the end of the array, bail out and
+  // compare the remaining bytes below by skipping the garbage bytes.
+  ldx(ary1, limit, result);
   bind(Lloop);
-  lduw(ary2, limit, chr2);
-  cmp(chr1, chr2);
-  br(Assembler::notEqual, true, Assembler::pt, Ldone);
-  delayed()->mov(G0, result);     // not equal
-  inccc(limit, 2*sizeof(jchar));
-  // annul LDUW if branch is not taken to prevent access past end of array
-  br(Assembler::notZero, true, Assembler::pt, Lloop);
-  delayed()->lduw(ary1, limit, chr1); // hoisted
+  ldx(ary2, limit, tmp);
+  inccc(limit, 8);
+  // Bail out if we reached the end (but still do the comparison)
+  br(Assembler::positive, false, Assembler::pn, Lremaining);
+  delayed()->cmp(result, tmp);
+  // Check equality of elements
+  brx(Assembler::equal, false, Assembler::pt, target(Lloop));
+  delayed()->ldx(ary1, limit, result);
 
-  // Caller should set it:
-  // add(G0, 1, result); // equals
+  ba(Ldone);
+  delayed()->clr(result); // not equal
+
+  // TAIL COMPARISON
+  // We got here because we reached the end of the arrays. 'limit' is the number of
+  // garbage bytes we may have compared by reading over the end of the arrays. Shift
+  // out the garbage and compare the remaining elements.
+  bind(Lremaining);
+  // Optimistic shortcut: elements potentially including garbage are equal
+  brx(Assembler::equal, true, Assembler::pt, target(Ldone));
+  delayed()->mov(1, result); // equal
+  // Shift 'limit' bytes to the right and compare
+  sll(limit, 3, limit); // bytes to bits
+  srlx(result, limit, result);
+  srlx(tmp, limit, tmp);
+  cmp(result, tmp);
+  clr(result);
+  movcc(Assembler::equal, false, xcc, 1, result);
+
+  bind(Ldone);
 }
+
+void MacroAssembler::has_negatives(Register inp, Register size, Register result, Register t2, Register t3, Register t4, Register t5) {
+
+  // test for negative bytes in input string of a given size
+  // result 1 if found, 0 otherwise.
+
+  Label Lcore, Ltail, Lreturn, Lcore_rpt;
+
+  assert_different_registers(inp, size, t2, t3, t4, t5, result);
+
+  Register i     = result;  // result used as integer index i until very end
+  Register lmask = t2;      // t2 is aliased to lmask
+
+  // INITIALIZATION
+  // ===========================================================
+  // initialize highbits mask -> lmask = 0x8080808080808080  (8B/64b)
+  // compute unaligned offset -> i
+  // compute core end index   -> t5
+  Assembler::sethi(0x80808000, t2);   //! sethi macro fails to emit optimal
+  add(t2, 0x80, t2);
+  sllx(t2, 32, t3);
+  or3(t3, t2, lmask);                 // 0x8080808080808080 -> lmask
+  sra(size,0,size);
+  andcc(inp, 0x7, i);                 // unaligned offset -> i
+  br(Assembler::zero, true, Assembler::pn, Lcore); // starts 8B aligned?
+  delayed()->add(size, -8, t5);       // (annuled) core end index -> t5
+
+  // ===========================================================
+
+  // UNALIGNED HEAD
+  // ===========================================================
+  // * unaligned head handling: grab aligned 8B containing unaligned inp(ut)
+  // * obliterate (ignore) bytes outside string by shifting off reg ends
+  // * compare with bitmask, short circuit return true if one or more high
+  //   bits set.
+  cmp(size, 0);
+  br(Assembler::zero, true, Assembler::pn, Lreturn); // short-circuit?
+  delayed()->mov(0,result);      // annuled so i not clobbered for following
+  neg(i, t4);
+  add(i, size, t5);
+  ldx(inp, t4, t3);  // raw aligned 8B containing unaligned head -> t3
+  mov(8, t4);
+  sub(t4, t5, t4);
+  sra(t4, 31, t5);
+  andn(t4, t5, t5);
+  add(i, t5, t4);
+  sll(t5, 3, t5);
+  sll(t4, 3, t4);   // # bits to shift right, left -> t5,t4
+  srlx(t3, t5, t3);
+  sllx(t3, t4, t3); // bytes outside string in 8B header obliterated -> t3
+  andcc(lmask, t3, G0);
+  brx(Assembler::notZero, true, Assembler::pn, Lreturn); // short circuit?
+  delayed()->mov(1,result);      // annuled so i not clobbered for following
+  add(size, -8, t5);             // core end index -> t5
+  mov(8, t4);
+  sub(t4, i, i);                 // # bytes examined in unalgn head (<8) -> i
+  // ===========================================================
+
+  // ALIGNED CORE
+  // ===========================================================
+  // * iterate index i over aligned 8B sections of core, comparing with
+  //   bitmask, short circuit return true if one or more high bits set
+  // t5 contains core end index/loop limit which is the index
+  //     of the MSB of last (unaligned) 8B fully contained in the string.
+  // inp   contains address of first byte in string/array
+  // lmask contains 8B high bit mask for comparison
+  // i     contains next index to be processed (adr. inp+i is on 8B boundary)
+  bind(Lcore);
+  cmp_and_br_short(i, t5, Assembler::greater, Assembler::pn, Ltail);
+  bind(Lcore_rpt);
+  ldx(inp, i, t3);
+  andcc(t3, lmask, G0);
+  brx(Assembler::notZero, true, Assembler::pn, Lreturn);
+  delayed()->mov(1, result);    // annuled so i not clobbered for following
+  add(i, 8, i);
+  cmp_and_br_short(i, t5, Assembler::lessEqual, Assembler::pn, Lcore_rpt);
+  // ===========================================================
+
+  // ALIGNED TAIL (<8B)
+  // ===========================================================
+  // handle aligned tail of 7B or less as complete 8B, obliterating end of
+  // string bytes by shifting them off end, compare what's left with bitmask
+  // inp   contains address of first byte in string/array
+  // lmask contains 8B high bit mask for comparison
+  // i     contains next index to be processed (adr. inp+i is on 8B boundary)
+  bind(Ltail);
+  subcc(size, i, t4);   // # of remaining bytes in string -> t4
+  // return 0 if no more remaining bytes
+  br(Assembler::lessEqual, true, Assembler::pn, Lreturn);
+  delayed()->mov(0, result); // annuled so i not clobbered for following
+  ldx(inp, i, t3);       // load final 8B (aligned) containing tail -> t3
+  mov(8, t5);
+  sub(t5, t4, t4);
+  mov(0, result);        // ** i clobbered at this point
+  sll(t4, 3, t4);        // bits beyond end of string          -> t4
+  srlx(t3, t4, t3);      // bytes beyond end now obliterated   -> t3
+  andcc(lmask, t3, G0);
+  movcc(Assembler::notZero, false, xcc,  1, result);
+  bind(Lreturn);
+}
+
+#endif
+
 
 // Use BIS for zeroing (count is in bytes).
 void MacroAssembler::bis_zeroing(Register to, Register count, Register temp, Label& Ldone) {
   assert(UseBlockZeroing && VM_Version::has_block_zeroing(), "only works with BIS zeroing");
   Register end = count;
   int cache_line_size = VM_Version::prefetch_data_size();
+  assert(cache_line_size > 0, "cache line size should be known for this code");
   // Minimum count when BIS zeroing can be used since
   // it needs membar which is expensive.
   int block_zero_size  = MAX2(cache_line_size*3, (int)BlockZeroingLowLimit);
@@ -4381,21 +4747,21 @@ void MacroAssembler::update_byte_crc32(Register crc, Register val, Register tabl
 
 // Reverse byte order of lower 32 bits, assuming upper 32 bits all zeros
 void MacroAssembler::reverse_bytes_32(Register src, Register dst, Register tmp) {
-  srlx(src, 24, dst);
+    srlx(src, 24, dst);
 
-  sllx(src, 32+8, tmp);
-  srlx(tmp, 32+24, tmp);
-  sllx(tmp, 8, tmp);
-  or3(dst, tmp, dst);
+    sllx(src, 32+8, tmp);
+    srlx(tmp, 32+24, tmp);
+    sllx(tmp, 8, tmp);
+    or3(dst, tmp, dst);
 
-  sllx(src, 32+16, tmp);
-  srlx(tmp, 32+24, tmp);
-  sllx(tmp, 16, tmp);
-  or3(dst, tmp, dst);
+    sllx(src, 32+16, tmp);
+    srlx(tmp, 32+24, tmp);
+    sllx(tmp, 16, tmp);
+    or3(dst, tmp, dst);
 
-  sllx(src, 32+24, tmp);
-  srlx(tmp, 32, tmp);
-  or3(dst, tmp, dst);
+    sllx(src, 32+24, tmp);
+    srlx(tmp, 32, tmp);
+    or3(dst, tmp, dst);
 }
 
 void MacroAssembler::movitof_revbytes(Register src, FloatRegister dst, Register tmp1, Register tmp2) {
@@ -4406,4 +4772,417 @@ void MacroAssembler::movitof_revbytes(Register src, FloatRegister dst, Register 
 void MacroAssembler::movftoi_revbytes(FloatRegister src, Register dst, Register tmp1, Register tmp2) {
   movdtox(src, tmp1);
   reverse_bytes_32(tmp1, dst, tmp2);
+}
+
+void MacroAssembler::fold_128bit_crc32(Register xcrc_hi, Register xcrc_lo, Register xK_hi, Register xK_lo, Register xtmp_hi, Register xtmp_lo, Register buf, int offset) {
+  xmulx(xcrc_hi, xK_hi, xtmp_lo);
+  xmulxhi(xcrc_hi, xK_hi, xtmp_hi);
+  xmulxhi(xcrc_lo, xK_lo, xcrc_hi);
+  xmulx(xcrc_lo, xK_lo, xcrc_lo);
+  xor3(xcrc_lo, xtmp_lo, xcrc_lo);
+  xor3(xcrc_hi, xtmp_hi, xcrc_hi);
+  ldxl(buf, G0, xtmp_lo);
+  inc(buf, 8);
+  ldxl(buf, G0, xtmp_hi);
+  inc(buf, 8);
+  xor3(xcrc_lo, xtmp_lo, xcrc_lo);
+  xor3(xcrc_hi, xtmp_hi, xcrc_hi);
+}
+
+void MacroAssembler::fold_128bit_crc32(Register xcrc_hi, Register xcrc_lo, Register xK_hi, Register xK_lo, Register xtmp_hi, Register xtmp_lo, Register xbuf_hi, Register xbuf_lo) {
+  mov(xcrc_lo, xtmp_lo);
+  mov(xcrc_hi, xtmp_hi);
+  xmulx(xtmp_hi, xK_hi, xtmp_lo);
+  xmulxhi(xtmp_hi, xK_hi, xtmp_hi);
+  xmulxhi(xcrc_lo, xK_lo, xcrc_hi);
+  xmulx(xcrc_lo, xK_lo, xcrc_lo);
+  xor3(xcrc_lo, xbuf_lo, xcrc_lo);
+  xor3(xcrc_hi, xbuf_hi, xcrc_hi);
+  xor3(xcrc_lo, xtmp_lo, xcrc_lo);
+  xor3(xcrc_hi, xtmp_hi, xcrc_hi);
+}
+
+void MacroAssembler::fold_8bit_crc32(Register xcrc, Register table, Register xtmp, Register tmp) {
+  and3(xcrc, 0xFF, tmp);
+  sllx(tmp, 2, tmp);
+  lduw(table, tmp, xtmp);
+  srlx(xcrc, 8, xcrc);
+  xor3(xtmp, xcrc, xcrc);
+}
+
+void MacroAssembler::fold_8bit_crc32(Register crc, Register table, Register tmp) {
+  and3(crc, 0xFF, tmp);
+  srlx(crc, 8, crc);
+  sllx(tmp, 2, tmp);
+  lduw(table, tmp, tmp);
+  xor3(tmp, crc, crc);
+}
+
+#define CRC32_TMP_REG_NUM 18
+
+#define CRC32_CONST_64  0x163cd6124
+#define CRC32_CONST_96  0x0ccaa009e
+#define CRC32_CONST_160 0x1751997d0
+#define CRC32_CONST_480 0x1c6e41596
+#define CRC32_CONST_544 0x154442bd4
+
+void MacroAssembler::kernel_crc32(Register crc, Register buf, Register len, Register table) {
+
+  Label L_cleanup_loop, L_cleanup_check, L_align_loop, L_align_check;
+  Label L_main_loop_prologue;
+  Label L_fold_512b, L_fold_512b_loop, L_fold_128b;
+  Label L_fold_tail, L_fold_tail_loop;
+  Label L_8byte_fold_loop, L_8byte_fold_check;
+
+  const Register tmp[CRC32_TMP_REG_NUM] = {L0, L1, L2, L3, L4, L5, L6, G1, I0, I1, I2, I3, I4, I5, I7, O4, O5, G3};
+
+  Register const_64  = tmp[CRC32_TMP_REG_NUM-1];
+  Register const_96  = tmp[CRC32_TMP_REG_NUM-1];
+  Register const_160 = tmp[CRC32_TMP_REG_NUM-2];
+  Register const_480 = tmp[CRC32_TMP_REG_NUM-1];
+  Register const_544 = tmp[CRC32_TMP_REG_NUM-2];
+
+  set(ExternalAddress(StubRoutines::crc_table_addr()), table);
+
+  not1(crc); // ~c
+  clruwu(crc); // clear upper 32 bits of crc
+
+  // Check if below cutoff, proceed directly to cleanup code
+  mov(31, G4);
+  cmp_and_br_short(len, G4, Assembler::lessEqualUnsigned, Assembler::pt, L_cleanup_check);
+
+  // Align buffer to 8 byte boundry
+  mov(8, O5);
+  and3(buf, 0x7, O4);
+  sub(O5, O4, O5);
+  and3(O5, 0x7, O5);
+  sub(len, O5, len);
+  ba(L_align_check);
+  delayed()->nop();
+
+  // Alignment loop, table look up method for up to 7 bytes
+  bind(L_align_loop);
+  ldub(buf, 0, O4);
+  inc(buf);
+  dec(O5);
+  xor3(O4, crc, O4);
+  and3(O4, 0xFF, O4);
+  sllx(O4, 2, O4);
+  lduw(table, O4, O4);
+  srlx(crc, 8, crc);
+  xor3(O4, crc, crc);
+  bind(L_align_check);
+  nop();
+  cmp_and_br_short(O5, 0, Assembler::notEqual, Assembler::pt, L_align_loop);
+
+  // Aligned on 64-bit (8-byte) boundry at this point
+  // Check if still above cutoff (31-bytes)
+  mov(31, G4);
+  cmp_and_br_short(len, G4, Assembler::lessEqualUnsigned, Assembler::pt, L_cleanup_check);
+  // At least 32 bytes left to process
+
+  // Free up registers by storing them to FP registers
+  for (int i = 0; i < CRC32_TMP_REG_NUM; i++) {
+    movxtod(tmp[i], as_FloatRegister(2*i));
+  }
+
+  // Determine which loop to enter
+  // Shared prologue
+  ldxl(buf, G0, tmp[0]);
+  inc(buf, 8);
+  ldxl(buf, G0, tmp[1]);
+  inc(buf, 8);
+  xor3(tmp[0], crc, tmp[0]); // Fold CRC into first few bytes
+  and3(crc, 0, crc); // Clear out the crc register
+  // Main loop needs 128-bytes at least
+  mov(128, G4);
+  mov(64, tmp[2]);
+  cmp_and_br_short(len, G4, Assembler::greaterEqualUnsigned, Assembler::pt, L_main_loop_prologue);
+  // Less than 64 bytes
+  nop();
+  cmp_and_br_short(len, tmp[2], Assembler::lessUnsigned, Assembler::pt, L_fold_tail);
+  // Between 64 and 127 bytes
+  set64(CRC32_CONST_96,  const_96,  tmp[8]);
+  set64(CRC32_CONST_160, const_160, tmp[9]);
+  fold_128bit_crc32(tmp[1], tmp[0], const_96, const_160, tmp[2], tmp[3], buf, 0);
+  fold_128bit_crc32(tmp[1], tmp[0], const_96, const_160, tmp[4], tmp[5], buf, 16);
+  fold_128bit_crc32(tmp[1], tmp[0], const_96, const_160, tmp[6], tmp[7], buf, 32);
+  dec(len, 48);
+  ba(L_fold_tail);
+  delayed()->nop();
+
+  bind(L_main_loop_prologue);
+  for (int i = 2; i < 8; i++) {
+    ldxl(buf, G0, tmp[i]);
+    inc(buf, 8);
+  }
+
+  // Fold total 512 bits of polynomial on each iteration,
+  // 128 bits per each of 4 parallel streams
+  set64(CRC32_CONST_480, const_480, tmp[8]);
+  set64(CRC32_CONST_544, const_544, tmp[9]);
+
+  mov(128, G4);
+  bind(L_fold_512b_loop);
+  fold_128bit_crc32(tmp[1], tmp[0], const_480, const_544, tmp[9],  tmp[8],  buf,  0);
+  fold_128bit_crc32(tmp[3], tmp[2], const_480, const_544, tmp[11], tmp[10], buf, 16);
+  fold_128bit_crc32(tmp[5], tmp[4], const_480, const_544, tmp[13], tmp[12], buf, 32);
+  fold_128bit_crc32(tmp[7], tmp[6], const_480, const_544, tmp[15], tmp[14], buf, 64);
+  dec(len, 64);
+  cmp_and_br_short(len, G4, Assembler::greaterEqualUnsigned, Assembler::pt, L_fold_512b_loop);
+
+  // Fold 512 bits to 128 bits
+  bind(L_fold_512b);
+  set64(CRC32_CONST_96,  const_96,  tmp[8]);
+  set64(CRC32_CONST_160, const_160, tmp[9]);
+
+  fold_128bit_crc32(tmp[1], tmp[0], const_96, const_160, tmp[8], tmp[9], tmp[3], tmp[2]);
+  fold_128bit_crc32(tmp[1], tmp[0], const_96, const_160, tmp[8], tmp[9], tmp[5], tmp[4]);
+  fold_128bit_crc32(tmp[1], tmp[0], const_96, const_160, tmp[8], tmp[9], tmp[7], tmp[6]);
+  dec(len, 48);
+
+  // Fold the rest of 128 bits data chunks
+  bind(L_fold_tail);
+  mov(32, G4);
+  cmp_and_br_short(len, G4, Assembler::lessEqualUnsigned, Assembler::pt, L_fold_128b);
+
+  set64(CRC32_CONST_96,  const_96,  tmp[8]);
+  set64(CRC32_CONST_160, const_160, tmp[9]);
+
+  bind(L_fold_tail_loop);
+  fold_128bit_crc32(tmp[1], tmp[0], const_96, const_160, tmp[2], tmp[3], buf, 0);
+  sub(len, 16, len);
+  cmp_and_br_short(len, G4, Assembler::greaterEqualUnsigned, Assembler::pt, L_fold_tail_loop);
+
+  // Fold the 128 bits in tmps 0 - 1 into tmp 1
+  bind(L_fold_128b);
+
+  set64(CRC32_CONST_64, const_64, tmp[4]);
+
+  xmulx(const_64, tmp[0], tmp[2]);
+  xmulxhi(const_64, tmp[0], tmp[3]);
+
+  srl(tmp[2], G0, tmp[4]);
+  xmulx(const_64, tmp[4], tmp[4]);
+
+  srlx(tmp[2], 32, tmp[2]);
+  sllx(tmp[3], 32, tmp[3]);
+  or3(tmp[2], tmp[3], tmp[2]);
+
+  xor3(tmp[4], tmp[1], tmp[4]);
+  xor3(tmp[4], tmp[2], tmp[1]);
+  dec(len, 8);
+
+  // Use table lookup for the 8 bytes left in tmp[1]
+  dec(len, 8);
+
+  // 8 8-bit folds to compute 32-bit CRC.
+  for (int j = 0; j < 4; j++) {
+    fold_8bit_crc32(tmp[1], table, tmp[2], tmp[3]);
+  }
+  srl(tmp[1], G0, crc); // move 32 bits to general register
+  for (int j = 0; j < 4; j++) {
+    fold_8bit_crc32(crc, table, tmp[3]);
+  }
+
+  bind(L_8byte_fold_check);
+
+  // Restore int registers saved in FP registers
+  for (int i = 0; i < CRC32_TMP_REG_NUM; i++) {
+    movdtox(as_FloatRegister(2*i), tmp[i]);
+  }
+
+  ba(L_cleanup_check);
+  delayed()->nop();
+
+  // Table look-up method for the remaining few bytes
+  bind(L_cleanup_loop);
+  ldub(buf, 0, O4);
+  inc(buf);
+  dec(len);
+  xor3(O4, crc, O4);
+  and3(O4, 0xFF, O4);
+  sllx(O4, 2, O4);
+  lduw(table, O4, O4);
+  srlx(crc, 8, crc);
+  xor3(O4, crc, crc);
+  bind(L_cleanup_check);
+  nop();
+  cmp_and_br_short(len, 0, Assembler::greaterUnsigned, Assembler::pt, L_cleanup_loop);
+
+  not1(crc);
+}
+
+#define CHUNK_LEN   128          /* 128 x 8B = 1KB */
+#define CHUNK_K1    0x1307a0206  /* reverseBits(pow(x, CHUNK_LEN*8*8*3 - 32) mod P(x)) << 1 */
+#define CHUNK_K2    0x1a0f717c4  /* reverseBits(pow(x, CHUNK_LEN*8*8*2 - 32) mod P(x)) << 1 */
+#define CHUNK_K3    0x0170076fa  /* reverseBits(pow(x, CHUNK_LEN*8*8*1 - 32) mod P(x)) << 1 */
+
+void MacroAssembler::kernel_crc32c(Register crc, Register buf, Register len, Register table) {
+
+  Label L_crc32c_head, L_crc32c_aligned;
+  Label L_crc32c_parallel, L_crc32c_parallel_loop;
+  Label L_crc32c_serial, L_crc32c_x32_loop, L_crc32c_x8, L_crc32c_x8_loop;
+  Label L_crc32c_done, L_crc32c_tail, L_crc32c_return;
+
+  set(ExternalAddress(StubRoutines::crc32c_table_addr()), table);
+
+  cmp_and_br_short(len, 0, Assembler::lessEqual, Assembler::pn, L_crc32c_return);
+
+  // clear upper 32 bits of crc
+  clruwu(crc);
+
+  and3(buf, 7, G4);
+  cmp_and_brx_short(G4, 0, Assembler::equal, Assembler::pt, L_crc32c_aligned);
+
+  mov(8, G1);
+  sub(G1, G4, G4);
+
+  // ------ process the misaligned head (7 bytes or less) ------
+  bind(L_crc32c_head);
+
+  // crc = (crc >>> 8) ^ byteTable[(crc ^ b) & 0xFF];
+  ldub(buf, 0, G1);
+  update_byte_crc32(crc, G1, table);
+
+  inc(buf);
+  dec(len);
+  cmp_and_br_short(len, 0, Assembler::equal, Assembler::pn, L_crc32c_return);
+  dec(G4);
+  cmp_and_br_short(G4, 0, Assembler::greater, Assembler::pt, L_crc32c_head);
+
+  // ------ process the 8-byte-aligned body ------
+  bind(L_crc32c_aligned);
+  nop();
+  cmp_and_br_short(len, 8, Assembler::less, Assembler::pn, L_crc32c_tail);
+
+  // reverse the byte order of lower 32 bits to big endian, and move to FP side
+  movitof_revbytes(crc, F0, G1, G3);
+
+  set(CHUNK_LEN*8*4, G4);
+  cmp_and_br_short(len, G4, Assembler::less, Assembler::pt, L_crc32c_serial);
+
+  // ------ process four 1KB chunks in parallel ------
+  bind(L_crc32c_parallel);
+
+  fzero(FloatRegisterImpl::D, F2);
+  fzero(FloatRegisterImpl::D, F4);
+  fzero(FloatRegisterImpl::D, F6);
+
+  mov(CHUNK_LEN - 1, G4);
+  bind(L_crc32c_parallel_loop);
+  // schedule ldf's ahead of crc32c's to hide the load-use latency
+  ldf(FloatRegisterImpl::D, buf, 0,            F8);
+  ldf(FloatRegisterImpl::D, buf, CHUNK_LEN*8,  F10);
+  ldf(FloatRegisterImpl::D, buf, CHUNK_LEN*16, F12);
+  ldf(FloatRegisterImpl::D, buf, CHUNK_LEN*24, F14);
+  crc32c(F0, F8,  F0);
+  crc32c(F2, F10, F2);
+  crc32c(F4, F12, F4);
+  crc32c(F6, F14, F6);
+  inc(buf, 8);
+  dec(G4);
+  cmp_and_br_short(G4, 0, Assembler::greater, Assembler::pt, L_crc32c_parallel_loop);
+
+  ldf(FloatRegisterImpl::D, buf, 0,            F8);
+  ldf(FloatRegisterImpl::D, buf, CHUNK_LEN*8,  F10);
+  ldf(FloatRegisterImpl::D, buf, CHUNK_LEN*16, F12);
+  crc32c(F0, F8,  F0);
+  crc32c(F2, F10, F2);
+  crc32c(F4, F12, F4);
+
+  inc(buf, CHUNK_LEN*24);
+  ldfl(FloatRegisterImpl::D, buf, G0, F14);  // load in little endian
+  inc(buf, 8);
+
+  prefetch(buf, 0,            Assembler::severalReads);
+  prefetch(buf, CHUNK_LEN*8,  Assembler::severalReads);
+  prefetch(buf, CHUNK_LEN*16, Assembler::severalReads);
+  prefetch(buf, CHUNK_LEN*24, Assembler::severalReads);
+
+  // move to INT side, and reverse the byte order of lower 32 bits to little endian
+  movftoi_revbytes(F0, O4, G1, G4);
+  movftoi_revbytes(F2, O5, G1, G4);
+  movftoi_revbytes(F4, G5, G1, G4);
+
+  // combine the results of 4 chunks
+  set64(CHUNK_K1, G3, G1);
+  xmulx(O4, G3, O4);
+  set64(CHUNK_K2, G3, G1);
+  xmulx(O5, G3, O5);
+  set64(CHUNK_K3, G3, G1);
+  xmulx(G5, G3, G5);
+
+  movdtox(F14, G4);
+  xor3(O4, O5, O5);
+  xor3(G5, O5, O5);
+  xor3(G4, O5, O5);
+
+  // reverse the byte order to big endian, via stack, and move to FP side
+  // TODO: use new revb instruction
+  add(SP, -8, G1);
+  srlx(G1, 3, G1);
+  sllx(G1, 3, G1);
+  stx(O5, G1, G0);
+  ldfl(FloatRegisterImpl::D, G1, G0, F2);  // load in little endian
+
+  crc32c(F6, F2, F0);
+
+  set(CHUNK_LEN*8*4, G4);
+  sub(len, G4, len);
+  cmp_and_br_short(len, G4, Assembler::greaterEqual, Assembler::pt, L_crc32c_parallel);
+  nop();
+  cmp_and_br_short(len, 0, Assembler::equal, Assembler::pt, L_crc32c_done);
+
+  bind(L_crc32c_serial);
+
+  mov(32, G4);
+  cmp_and_br_short(len, G4, Assembler::less, Assembler::pn, L_crc32c_x8);
+
+  // ------ process 32B chunks ------
+  bind(L_crc32c_x32_loop);
+  ldf(FloatRegisterImpl::D, buf, 0, F2);
+  crc32c(F0, F2, F0);
+  ldf(FloatRegisterImpl::D, buf, 8, F2);
+  crc32c(F0, F2, F0);
+  ldf(FloatRegisterImpl::D, buf, 16, F2);
+  crc32c(F0, F2, F0);
+  ldf(FloatRegisterImpl::D, buf, 24, F2);
+  inc(buf, 32);
+  crc32c(F0, F2, F0);
+  dec(len, 32);
+  cmp_and_br_short(len, G4, Assembler::greaterEqual, Assembler::pt, L_crc32c_x32_loop);
+
+  bind(L_crc32c_x8);
+  nop();
+  cmp_and_br_short(len, 8, Assembler::less, Assembler::pt, L_crc32c_done);
+
+  // ------ process 8B chunks ------
+  bind(L_crc32c_x8_loop);
+  ldf(FloatRegisterImpl::D, buf, 0, F2);
+  inc(buf, 8);
+  crc32c(F0, F2, F0);
+  dec(len, 8);
+  cmp_and_br_short(len, 8, Assembler::greaterEqual, Assembler::pt, L_crc32c_x8_loop);
+
+  bind(L_crc32c_done);
+
+  // move to INT side, and reverse the byte order of lower 32 bits to little endian
+  movftoi_revbytes(F0, crc, G1, G3);
+
+  cmp_and_br_short(len, 0, Assembler::equal, Assembler::pt, L_crc32c_return);
+
+  // ------ process the misaligned tail (7 bytes or less) ------
+  bind(L_crc32c_tail);
+
+  // crc = (crc >>> 8) ^ byteTable[(crc ^ b) & 0xFF];
+  ldub(buf, 0, G1);
+  update_byte_crc32(crc, G1, table);
+
+  inc(buf);
+  dec(len);
+  cmp_and_br_short(len, 0, Assembler::greater, Assembler::pt, L_crc32c_tail);
+
+  bind(L_crc32c_return);
+  nop();
 }

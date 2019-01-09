@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 SAP AG.  All Rights Reserved.
+ * Copyright (c) 2013 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,13 +25,21 @@
  * @test
  * @bug 8007898
  * @summary Incorrect optimization of Memory Barriers in Matcher::post_store_load_barrier().
- * @run main/othervm -Xbatch -XX:+IgnoreUnrecognizedVMOptions -XX:CICompilerCount=1 -XX:-TieredCompilation -XX:+StressGCM -XX:+StressLCM DekkerTest
- * @run main/othervm -Xbatch -XX:+IgnoreUnrecognizedVMOptions -XX:CICompilerCount=1 -XX:-TieredCompilation -XX:+StressGCM -XX:+StressLCM DekkerTest
- * @run main/othervm -Xbatch -XX:+IgnoreUnrecognizedVMOptions -XX:CICompilerCount=1 -XX:-TieredCompilation -XX:+StressGCM -XX:+StressLCM DekkerTest
+ * @run main/othervm -Xbatch -XX:+UnlockDiagnosticVMOptions -XX:+IgnoreUnrecognizedVMOptions
+ *      -XX:-TieredCompilation -XX:CICompilerCount=1 -XX:+StressGCM -XX:+StressLCM
+ *      compiler.membars.DekkerTest
+ * @run main/othervm -Xbatch -XX:+UnlockDiagnosticVMOptions -XX:+IgnoreUnrecognizedVMOptions
+ *      -XX:-TieredCompilation -XX:CICompilerCount=1 -XX:+StressGCM -XX:+StressLCM
+ *      compiler.membars.DekkerTest
+ * @run main/othervm -Xbatch -XX:+UnlockDiagnosticVMOptions -XX:+IgnoreUnrecognizedVMOptions
+ *      -XX:-TieredCompilation -XX:CICompilerCount=1 -XX:+StressGCM -XX:+StressLCM
+ *      compiler.membars.DekkerTest
  * @author Martin Doerr martin DOT doerr AT sap DOT com
  *
  * Run 3 times since the failure is intermittent.
  */
+
+package compiler.membars;
 
 public class DekkerTest {
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015 Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,10 +23,10 @@
 
 /**
  * @test
- * @bug 8016846 8024341 8071479
+ * @bug 8016846 8024341 8071479 8145006
  * @summary Unit tests stream and lambda-based methods on Pattern and Matcher
  * @library ../stream/bootlib
- * @build java.util.stream.OpTestCase
+ * @build java.base/java.util.stream.OpTestCase
  * @run testng/othervm PatternStreamTest
  */
 
@@ -42,6 +42,7 @@ import java.util.function.Supplier;
 import java.util.regex.MatchResult;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.LambdaTestHelpers;
 import java.util.stream.OpTestCase;
 import java.util.stream.Stream;
@@ -183,6 +184,20 @@ public class PatternStreamTest extends OpTestCase {
                 .stream(s -> s.map(MatchResultHolder::new))
                 .expectedResult(expected)
                 .exercise();
+    }
+
+    @Test
+    public void testLateBinding() {
+        Pattern pattern = Pattern.compile(",");
+
+        StringBuilder sb = new StringBuilder("a,b,c,d,e");
+        Stream<String> stream = pattern.splitAsStream(sb);
+        sb.setLength(3);
+        assertEquals(Arrays.asList("a", "b"), stream.collect(Collectors.toList()));
+
+        stream = pattern.splitAsStream(sb);
+        sb.append(",f,g");
+        assertEquals(Arrays.asList("a", "b", "f", "g"), stream.collect(Collectors.toList()));
     }
 
     public void testFailfastMatchResults() {

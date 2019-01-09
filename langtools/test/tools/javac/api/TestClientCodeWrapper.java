@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,9 +39,10 @@ import javax.annotation.processing.*;
 import javax.lang.model.*;
 import javax.lang.model.element.*;
 import javax.tools.*;
+import javax.tools.JavaFileObject.Kind;
+
 import com.sun.source.util.*;
 import com.sun.tools.javac.api.*;
-import javax.tools.JavaFileObject.Kind;
 
 public class TestClientCodeWrapper extends JavacTestingAbstractProcessor {
     public static void main(String... args) throws Exception {
@@ -60,7 +61,8 @@ public class TestClientCodeWrapper extends JavacTestingAbstractProcessor {
         try (StandardJavaFileManager fm = compiler.getStandardFileManager(null, null, null)) {
             defaultFileManager = fm;
 
-            for (Method m: getMethodsExcept(JavaFileManager.class, "close", "getJavaFileForInput")) {
+            for (Method m: getMethodsExcept(JavaFileManager.class,
+                        "close", "getJavaFileForInput", "getLocationForModule", "getServiceLoader", "contains")) {
                 test(m);
             }
 
@@ -131,6 +133,7 @@ public class TestClientCodeWrapper extends JavacTestingAbstractProcessor {
         PrintWriter pw = new PrintWriter(sw);
 
         List<String> javacOptions = Arrays.asList(
+                "--add-exports", "jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
                 "-extdirs", extDirs.getPath(), // for use by filemanager handleOption
                 "-processor", TestClientCodeWrapper.class.getName()
                 );
@@ -320,6 +323,12 @@ public class TestClientCodeWrapper extends JavacTestingAbstractProcessor {
         }
 
         @Override
+        public <S> ServiceLoader getServiceLoader(Location location, Class<S> service) throws IOException {
+            throwUserExceptionIfNeeded(fileManagerMethod, "getServiceLoader");
+            return super.getServiceLoader(location, service);
+        }
+
+        @Override
         public Iterable<JavaFileObject> list(Location location, String packageName, Set<Kind> kinds, boolean recurse) throws IOException {
             throwUserExceptionIfNeeded(fileManagerMethod, "list");
             return wrap(super.list(location, packageName, kinds, recurse));
@@ -391,8 +400,38 @@ public class TestClientCodeWrapper extends JavacTestingAbstractProcessor {
             return super.isSupportedOption(option);
         }
 
+        @Override
+        public Location getLocationForModule(Location location, String moduleName) throws IOException {
+            throwUserExceptionIfNeeded(fileManagerMethod, "getLocationForModule");
+            return super.getLocationForModule(location, moduleName);
+        }
+
+        @Override
+        public Location getLocationForModule(Location location, JavaFileObject fo) throws IOException {
+            throwUserExceptionIfNeeded(fileManagerMethod, "getLocationForModule");
+            return super.getLocationForModule(location, fo);
+        }
+
+        @Override
+        public String inferModuleName(Location location) throws IOException {
+            throwUserExceptionIfNeeded(fileManagerMethod, "inferModuleName");
+            return super.inferModuleName(location);
+        }
+
+        @Override
+        public Iterable<Set<Location>> listLocationsForModules(Location location) throws IOException {
+            throwUserExceptionIfNeeded(fileManagerMethod, "listLocationsForModules");
+            return super.listLocationsForModules(location);
+        }
+
+        @Override
+        public boolean contains(Location location, FileObject fo) throws IOException {
+            throwUserExceptionIfNeeded(fileManagerMethod, "contains");
+            return super.contains(location, fo);
+        }
+
         public FileObject wrap(FileObject fo) {
-            if (fileObjectMethod == null)
+            if (fileObjectMethod == null || fo == null)
                 return fo;
             return new UserFileObject(fileObjectMethod, (JavaFileObject)fo);
         }
@@ -405,7 +444,7 @@ public class TestClientCodeWrapper extends JavacTestingAbstractProcessor {
         }
 
         public JavaFileObject wrap(JavaFileObject fo) {
-            if (fileObjectMethod == null)
+            if (fileObjectMethod == null || fo == null)
                 return fo;
             return new UserFileObject(fileObjectMethod, fo);
         }

@@ -31,6 +31,7 @@ text: .text%Java_sun_reflect_Reflection_getCallerClass__;
 text: .text%Java_sun_reflect_Reflection_getCallerClass__I;
 text: .text%Java_java_lang_Class_forName0;
 text: .text%Java_java_lang_String_intern;
+text: .text%Java_java_lang_StringUTF16_isBigEndian;
 text: .text%Java_sun_reflect_NativeConstructorAccessorImpl_newInstance0;
 text: .text%Java_java_lang_Throwable_fillInStackTrace;
 text: .text%Java_java_lang_System_setOut0;
@@ -75,13 +76,10 @@ text: .text%Java_java_security_AccessController_doPrivileged__Ljava_security_Pri
 text: .text%JNU_GetEnv;
 text: .text%Java_java_io_UnixFileSystem_checkAccess;
 text: .text%Java_sun_reflect_NativeMethodAccessorImpl_invoke0;
-text: .text%Java_java_io_FileInputStream_available;
+text: .text%Java_java_io_FileInputStream_available0;
 text: .text%Java_java_lang_reflect_Array_newArray;
-text: .text%Java_java_lang_Throwable_getStackTraceDepth;
-text: .text%Java_java_lang_Throwable_getStackTraceElement;
+text: .text%Java_java_lang_StackTraceElement_initStackTraceElements;
 text: .text%Java_java_lang_System_identityHashCode;
-text: .text%Java_sun_misc_Signal_findSignal;
-text: .text%Java_sun_misc_Signal_handle0;
 text: .text%JNU_NotifyAll;
 # Test LoadFrame
 text: .text%JNU_CallMethodByName;

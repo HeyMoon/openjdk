@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,7 +31,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 import javax.activation.DataSource;
-import javax.xml.soap.AttachmentPart;
 import com.sun.xml.internal.org.jvnet.mimepull.MIMEConfig;
 import com.sun.xml.internal.org.jvnet.mimepull.MIMEMessage;
 import com.sun.xml.internal.org.jvnet.mimepull.MIMEPart;
@@ -114,6 +113,7 @@ public class MimePullMultipart  extends MimeMultipart {
        parsed = true;
     }
 
+    @Override
     protected  void parse() throws MessagingException {
         parseAll();
     }

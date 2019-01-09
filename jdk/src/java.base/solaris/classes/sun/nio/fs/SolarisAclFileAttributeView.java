@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,7 @@ import java.nio.file.*;
 import java.nio.file.attribute.*;
 import java.util.*;
 import java.io.IOException;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 import static sun.nio.fs.UnixConstants.*;
 import static sun.nio.fs.SolarisConstants.*;
@@ -309,7 +309,12 @@ class SolarisAclFileAttributeView
         checkAccess(file, true, false);
 
         // open file (will fail if file is a link and not following links)
-        int fd = file.openForAttributeAccess(followLinks);
+        int fd = -1;
+        try {
+            fd = file.openForAttributeAccess(followLinks);
+        } catch (UnixException x) {
+            x.rethrowAsIOException(file);
+        }
         try {
             long address = unsafe.allocateMemory(SIZEOF_ACE_T * MAX_ACL_ENTRIES);
             try {
@@ -338,7 +343,12 @@ class SolarisAclFileAttributeView
         checkAccess(file, false, true);
 
         // open file (will fail if file is a link and not following links)
-        int fd = file.openForAttributeAccess(followLinks);
+        int fd = -1;
+        try {
+            fd = file.openForAttributeAccess(followLinks);
+        } catch (UnixException x) {
+            x.rethrowAsIOException(file);
+        }
         try {
             // SECURITY: need to copy list as can change during processing
             acl = new ArrayList<AclEntry>(acl);

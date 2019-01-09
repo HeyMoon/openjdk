@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -205,14 +205,19 @@ static BOOL initShellProcs()
 static jstring jstringFromSTRRET(JNIEnv* env, LPITEMIDLIST pidl, STRRET* pStrret) {
     switch (pStrret->uType) {
         case STRRET_CSTR :
-            return JNU_NewStringPlatform(env, reinterpret_cast<const char*>(pStrret->cStr));
+            if (pStrret->cStr != NULL) {
+                return JNU_NewStringPlatform(env, reinterpret_cast<const char*>(pStrret->cStr));
+            }
+            break;
         case STRRET_OFFSET :
             // Note : this may need to be WCHAR instead
             return JNU_NewStringPlatform(env,
                                          (CHAR*)pidl + pStrret->uOffset);
         case STRRET_WSTR :
-            return env->NewString(reinterpret_cast<const jchar*>(pStrret->pOleStr),
-                static_cast<jsize>(wcslen(pStrret->pOleStr)));
+            if (pStrret->pOleStr != NULL) {
+                return env->NewString(reinterpret_cast<const jchar*>(pStrret->pOleStr),
+                    static_cast<jsize>(wcslen(pStrret->pOleStr)));
+            }
     }
     return NULL;
 }
@@ -686,6 +691,9 @@ JNIEXPORT jlong JNICALL Java_sun_awt_shell_Win32ShellFolder2_getLinkLocation
       case STRRET_WSTR :
         wstr = strret.pOleStr;
         break;
+
+      default:
+        return NULL;
     }
 
     IShellLinkW* psl;
@@ -927,12 +935,17 @@ JNIEXPORT void JNICALL Java_sun_awt_shell_Win32ShellFolder2_disposeIcon
 /*
  * Class:     sun_awt_shell_Win32ShellFolder2
  * Method:    getIconBits
- * Signature: (JI)[I
+ * Signature: (J)[I
  */
 JNIEXPORT jintArray JNICALL Java_sun_awt_shell_Win32ShellFolder2_getIconBits
-    (JNIEnv* env, jclass cls, jlong hicon, jint iconSize)
+    (JNIEnv* env, jclass cls, jlong hicon)
 {
+    const int MAX_ICON_SIZE = 128;
+    int iconSize = 0;
     jintArray iconBits = NULL;
+
+    BITMAP bmp;
+    memset(&bmp, 0, sizeof(BITMAP));
 
     // Get the icon info
     ICONINFO iconInfo;
@@ -940,6 +953,25 @@ JNIEXPORT jintArray JNICALL Java_sun_awt_shell_Win32ShellFolder2_getIconBits
         // Get the screen DC
         HDC dc = GetDC(NULL);
         if (dc != NULL) {
+            // find out the icon size in order to deal with different sizes
+            // delivered depending on HiDPI mode or SD DPI mode.
+            if (iconInfo.hbmColor) {
+                const int nWrittenBytes = GetObject(iconInfo.hbmColor, sizeof(bmp), &bmp);
+                if(nWrittenBytes > 0) {
+                    iconSize = bmp.bmWidth;
+                }
+            } else if (iconInfo.hbmMask) {
+                // Icon has no color plane, image data stored in mask
+                const int nWrittenBytes = GetObject(iconInfo.hbmMask, sizeof(bmp), &bmp);
+                if (nWrittenBytes > 0) {
+                    iconSize = bmp.bmWidth;
+                }
+            }
+            // limit iconSize to MAX_ICON_SIZE, so that the colorBits and maskBits
+            // arrays are big enough.
+            // (logic: rather show bad icons than overrun the array size)
+            iconSize = iconSize > MAX_ICON_SIZE ? MAX_ICON_SIZE : iconSize;
+
             // Set up BITMAPINFO
             BITMAPINFO bmi;
             memset(&bmi, 0, sizeof(BITMAPINFO));
@@ -951,7 +983,7 @@ JNIEXPORT jintArray JNICALL Java_sun_awt_shell_Win32ShellFolder2_getIconBits
             bmi.bmiHeader.biCompression = BI_RGB;
             // Extract the color bitmap
             int nBits = iconSize * iconSize;
-            long colorBits[1024];
+            long colorBits[MAX_ICON_SIZE * MAX_ICON_SIZE];
             GetDIBits(dc, iconInfo.hbmColor, 0, iconSize, colorBits, &bmi, DIB_RGB_COLORS);
             // XP supports alpha in some icons, and depending on device.
             // This should take precedence over the icon mask bits.
@@ -966,7 +998,7 @@ JNIEXPORT jintArray JNICALL Java_sun_awt_shell_Win32ShellFolder2_getIconBits
             }
             if (!hasAlpha) {
                 // Extract the mask bitmap
-                long maskBits[1024];
+                long maskBits[MAX_ICON_SIZE * MAX_ICON_SIZE];
                 GetDIBits(dc, iconInfo.hbmMask, 0, iconSize, maskBits, &bmi, DIB_RGB_COLORS);
                 // Copy the mask alphas into the color bits
                 for (int i = 0; i < nBits; i++) {
@@ -998,10 +1030,10 @@ JNIEXPORT jintArray JNICALL Java_sun_awt_shell_Win32ShellFolder2_getIconBits
 /*
  * Class:     sun_awt_shell_Win32ShellFolder2
  * Method:    getStandardViewButton0
- * Signature: (I)[I
+ * Signature: (IZ)[I
  */
 JNIEXPORT jintArray JNICALL Java_sun_awt_shell_Win32ShellFolder2_getStandardViewButton0
-    (JNIEnv* env, jclass cls, jint iconIndex)
+    (JNIEnv* env, jclass cls, jint iconIndex, jboolean smallIcon)
 {
     jintArray result = NULL;
 
@@ -1011,7 +1043,8 @@ JNIEXPORT jintArray JNICALL Java_sun_awt_shell_Win32ShellFolder2_getStandardView
         NULL, NULL, NULL, NULL);
 
     if (hWndToolbar != NULL) {
-        SendMessage(hWndToolbar, TB_LOADIMAGES, (WPARAM)IDB_VIEW_SMALL_COLOR, (LPARAM)HINST_COMMCTRL);
+        WPARAM size = smallIcon ? (WPARAM)IDB_VIEW_SMALL_COLOR : (WPARAM)IDB_VIEW_LARGE_COLOR;
+        SendMessage(hWndToolbar, TB_LOADIMAGES, size, (LPARAM)HINST_COMMCTRL);
 
         HIMAGELIST hImageList = (HIMAGELIST) SendMessage(hWndToolbar, TB_GETIMAGELIST, 0, 0);
 
@@ -1019,7 +1052,7 @@ JNIEXPORT jintArray JNICALL Java_sun_awt_shell_Win32ShellFolder2_getStandardView
             HICON hIcon = ImageList_GetIcon(hImageList, iconIndex, ILD_TRANSPARENT);
 
             if (hIcon != NULL) {
-                result = Java_sun_awt_shell_Win32ShellFolder2_getIconBits(env, cls, ptr_to_jlong(hIcon), 16);
+                result = Java_sun_awt_shell_Win32ShellFolder2_getIconBits(env, cls, ptr_to_jlong(hIcon));
 
                 DestroyIcon(hIcon);
             }

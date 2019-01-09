@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -108,7 +108,7 @@ import static com.sun.tools.javac.util.Position.NOPOS;
  *          jdk.compiler/com.sun.tools.javac.file
  *          jdk.compiler/com.sun.tools.javac.tree
  *          jdk.compiler/com.sun.tools.javac.util
- * @run main TreePosTest -q -r .
+ * @run main/othervm TreePosTest -q -r .
  */
 public class TreePosTest {
     /**
@@ -281,7 +281,7 @@ public class TreePosTest {
         JavacTool tool = JavacTool.create();
         r.errors = 0;
         Iterable<? extends JavaFileObject> files = fm.getJavaFileObjects(file);
-        JavacTask task = tool.getTask(pw, fm, r, Collections.<String>emptyList(), null, files);
+        JavacTask task = tool.getTask(pw, fm, r, List.of("-proc:none"), null, files);
         Iterable<? extends CompilationUnitTree> trees = task.parse();
         pw.flush();
         if (r.errors > 0)

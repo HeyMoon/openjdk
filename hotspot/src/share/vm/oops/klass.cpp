@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "gc/shared/collectedHeap.inline.hpp"
+#include "logging/log.hpp"
 #include "memory/heapInspection.hpp"
 #include "memory/metadataFactory.hpp"
 #include "memory/oopFactory.hpp"
@@ -35,7 +36,7 @@
 #include "oops/instanceKlass.hpp"
 #include "oops/klass.inline.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/orderAccess.inline.hpp"
 #include "trace/traceMacros.hpp"
 #include "utilities/macros.hpp"
@@ -43,6 +44,20 @@
 #if INCLUDE_ALL_GCS
 #include "gc/g1/g1SATBCardTableModRefBS.hpp"
 #endif // INCLUDE_ALL_GCS
+
+bool Klass::is_cloneable() const {
+  return _access_flags.is_cloneable_fast() ||
+         is_subtype_of(SystemDictionary::Cloneable_klass());
+}
+
+void Klass::set_is_cloneable() {
+  if (name() != vmSymbols::java_lang_invoke_MemberName()) {
+    _access_flags.set_is_cloneable_fast();
+  } else {
+    assert(is_final(), "no subclasses allowed");
+    // MemberName cloning should not be intrinsified and always happen in JVM_Clone.
+  }
+}
 
 void Klass::set_name(Symbol* n) {
   _name = n;
@@ -136,7 +151,7 @@ Klass* Klass::find_field(Symbol* name, Symbol* sig, fieldDescriptor* fd) const {
   return NULL;
 }
 
-Method* Klass::uncached_lookup_method(Symbol* name, Symbol* signature, OverpassLookupMode overpass_mode) const {
+Method* Klass::uncached_lookup_method(const Symbol* name, const Symbol* signature, OverpassLookupMode overpass_mode) const {
 #ifdef ASSERT
   tty->print_cr("Error: uncached_lookup_method called on a klass oop."
                 " Likely error: reflection method does not correctly"
@@ -151,45 +166,18 @@ void* Klass::operator new(size_t size, ClassLoaderData* loader_data, size_t word
                              MetaspaceObj::ClassType, THREAD);
 }
 
-Klass::Klass() {
-  Klass* k = this;
+// "Normal" instantiation is preceeded by a MetaspaceObj allocation
+// which zeros out memory - calloc equivalent.
+// The constructor is also used from init_self_patching_vtbl_list,
+// which doesn't zero out the memory before calling the constructor.
+// Need to set the _java_mirror field explicitly to not hit an assert that the field
+// should be NULL before setting it.
+Klass::Klass() : _prototype_header(markOopDesc::prototype()),
+                 _shared_class_path_index(-1),
+                 _java_mirror(NULL) {
 
-  // Preinitialize supertype information.
-  // A later call to initialize_supers() may update these settings:
-  set_super(NULL);
-  for (juint i = 0; i < Klass::primary_super_limit(); i++) {
-    _primary_supers[i] = NULL;
-  }
-  set_secondary_supers(NULL);
-  set_secondary_super_cache(NULL);
-  _primary_supers[0] = k;
+  _primary_supers[0] = this;
   set_super_check_offset(in_bytes(primary_supers_offset()));
-
-  // The constructor is used from init_self_patching_vtbl_list,
-  // which doesn't zero out the memory before calling the constructor.
-  // Need to set the field explicitly to not hit an assert that the field
-  // should be NULL before setting it.
-  _java_mirror = NULL;
-
-  set_modifier_flags(0);
-  set_layout_helper(Klass::_lh_neutral_value);
-  set_name(NULL);
-  AccessFlags af;
-  af.set_flags(0);
-  set_access_flags(af);
-  set_subklass(NULL);
-  set_next_sibling(NULL);
-  set_next_link(NULL);
-  TRACE_INIT_ID(this);
-
-  set_prototype_header(markOopDesc::prototype());
-  set_biased_lock_revocation_count(0);
-  set_last_biased_lock_bulk_revocation_time(0);
-
-  // The klass doesn't have any references at this point.
-  clear_modified_oops();
-  clear_accumulated_modified_oops();
-  _shared_class_path_index = -1;
 }
 
 jint Klass::array_layout_helper(BasicType etype) {
@@ -348,7 +336,7 @@ GrowableArray<Klass*>* Klass::compute_secondary_supers(int num_extra_slots) {
 
 
 InstanceKlass* Klass::superklass() const {
-  assert(super() == NULL || super()->oop_is_instance(), "must be instance klass");
+  assert(super() == NULL || super()->is_instance_klass(), "must be instance klass");
   return _super == NULL ? NULL : InstanceKlass::cast(_super);
 }
 
@@ -413,9 +401,9 @@ void Klass::clean_weak_klass_links(BoolObjectClosure* is_alive, bool clean_alive
     Klass* sub = current->subklass();
     while (sub != NULL && !sub->is_loader_alive(is_alive)) {
 #ifndef PRODUCT
-      if (TraceClassUnloading && WizardMode) {
+      if (log_is_enabled(Trace, class, unload)) {
         ResourceMark rm;
-        tty->print_cr("[Unlinking class (subclass) %s]", sub->external_name());
+        log_trace(class, unload)("unlinking class (subclass): %s", sub->external_name());
       }
 #endif
       sub = sub->next_sibling();
@@ -428,9 +416,9 @@ void Klass::clean_weak_klass_links(BoolObjectClosure* is_alive, bool clean_alive
     // Find and set the first alive sibling
     Klass* sibling = current->next_sibling();
     while (sibling != NULL && !sibling->is_loader_alive(is_alive)) {
-      if (TraceClassUnloading && WizardMode) {
+      if (log_is_enabled(Trace, class, unload)) {
         ResourceMark rm;
-        tty->print_cr("[Unlinking class (sibling) %s]", sibling->external_name());
+        log_trace(class, unload)("[Unlinking class (sibling) %s]", sibling->external_name());
       }
       sibling = sibling->next_sibling();
     }
@@ -440,10 +428,15 @@ void Klass::clean_weak_klass_links(BoolObjectClosure* is_alive, bool clean_alive
     }
 
     // Clean the implementors list and method data.
-    if (clean_alive_klasses && current->oop_is_instance()) {
+    if (clean_alive_klasses && current->is_instance_klass()) {
       InstanceKlass* ik = InstanceKlass::cast(current);
-      ik->clean_implementors_list(is_alive);
-      ik->clean_method_data(is_alive);
+      ik->clean_weak_instanceklass_links(is_alive);
+
+      // JVMTI RedefineClasses creates previous versions that are not in
+      // the class hierarchy, so process them here.
+      while ((ik = ik->previous_versions()) != NULL) {
+        ik->clean_weak_instanceklass_links(is_alive);
+      }
     }
   }
 }
@@ -495,6 +488,7 @@ void Klass::oops_do(OopClosure* cl) {
 
 void Klass::remove_unshareable_info() {
   assert (DumpSharedSpaces, "only called for DumpSharedSpaces");
+  TRACE_REMOVE_ID(this);
 
   set_subklass(NULL);
   set_next_sibling(NULL);
@@ -507,7 +501,8 @@ void Klass::remove_unshareable_info() {
 }
 
 void Klass::restore_unshareable_info(ClassLoaderData* loader_data, Handle protection_domain, TRAPS) {
-  TRACE_INIT_ID(this);
+  TRACE_RESTORE_ID(this);
+
   // If an exception happened during CDS restore, some of these fields may already be
   // set.  We leave the class on the CLD list, even if incomplete so that we don't
   // modify the CLD list outside a safepoint.
@@ -525,7 +520,21 @@ void Klass::restore_unshareable_info(ClassLoaderData* loader_data, Handle protec
   // gotten an OOM later but keep the mirror if it was created.
   if (java_mirror() == NULL) {
     Handle loader = loader_data->class_loader();
-    java_lang_Class::create_mirror(this, loader, protection_domain, CHECK);
+    ModuleEntry* module_entry = NULL;
+    Klass* k = this;
+    if (k->is_objArray_klass()) {
+      k = ObjArrayKlass::cast(k)->bottom_klass();
+    }
+    // Obtain klass' module.
+    if (k->is_instance_klass()) {
+      InstanceKlass* ik = (InstanceKlass*) k;
+      module_entry = ik->module();
+    } else {
+      module_entry = ModuleEntryTable::javabase_moduleEntry();
+    }
+    // Obtain java.lang.Module, if available
+    Handle module_handle(THREAD, ((module_entry != NULL) ? JNIHandles::resolve(module_entry->module()) : (oop)NULL));
+    java_lang_Class::create_mirror(this, loader, module_handle, protection_domain, CHECK);
   }
 }
 
@@ -558,9 +567,11 @@ Klass* Klass::array_klass_impl(bool or_null, TRAPS) {
 
 oop Klass::class_loader() const { return class_loader_data()->class_loader(); }
 
+// In product mode, this function doesn't have virtual function calls so
+// there might be some performance advantage to handling InstanceKlass here.
 const char* Klass::external_name() const {
-  if (oop_is_instance()) {
-    InstanceKlass* ik = (InstanceKlass*) this;
+  if (is_instance_klass()) {
+    const InstanceKlass* ik = static_cast<const InstanceKlass*>(this);
     if (ik->is_anonymous()) {
       intptr_t hash = 0;
       if (ik->java_mirror() != NULL) {
@@ -685,43 +696,41 @@ void Klass::oop_verify_on(oop obj, outputStream* st) {
   guarantee(obj->klass()->is_klass(), "klass field is not a klass");
 }
 
+klassVtable* Klass::vtable() const {
+  return new klassVtable(this, start_of_vtable(), vtable_length() / vtableEntry::size());
+}
+
+vtableEntry* Klass::start_of_vtable() const {
+  return (vtableEntry*) ((address)this + in_bytes(vtable_start_offset()));
+}
+
+Method* Klass::method_at_vtable(int index)  {
+#ifndef PRODUCT
+  assert(index >= 0, "valid vtable index");
+  if (DebugVtables) {
+    verify_vtable_index(index);
+  }
+#endif
+  return start_of_vtable()[index].method();
+}
+
+ByteSize Klass::vtable_start_offset() {
+  return in_ByteSize(InstanceKlass::header_size() * wordSize);
+}
+
 #ifndef PRODUCT
 
 bool Klass::verify_vtable_index(int i) {
-  if (oop_is_instance()) {
-    int limit = ((InstanceKlass*)this)->vtable_length()/vtableEntry::size();
-    assert(i >= 0 && i < limit, err_msg("index %d out of bounds %d", i, limit));
-  } else {
-    assert(oop_is_array(), "Must be");
-    int limit = ((ArrayKlass*)this)->vtable_length()/vtableEntry::size();
-    assert(i >= 0 && i < limit, err_msg("index %d out of bounds %d", i, limit));
-  }
+  int limit = vtable_length()/vtableEntry::size();
+  assert(i >= 0 && i < limit, "index %d out of bounds %d", i, limit);
   return true;
 }
 
 bool Klass::verify_itable_index(int i) {
-  assert(oop_is_instance(), "");
+  assert(is_instance_klass(), "");
   int method_count = klassItable::method_count_for_interface(this);
   assert(i >= 0 && i < method_count, "index out of bounds");
   return true;
-}
-
-#endif
-
-/////////////// Unit tests ///////////////
-
-#ifndef PRODUCT
-
-class TestKlass {
- public:
-  static void test_oop_is_instanceClassLoader() {
-    assert(SystemDictionary::ClassLoader_klass()->oop_is_instanceClassLoader(), "assert");
-    assert(!SystemDictionary::String_klass()->oop_is_instanceClassLoader(), "assert");
-  }
-};
-
-void TestKlass_test() {
-  TestKlass::test_oop_is_instanceClassLoader();
 }
 
 #endif

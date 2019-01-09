@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -78,6 +78,9 @@ import com.sun.xml.internal.bind.v2.runtime.output.XmlOutput;
 import com.sun.xml.internal.bind.v2.util.FatalAdapter;
 
 import java.net.URISyntaxException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
 import org.w3c.dom.Document;
 import org.w3c.dom.Node;
 import org.xml.sax.SAXException;
@@ -95,6 +98,8 @@ import org.xml.sax.helpers.XMLFilterImpl;
  */
 public /*to make unit tests happy*/ final class MarshallerImpl extends AbstractMarshallerImpl implements ValidationEventHandler
 {
+    private static final Logger LOGGER = Logger.getLogger(MarshallerImpl.class.getName());
+
     /** Indentation string. Default is four whitespaces. */
     private String indent = "    ";
 
@@ -160,7 +165,7 @@ public /*to make unit tests happy*/ final class MarshallerImpl extends AbstractM
 
     @Override
     public void marshal(Object obj, XMLStreamWriter writer) throws JAXBException {
-        write(obj, XMLStreamWriterOutput.create(writer,context), new StAXPostInitAction(writer,serializer));
+        write(obj, XMLStreamWriterOutput.create(writer,context, escapeHandler), new StAXPostInitAction(writer,serializer));
     }
 
     @Override
@@ -327,12 +332,14 @@ public /*to make unit tests happy*/ final class MarshallerImpl extends AbstractM
                 toBeFlushed.flush();
             } catch (IOException e) {
                 // ignore
+                LOGGER.log(Level.SEVERE, e.getMessage(), e);
             }
         if(toBeClosed!=null)
             try {
                 toBeClosed.close();
             } catch (IOException e) {
                 // ignore
+                LOGGER.log(Level.SEVERE, e.getMessage(), e);
             }
         toBeFlushed = null;
         toBeClosed = null;
@@ -363,6 +370,15 @@ public /*to make unit tests happy*/ final class MarshallerImpl extends AbstractM
         serializer.reconcileID();   // extra check
     }
 
+
+    /**
+     * Returns escape handler provided with JAXB context parameters.
+     *
+     * @return escape handler
+     */
+    CharacterEscapeHandler getEscapeHandler() {
+        return escapeHandler;
+    }
 
     //
     //
@@ -429,13 +445,14 @@ public /*to make unit tests happy*/ final class MarshallerImpl extends AbstractM
         if(encoding.equals("UTF-8")) {
             Encoded[] table = context.getUTF8NameTable();
             final UTF8XmlOutput out;
+            CharacterEscapeHandler ceh = createEscapeHandler(encoding);
             if(isFormattedOutput())
-                out = new IndentingUTF8XmlOutput(os, indent, table, escapeHandler);
+                out = new IndentingUTF8XmlOutput(os, indent, table, ceh);
             else {
                 if(c14nSupport)
-                    out = new C14nXmlOutput(os, table, context.c14nSupport, escapeHandler);
+                    out = new C14nXmlOutput(os, table, context.c14nSupport, ceh);
                 else
-                    out = new UTF8XmlOutput(os, table, escapeHandler);
+                    out = new UTF8XmlOutput(os, table, ceh);
             }
             if(header!=null)
                 out.setHeader(header);

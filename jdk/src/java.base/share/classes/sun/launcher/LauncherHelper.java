@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,32 +43,59 @@ import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.io.UnsupportedEncodingException;
+import java.lang.module.Configuration;
+import java.lang.module.FindException;
+import java.lang.module.ModuleDescriptor;
+import java.lang.module.ModuleDescriptor.Requires;
+import java.lang.module.ModuleDescriptor.Exports;
+import java.lang.module.ModuleDescriptor.Opens;
+import java.lang.module.ModuleDescriptor.Provides;
+import java.lang.module.ModuleFinder;
+import java.lang.module.ModuleReference;
+import java.lang.module.ResolvedModule;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.net.URI;
 import java.nio.charset.Charset;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.text.Normalizer;
-import java.util.ResourceBundle;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Locale.Category;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
+import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.jar.Attributes;
 import java.util.jar.JarFile;
 import java.util.jar.Manifest;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
-public enum LauncherHelper {
-    INSTANCE;
+import jdk.internal.misc.VM;
+import jdk.internal.module.ModuleBootstrap;
+import jdk.internal.module.Modules;
+
+public final class LauncherHelper {
+
+    // No instantiation
+    private LauncherHelper() {}
 
     // used to identify JavaFX applications
     private static final String JAVAFX_APPLICATION_MARKER =
@@ -77,7 +104,10 @@ public enum LauncherHelper {
             "javafx.application.Application";
     private static final String JAVAFX_FXHELPER_CLASS_NAME_SUFFIX =
             "sun.launcher.LauncherHelper$FXHelper";
+    private static final String LAUNCHER_AGENT_CLASS = "Launcher-Agent-Class";
     private static final String MAIN_CLASS = "Main-Class";
+    private static final String ADD_EXPORTS = "Add-Exports";
+    private static final String ADD_OPENS = "Add-Opens";
 
     private static StringBuilder outBuf = new StringBuilder();
 
@@ -86,9 +116,9 @@ public enum LauncherHelper {
     private static final String PROP_SETTINGS   = "Property settings:";
     private static final String LOCALE_SETTINGS = "Locale settings:";
 
-    // sync with java.c and sun.misc.VM
+    // sync with java.c and jdk.internal.misc.VM
     private static final String diagprop = "sun.java.launcher.diag";
-    final static boolean trace = sun.misc.VM.getSavedProperty(diagprop) != null;
+    static final boolean trace = VM.getSavedProperty(diagprop) != null;
 
     private static final String defaultBundleName =
             "sun.launcher.resources.launcher";
@@ -97,7 +127,6 @@ public enum LauncherHelper {
                 ResourceBundle.getBundle(defaultBundleName);
     }
     private static PrintStream ostream;
-    private static final ClassLoader scloader = ClassLoader.getSystemClassLoader();
     private static Class<?> appClass; // application class, for GUI/reporting purposes
 
     /*
@@ -123,8 +152,7 @@ public enum LauncherHelper {
      *    line entirely.
      */
     static void showSettings(boolean printToStderr, String optionFlag,
-            long initialHeapSize, long maxHeapSize, long stackSize,
-            boolean isServer) {
+            long initialHeapSize, long maxHeapSize, long stackSize) {
 
         initOutput(printToStderr);
         String opts[] = optionFlag.split(":");
@@ -133,8 +161,7 @@ public enum LauncherHelper {
                 : "all";
         switch (optStr) {
             case "vm":
-                printVmSettings(initialHeapSize, maxHeapSize,
-                                stackSize, isServer);
+                printVmSettings(initialHeapSize, maxHeapSize, stackSize);
                 break;
             case "properties":
                 printProperties();
@@ -143,8 +170,7 @@ public enum LauncherHelper {
                 printLocale();
                 break;
             default:
-                printVmSettings(initialHeapSize, maxHeapSize, stackSize,
-                                isServer);
+                printVmSettings(initialHeapSize, maxHeapSize, stackSize);
                 printProperties();
                 printLocale();
                 break;
@@ -156,7 +182,7 @@ public enum LauncherHelper {
      */
     private static void printVmSettings(
             long initialHeapSize, long maxHeapSize,
-            long stackSize, boolean isServer) {
+            long stackSize) {
 
         ostream.println(VM_SETTINGS);
         if (stackSize != 0L) {
@@ -174,8 +200,6 @@ public enum LauncherHelper {
             ostream.println(INDENT + "Max. Heap Size (Estimated): "
                     + SizePrefix.scaleValue(Runtime.getRuntime().maxMemory()));
         }
-        ostream.println(INDENT + "Ergonomics Machine Class: "
-                + ((isServer) ? "server" : "client"));
         ostream.println(INDENT + "Using VM: "
                 + System.getProperty("java.vm.name"));
         ostream.println();
@@ -363,18 +387,6 @@ public enum LauncherHelper {
     }
 
     /**
-     * Appends the vm Ergo message to the header, already created.
-     * initHelpSystem must be called before using this method.
-     */
-    static void appendVmErgoMessage(boolean isServerClass, String vm) {
-        outBuf = outBuf.append(getLocalizedMessage("java.launcher.ergo.message1",
-                vm));
-        outBuf = (isServerClass) ? outBuf.append(",\n")
-                .append(getLocalizedMessage("java.launcher.ergo.message2"))
-                .append("\n\n") : outBuf.append(".\n\n");
-    }
-
-    /**
      * Appends the last invariant part to the previously created messages,
      * and finishes up the printing to the desired output stream.
      * initHelpSystem must be called before using this method.
@@ -403,8 +415,12 @@ public enum LauncherHelper {
         ostream =  (printToStderr) ? System.err : System.out;
     }
 
+    static void initOutput(PrintStream ps) {
+        ostream = ps;
+    }
+
     static String getMainClassFromJar(String jarname) {
-        String mainValue = null;
+        String mainValue;
         try (JarFile jarFile = new JarFile(jarname)) {
             Manifest manifest = jarFile.getManifest();
             if (manifest == null) {
@@ -414,9 +430,37 @@ public enum LauncherHelper {
             if (mainAttrs == null) {
                 abort(null, "java.launcher.jar.error3", jarname);
             }
+
+            // Main-Class
             mainValue = mainAttrs.getValue(MAIN_CLASS);
             if (mainValue == null) {
                 abort(null, "java.launcher.jar.error3", jarname);
+            }
+
+            // Launcher-Agent-Class (only check for this when Main-Class present)
+            String agentClass = mainAttrs.getValue(LAUNCHER_AGENT_CLASS);
+            if (agentClass != null) {
+                ModuleLayer.boot().findModule("java.instrument").ifPresent(m -> {
+                    try {
+                        String cn = "sun.instrument.InstrumentationImpl";
+                        Class<?> clazz = Class.forName(cn, false, null);
+                        Method loadAgent = clazz.getMethod("loadAgent", String.class);
+                        loadAgent.invoke(null, jarname);
+                    } catch (Throwable e) {
+                        if (e instanceof InvocationTargetException) e = e.getCause();
+                        abort(e, "java.launcher.jar.error4", jarname);
+                    }
+                });
+            }
+
+            // Add-Exports and Add-Opens
+            String exports = mainAttrs.getValue(ADD_EXPORTS);
+            if (exports != null) {
+                addExportsOrOpens(exports, false);
+            }
+            String opens = mainAttrs.getValue(ADD_OPENS);
+            if (opens != null) {
+                addExportsOrOpens(opens, true);
             }
 
             /*
@@ -437,12 +481,37 @@ public enum LauncherHelper {
         return null;
     }
 
+    /**
+     * Process the Add-Exports or Add-Opens value. The value is
+     * {@code <module>/<package> ( <module>/<package>)*}.
+     */
+    static void addExportsOrOpens(String value, boolean open) {
+        for (String moduleAndPackage : value.split(" ")) {
+            String[] s = moduleAndPackage.trim().split("/");
+            if (s.length == 2) {
+                String mn = s[0];
+                String pn = s[1];
+                ModuleLayer.boot()
+                    .findModule(mn)
+                    .filter(m -> m.getDescriptor().packages().contains(pn))
+                    .ifPresent(m -> {
+                        if (open) {
+                            Modules.addOpensToAllUnnamed(m, pn);
+                        } else {
+                            Modules.addExportsToAllUnnamed(m, pn);
+                        }
+                    });
+            }
+        }
+    }
+
     // From src/share/bin/java.c:
-    //   enum LaunchMode { LM_UNKNOWN = 0, LM_CLASS, LM_JAR };
+    //   enum LaunchMode { LM_UNKNOWN = 0, LM_CLASS, LM_JAR, LM_MODULE }
 
     private static final int LM_UNKNOWN = 0;
     private static final int LM_CLASS   = 1;
     private static final int LM_JAR     = 2;
+    private static final int LM_MODULE  = 3;
 
     static void abort(Throwable t, String msgKey, Object... args) {
         if (msgKey != null) {
@@ -459,64 +528,30 @@ public enum LauncherHelper {
     }
 
     /**
-     * This method does the following:
-     * 1. gets the classname from a Jar's manifest, if necessary
-     * 2. loads the class using the System ClassLoader
-     * 3. ensures the availability and accessibility of the main method,
-     *    using signatureDiagnostic method.
-     *    a. does the class exist
-     *    b. is there a main
-     *    c. is the main public
-     *    d. is the main static
-     *    e. does the main take a String array for args
-     * 4. if no main method and if the class extends FX Application, then call
-     *    on FXHelper to determine the main class to launch
-     * 5. and off we go......
+     * This method:
+     * 1. Loads the main class from the module or class path
+     * 2. Checks the public static void main method.
+     * 3. If the main class extends FX Application then call on FXHelper to
+     * perform the launch.
      *
      * @param printToStderr if set, all output will be routed to stderr
      * @param mode LaunchMode as determined by the arguments passed on the
-     * command line
-     * @param what either the jar file to launch or the main class when using
-     * LM_CLASS mode
+     *             command line
+     * @param what the module name[/class], JAR file, or the main class
+     *             depending on the mode
+     *
      * @return the application's main class
      */
     public static Class<?> checkAndLoadMain(boolean printToStderr,
                                             int mode,
                                             String what) {
         initOutput(printToStderr);
-        // get the class name
-        String cn = null;
-        switch (mode) {
-            case LM_CLASS:
-                cn = what;
-                break;
-            case LM_JAR:
-                cn = getMainClassFromJar(what);
-                break;
-            default:
-                // should never happen
-                throw new InternalError("" + mode + ": Unknown launch mode");
-        }
-        cn = cn.replace('/', '.');
-        Class<?> mainClass = null;
-        try {
-            mainClass = scloader.loadClass(cn);
-        } catch (NoClassDefFoundError | ClassNotFoundException cnfe) {
-            if (System.getProperty("os.name", "").contains("OS X")
-                && Normalizer.isNormalized(cn, Normalizer.Form.NFD)) {
-                try {
-                    // On Mac OS X since all names with diacretic symbols are given as decomposed it
-                    // is possible that main class name comes incorrectly from the command line
-                    // and we have to re-compose it
-                    mainClass = scloader.loadClass(Normalizer.normalize(cn, Normalizer.Form.NFC));
-                } catch (NoClassDefFoundError | ClassNotFoundException cnfe1) {
-                    abort(cnfe, "java.launcher.cls.error1", cn);
-                }
-            } else {
-                abort(cnfe, "java.launcher.cls.error1", cn);
-            }
-        }
-        // set to mainClass
+
+        Class<?> mainClass = (mode == LM_MODULE) ? loadModuleMainClass(what)
+                                                 : loadMainClass(mode, what);
+
+        // record the real main class for UI purposes
+        // neither method above can return null, they will abort()
         appClass = mainClass;
 
         /*
@@ -528,10 +563,118 @@ public enum LauncherHelper {
             doesExtendFXApplication(mainClass)) {
             // Will abort() if there are problems with FX runtime
             FXHelper.setFXLaunchParameters(what, mode);
-            return FXHelper.class;
+            mainClass = FXHelper.class;
         }
 
         validateMainClass(mainClass);
+        return mainClass;
+    }
+
+    /**
+     * Returns the main class for a module. The query is either a module name
+     * or module-name/main-class. For the former then the module's main class
+     * is obtained from the module descriptor (MainClass attribute).
+     */
+    private static Class<?> loadModuleMainClass(String what) {
+        int i = what.indexOf('/');
+        String mainModule;
+        String mainClass;
+        if (i == -1) {
+            mainModule = what;
+            mainClass = null;
+        } else {
+            mainModule = what.substring(0, i);
+            mainClass = what.substring(i+1);
+        }
+
+        // main module is in the boot layer
+        ModuleLayer layer = ModuleLayer.boot();
+        Optional<Module> om = layer.findModule(mainModule);
+        if (!om.isPresent()) {
+            // should not happen
+            throw new InternalError("Module " + mainModule + " not in boot Layer");
+        }
+        Module m = om.get();
+
+        // get main class
+        if (mainClass == null) {
+            Optional<String> omc = m.getDescriptor().mainClass();
+            if (!omc.isPresent()) {
+                abort(null, "java.launcher.module.error1", mainModule);
+            }
+            mainClass = omc.get();
+        }
+
+        // load the class from the module
+        Class<?> c = null;
+        try {
+            c = Class.forName(m, mainClass);
+            if (c == null && System.getProperty("os.name", "").contains("OS X")
+                    && Normalizer.isNormalized(mainClass, Normalizer.Form.NFD)) {
+
+                String cn = Normalizer.normalize(mainClass, Normalizer.Form.NFC);
+                c = Class.forName(m, cn);
+            }
+        } catch (LinkageError le) {
+            abort(null, "java.launcher.module.error3", mainClass, m.getName(),
+                    le.getClass().getName() + ": " + le.getLocalizedMessage());
+        }
+        if (c == null) {
+            abort(null, "java.launcher.module.error2", mainClass, mainModule);
+        }
+
+        System.setProperty("jdk.module.main.class", c.getName());
+        return c;
+    }
+
+    /**
+     * Loads the main class from the class path (LM_CLASS or LM_JAR).
+     */
+    private static Class<?> loadMainClass(int mode, String what) {
+        // get the class name
+        String cn;
+        switch (mode) {
+            case LM_CLASS:
+                cn = what;
+                break;
+            case LM_JAR:
+                cn = getMainClassFromJar(what);
+                break;
+            default:
+                // should never happen
+                throw new InternalError("" + mode + ": Unknown launch mode");
+        }
+
+        // load the main class
+        cn = cn.replace('/', '.');
+        Class<?> mainClass = null;
+        ClassLoader scl = ClassLoader.getSystemClassLoader();
+        try {
+            try {
+                mainClass = Class.forName(cn, false, scl);
+            } catch (NoClassDefFoundError | ClassNotFoundException cnfe) {
+                if (System.getProperty("os.name", "").contains("OS X")
+                        && Normalizer.isNormalized(cn, Normalizer.Form.NFD)) {
+                    try {
+                        // On Mac OS X since all names with diacritical marks are
+                        // given as decomposed it is possible that main class name
+                        // comes incorrectly from the command line and we have
+                        // to re-compose it
+                        String ncn = Normalizer.normalize(cn, Normalizer.Form.NFC);
+                        mainClass = Class.forName(ncn, false, scl);
+                    } catch (NoClassDefFoundError | ClassNotFoundException cnfe1) {
+                        abort(cnfe1, "java.launcher.cls.error1", cn,
+                                cnfe1.getClass().getCanonicalName(), cnfe1.getMessage());
+                    }
+                } else {
+                    abort(cnfe, "java.launcher.cls.error1", cn,
+                            cnfe.getClass().getCanonicalName(), cnfe.getMessage());
+                }
+            }
+        } catch (LinkageError le) {
+            abort(le, "java.launcher.cls.error6", cn,
+                    le.getClass().getName() + ": " + le.getLocalizedMessage());
+        }
         return mainClass;
     }
 
@@ -562,14 +705,22 @@ public enum LauncherHelper {
 
     // Check the existence and signature of main and abort if incorrect
     static void validateMainClass(Class<?> mainClass) {
-        Method mainMethod;
+        Method mainMethod = null;
         try {
             mainMethod = mainClass.getMethod("main", String[].class);
         } catch (NoSuchMethodException nsme) {
             // invalid main or not FX application, abort with an error
             abort(null, "java.launcher.cls.error4", mainClass.getName(),
                   JAVAFX_APPLICATION_CLASS_NAME);
-            return; // Avoid compiler issues
+        } catch (Throwable e) {
+            if (mainClass.getModule().isNamed()) {
+                abort(e, "java.launcher.module.error5",
+                      mainClass.getName(), mainClass.getModule(),
+                      e.getClass().getName(), e.getLocalizedMessage());
+            } else {
+                abort(e, "java.launcher.cls.error7", mainClass.getName(),
+                      e.getClass().getName(), e.getLocalizedMessage());
+            }
         }
 
         /*
@@ -692,6 +843,9 @@ public enum LauncherHelper {
 
     static final class FXHelper {
 
+        private static final String JAVAFX_GRAPHICS_MODULE_NAME =
+                "javafx.graphics";
+
         private static final String JAVAFX_LAUNCHER_CLASS_NAME =
                 "com.sun.javafx.application.LauncherImpl";
 
@@ -704,9 +858,15 @@ public enum LauncherHelper {
          * java -cp somedir FXClass     N/A               LM_CLASS     "LM_CLASS"
          * java -jar fxapp.jar          Present           LM_JAR       "LM_JAR"
          * java -jar fxapp.jar          Not Present       LM_JAR       "LM_JAR"
+         * java -m module/class [1]     N/A               LM_MODULE    "LM_MODULE"
+         * java -m module               N/A               LM_MODULE    "LM_MODULE"
+         *
+         * [1] - JavaFX-Application-Class is ignored when modular args are used, even
+         * if present in a modular jar
          */
         private static final String JAVAFX_LAUNCH_MODE_CLASS = "LM_CLASS";
         private static final String JAVAFX_LAUNCH_MODE_JAR = "LM_JAR";
+        private static final String JAVAFX_LAUNCH_MODE_MODULE = "LM_MODULE";
 
         /*
          * FX application launcher and launch method, so we can launch
@@ -724,9 +884,20 @@ public enum LauncherHelper {
          * issue with loading the FX runtime or with the launcher method.
          */
         private static void setFXLaunchParameters(String what, int mode) {
-            // Check for the FX launcher classes
+
+            // find the module with the FX launcher
+            Optional<Module> om = ModuleLayer.boot().findModule(JAVAFX_GRAPHICS_MODULE_NAME);
+            if (!om.isPresent()) {
+                abort(null, "java.launcher.cls.error5");
+            }
+
+            // load the FX launcher class
+            fxLauncherClass = Class.forName(om.get(), JAVAFX_LAUNCHER_CLASS_NAME);
+            if (fxLauncherClass == null) {
+                abort(null, "java.launcher.cls.error5");
+            }
+
             try {
-                fxLauncherClass = scloader.loadClass(JAVAFX_LAUNCHER_CLASS_NAME);
                 /*
                  * signature must be:
                  * public static void launchApplication(String launchName,
@@ -743,7 +914,7 @@ public enum LauncherHelper {
                 if (fxLauncherMethod.getReturnType() != java.lang.Void.TYPE) {
                     abort(null, "java.launcher.javafx.error1");
                 }
-            } catch (ClassNotFoundException | NoSuchMethodException ex) {
+            } catch (NoSuchMethodException ex) {
                 abort(ex, "java.launcher.cls.error5", ex);
             }
 
@@ -754,6 +925,9 @@ public enum LauncherHelper {
                     break;
                 case LM_JAR:
                     fxLaunchMode = JAVAFX_LAUNCH_MODE_JAR;
+                    break;
+                case LM_MODULE:
+                    fxLaunchMode = JAVAFX_LAUNCH_MODE_MODULE;
                     break;
                 default:
                     // should not have gotten this far...
@@ -770,6 +944,353 @@ public enum LauncherHelper {
             // launch appClass via fxLauncherMethod
             fxLauncherMethod.invoke(null,
                     new Object[] {fxLaunchName, fxLaunchMode, args});
+        }
+    }
+
+    /**
+     * Called by the launcher to list the observable modules.
+     */
+    static void listModules() {
+        initOutput(System.out);
+
+        ModuleBootstrap.limitedFinder().findAll().stream()
+            .sorted(new JrtFirstComparator())
+            .forEach(LauncherHelper::showModule);
+    }
+
+    /**
+     * Called by the launcher to show the resolved modules
+     */
+    static void showResolvedModules() {
+        initOutput(System.out);
+
+        ModuleLayer bootLayer = ModuleLayer.boot();
+        Configuration cf = bootLayer.configuration();
+
+        cf.modules().stream()
+            .map(ResolvedModule::reference)
+            .sorted(new JrtFirstComparator())
+            .forEach(LauncherHelper::showModule);
+    }
+
+    /**
+     * Called by the launcher to describe a module
+     */
+    static void describeModule(String moduleName) {
+        initOutput(System.out);
+
+        ModuleFinder finder = ModuleBootstrap.limitedFinder();
+        ModuleReference mref = finder.find(moduleName).orElse(null);
+        if (mref == null) {
+            abort(null, "java.launcher.module.error4", moduleName);
+        }
+        ModuleDescriptor md = mref.descriptor();
+
+        // one-line summary
+        showModule(mref);
+
+        // unqualified exports (sorted by package)
+        md.exports().stream()
+            .filter(e -> !e.isQualified())
+            .sorted(Comparator.comparing(Exports::source))
+            .map(e -> Stream.concat(Stream.of(e.source()),
+                                    toStringStream(e.modifiers()))
+                    .collect(Collectors.joining(" ")))
+            .forEach(sourceAndMods -> ostream.format("exports %s%n", sourceAndMods));
+
+        // dependences
+        for (Requires r : md.requires()) {
+            String nameAndMods = Stream.concat(Stream.of(r.name()),
+                                               toStringStream(r.modifiers()))
+                    .collect(Collectors.joining(" "));
+            ostream.format("requires %s", nameAndMods);
+            finder.find(r.name())
+                .map(ModuleReference::descriptor)
+                .filter(ModuleDescriptor::isAutomatic)
+                .ifPresent(any -> ostream.print(" automatic"));
+            ostream.println();
+        }
+
+        // service use and provides
+        for (String s : md.uses()) {
+            ostream.format("uses %s%n", s);
+        }
+        for (Provides ps : md.provides()) {
+            String names = ps.providers().stream().collect(Collectors.joining(" "));
+            ostream.format("provides %s with %s%n", ps.service(), names);
+
+        }
+
+        // qualified exports
+        for (Exports e : md.exports()) {
+            if (e.isQualified()) {
+                String who = e.targets().stream().collect(Collectors.joining(" "));
+                ostream.format("qualified exports %s to %s%n", e.source(), who);
+            }
+        }
+
+        // open packages
+        for (Opens opens: md.opens()) {
+            if (opens.isQualified())
+                ostream.print("qualified ");
+            String sourceAndMods = Stream.concat(Stream.of(opens.source()),
+                                                 toStringStream(opens.modifiers()))
+                    .collect(Collectors.joining(" "));
+            ostream.format("opens %s", sourceAndMods);
+            if (opens.isQualified()) {
+                String who = opens.targets().stream().collect(Collectors.joining(" "));
+                ostream.format(" to %s", who);
+            }
+            ostream.println();
+        }
+
+        // non-exported/non-open packages
+        Set<String> concealed = new TreeSet<>(md.packages());
+        md.exports().stream().map(Exports::source).forEach(concealed::remove);
+        md.opens().stream().map(Opens::source).forEach(concealed::remove);
+        concealed.forEach(p -> ostream.format("contains %s%n", p));
+    }
+
+    /**
+     * Prints a single line with the module name, version and modifiers
+     */
+    private static void showModule(ModuleReference mref) {
+        ModuleDescriptor md = mref.descriptor();
+        ostream.print(md.toNameAndVersion());
+        mref.location()
+                .filter(uri -> !isJrt(uri))
+                .ifPresent(uri -> ostream.format(" %s", uri));
+        if (md.isOpen())
+            ostream.print(" open");
+        if (md.isAutomatic())
+            ostream.print(" automatic");
+        ostream.println();
+    }
+
+    /**
+     * A ModuleReference comparator that considers modules in the run-time
+     * image to be less than modules than not in the run-time image.
+     */
+    private static class JrtFirstComparator implements Comparator<ModuleReference> {
+        private final Comparator<ModuleReference> real;
+
+        JrtFirstComparator() {
+            this.real = Comparator.comparing(ModuleReference::descriptor);
+        }
+
+        @Override
+        public int compare(ModuleReference a, ModuleReference b) {
+            if (isJrt(a)) {
+                return isJrt(b) ? real.compare(a, b) : -1;
+            } else {
+                return isJrt(b) ? 1 : real.compare(a, b);
+            }
+        }
+    }
+
+    private static <T> Stream<String> toStringStream(Set<T> s) {
+        return s.stream().map(e -> e.toString().toLowerCase());
+    }
+
+    private static boolean isJrt(ModuleReference mref) {
+        return isJrt(mref.location().orElse(null));
+    }
+
+    private static boolean isJrt(URI uri) {
+        return (uri != null && uri.getScheme().equalsIgnoreCase("jrt"));
+    }
+
+    /**
+     * Called by the launcher to validate the modules on the upgrade and
+     * application module paths.
+     *
+     * @return {@code true} if no errors are found
+     */
+    private static boolean validateModules() {
+        initOutput(System.out);
+
+        ModuleValidator validator = new ModuleValidator();
+
+        // upgrade module path
+        String value = System.getProperty("jdk.module.upgrade.path");
+        if (value != null) {
+            Stream.of(value.split(File.pathSeparator))
+                    .map(Paths::get)
+                    .forEach(validator::scan);
+        }
+
+        // system modules
+        ModuleFinder.ofSystem().findAll().stream()
+                .sorted(Comparator.comparing(ModuleReference::descriptor))
+                .forEach(validator::process);
+
+        // application module path
+        value = System.getProperty("jdk.module.path");
+        if (value != null) {
+            Stream.of(value.split(File.pathSeparator))
+                    .map(Paths::get)
+                    .forEach(validator::scan);
+        }
+
+        return !validator.foundErrors();
+    }
+
+    /**
+     * A simple validator to check for errors and conflicts between modules.
+     */
+    static class ModuleValidator {
+        private static final String MODULE_INFO = "module-info.class";
+
+        private Map<String, ModuleReference> nameToModule = new HashMap<>();
+        private Map<String, ModuleReference> packageToModule = new HashMap<>();
+        private boolean errorFound;
+
+        /**
+         * Returns true if at least one error was found
+         */
+        boolean foundErrors() {
+            return errorFound;
+        }
+
+        /**
+         * Prints the module location and name.
+         */
+        private void printModule(ModuleReference mref) {
+            mref.location()
+                .filter(uri -> !isJrt(uri))
+                .ifPresent(uri -> ostream.print(uri + " "));
+            ModuleDescriptor descriptor = mref.descriptor();
+            ostream.print(descriptor.name());
+            if (descriptor.isAutomatic())
+                ostream.print(" automatic");
+            ostream.println();
+        }
+
+        /**
+         * Prints the module location and name, checks if the module is
+         * shadowed by a previously seen module, and finally checks for
+         * package conflicts with previously seen modules.
+         */
+        void process(ModuleReference mref) {
+            printModule(mref);
+
+            String name = mref.descriptor().name();
+            ModuleReference previous = nameToModule.putIfAbsent(name, mref);
+            if (previous != null) {
+                ostream.print(INDENT + "shadowed by ");
+                printModule(previous);
+            } else {
+                // check for package conflicts when not shadowed
+                for (String pkg :  mref.descriptor().packages()) {
+                    previous = packageToModule.putIfAbsent(pkg, mref);
+                    if (previous != null) {
+                        String mn = previous.descriptor().name();
+                        ostream.println(INDENT + "contains " + pkg
+                                        + " conflicts with module " + mn);
+                        errorFound = true;
+                    }
+                }
+            }
+        }
+
+        /**
+         * Scan an element on a module path. The element is a directory
+         * of modules, an exploded module, or a JAR file.
+         */
+        void scan(Path entry) {
+            BasicFileAttributes attrs;
+            try {
+                attrs = Files.readAttributes(entry, BasicFileAttributes.class);
+            } catch (NoSuchFileException ignore) {
+                return;
+            } catch (IOException ioe) {
+                ostream.println(entry + " " + ioe);
+                errorFound = true;
+                return;
+            }
+
+            String fn = entry.getFileName().toString();
+            if (attrs.isRegularFile() && fn.endsWith(".jar")) {
+                // JAR file, explicit or automatic module
+                scanModule(entry).ifPresent(this::process);
+            } else if (attrs.isDirectory()) {
+                Path mi = entry.resolve(MODULE_INFO);
+                if (Files.exists(mi)) {
+                    // exploded module
+                    scanModule(entry).ifPresent(this::process);
+                } else {
+                    // directory of modules
+                    scanDirectory(entry);
+                }
+            }
+        }
+
+        /**
+         * Scan the JAR files and exploded modules in a directory.
+         */
+        private void scanDirectory(Path dir) {
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+                Map<String, Path> moduleToEntry = new HashMap<>();
+
+                for (Path entry : stream) {
+                    BasicFileAttributes attrs;
+                    try {
+                        attrs = Files.readAttributes(entry, BasicFileAttributes.class);
+                    } catch (IOException ioe) {
+                        ostream.println(entry + " " + ioe);
+                        errorFound = true;
+                        continue;
+                    }
+
+                    ModuleReference mref = null;
+
+                    String fn = entry.getFileName().toString();
+                    if (attrs.isRegularFile() && fn.endsWith(".jar")) {
+                        mref = scanModule(entry).orElse(null);
+                    } else if (attrs.isDirectory()) {
+                        Path mi = entry.resolve(MODULE_INFO);
+                        if (Files.exists(mi)) {
+                            mref = scanModule(entry).orElse(null);
+                        }
+                    }
+
+                    if (mref != null) {
+                        String name = mref.descriptor().name();
+                        Path previous = moduleToEntry.putIfAbsent(name, entry);
+                        if (previous != null) {
+                            // same name as other module in the directory
+                            printModule(mref);
+                            ostream.println(INDENT + "contains same module as "
+                                            + previous.getFileName());
+                            errorFound = true;
+                        } else {
+                            process(mref);
+                        }
+                    }
+                }
+            } catch (IOException ioe) {
+                ostream.println(dir + " " + ioe);
+                errorFound = true;
+            }
+        }
+
+        /**
+         * Scan a JAR file or exploded module.
+         */
+        private Optional<ModuleReference> scanModule(Path entry) {
+            ModuleFinder finder = ModuleFinder.of(entry);
+            try {
+                return finder.findAll().stream().findFirst();
+            } catch (FindException e) {
+                ostream.println(entry);
+                ostream.println(INDENT + e.getMessage());
+                Throwable cause = e.getCause();
+                if (cause != null) {
+                    ostream.println(INDENT + cause);
+                }
+                errorFound = true;
+                return Optional.empty();
+            }
         }
     }
 }

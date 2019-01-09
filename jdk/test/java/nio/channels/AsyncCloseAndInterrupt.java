@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,7 +23,9 @@
 
 /* @test
  * @bug 4460583 4470470 4840199 6419424 6710579 6596323 6824135 6395224 7142919
+ *      8151582 8068693 8153209
  * @run main/othervm AsyncCloseAndInterrupt
+ * @key intermittent
  * @summary Comprehensive test of asynchronous closing and interruption
  * @author Mark Reinhold
  */
@@ -89,7 +91,7 @@ public class AsyncCloseAndInterrupt {
 
     private static void initRefuser() throws IOException {
         refuser = ServerSocketChannel.open();
-        refuser.socket().bind(wildcardAddress);
+        refuser.bind(wildcardAddress, 1);      // use minimum backlog
     }
 
     // Dead pipe source and sink
@@ -349,7 +351,7 @@ public class AsyncCloseAndInterrupt {
 
     static final Op CONNECT = new Op("connect") {
             void setup() {
-                waitPump("connect wait for pumping refuser ...");
+                waitPump("connect waiting for pumping refuser ...");
             }
             void doIO(InterruptibleChannel ich) throws IOException {
                 SocketChannel sc = (SocketChannel)ich;
@@ -361,7 +363,7 @@ public class AsyncCloseAndInterrupt {
 
     static final Op FINISH_CONNECT = new Op("finishConnect") {
             void setup() {
-                waitPump("finishConnect wait for pumping refuser ...");
+                waitPump("finishConnect waiting for pumping refuser ...");
             }
             void doIO(InterruptibleChannel ich) throws IOException {
                 SocketChannel sc = (SocketChannel)ich;
@@ -498,12 +500,11 @@ public class AsyncCloseAndInterrupt {
     private static volatile boolean pumpReady = false;
 
     private static void waitPump(String msg){
-        pumpReady = false;
         log.println(msg);
-
         while (!pumpReady){
             sleep(200);
         }
+        log.println(msg + " done");
     }
 
     // Create a pump thread dedicated to saturate refuser's connection backlog
@@ -520,27 +521,33 @@ public class AsyncCloseAndInterrupt {
 
                 // Saturate the refuser's connection backlog so that further connection
                 // attempts will be blocked
+                pumpReady = false;
                 while (!pumpDone) {
                     SocketChannel sc = SocketChannel.open();
                     sc.configureBlocking(false);
                     boolean connected = sc.connect(refuser.socket().getLocalSocketAddress());
 
                     // Assume that the connection backlog is saturated if a
-                    // client cannot connect to the refuser within 50 miliseconds
+                    // client cannot connect to the refuser within 50 milliseconds
                     long start = System.currentTimeMillis();
-                    while (!connected && (System.currentTimeMillis() - start < 50)) {
+                    while (!pumpReady && !connected
+                            && (System.currentTimeMillis() - start < 50)) {
                         connected = sc.finishConnect();
                     }
 
                     if (connected) {
                         // Retain so that finalizer doesn't close
                         refuserClients.add(sc);
-                        pumpReady = false;
                     } else {
                         sc.close();
                         pumpReady = true;
                     }
                 }
+
+                for (SocketChannel sc : refuserClients) {
+                    sc.close();
+                }
+                refuser.close();
 
                 log.println("Stop pumping refuser ...");
                 return refuserClients.size();
@@ -551,7 +558,11 @@ public class AsyncCloseAndInterrupt {
     }
 
     // Test
-    static void test(ChannelFactory cf, Op op, int test)
+    static void test(ChannelFactory cf, Op op, int test) throws Exception {
+        test(cf, op, test, true);
+    }
+
+    static void test(ChannelFactory cf, Op op, int test, boolean extraSleep)
         throws Exception
     {
         log.println();
@@ -565,7 +576,9 @@ public class AsyncCloseAndInterrupt {
             sleep(50);
         } while (!t.ready);
 
-        sleep(100);
+        if (extraSleep) {
+            sleep(100);
+        }
 
         switch (test) {
 
@@ -599,15 +612,18 @@ public class AsyncCloseAndInterrupt {
             break;
         }
 
-        t.finishAndThrow(500);
+        t.finishAndThrow(10000);
     }
 
-
     static void test(ChannelFactory cf, Op op) throws Exception {
+        test(cf, op, true);
+    }
+
+    static void test(ChannelFactory cf, Op op, boolean extraSleep) throws Exception {
         // Test INTR cases before PREINTER cases since sometimes
         // interrupted threads can't load classes
-        test(cf, op, TEST_INTR);
-        test(cf, op, TEST_PREINTR);
+        test(cf, op, TEST_INTR, extraSleep);
+        test(cf, op, TEST_PREINTR, extraSleep);
 
         // Bugs, see FileChannelImpl for details
         if (op == TRANSFER_FROM) {
@@ -619,7 +635,7 @@ public class AsyncCloseAndInterrupt {
             return;
         }
 
-        test(cf, op, TEST_CLOSE);
+        test(cf, op, TEST_CLOSE, extraSleep);
     }
 
     static void test(ChannelFactory cf)
@@ -716,8 +732,8 @@ public class AsyncCloseAndInterrupt {
                 Future<Integer> pumpFuture = pumpRefuser(pumperExecutor);
                 waitPump("\nWait for initial Pump");
 
-                test(socketChannelFactory, CONNECT);
-                test(socketChannelFactory, FINISH_CONNECT);
+                test(socketChannelFactory, CONNECT, false);
+                test(socketChannelFactory, FINISH_CONNECT, false);
 
                 pumpDone = true;
                 Integer newConn = pumpFuture.get(30, TimeUnit.SECONDS);

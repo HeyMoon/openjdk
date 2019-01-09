@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@ import javax.swing.plaf.RootPaneUI;
 import java.util.Vector;
 import java.io.Serializable;
 import javax.swing.border.*;
+
 import sun.awt.AWTAccessor;
 import sun.security.action.GetBooleanAction;
 
@@ -69,9 +70,11 @@ import sun.security.action.GetBooleanAction;
  * can be used to obtain the <code>JRootPane</code> that contains
  * a given component.
  * </blockquote>
- * <table style="float:right" border="0" summary="layout">
+ *
+ * <table class="borderless" style="float:right">
+ * <caption>Example</caption>
  * <tr>
- * <td align="center">
+ * <td style="text-align:center">
  * <img src="doc-files/JRootPane-2.gif"
  * alt="The following text describes this graphic." HEIGHT=386 WIDTH=349>
  * </td>
@@ -193,7 +196,7 @@ import sun.security.action.GetBooleanAction;
  * @see JComponent
  * @see BoxLayout
  *
- * @see <a href="http://java.sun.com/products/jfc/tsc/articles/mixing/">
+ * @see <a href="http://www.oracle.com/technetwork/articles/java/mixing-components-433992.html">
  * Mixing Heavy and Light Components</a>
  *
  * @author David Kloba
@@ -319,28 +322,6 @@ public class JRootPane extends JComponent implements Accessible {
      * a UI-specific action like pressing the <b>Enter</b> key occurs.
      */
     protected JButton defaultButton;
-    /**
-     * As of Java 2 platform v1.3 this unusable field is no longer used.
-     * To override the default button you should replace the <code>Action</code>
-     * in the <code>JRootPane</code>'s <code>ActionMap</code>. Please refer to
-     * the key bindings specification for further details.
-     *
-     * @deprecated As of Java 2 platform v1.3.
-     *  @see #defaultButton
-     */
-    @Deprecated
-    protected DefaultAction defaultPressAction;
-    /**
-     * As of Java 2 platform v1.3 this unusable field is no longer used.
-     * To override the default button you should replace the <code>Action</code>
-     * in the <code>JRootPane</code>'s <code>ActionMap</code>. Please refer to
-     * the key bindings specification for further details.
-     *
-     * @deprecated As of Java 2 platform v1.3.
-     *  @see #defaultButton
-     */
-    @Deprecated
-    protected DefaultAction defaultReleaseAction;
 
     /**
      * Whether or not true double buffering should be used.  This is typically
@@ -421,21 +402,18 @@ public class JRootPane extends JComponent implements Accessible {
      *        <code>FILE_CHOOSER_DIALOG</code>, <code>QUESTION_DIALOG</code>, or
      *        <code>WARNING_DIALOG</code>.
      * @since 1.4
-     * @beaninfo
-     *        bound: true
-     *         enum: NONE                   JRootPane.NONE
-     *               FRAME                  JRootPane.FRAME
-     *               PLAIN_DIALOG           JRootPane.PLAIN_DIALOG
-     *               INFORMATION_DIALOG     JRootPane.INFORMATION_DIALOG
-     *               ERROR_DIALOG           JRootPane.ERROR_DIALOG
-     *               COLOR_CHOOSER_DIALOG   JRootPane.COLOR_CHOOSER_DIALOG
-     *               FILE_CHOOSER_DIALOG    JRootPane.FILE_CHOOSER_DIALOG
-     *               QUESTION_DIALOG        JRootPane.QUESTION_DIALOG
-     *               WARNING_DIALOG         JRootPane.WARNING_DIALOG
-     *       expert: true
-     *    attribute: visualUpdate true
-     *  description: Identifies the type of Window decorations to provide
      */
+    @BeanProperty(expert = true, visualUpdate = true, enumerationValues = {
+            "JRootPane.NONE",
+            "JRootPane.FRAME",
+            "JRootPane.PLAIN_DIALOG",
+            "JRootPane.INFORMATION_DIALOG",
+            "JRootPane.ERROR_DIALOG",
+            "JRootPane.COLOR_CHOOSER_DIALOG",
+            "JRootPane.FILE_CHOOSER_DIALOG",
+            "JRootPane.QUESTION_DIALOG",
+            "JRootPane.WARNING_DIALOG"}, description
+            = "Identifies the type of Window decorations to provide")
     public void setWindowDecorationStyle(int windowDecorationStyle) {
         if (windowDecorationStyle < 0 ||
                   windowDecorationStyle > WARNING_DIALOG) {
@@ -463,14 +441,10 @@ public class JRootPane extends JComponent implements Accessible {
      *
      * @param ui  the <code>LabelUI</code> L&amp;F object
      * @see UIDefaults#getUI
-     * @beaninfo
-     *        bound: true
-     *       hidden: true
-     *      expert: true
-     *    attribute: visualUpdate true
-     *  description: The UI object that implements the Component's LookAndFeel.
      * @since 1.3
      */
+    @BeanProperty(expert = true, hidden = true, visualUpdate = true, description
+            = "The UI object that implements the Component's LookAndFeel.")
     public void setUI(RootPaneUI ui) {
         super.setUI(ui);
     }
@@ -569,8 +543,10 @@ public class JRootPane extends JComponent implements Accessible {
             layeredPane.remove(menuBar);
         menuBar = menu;
 
-        if(menuBar != null)
+        if(menuBar != null) {
+            menuBar.updateUI();
             layeredPane.add(menuBar, JLayeredPane.FRAME_CONTENT_LAYER);
+        }
     }
 
     /**
@@ -691,8 +667,7 @@ public class JRootPane extends JComponent implements Accessible {
             throw new NullPointerException("glassPane cannot be set to null.");
         }
 
-        AWTAccessor.getComponentAccessor().setMixingCutoutShape(glass,
-                new Rectangle());
+        glass.setMixingCutoutShape(new Rectangle());
 
         boolean visible = false;
         if (glassPane != null && glassPane.getParent() == this) {
@@ -783,10 +758,9 @@ public class JRootPane extends JComponent implements Accessible {
      *
      * @see JButton#isDefaultButton
      * @param defaultButton the <code>JButton</code> which is to be the default button
-     *
-     * @beaninfo
-     *  description: The button activated by default in this root pane
      */
+    @BeanProperty(description
+            = "The button activated by default in this root pane")
     public void setDefaultButton(JButton defaultButton) {
         JButton oldDefault = this.defaultButton;
 
@@ -835,35 +809,6 @@ public class JRootPane extends JComponent implements Accessible {
             }
         }
     }
-
-    @SuppressWarnings("serial")
-    static class DefaultAction extends AbstractAction {
-        JButton owner;
-        JRootPane root;
-        boolean press;
-        DefaultAction(JRootPane root, boolean press) {
-            this.root = root;
-            this.press = press;
-        }
-        public void setOwner(JButton owner) {
-            this.owner = owner;
-        }
-        public void actionPerformed(ActionEvent e) {
-            if (owner != null && SwingUtilities.getRootPane(owner) == root) {
-                ButtonModel model = owner.getModel();
-                if (press) {
-                    model.setArmed(true);
-                    model.setPressed(true);
-                } else {
-                    model.setPressed(false);
-                }
-            }
-        }
-        public boolean isEnabled() {
-            return owner.getModel().isEnabled();
-        }
-    }
-
 
     /**
      * Overridden to enforce the position of the glass component as

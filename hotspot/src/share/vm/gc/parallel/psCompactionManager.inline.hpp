@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -125,13 +125,13 @@ inline void oop_pc_follow_contents_specialized(objArrayOop obj, int index, ParCo
   T* const beg = base + beg_index;
   T* const end = base + end_index;
 
+  if (end_index < len) {
+    cm->push_objarray(obj, end_index); // Push the continuation.
+  }
+
   // Push the non-NULL elements of the next stride on the marking stack.
   for (T* e = beg; e < end; e++) {
     cm->mark_and_push<T>(e);
-  }
-
-  if (end_index < len) {
-    cm->push_objarray(obj, end_index); // Push the continuation.
   }
 }
 
@@ -144,7 +144,7 @@ inline void ParCompactionManager::follow_contents(objArrayOop obj, int index) {
 }
 
 inline void ParCompactionManager::update_contents(oop obj) {
-  obj->pc_update_contents();
+  obj->pc_update_contents(this);
 }
 
 #endif // SHARE_VM_GC_PARALLEL_PSCOMPACTIONMANAGER_INLINE_HPP

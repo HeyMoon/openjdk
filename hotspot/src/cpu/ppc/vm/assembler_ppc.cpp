@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 2012, 2015 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -53,9 +53,6 @@ int AbstractAssembler::code_fill_byte() {
   return 0x00;                  // illegal instruction 0x00000000
 }
 
-void Assembler::print_instruction(int inst) {
-  Unimplemented();
-}
 
 // Patch instruction `inst' at offset `inst_pos' to refer to
 // `dest_pos' and return the resulting instruction.  We should have
@@ -484,7 +481,7 @@ int Assembler::add_const_optimized(Register d, Register s, long x, Register tmp,
       if (d != s) { mr(d, s); }
       return 0;
     }
-    if (return_simm16_rest) {
+    if (return_simm16_rest && (d == s)) {
       return xd;
     }
     addi(d, s, xd);

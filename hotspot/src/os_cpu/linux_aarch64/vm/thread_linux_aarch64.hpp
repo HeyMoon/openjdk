@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2014, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -43,12 +43,7 @@
 
   frame pd_last_frame() {
     assert(has_last_Java_frame(), "must have last_Java_sp() when suspended");
-    if (_anchor.last_Java_pc() != NULL) {
-      return frame(_anchor.last_Java_sp(), _anchor.last_Java_fp(), _anchor.last_Java_pc());
-    } else {
-      // This will pick up pc from sp
-      return frame(_anchor.last_Java_sp(), _anchor.last_Java_fp());
-    }
+    return frame(_anchor.last_Java_sp(), _anchor.last_Java_fp(), _anchor.last_Java_pc());
   }
 
  public:
@@ -76,6 +71,8 @@
 private:
   bool pd_get_top_frame(frame* fr_addr, void* ucontext, bool isInJava);
 public:
+
+  static Thread *aarch64_get_thread_helper();
 
   // These routines are only used on cpu architectures that
   // have separate register stacks (Itanium).

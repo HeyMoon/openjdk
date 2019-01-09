@@ -27,7 +27,7 @@
 # loader, the context class loader should remain unchanged (i.e., not be
 # set to the impl's class loader) when the impl is activated.
 # @library ../../../testlibrary
-# @build TestLibrary RMID ActivationLibrary
+# @build TestLibrary RMID RMIDSelectorProvider ActivationLibrary
 # @build ExtLoadedImplTest ExtLoadedImpl ExtLoadedImpl_Stub CheckLoader
 # @run shell ext.sh
 
@@ -51,5 +51,10 @@ rm classes/ExtLoadedImpl.class classes/ExtLoadedImpl_Stub.class classes/CheckLoa
 mkdir -p ext
 $COMPILEJAVA/bin/jar ${TESTTOOLVMOPTS} cf ext/ext.jar -C $TESTCLASSES ExtLoadedImpl.class -C $TESTCLASSES ExtLoadedImpl_Stub.class -C $TESTCLASSES CheckLoader.class
 
+TESTVMOPTS="${TESTVMOPTS} \
+ --add-exports java.rmi/sun.rmi.registry=ALL-UNNAMED \
+ --add-exports java.rmi/sun.rmi.server=ALL-UNNAMED \
+ --add-exports java.rmi/sun.rmi.transport=ALL-UNNAMED \
+ --add-exports java.rmi/sun.rmi.transport.tcp=ALL-UNNAMED"
 $TESTJAVA/bin/java ${TESTVMOPTS} -cp classes -Dtest.src=$TESTSRC -Dtest.classes=$TESTCLASSES -Djava.security.policy=$TESTSRC/security.policy -Djava.ext.dirs=ext ExtLoadedImplTest
 

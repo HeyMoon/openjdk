@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,12 +26,8 @@
 package com.sun.tools.javac.parser;
 
 import java.text.BreakIterator;
-import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 
 import com.sun.source.doctree.AttributeTree.ValueKind;
 import com.sun.tools.javac.parser.DocCommentParser.TagParser.Kind;
@@ -40,12 +36,10 @@ import com.sun.tools.javac.parser.Tokens.TokenKind;
 import com.sun.tools.javac.tree.DCTree;
 import com.sun.tools.javac.tree.DCTree.DCAttribute;
 import com.sun.tools.javac.tree.DCTree.DCDocComment;
-import com.sun.tools.javac.tree.DCTree.DCEndElement;
 import com.sun.tools.javac.tree.DCTree.DCEndPosTree;
 import com.sun.tools.javac.tree.DCTree.DCErroneous;
 import com.sun.tools.javac.tree.DCTree.DCIdentifier;
 import com.sun.tools.javac.tree.DCTree.DCReference;
-import com.sun.tools.javac.tree.DCTree.DCStartElement;
 import com.sun.tools.javac.tree.DCTree.DCText;
 import com.sun.tools.javac.tree.DocTreeMaker;
 import com.sun.tools.javac.tree.JCTree;
@@ -55,9 +49,8 @@ import com.sun.tools.javac.util.ListBuffer;
 import com.sun.tools.javac.util.Log;
 import com.sun.tools.javac.util.Name;
 import com.sun.tools.javac.util.Names;
-import com.sun.tools.javac.util.Options;
 import com.sun.tools.javac.util.Position;
-import com.sun.tools.javac.util.StringUtils;
+
 import static com.sun.tools.javac.util.LayoutCharacters.*;
 
 /**
@@ -100,24 +93,20 @@ public class DocCommentParser {
 
     Map<Name, TagParser> tagParsers;
 
-    DocCommentParser(ParserFactory fac, DiagnosticSource diagSource, Comment comment) {
+    public DocCommentParser(ParserFactory fac, DiagnosticSource diagSource, Comment comment) {
         this.fac = fac;
         this.diagSource = diagSource;
         this.comment = comment;
         names = fac.names;
         m = fac.docTreeMaker;
-
-        Locale locale = (fac.locale == null) ? Locale.getDefault() : fac.locale;
-
-        Options options = fac.options;
-        boolean useBreakIterator = options.isSet("breakIterator");
-        if (useBreakIterator || !locale.getLanguage().equals(Locale.ENGLISH.getLanguage()))
-            sentenceBreaker = BreakIterator.getSentenceInstance(locale);
-
         initTagParsers();
     }
 
-    DCDocComment parse() {
+    public DocCommentParser(ParserFactory fac) {
+        this(fac, null, null);
+    }
+
+    public DCDocComment parse() {
         String c = comment.getText();
         buf = new char[c.length() + 1];
         c.getChars(0, c.length(), buf, 0);
@@ -128,54 +117,11 @@ public class DocCommentParser {
 
         List<DCTree> body = blockContent();
         List<DCTree> tags = blockTags();
+        int pos = !body.isEmpty()
+                ? body.head.pos
+                : !tags.isEmpty() ? tags.head.pos : Position.NOPOS;
 
-        // split body into first sentence and body
-        ListBuffer<DCTree> fs = new ListBuffer<>();
-        loop:
-        for (; body.nonEmpty(); body = body.tail) {
-            DCTree t = body.head;
-            switch (t.getKind()) {
-                case TEXT:
-                    String s = ((DCText) t).getBody();
-                    int i = getSentenceBreak(s);
-                    if (i > 0) {
-                        int i0 = i;
-                        while (i0 > 0 && isWhitespace(s.charAt(i0 - 1)))
-                            i0--;
-                        fs.add(m.at(t.pos).Text(s.substring(0, i0)));
-                        int i1 = i;
-                        while (i1 < s.length() && isWhitespace(s.charAt(i1)))
-                            i1++;
-                        body = body.tail;
-                        if (i1 < s.length())
-                            body = body.prepend(m.at(t.pos + i1).Text(s.substring(i1)));
-                        break loop;
-                    } else if (body.tail.nonEmpty()) {
-                        if (isSentenceBreak(body.tail.head)) {
-                            int i0 = s.length() - 1;
-                            while (i0 > 0 && isWhitespace(s.charAt(i0)))
-                                i0--;
-                            fs.add(m.at(t.pos).Text(s.substring(0, i0 + 1)));
-                            body = body.tail;
-                            break loop;
-                        }
-                    }
-                    break;
-
-                case START_ELEMENT:
-                case END_ELEMENT:
-                    if (isSentenceBreak(t))
-                        break loop;
-                    break;
-            }
-            fs.add(t);
-        }
-
-        @SuppressWarnings("unchecked")
-        DCTree first = getFirst(fs.toList(), body, tags);
-        int pos = (first == null) ? Position.NOPOS : first.pos;
-
-        DCDocComment dc = m.at(pos).DocComment(comment, fs.toList(), body, tags);
+        DCDocComment dc = m.at(pos).newDocCommentTree(comment, body, tags);
         return dc;
     }
 
@@ -225,7 +171,7 @@ public class DocCommentParser {
                 case '>':
                     newline = false;
                     addPendingText(trees, bp - 1);
-                    trees.add(m.at(bp).Erroneous(newString(bp, bp+1), diagSource, "dc.bad.gt"));
+                    trees.add(m.at(bp).newErroneousTree(newString(bp, bp + 1), diagSource, "dc.bad.gt"));
                     nextChar();
                     if (textStart == -1) {
                         textStart = bp;
@@ -285,7 +231,7 @@ public class DocCommentParser {
                 TagParser tp = tagParsers.get(name);
                 if (tp == null) {
                     List<DCTree> content = blockContent();
-                    return m.at(p).UnknownBlockTag(name, content);
+                    return m.at(p).newUnknownBlockTagTree(name, content);
                 } else {
                     switch (tp.getKind()) {
                         case BLOCK:
@@ -331,23 +277,28 @@ public class DocCommentParser {
             nextChar();
             if (isIdentifierStart(ch)) {
                 Name name = readTagName();
-                skipWhitespace();
-
                 TagParser tp = tagParsers.get(name);
+
                 if (tp == null) {
-                    DCTree text = inlineText();
+                    skipWhitespace();
+                    DCTree text = inlineText(WhitespaceRetentionPolicy.REMOVE_ALL);
                     if (text != null) {
                         nextChar();
-                        return m.at(p).UnknownInlineTag(name, List.of(text)).setEndPos(bp);
-                    }
-                } else if (tp.getKind() == TagParser.Kind.INLINE) {
-                    DCEndPosTree<?> tree = (DCEndPosTree<?>) tp.parse(p);
-                    if (tree != null) {
-                        return tree.setEndPos(bp);
+                        return m.at(p).newUnknownInlineTagTree(name, List.of(text)).setEndPos(bp);
                     }
                 } else {
-                    inlineText(); // skip content
-                    nextChar();
+                    if (!tp.retainWhiteSpace) {
+                        skipWhitespace();
+                    }
+                    if (tp.getKind() == TagParser.Kind.INLINE) {
+                        DCEndPosTree<?> tree = (DCEndPosTree<?>) tp.parse(p);
+                        if (tree != null) {
+                            return tree.setEndPos(bp);
+                        }
+                    } else { // handle block tags (ex: @see) in inline content
+                        inlineText(WhitespaceRetentionPolicy.REMOVE_ALL); // skip content
+                        nextChar();
+                    }
                 }
             }
             return erroneous("dc.no.tag.name", p);
@@ -356,13 +307,32 @@ public class DocCommentParser {
         }
     }
 
+    private static enum WhitespaceRetentionPolicy {
+        RETAIN_ALL,
+        REMOVE_FIRST_SPACE,
+        REMOVE_ALL
+    }
+
     /**
      * Read plain text content of an inline tag.
      * Matching pairs of { } are skipped; the text is terminated by the first
      * unmatched }. It is an error if the beginning of the next tag is detected.
      */
-    protected DCTree inlineText() throws ParseException {
-        skipWhitespace();
+    private DCTree inlineText(WhitespaceRetentionPolicy whitespacePolicy) throws ParseException {
+        switch (whitespacePolicy) {
+            case REMOVE_ALL:
+                skipWhitespace();
+                break;
+            case REMOVE_FIRST_SPACE:
+                if (ch == ' ')
+                    nextChar();
+                break;
+            case RETAIN_ALL:
+            default:
+                // do nothing
+                break;
+
+        }
         int pos = bp;
         int depth = 1;
 
@@ -384,7 +354,7 @@ public class DocCommentParser {
 
                 case '}':
                     if (--depth == 0) {
-                        return m.at(pos).Text(newString(pos, bp));
+                        return m.at(pos).newTextTree(newString(pos, bp));
                     }
                     newline = false;
                     lastNonWhite = bp;
@@ -414,6 +384,7 @@ public class DocCommentParser {
      */
     // TODO: boolean allowMember should be enum FORBID, ALLOW, REQUIRE
     // TODO: improve quality of parse to forbid bad constructions.
+    // TODO: update to use ReferenceParser
     @SuppressWarnings("fallthrough")
     protected DCReference reference(boolean allowMember) throws ParseException {
         int pos = bp;
@@ -511,7 +482,7 @@ public class DocCommentParser {
             fac.log.popDiagnosticHandler(deferredDiagnosticHandler);
         }
 
-        return m.at(pos).Reference(sig, qualExpr, member, paramTypes).setEndPos(bp);
+        return m.at(pos).newReferenceTree(sig, qualExpr, member, paramTypes).setEndPos(bp);
     }
 
     JCTree parseType(String s) throws ParseException {
@@ -567,7 +538,7 @@ public class DocCommentParser {
 
         if (isJavaIdentifierStart(ch)) {
             Name name = readJavaIdentifier();
-            return m.at(pos).Identifier(name);
+            return m.at(pos).newIdentifierTree(name);
         }
 
         throw new ParseException("dc.identifier.expected");
@@ -595,7 +566,7 @@ public class DocCommentParser {
                 case '"':
                     nextChar();
                     // trim trailing white-space?
-                    return m.at(pos).Text(newString(pos, bp));
+                    return m.at(pos).newTextTree(newString(pos, bp));
 
                 case '@':
                     if (newline)
@@ -608,12 +579,49 @@ public class DocCommentParser {
     }
 
     /**
+     * Read a term ie. one word.
+     * It is an error if the beginning of the next tag is detected.
+     */
+    @SuppressWarnings("fallthrough")
+    protected DCText inlineWord() {
+        int pos = bp;
+        int depth = 0;
+        loop:
+        while (bp < buflen) {
+            switch (ch) {
+                case '\n':
+                    newline = true;
+                    // fallthrough
+
+                case '\r': case '\f': case ' ': case '\t':
+                    return m.at(pos).newTextTree(newString(pos, bp));
+
+                case '@':
+                    if (newline)
+                        break loop;
+
+                case '{':
+                    depth++;
+                    break;
+
+                case '}':
+                    if (depth == 0 || --depth == 0)
+                        return m.at(pos).newTextTree(newString(pos, bp));
+                    break;
+            }
+            newline = false;
+            nextChar();
+        }
+        return null;
+    }
+
+    /**
      * Read general text content of an inline tag, including HTML entities and elements.
      * Matching pairs of { } are skipped; the text is terminated by the first
      * unmatched }. It is an error if the beginning of the next tag is detected.
      */
     @SuppressWarnings("fallthrough")
-    protected List<DCTree> inlineContent() {
+    private List<DCTree> inlineContent() {
         ListBuffer<DCTree> trees = new ListBuffer<>();
 
         skipWhitespace();
@@ -644,6 +652,8 @@ public class DocCommentParser {
                     break;
 
                 case '{':
+                    if (textStart == -1)
+                        textStart = bp;
                     newline = false;
                     depth++;
                     nextChar();
@@ -672,7 +682,7 @@ public class DocCommentParser {
             }
         }
 
-        return List.<DCTree>of(erroneous("dc.unterminated.inline.tag", pos));
+        return List.of(erroneous("dc.unterminated.inline.tag", pos));
     }
 
     protected void entity(ListBuffer<DCTree> list) {
@@ -720,7 +730,7 @@ public class DocCommentParser {
             if (ch != ';')
                 return erroneous("dc.missing.semicolon", p);
             nextChar();
-            return m.at(p).Entity(name);
+            return m.at(p).newEntityTree(name);
         }
     }
 
@@ -742,7 +752,8 @@ public class DocCommentParser {
                 }
                 if (ch == '>') {
                     nextChar();
-                    return m.at(p).StartElement(name, attrs, selfClosing).setEndPos(bp);
+                    DCTree dctree = m.at(p).newStartElementTree(name, attrs, selfClosing).setEndPos(bp);
+                    return dctree;
                 }
             }
         } else if (ch == '/') {
@@ -752,7 +763,7 @@ public class DocCommentParser {
                 skipWhitespace();
                 if (ch == '>') {
                     nextChar();
-                    return m.at(p).EndElement(name);
+                    return m.at(p).newEndElementTree(name);
                 }
             }
         } else if (ch == '!') {
@@ -767,11 +778,13 @@ public class DocCommentParser {
                             dash++;
                             nextChar();
                         }
-                        // strictly speaking, a comment should not contain "--"
+                        // Strictly speaking, a comment should not contain "--"
                         // so dash > 2 is an error, dash == 2 implies ch == '>'
+                        // See http://www.w3.org/TR/html-markup/syntax.html#syntax-comments
+                        // for more details.
                         if (dash >= 2 && ch == '>') {
                             nextChar();
-                            return m.at(p).Comment(newString(p, bp));
+                            return m.at(p).newCommentTree(newString(p, bp));
                         }
 
                         nextChar();
@@ -834,7 +847,7 @@ public class DocCommentParser {
                 skipWhitespace();
                 value = v.toList();
             }
-            DCAttribute attr = m.at(namePos).Attribute(name, vkind, value);
+            DCAttribute attr = m.at(namePos).newAttributeTree(name, vkind, value);
             attrs.add(attr);
         }
 
@@ -859,7 +872,7 @@ public class DocCommentParser {
     protected void addPendingText(ListBuffer<DCTree> list, int textEnd) {
         if (textStart != -1) {
             if (textStart <= textEnd) {
-                list.add(m.at(textStart).Text(newString(textStart, textEnd + 1)));
+                list.add(m.at(textStart).newTextTree(newString(textStart, textEnd + 1)));
             }
             textStart = -1;
         }
@@ -881,16 +894,7 @@ public class DocCommentParser {
             i--;
         }
         textStart = -1;
-        return m.at(pos).Erroneous(newString(pos, i + 1), diagSource, code);
-    }
-
-    @SuppressWarnings("unchecked")
-    <T> T getFirst(List<T>... lists) {
-        for (List<T> list: lists) {
-            if (list.nonEmpty())
-                return list.head;
-        }
-        return null;
+        return m.at(pos).newErroneousTree(newString(pos, i + 1), diagSource, code);
     }
 
     protected boolean isIdentifierStart(char ch) {
@@ -916,8 +920,11 @@ public class DocCommentParser {
     protected Name readTagName() {
         int start = bp;
         nextChar();
-        while (bp < buflen && (Character.isUnicodeIdentifierPart(ch) || ch == '.'))
+        while (bp < buflen
+                && (Character.isUnicodeIdentifierPart(ch) || ch == '.'
+                || ch == '-' || ch == ':')) {
             nextChar();
+        }
         return names.fromChars(buf, start, bp - start);
     }
 
@@ -960,59 +967,9 @@ public class DocCommentParser {
     }
 
     protected void skipWhitespace() {
-        while (isWhitespace(ch))
+        while (isWhitespace(ch)) {
             nextChar();
-    }
-
-    protected int getSentenceBreak(String s) {
-        if (sentenceBreaker != null) {
-            sentenceBreaker.setText(s);
-            int i = sentenceBreaker.next();
-            return (i == s.length()) ? -1 : i;
         }
-
-        // scan for period followed by whitespace
-        boolean period = false;
-        for (int i = 0; i < s.length(); i++) {
-            switch (s.charAt(i)) {
-                case '.':
-                    period = true;
-                    break;
-
-                case ' ':
-                case '\f':
-                case '\n':
-                case '\r':
-                case '\t':
-                    if (period)
-                        return i;
-                    break;
-
-                default:
-                    period = false;
-                    break;
-            }
-        }
-        return -1;
-    }
-
-
-    Set<String> htmlBlockTags = new HashSet<>(Arrays.asList(
-                    "h1", "h2", "h3", "h4", "h5", "h6", "p", "pre"));
-
-    protected boolean isSentenceBreak(Name n) {
-        return htmlBlockTags.contains(StringUtils.toLowerCase(n.toString()));
-    }
-
-    protected boolean isSentenceBreak(DCTree t) {
-        switch (t.getKind()) {
-            case START_ELEMENT:
-                return isSentenceBreak(((DCStartElement) t).getName());
-
-            case END_ELEMENT:
-                return isSentenceBreak(((DCEndElement) t).getName());
-        }
-        return false;
     }
 
     /**
@@ -1026,12 +983,21 @@ public class DocCommentParser {
     static abstract class TagParser {
         enum Kind { INLINE, BLOCK }
 
-        Kind kind;
-        DCTree.Kind treeKind;
+        final Kind kind;
+        final DCTree.Kind treeKind;
+        final boolean retainWhiteSpace;
+
 
         TagParser(Kind k, DCTree.Kind tk) {
             kind = k;
             treeKind = tk;
+            retainWhiteSpace = false;
+        }
+
+        TagParser(Kind k, DCTree.Kind tk, boolean retainWhiteSpace) {
+            kind = k;
+            treeKind = tk;
+            this.retainWhiteSpace = retainWhiteSpace;
         }
 
         Kind getKind() {
@@ -1046,7 +1012,7 @@ public class DocCommentParser {
     }
 
     /**
-     * @see <a href="http://docs.oracle.com/javase/7/docs/technotes/tools/solaris/javadoc.html#javadoctags">Javadoc Tags</a>
+     * @see <a href="http://docs.oracle.com/javase/8/docs/technotes/tools/unix/javadoc.html#CHDJGIJB">Javadoc Tags</a>
      */
     private void initTagParsers() {
         TagParser[] parsers = {
@@ -1054,16 +1020,16 @@ public class DocCommentParser {
             new TagParser(Kind.BLOCK, DCTree.Kind.AUTHOR) {
                 public DCTree parse(int pos) {
                     List<DCTree> name = blockContent();
-                    return m.at(pos).Author(name);
+                    return m.at(pos).newAuthorTree(name);
                 }
             },
 
             // {@code text}
-            new TagParser(Kind.INLINE, DCTree.Kind.CODE) {
+            new TagParser(Kind.INLINE, DCTree.Kind.CODE, true) {
                 public DCTree parse(int pos) throws ParseException {
-                    DCTree text = inlineText();
+                    DCTree text = inlineText(WhitespaceRetentionPolicy.REMOVE_FIRST_SPACE);
                     nextChar();
-                    return m.at(pos).Code((DCText) text);
+                    return m.at(pos).newCodeTree((DCText) text);
                 }
             },
 
@@ -1071,7 +1037,7 @@ public class DocCommentParser {
             new TagParser(Kind.BLOCK, DCTree.Kind.DEPRECATED) {
                 public DCTree parse(int pos) {
                     List<DCTree> reason = blockContent();
-                    return m.at(pos).Deprecated(reason);
+                    return m.at(pos).newDeprecatedTree(reason);
                 }
             },
 
@@ -1080,9 +1046,9 @@ public class DocCommentParser {
                 public DCTree parse(int pos) throws ParseException {
                     if (ch == '}') {
                         nextChar();
-                        return m.at(pos).DocRoot();
+                        return m.at(pos).newDocRootTree();
                     }
-                    inlineText(); // skip unexpected content
+                    inlineText(WhitespaceRetentionPolicy.REMOVE_ALL); // skip unexpected content
                     nextChar();
                     throw new ParseException("dc.unexpected.content");
                 }
@@ -1094,7 +1060,37 @@ public class DocCommentParser {
                     skipWhitespace();
                     DCReference ref = reference(false);
                     List<DCTree> description = blockContent();
-                    return m.at(pos).Exception(ref, description);
+                    return m.at(pos).newExceptionTree(ref, description);
+                }
+            },
+
+            // @hidden hidden-text
+            new TagParser(Kind.BLOCK, DCTree.Kind.HIDDEN) {
+                public DCTree parse(int pos) {
+                    List<DCTree> reason = blockContent();
+                    return m.at(pos).newHiddenTree(reason);
+                }
+            },
+
+            // @index search-term options-description
+            new TagParser(Kind.INLINE, DCTree.Kind.INDEX) {
+                public DCTree parse(int pos) throws ParseException {
+                    skipWhitespace();
+                    if (ch == '}') {
+                        throw new ParseException("dc.no.content");
+                    }
+                    DCTree term = ch == '"' ? quotedString() : inlineWord();
+                    if (term == null) {
+                        throw new ParseException("dc.no.content");
+                    }
+                    skipWhitespace();
+                    List<DCTree> description = List.nil();
+                    if (ch != '}') {
+                        description = inlineContent();
+                    } else {
+                        nextChar();
+                    }
+                    return m.at(pos).newIndexTree(term, description);
                 }
             },
 
@@ -1103,9 +1099,9 @@ public class DocCommentParser {
                 public DCTree parse(int pos) throws ParseException {
                     if (ch == '}') {
                         nextChar();
-                        return m.at(pos).InheritDoc();
+                        return m.at(pos).newInheritDocTree();
                     }
-                    inlineText(); // skip unexpected content
+                    inlineText(WhitespaceRetentionPolicy.REMOVE_ALL); // skip unexpected content
                     nextChar();
                     throw new ParseException("dc.unexpected.content");
                 }
@@ -1116,7 +1112,7 @@ public class DocCommentParser {
                 public DCTree parse(int pos) throws ParseException {
                     DCReference ref = reference(true);
                     List<DCTree> label = inlineContent();
-                    return m.at(pos).Link(ref, label);
+                    return m.at(pos).newLinkTree(ref, label);
                 }
             },
 
@@ -1125,16 +1121,16 @@ public class DocCommentParser {
                 public DCTree parse(int pos) throws ParseException {
                     DCReference ref = reference(true);
                     List<DCTree> label = inlineContent();
-                    return m.at(pos).LinkPlain(ref, label);
+                    return m.at(pos).newLinkPlainTree(ref, label);
                 }
             },
 
             // {@literal text}
-            new TagParser(Kind.INLINE, DCTree.Kind.LITERAL) {
+            new TagParser(Kind.INLINE, DCTree.Kind.LITERAL, true) {
                 public DCTree parse(int pos) throws ParseException {
-                    DCTree text = inlineText();
+                    DCTree text = inlineText(WhitespaceRetentionPolicy.REMOVE_FIRST_SPACE);
                     nextChar();
-                    return m.at(pos).Literal((DCText) text);
+                    return m.at(pos).newLiteralTree((DCText) text);
                 }
             },
 
@@ -1159,7 +1155,17 @@ public class DocCommentParser {
 
                     skipWhitespace();
                     List<DCTree> desc = blockContent();
-                    return m.at(pos).Param(typaram, id, desc);
+                    return m.at(pos).newParamTree(typaram, id, desc);
+                }
+            },
+
+            // @provides service-name description
+            new TagParser(Kind.BLOCK, DCTree.Kind.PROVIDES) {
+                public DCTree parse(int pos) throws ParseException {
+                    skipWhitespace();
+                    DCReference ref = reference(true);
+                    List<DCTree> description = blockContent();
+                    return m.at(pos).newProvidesTree(ref, description);
                 }
             },
 
@@ -1167,7 +1173,7 @@ public class DocCommentParser {
             new TagParser(Kind.BLOCK, DCTree.Kind.RETURN) {
                 public DCTree parse(int pos) {
                     List<DCTree> description = blockContent();
-                    return m.at(pos).Return(description);
+                    return m.at(pos).newReturnTree(description);
                 }
             },
 
@@ -1182,7 +1188,7 @@ public class DocCommentParser {
                                 skipWhitespace();
                                 if (ch == '@'
                                         || ch == EOI && bp == buf.length - 1) {
-                                    return m.at(pos).See(List.<DCTree>of(string));
+                                    return m.at(pos).newSeeTree(List.<DCTree>of(string));
                                 }
                             }
                             break;
@@ -1190,7 +1196,7 @@ public class DocCommentParser {
                         case '<':
                             List<DCTree> html = blockContent();
                             if (html != null)
-                                return m.at(pos).See(html);
+                                return m.at(pos).newSeeTree(html);
                             break;
 
                         case '@':
@@ -1207,7 +1213,7 @@ public class DocCommentParser {
                             if (isJavaIdentifierStart(ch) || ch == '#') {
                                 DCReference ref = reference(true);
                                 List<DCTree> description = blockContent();
-                                return m.at(pos).See(description.prepend(ref));
+                                return m.at(pos).newSeeTree(description.prepend(ref));
                             }
                     }
                     throw new ParseException("dc.unexpected.content");
@@ -1218,7 +1224,7 @@ public class DocCommentParser {
             new TagParser(Kind.BLOCK, DCTree.Kind.SERIAL_DATA) {
                 public DCTree parse(int pos) {
                     List<DCTree> description = blockContent();
-                    return m.at(pos).SerialData(description);
+                    return m.at(pos).newSerialDataTree(description);
                 }
             },
 
@@ -1234,7 +1240,7 @@ public class DocCommentParser {
                         skipWhitespace();
                         description = blockContent();
                     }
-                    return m.at(pos).SerialField(name, type, description);
+                    return m.at(pos).newSerialFieldTree(name, type, description);
                 }
             },
 
@@ -1242,7 +1248,7 @@ public class DocCommentParser {
             new TagParser(Kind.BLOCK, DCTree.Kind.SERIAL) {
                 public DCTree parse(int pos) {
                     List<DCTree> description = blockContent();
-                    return m.at(pos).Serial(description);
+                    return m.at(pos).newSerialTree(description);
                 }
             },
 
@@ -1250,7 +1256,7 @@ public class DocCommentParser {
             new TagParser(Kind.BLOCK, DCTree.Kind.SINCE) {
                 public DCTree parse(int pos) {
                     List<DCTree> description = blockContent();
-                    return m.at(pos).Since(description);
+                    return m.at(pos).newSinceTree(description);
                 }
             },
 
@@ -1260,7 +1266,17 @@ public class DocCommentParser {
                     skipWhitespace();
                     DCReference ref = reference(false);
                     List<DCTree> description = blockContent();
-                    return m.at(pos).Throws(ref, description);
+                    return m.at(pos).newThrowsTree(ref, description);
+                }
+            },
+
+            // @uses service-name description
+            new TagParser(Kind.BLOCK, DCTree.Kind.USES) {
+                public DCTree parse(int pos) throws ParseException {
+                    skipWhitespace();
+                    DCReference ref = reference(true);
+                    List<DCTree> description = blockContent();
+                    return m.at(pos).newUsesTree(ref, description);
                 }
             },
 
@@ -1271,7 +1287,7 @@ public class DocCommentParser {
                     skipWhitespace();
                     if (ch == '}') {
                         nextChar();
-                        return m.at(pos).Value(ref);
+                        return m.at(pos).newValueTree(ref);
                     }
                     nextChar();
                     throw new ParseException("dc.unexpected.content");
@@ -1282,7 +1298,7 @@ public class DocCommentParser {
             new TagParser(Kind.BLOCK, DCTree.Kind.VERSION) {
                 public DCTree parse(int pos) {
                     List<DCTree> description = blockContent();
-                    return m.at(pos).Version(description);
+                    return m.at(pos).newVersionTree(description);
                 }
             },
         };

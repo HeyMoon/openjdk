@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,6 @@
 
 #include "gc/shared/blockOffsetTable.hpp"
 #include "gc/shared/cardTableModRefBS.hpp"
-#include "gc/shared/watermark.hpp"
 #include "gc/shared/workgroup.hpp"
 #include "memory/allocation.hpp"
 #include "memory/iterator.hpp"
@@ -48,7 +47,6 @@ class BlockOffsetArrayContigSpace;
 class Generation;
 class CompactibleSpace;
 class BlockOffsetTable;
-class GenRemSet;
 class CardTableRS;
 class DirtyCardToOopClosure;
 
@@ -222,7 +220,6 @@ class Space: public CHeapObj<mtGC> {
   // moving as a part of compaction.
   virtual void adjust_pointers() = 0;
 
-  // PrintHeapAtGC support
   virtual void print() const;
   virtual void print_on(outputStream* st) const;
   virtual void print_short() const;
@@ -363,9 +360,13 @@ private:
     return size;
   }
 
-  inline size_t obj_size(const HeapWord* addr) const {
-    return oop(addr)->size();
-  }
+  inline size_t obj_size(const HeapWord* addr) const;
+
+  template <class SpaceType>
+  static inline void verify_up_to_first_dead(SpaceType* space) NOT_DEBUG_RETURN;
+
+  template <class SpaceType>
+  static inline void clear_empty_region(SpaceType* space);
 
 public:
   CompactibleSpace() :
@@ -460,16 +461,6 @@ protected:
     return end();
   }
 
-  // Requires "allowed_deadspace_words > 0", that "q" is the start of a
-  // free block of the given "word_len", and that "q", were it an object,
-  // would not move if forwarded.  If the size allows, fill the free
-  // block with an object, to prevent excessive compaction.  Returns "true"
-  // iff the free region was made deadspace, and modifies
-  // "allowed_deadspace_words" to reflect the number of available deadspace
-  // words remaining after this operation.
-  bool insert_deadspace(size_t& allowed_deadspace_words, HeapWord* q,
-                        size_t word_len);
-
   // Below are template functions for scan_and_* algorithms (avoiding virtual calls).
   // The space argument should be a subclass of CompactibleSpace, implementing
   // scan_limit(), scanned_block_is_obj(), and scanned_block_size(),
@@ -511,9 +502,7 @@ class ContiguousSpace: public CompactibleSpace {
     return true; // Always true, since scan_limit is top
   }
 
-  inline size_t scanned_block_size(const HeapWord* addr) const {
-    return oop(addr)->size();
-  }
+  inline size_t scanned_block_size(const HeapWord* addr) const;
 
  protected:
   HeapWord* _top;
@@ -541,9 +530,6 @@ class ContiguousSpace: public CompactibleSpace {
   void set_saved_mark()            { _saved_mark_word = top();    }
   void reset_saved_mark()          { _saved_mark_word = bottom(); }
 
-  WaterMark bottom_mark()     { return WaterMark(this, bottom()); }
-  WaterMark top_mark()        { return WaterMark(this, top()); }
-  WaterMark saved_mark()      { return WaterMark(this, saved_mark_word()); }
   bool saved_mark_at_top() const { return saved_mark_word() == top(); }
 
   // In debug mode mangle (write it with a particular bit
@@ -649,7 +635,7 @@ class ContiguousSpace: public CompactibleSpace {
   // Same as object_iterate, but starting from "mark", which is required
   // to denote the start of an object.  Objects allocated by
   // applications of the closure *are* included in the iteration.
-  virtual void object_iterate_from(WaterMark mark, ObjectClosure* blk);
+  virtual void object_iterate_from(HeapWord* mark, ObjectClosure* blk);
 
   // Very inefficient implementation.
   virtual HeapWord* block_start_const(const void* p) const;
@@ -664,7 +650,6 @@ class ContiguousSpace: public CompactibleSpace {
   // Overrides for more efficient compaction support.
   void prepare_for_compaction(CompactPoint* cp);
 
-  // PrintHeapAtGC support.
   virtual void print_on(outputStream* st) const;
 
   // Checked dynamic downcasts.
@@ -683,7 +668,7 @@ class ContiguousSpace: public CompactibleSpace {
 
 // A dirty card to oop closure that does filtering.
 // It knows how to filter out objects that are outside of the _boundary.
-class Filtering_DCTOC : public DirtyCardToOopClosure {
+class FilteringDCTOC : public DirtyCardToOopClosure {
 protected:
   // Override.
   void walk_mem_region(MemRegion mr,
@@ -704,7 +689,7 @@ protected:
                                        FilteringClosure* cl) = 0;
 
 public:
-  Filtering_DCTOC(Space* sp, ExtendedOopClosure* cl,
+  FilteringDCTOC(Space* sp, ExtendedOopClosure* cl,
                   CardTableModRefBS::PrecisionStyle precision,
                   HeapWord* boundary) :
     DirtyCardToOopClosure(sp, cl, precision, boundary) {}
@@ -720,7 +705,7 @@ public:
 // 2. That the space is really made up of objects and not just
 //    blocks.
 
-class ContiguousSpaceDCTOC : public Filtering_DCTOC {
+class ContiguousSpaceDCTOC : public FilteringDCTOC {
 protected:
   // Overrides.
   HeapWord* get_actual_top(HeapWord* top, HeapWord* top_obj);
@@ -736,7 +721,7 @@ public:
   ContiguousSpaceDCTOC(ContiguousSpace* sp, ExtendedOopClosure* cl,
                        CardTableModRefBS::PrecisionStyle precision,
                        HeapWord* boundary) :
-    Filtering_DCTOC(sp, cl, precision, boundary)
+    FilteringDCTOC(sp, cl, precision, boundary)
   {}
 };
 

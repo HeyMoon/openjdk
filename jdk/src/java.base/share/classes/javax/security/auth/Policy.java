@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -153,13 +153,14 @@ import sun.security.util.Debug;
  * These two APIs provide callers the means to query the
  * Policy for Principal-based Permission entries.
  *
+ * @since 1.4
  * @see java.security.Security security properties
  */
-@Deprecated
+@Deprecated(since="1.4")
 public abstract class Policy {
 
     private static Policy policy;
-    private final static String AUTH_POLICY =
+    private static final String AUTH_POLICY =
         "sun.security.provider.AuthPolicyFile";
 
     private final java.security.AccessControlContext acc =

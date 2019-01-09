@@ -52,6 +52,7 @@ import java.util.logging.LoggingPermission;
  * @test
  * @bug 8059767
  * @summary tests that FileHandler can accept a long limit.
+ * @modules java.logging/java.util.logging:open
  * @run main/othervm FileHandlerLongLimit UNSECURE
  * @run main/othervm FileHandlerLongLimit SECURE
  * @author danielfuchs
@@ -441,7 +442,7 @@ public class FileHandlerLongLimit {
     }
 
 
-    final static class PermissionsBuilder {
+    static final class PermissionsBuilder {
         final Permissions perms;
         public PermissionsBuilder() {
             this(new Permissions());

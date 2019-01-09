@@ -23,6 +23,7 @@
 
 import com.sun.tools.classfile.*;
 
+import java.nio.file.Paths;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -62,6 +63,7 @@ public class LineNumberTestBase extends TestBase {
         boolean failed = false;
         for (TestCase testCase : testCases) {
             try {
+                writeToFileIfEnabled(Paths.get(testCase.getName() + ".java"), testCase.src);
                 Set<Integer> coveredLines = new HashSet<>();
                 for (JavaFileObject file : compile(testCase.src).getClasses().values()) {
                     ClassFile classFile = ClassFile.read(file.openInputStream());
@@ -189,7 +191,7 @@ public class LineNumberTestBase extends TestBase {
         CONDITION("int res = \n" +
                 "testField == 2 ?\n" +
                 "10\n" +
-                ":9;", 1, 3, 4), // see issue https://bugs.openjdk.java.net/browse/JDK-8050993
+                ":9;", 2, 3, 4),
         TRY("try{\n" +
                 "    --testField;\n" +
                 "}\n" +

@@ -34,6 +34,9 @@ import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.geom.Path2D;
 import java.beans.ConstructorProperties;
+import java.beans.PropertyChangeEvent;
+import java.beans.PropertyChangeListener;
+import java.lang.ref.WeakReference;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.UIManager;
@@ -100,55 +103,55 @@ public class TitledBorder extends AbstractBorder
     /**
      * Use the default vertical orientation for the title text.
      */
-    static public final int     DEFAULT_POSITION        = 0;
+    public static final int     DEFAULT_POSITION        = 0;
     /** Position the title above the border's top line. */
-    static public final int     ABOVE_TOP               = 1;
+    public static final int     ABOVE_TOP               = 1;
     /** Position the title in the middle of the border's top line. */
-    static public final int     TOP                     = 2;
+    public static final int     TOP                     = 2;
     /** Position the title below the border's top line. */
-    static public final int     BELOW_TOP               = 3;
+    public static final int     BELOW_TOP               = 3;
     /** Position the title above the border's bottom line. */
-    static public final int     ABOVE_BOTTOM            = 4;
+    public static final int     ABOVE_BOTTOM            = 4;
     /** Position the title in the middle of the border's bottom line. */
-    static public final int     BOTTOM                  = 5;
+    public static final int     BOTTOM                  = 5;
     /** Position the title below the border's bottom line. */
-    static public final int     BELOW_BOTTOM            = 6;
+    public static final int     BELOW_BOTTOM            = 6;
 
     /**
      * Use the default justification for the title text.
      */
-    static public final int     DEFAULT_JUSTIFICATION   = 0;
+    public static final int     DEFAULT_JUSTIFICATION   = 0;
     /** Position title text at the left side of the border line. */
-    static public final int     LEFT                    = 1;
+    public static final int     LEFT                    = 1;
     /** Position title text in the center of the border line. */
-    static public final int     CENTER                  = 2;
+    public static final int     CENTER                  = 2;
     /** Position title text at the right side of the border line. */
-    static public final int     RIGHT                   = 3;
+    public static final int     RIGHT                   = 3;
     /** Position title text at the left side of the border line
      *  for left to right orientation, at the right side of the
      *  border line for right to left orientation.
      */
-    static public final int     LEADING = 4;
+    public static final int     LEADING = 4;
     /** Position title text at the right side of the border line
      *  for left to right orientation, at the left side of the
      *  border line for right to left orientation.
      */
-    static public final int     TRAILING = 5;
+    public static final int     TRAILING = 5;
 
     /**
      * Space between the border and the component's edge
      */
-    static protected final int EDGE_SPACING = 2;
+    protected static final int EDGE_SPACING = 2;
 
     /**
      * Space between the border and text
      */
-    static protected final int TEXT_SPACING = 2;
+    protected static final int TEXT_SPACING = 2;
 
     /**
      * Horizontal inset of text that is left or right justified
      */
-    static protected final int TEXT_INSET_H = 5;
+    protected static final int TEXT_INSET_H = 5;
 
     /**
      * Creates a TitledBorder instance.
@@ -246,6 +249,7 @@ public class TitledBorder extends AbstractBorder
         this.label = new JLabel();
         this.label.setOpaque(false);
         this.label.putClientProperty(BasicHTML.propertyKey, null);
+        installPropertyChangeListeners();
     }
 
     /**
@@ -751,5 +755,26 @@ public class TitledBorder extends AbstractBorder
             insets.set(i.top, i.left, i.bottom, i.right);
         }
         return insets;
+    }
+
+    private void installPropertyChangeListeners() {
+        final WeakReference<TitledBorder> weakReference = new WeakReference<TitledBorder>(this);
+        final PropertyChangeListener listener = new PropertyChangeListener() {
+            @Override
+            public void propertyChange(PropertyChangeEvent evt) {
+                if (weakReference.get() == null) {
+                    UIManager.removePropertyChangeListener(this);
+                    UIManager.getDefaults().removePropertyChangeListener(this);
+                } else {
+                    String prop = evt.getPropertyName();
+                    if ("lookAndFeel".equals(prop) || "LabelUI".equals(prop)) {
+                        label.updateUI();
+                    }
+                }
+            }
+        };
+
+        UIManager.addPropertyChangeListener(listener);
+        UIManager.getDefaults().addPropertyChangeListener(listener);
     }
 }

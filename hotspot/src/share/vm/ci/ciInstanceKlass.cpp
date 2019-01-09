@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@
 #include "classfile/systemDictionary.hpp"
 #include "memory/allocation.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/fieldStreams.hpp"
 #include "runtime/fieldDescriptor.hpp"
@@ -46,7 +47,7 @@
 ciInstanceKlass::ciInstanceKlass(KlassHandle h_k) :
   ciKlass(h_k)
 {
-  assert(get_Klass()->oop_is_instance(), "wrong type");
+  assert(get_Klass()->is_instance_klass(), "wrong type");
   assert(get_instanceKlass()->is_loaded(), "must be at least loaded");
   InstanceKlass* ik = get_instanceKlass();
 
@@ -57,7 +58,7 @@ ciInstanceKlass::ciInstanceKlass(KlassHandle h_k) :
   _init_state = ik->init_state();
   _nonstatic_field_size = ik->nonstatic_field_size();
   _has_nonstatic_fields = ik->has_nonstatic_fields();
-  _has_default_methods = ik->has_default_methods();
+  _has_nonstatic_concrete_methods = ik->has_nonstatic_concrete_methods();
   _is_anonymous = ik->is_anonymous();
   _nonstatic_fields = NULL; // initialized lazily by compute_nonstatic_fields:
   _has_injected_fields = -1;
@@ -356,7 +357,7 @@ ciInstanceKlass* ciInstanceKlass::unique_concrete_subklass() {
   VM_ENTRY_MARK;
   InstanceKlass* ik = get_instanceKlass();
   Klass* up = ik->up_cast_abstract();
-  assert(up->oop_is_instance(), "must be InstanceKlass");
+  assert(up->is_instance_klass(), "must be InstanceKlass");
   if (ik == up) {
     return NULL;
   }
@@ -594,6 +595,16 @@ ciInstanceKlass* ciInstanceKlass::implementor() {
   return impl;
 }
 
+ciInstanceKlass* ciInstanceKlass::host_klass() {
+  assert(is_loaded(), "must be loaded");
+  if (is_anonymous()) {
+    VM_ENTRY_MARK
+    Klass* host_klass = get_instanceKlass()->host_klass();
+    return CURRENT_ENV->get_instance_klass(host_klass);
+  }
+  return NULL;
+}
+
 // Utility class for printing of the contents of the static fields for
 // use by compilation replay.  It only prints out the information that
 // could be consumed by the compiler, so for primitive types it prints
@@ -683,7 +694,7 @@ void ciInstanceKlass::dump_replay_data(outputStream* out) {
   // Try to record related loaded classes
   Klass* sub = ik->subklass();
   while (sub != NULL) {
-    if (sub->oop_is_instance()) {
+    if (sub->is_instance_klass()) {
       out->print_cr("instanceKlass %s", sub->name()->as_quoted_ascii());
     }
     sub = sub->next_sibling();

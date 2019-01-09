@@ -59,6 +59,7 @@ import sun.security.action.GetPropertyAction;
 import sun.swing.SwingUtilities2;
 import java.lang.reflect.Method;
 import java.util.HashMap;
+import java.util.Objects;
 import sun.awt.AppContext;
 import sun.awt.AWTAccessor;
 
@@ -495,6 +496,51 @@ public class UIManager implements Serializable
         return getLAFState().lookAndFeel;
     }
 
+    /**
+     * Creates a supported built-in Java {@code LookAndFeel} specified
+     * by the given {@code L&F name} name.
+     *
+     * @param name a {@code String} specifying the name of the built-in
+     *             look and feel
+     * @return the built-in {@code LookAndFeel} object
+     * @throws NullPointerException if {@code name} is {@code null}
+     * @throws UnsupportedLookAndFeelException if the built-in Java {@code L&F}
+     *         is not found for the given name or it is not supported by the
+     *         underlying platform
+     *
+     * @see LookAndFeel#getName
+     * @see LookAndFeel#isSupportedLookAndFeel
+     *
+     * @since 9
+     */
+    @SuppressWarnings("deprecation")
+    public static LookAndFeel createLookAndFeel(String name)
+            throws UnsupportedLookAndFeelException {
+        Objects.requireNonNull(name);
+
+        if ("GTK look and feel".equals(name)) {
+            name = "GTK+";
+        }
+
+        try {
+            for (LookAndFeelInfo info : installedLAFs) {
+                if (info.getName().equals(name)) {
+                    Class<?> cls = Class.forName(UIManager.class.getModule(),
+                                                 info.getClassName());
+                    LookAndFeel laf =
+                        (LookAndFeel) cls.newInstance();
+                    if (!laf.isSupportedLookAndFeel()) {
+                        break;
+                    }
+                    return laf;
+                }
+            }
+        } catch (ReflectiveOperationException |
+                 IllegalArgumentException ignore) {
+        }
+
+        throw new UnsupportedLookAndFeelException(name);
+    }
 
     /**
      * Sets the current look and feel to {@code newLookAndFeel}.
@@ -570,6 +616,7 @@ public class UIManager implements Serializable
      * @throws ClassCastException if {@code className} does not identify
      *         a class that extends {@code LookAndFeel}
      */
+    @SuppressWarnings("deprecation")
     public static void setLookAndFeel(String className)
         throws ClassNotFoundException,
                InstantiationException,
@@ -1043,6 +1090,7 @@ public class UIManager implements Serializable
     /**
      * Finds the Multiplexing <code>LookAndFeel</code>.
      */
+    @SuppressWarnings("deprecation")
     private static LookAndFeel getMultiLookAndFeel() {
         LookAndFeel multiLookAndFeel = getLAFState().multiLookAndFeel;
         if (multiLookAndFeel == null) {
@@ -1050,7 +1098,8 @@ public class UIManager implements Serializable
             String className = getLAFState().swingProps.getProperty(multiplexingLAFKey, defaultName);
             try {
                 Class<?> lnfClass = SwingUtilities.loadSystemClass(className);
-                multiLookAndFeel = (LookAndFeel)lnfClass.newInstance();
+                multiLookAndFeel =
+                        (LookAndFeel)lnfClass.newInstance();
             } catch (Exception exc) {
                 System.err.println("UIManager: failed loading " + className);
             }
@@ -1074,7 +1123,7 @@ public class UIManager implements Serializable
      * @see #getAuxiliaryLookAndFeels
      * @see #getInstalledLookAndFeels
      */
-    static public void addAuxiliaryLookAndFeel(LookAndFeel laf) {
+    public static void addAuxiliaryLookAndFeel(LookAndFeel laf) {
         maybeInitialize();
 
         if (!laf.isSupportedLookAndFeel()) {
@@ -1115,7 +1164,7 @@ public class UIManager implements Serializable
      * @see #setLookAndFeel
      * @see #getInstalledLookAndFeels
      */
-    static public boolean removeAuxiliaryLookAndFeel(LookAndFeel laf) {
+    public static boolean removeAuxiliaryLookAndFeel(LookAndFeel laf) {
         maybeInitialize();
 
         boolean result;
@@ -1153,7 +1202,7 @@ public class UIManager implements Serializable
      * @see #setLookAndFeel
      * @see #getInstalledLookAndFeels
      */
-    static public LookAndFeel[] getAuxiliaryLookAndFeels() {
+    public static LookAndFeel[] getAuxiliaryLookAndFeels() {
         maybeInitialize();
 
         Vector<LookAndFeel> v = getLAFState().auxLookAndFeels;
@@ -1365,6 +1414,7 @@ public class UIManager implements Serializable
     }
 
 
+    @SuppressWarnings("deprecation")
     private static void initializeAuxiliaryLAFs(Properties swingProps)
     {
         String auxLookAndFeelNames = swingProps.getProperty(auxiliaryLAFsKey);
@@ -1384,7 +1434,8 @@ public class UIManager implements Serializable
             String className = p.nextToken();
             try {
                 Class<?> lnfClass = SwingUtilities.loadSystemClass(className);
-                LookAndFeel newLAF = (LookAndFeel)lnfClass.newInstance();
+                LookAndFeel newLAF =
+                        (LookAndFeel)lnfClass.newInstance();
                 newLAF.initialize();
                 auxLookAndFeels.addElement(newLAF);
             }

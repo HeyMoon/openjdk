@@ -26,7 +26,6 @@
 package jdk.nashorn.internal.runtime;
 
 import java.lang.invoke.MethodHandle;
-import java.util.Iterator;
 import java.util.concurrent.Callable;
 import jdk.nashorn.internal.objects.Global;
 import jdk.nashorn.internal.parser.JSONParser;
@@ -46,8 +45,8 @@ public final class JSONFunctions {
                 new Callable<MethodHandle>() {
                     @Override
                     public MethodHandle call() {
-                        return Bootstrap.createDynamicInvoker("dyn:call", Object.class,
-                            ScriptFunction.class, ScriptObject.class, String.class, Object.class);
+                        return Bootstrap.createDynamicCallInvoker(Object.class,
+                            Object.class, Object.class, String.class, Object.class);
                     }
                 });
     }
@@ -91,16 +90,16 @@ public final class JSONFunctions {
 
     // apply 'reviver' function if available
     private static Object applyReviver(final Global global, final Object unfiltered, final Object reviver) {
-        if (reviver instanceof ScriptFunction) {
+        if (Bootstrap.isCallable(reviver)) {
             final ScriptObject root = global.newObject();
             root.addOwnProperty("", Property.WRITABLE_ENUMERABLE_CONFIGURABLE, unfiltered);
-            return walk(root, "", (ScriptFunction)reviver);
+            return walk(root, "", reviver);
         }
         return unfiltered;
     }
 
     // This is the abstract "Walk" operation from the spec.
-    private static Object walk(final ScriptObject holder, final Object name, final ScriptFunction reviver) {
+    private static Object walk(final ScriptObject holder, final Object name, final Object reviver) {
         final Object val = holder.get(name);
         if (val instanceof ScriptObject) {
             final ScriptObject     valueObj = (ScriptObject)val;
@@ -132,7 +131,7 @@ public final class JSONFunctions {
 
         try {
              // Object.class, ScriptFunction.class, ScriptObject.class, String.class, Object.class);
-             return getREVIVER_INVOKER().invokeExact(reviver, holder, JSType.toString(name), val);
+             return getREVIVER_INVOKER().invokeExact(reviver, (Object)holder, JSType.toString(name), val);
         } catch(Error|RuntimeException t) {
             throw t;
         } catch(final Throwable t) {

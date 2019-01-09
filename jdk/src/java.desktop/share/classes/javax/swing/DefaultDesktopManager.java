@@ -50,11 +50,11 @@ import java.beans.PropertyVetoException;
   */
 @SuppressWarnings("serial") // No Interesting Non-Transient State
 public class DefaultDesktopManager implements DesktopManager, java.io.Serializable {
-    final static String HAS_BEEN_ICONIFIED_PROPERTY = "wasIconOnce";
+    static final String HAS_BEEN_ICONIFIED_PROPERTY = "wasIconOnce";
 
-    final static int DEFAULT_DRAG_MODE = 0;
-    final static int OUTLINE_DRAG_MODE = 1;
-    final static int FASTER_DRAG_MODE = 2;
+    static final int DEFAULT_DRAG_MODE = 0;
+    static final int OUTLINE_DRAG_MODE = 1;
+    static final int FASTER_DRAG_MODE = 2;
 
     int dragMode = DEFAULT_DRAG_MODE;
 
@@ -129,8 +129,12 @@ public class DefaultDesktopManager implements DesktopManager, java.io.Serializab
             } catch (PropertyVetoException e2) {
             }
         } else {
+            Container c = f.getParent();
+            if (c == null) {
+                return;
+            }
             f.setNormalBounds(f.getBounds());
-            Rectangle desktopBounds = f.getParent().getBounds();
+            Rectangle desktopBounds = c.getBounds();
             setBoundsForFrame(f, 0, 0,
                 desktopBounds.width, desktopBounds.height);
         }
@@ -190,24 +194,16 @@ public class DefaultDesktopManager implements DesktopManager, java.io.Serializab
             int layer = JLayeredPane.getLayer(f);
             JLayeredPane.putLayer(desktopIcon, layer);
         }
-
-        // If we are maximized we already have the normal bounds recorded
-        // don't try to re-record them, otherwise we incorrectly set the
-        // normal bounds to maximized state.
-        if (!f.isMaximum()) {
-            f.setNormalBounds(f.getBounds());
-        }
-        d.setComponentOrderCheckingEnabled(false);
+        d.setComponentOrderCheckingEnabled(true);
         c.remove(f);
         c.add(desktopIcon);
-        d.setComponentOrderCheckingEnabled(true);
-        c.repaint(f.getX(), f.getY(), f.getWidth(), f.getHeight());
         if (findNext) {
             if (d.selectFrame(true) == null) {
                 // The icon is the last frame.
                 f.restoreSubcomponentFocus();
             }
         }
+        c.repaint(f.getX(), f.getY(), f.getWidth(), f.getHeight());
     }
 
     /**

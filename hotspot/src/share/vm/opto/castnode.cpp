@@ -24,6 +24,7 @@
 
 #include "precompiled.hpp"
 #include "opto/addnode.hpp"
+#include "opto/callnode.hpp"
 #include "opto/castnode.hpp"
 #include "opto/connode.hpp"
 #include "opto/matcher.hpp"
@@ -33,14 +34,21 @@
 
 //=============================================================================
 // If input is already higher or equal to cast type, then this is an identity.
-Node *ConstraintCastNode::Identity( PhaseTransform *phase ) {
+Node* ConstraintCastNode::Identity(PhaseGVN* phase) {
+  Node* dom = dominating_cast(phase);
+  if (dom != NULL) {
+    return dom;
+  }
+  if (_carry_dependency) {
+    return this;
+  }
   return phase->type(in(1))->higher_equal_speculative(_type) ? in(1) : this;
 }
 
 //------------------------------Value------------------------------------------
 // Take 'join' of input and cast-up type
-const Type *ConstraintCastNode::Value( PhaseTransform *phase ) const {
-  if( in(0) && phase->type(in(0)) == Type::TOP ) return Type::TOP;
+const Type* ConstraintCastNode::Value(PhaseGVN* phase) const {
+  if (in(0) && phase->type(in(0)) == Type::TOP) return Type::TOP;
   const Type* ft = phase->type(in(1))->filter_speculative(_type);
 
 #ifdef ASSERT
@@ -69,26 +77,82 @@ const Type *ConstraintCastNode::Value( PhaseTransform *phase ) const {
 //------------------------------Ideal------------------------------------------
 // Return a node which is more "ideal" than the current node.  Strip out
 // control copies
-Node *ConstraintCastNode::Ideal(PhaseGVN *phase, bool can_reshape){
+Node *ConstraintCastNode::Ideal(PhaseGVN *phase, bool can_reshape) {
   return (in(0) && remove_dead_region(phase, can_reshape)) ? this : NULL;
 }
 
-uint CastIINode::size_of() const {
+uint ConstraintCastNode::cmp(const Node &n) const {
+  return TypeNode::cmp(n) && ((ConstraintCastNode&)n)._carry_dependency == _carry_dependency;
+}
+
+uint ConstraintCastNode::size_of() const {
   return sizeof(*this);
 }
 
-uint CastIINode::cmp(const Node &n) const {
-  return TypeNode::cmp(n) && ((CastIINode&)n)._carry_dependency == _carry_dependency;
-}
-
-Node *CastIINode::Identity(PhaseTransform *phase) {
-  if (_carry_dependency) {
-    return this;
+Node* ConstraintCastNode::make_cast(int opcode, Node* c, Node *n, const Type *t, bool carry_dependency) {
+  switch(opcode) {
+  case Op_CastII: {
+    Node* cast = new CastIINode(n, t, carry_dependency);
+    cast->set_req(0, c);
+    return cast;
   }
-  return ConstraintCastNode::Identity(phase);
+  case Op_CastPP: {
+    Node* cast = new CastPPNode(n, t, carry_dependency);
+    cast->set_req(0, c);
+    return cast;
+  }
+  case Op_CheckCastPP: return new CheckCastPPNode(c, n, t, carry_dependency);
+  default:
+    fatal("Bad opcode %d", opcode);
+  }
+  return NULL;
 }
 
-const Type *CastIINode::Value(PhaseTransform *phase) const {
+TypeNode* ConstraintCastNode::dominating_cast(PhaseTransform *phase) const {
+  Node* val = in(1);
+  Node* ctl = in(0);
+  int opc = Opcode();
+  if (ctl == NULL) {
+    return NULL;
+  }
+  // Range check CastIIs may all end up under a single range check and
+  // in that case only the narrower CastII would be kept by the code
+  // below which would be incorrect.
+  if (is_CastII() && as_CastII()->has_range_check()) {
+    return NULL;
+  }
+  for (DUIterator_Fast imax, i = val->fast_outs(imax); i < imax; i++) {
+    Node* u = val->fast_out(i);
+    if (u != this &&
+        u->outcnt() > 0 &&
+        u->Opcode() == opc &&
+        u->in(0) != NULL &&
+        u->bottom_type()->higher_equal(type())) {
+      if (phase->is_dominator(u->in(0), ctl)) {
+        return u->as_Type();
+      }
+      if (is_CheckCastPP() && u->in(1)->is_Proj() && u->in(1)->in(0)->is_Allocate() &&
+          u->in(0)->is_Proj() && u->in(0)->in(0)->is_Initialize() &&
+          u->in(1)->in(0)->as_Allocate()->initialization() == u->in(0)->in(0)) {
+        // CheckCastPP following an allocation always dominates all
+        // use of the allocation result
+        return u->as_Type();
+      }
+    }
+  }
+  return NULL;
+}
+
+#ifndef PRODUCT
+void ConstraintCastNode::dump_spec(outputStream *st) const {
+  TypeNode::dump_spec(st);
+  if (_carry_dependency) {
+    st->print(" carry dependency");
+  }
+}
+#endif
+
+const Type* CastIINode::Value(PhaseGVN* phase) const {
   const Type *res = ConstraintCastNode::Value(phase);
 
   // Try to improve the type of the CastII if we recognize a CmpI/If
@@ -129,7 +193,7 @@ const Type *CastIINode::Value(PhaseTransform *phase) const {
             } else {
               stringStream ss;
               test.dump_on(&ss);
-              fatal(err_msg_res("unexpected comparison %s", ss.as_string()));
+              fatal("unexpected comparison %s", ss.as_string());
             }
             int lo_int = (int)lo_long;
             int hi_int = (int)hi_long;
@@ -154,11 +218,60 @@ const Type *CastIINode::Value(PhaseTransform *phase) const {
   return res;
 }
 
+Node *CastIINode::Ideal(PhaseGVN *phase, bool can_reshape) {
+  Node* progress = ConstraintCastNode::Ideal(phase, can_reshape);
+  if (progress != NULL) {
+    return progress;
+  }
+
+  // Similar to ConvI2LNode::Ideal() for the same reasons
+  // Do not narrow the type of range check dependent CastIINodes to
+  // avoid corruption of the graph if a CastII is replaced by TOP but
+  // the corresponding range check is not removed.
+  if (can_reshape && !_range_check_dependency && !phase->C->major_progress()) {
+    const TypeInt* this_type = this->type()->is_int();
+    const TypeInt* in_type = phase->type(in(1))->isa_int();
+    if (in_type != NULL && this_type != NULL &&
+        (in_type->_lo != this_type->_lo ||
+         in_type->_hi != this_type->_hi)) {
+      int lo1 = this_type->_lo;
+      int hi1 = this_type->_hi;
+      int w1  = this_type->_widen;
+
+      if (lo1 >= 0) {
+        // Keep a range assertion of >=0.
+        lo1 = 0;        hi1 = max_jint;
+      } else if (hi1 < 0) {
+        // Keep a range assertion of <0.
+        lo1 = min_jint; hi1 = -1;
+      } else {
+        lo1 = min_jint; hi1 = max_jint;
+      }
+      const TypeInt* wtype = TypeInt::make(MAX2(in_type->_lo, lo1),
+                                           MIN2(in_type->_hi, hi1),
+                                           MAX2((int)in_type->_widen, w1));
+      if (wtype != type()) {
+        set_type(wtype);
+        return this;
+      }
+    }
+  }
+  return NULL;
+}
+
+uint CastIINode::cmp(const Node &n) const {
+  return ConstraintCastNode::cmp(n) && ((CastIINode&)n)._range_check_dependency == _range_check_dependency;
+}
+
+uint CastIINode::size_of() const {
+  return sizeof(*this);
+}
+
 #ifndef PRODUCT
-void CastIINode::dump_spec(outputStream *st) const {
-  TypeNode::dump_spec(st);
-  if (_carry_dependency) {
-    st->print(" carry dependency");
+void CastIINode::dump_spec(outputStream* st) const {
+  ConstraintCastNode::dump_spec(st);
+  if (_range_check_dependency) {
+    st->print(" range check dependency");
   }
 }
 #endif
@@ -166,7 +279,14 @@ void CastIINode::dump_spec(outputStream *st) const {
 //=============================================================================
 //------------------------------Identity---------------------------------------
 // If input is already higher or equal to cast type, then this is an identity.
-Node *CheckCastPPNode::Identity( PhaseTransform *phase ) {
+Node* CheckCastPPNode::Identity(PhaseGVN* phase) {
+  Node* dom = dominating_cast(phase);
+  if (dom != NULL) {
+    return dom;
+  }
+  if (_carry_dependency) {
+    return this;
+  }
   // Toned down to rescue meeting at a Phi 3 different oops all implementing
   // the same interface.  CompileTheWorld starting at 502, kd12rc1.zip.
   return (phase->type(in(1)) == phase->type(this)) ? in(1) : this;
@@ -174,7 +294,7 @@ Node *CheckCastPPNode::Identity( PhaseTransform *phase ) {
 
 //------------------------------Value------------------------------------------
 // Take 'join' of input and cast-up type, unless working with an Interface
-const Type *CheckCastPPNode::Value( PhaseTransform *phase ) const {
+const Type* CheckCastPPNode::Value(PhaseGVN* phase) const {
   if( in(0) && phase->type(in(0)) == Type::TOP ) return Type::TOP;
 
   const Type *inn = phase->type(in(1));
@@ -255,16 +375,9 @@ const Type *CheckCastPPNode::Value( PhaseTransform *phase ) const {
   // return join;
 }
 
-//------------------------------Ideal------------------------------------------
-// Return a node which is more "ideal" than the current node.  Strip out
-// control copies
-Node *CheckCastPPNode::Ideal(PhaseGVN *phase, bool can_reshape){
-  return (in(0) && remove_dead_region(phase, can_reshape)) ? this : NULL;
-}
-
 //=============================================================================
 //------------------------------Value------------------------------------------
-const Type *CastX2PNode::Value( PhaseTransform *phase ) const {
+const Type* CastX2PNode::Value(PhaseGVN* phase) const {
   const Type* t = phase->type(in(1));
   if (t == Type::TOP) return Type::TOP;
   if (t->base() == Type_X && t->singleton()) {
@@ -328,14 +441,14 @@ Node *CastX2PNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 }
 
 //------------------------------Identity---------------------------------------
-Node *CastX2PNode::Identity( PhaseTransform *phase ) {
+Node* CastX2PNode::Identity(PhaseGVN* phase) {
   if (in(1)->Opcode() == Op_CastP2X)  return in(1)->in(1);
   return this;
 }
 
 //=============================================================================
 //------------------------------Value------------------------------------------
-const Type *CastP2XNode::Value( PhaseTransform *phase ) const {
+const Type* CastP2XNode::Value(PhaseGVN* phase) const {
   const Type* t = phase->type(in(1));
   if (t == Type::TOP) return Type::TOP;
   if (t->base() == Type::RawPtr && t->singleton()) {
@@ -350,7 +463,7 @@ Node *CastP2XNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 }
 
 //------------------------------Identity---------------------------------------
-Node *CastP2XNode::Identity( PhaseTransform *phase ) {
+Node* CastP2XNode::Identity(PhaseGVN* phase) {
   if (in(1)->Opcode() == Op_CastX2P)  return in(1)->in(1);
   return this;
 }

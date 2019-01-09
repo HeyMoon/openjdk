@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #include "precompiled.hpp"
 #include "code/vmreg.inline.hpp"
 #include "compiler/oopMap.hpp"
+#include "memory/resourceArea.hpp"
 #include "opto/addnode.hpp"
 #include "opto/callnode.hpp"
 #include "opto/compile.hpp"
@@ -542,10 +543,11 @@ static void do_liveness(PhaseRegAlloc* regalloc, PhaseCFG* cfg, Block_List* work
     if (i == cfg->number_of_blocks()) {
       break;                    // Got 'em all
     }
-#ifndef PRODUCT
-    if( PrintOpto && Verbose )
+
+    if (PrintOpto && Verbose) {
       tty->print_cr("retripping live calc");
-#endif
+    }
+
     // Force the issue (expensively): recheck everybody
     for (i = 1; i < cfg->number_of_blocks(); i++) {
       worklist->push(cfg->get_block(i));

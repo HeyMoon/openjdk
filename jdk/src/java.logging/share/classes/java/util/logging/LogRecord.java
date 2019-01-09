@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,10 +29,11 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.io.*;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.time.Clock;
-
-import sun.misc.JavaLangAccess;
-import sun.misc.SharedSecrets;
+import java.util.function.Predicate;
+import static jdk.internal.logger.SurrogateLogger.isFilteredFrame;
 
 /**
  * LogRecord objects are used to pass logging requests between
@@ -136,7 +137,7 @@ public class LogRecord implements java.io.Serializable {
 
     /**
      * Event time.
-     * @since 1.9
+     * @since 9
      */
     private Instant instant;
 
@@ -156,7 +157,7 @@ public class LogRecord implements java.io.Serializable {
      *               The event time instant can be reconstructed using
      * <code>Instant.ofEpochSecond(millis/1000, (millis % 1000) * 1000_000 + nanoAdjustment)</code>
      *              <p>
-     *              Since: 1.9
+     *              Since: 9
      * @serialField thrown Throwable The Throwable (if any) associated with log
      *              message
      * @serialField loggerName String Name of the source Logger
@@ -205,7 +206,7 @@ public class LogRecord implements java.io.Serializable {
      * The sequence property will be initialized with a new unique value.
      * These sequence values are allocated in increasing order within a VM.
      * <p>
-     * Since JDK 1.9, the event time is represented by an {@link Instant}.
+     * Since JDK 9, the event time is represented by an {@link Instant}.
      * The instant property will be initialized to the {@linkplain
      * Instant#now() current instant}, using the best available
      * {@linkplain Clock#systemUTC() clock} on the system.
@@ -468,12 +469,11 @@ public class LogRecord implements java.io.Serializable {
      * @implSpec This is equivalent to calling
      *      {@link #getInstant() getInstant().toEpochMilli()}.
      *
-     * @deprecated To get the full nanosecond resolution event time,
+     * @apiNote To get the full nanosecond resolution event time,
      *             use {@link #getInstant()}.
      *
      * @see #getInstant()
      */
-    @Deprecated
     public long getMillis() {
         return instant.toEpochMilli();
     }
@@ -487,8 +487,10 @@ public class LogRecord implements java.io.Serializable {
      *      {@link #setInstant(java.time.Instant)
      *      setInstant(Instant.ofEpochMilli(millis))}.
      *
-     * @deprecated To set event time with nanosecond resolution,
-     *             use {@link #setInstant(java.time.Instant)}.
+     * @deprecated LogRecord maintains timestamps with nanosecond resolution,
+     *             using {@link Instant} values. For this reason,
+     *             {@link #setInstant(java.time.Instant) setInstant()}
+     *             should be used in preference to {@code setMillis()}.
      *
      * @see #setInstant(java.time.Instant)
      */
@@ -502,7 +504,7 @@ public class LogRecord implements java.io.Serializable {
      *
      * @return the instant that the event occurred.
      *
-     * @since 1.9
+     * @since 9
      */
     public Instant getInstant() {
         return instant;
@@ -510,14 +512,23 @@ public class LogRecord implements java.io.Serializable {
 
     /**
      * Sets the instant that the event occurred.
+     * <p>
+     * If the given {@code instant} represents a point on the time-line too
+     * far in the future or past to fit in a {@code long} milliseconds and
+     * nanoseconds adjustment, then an {@code ArithmeticException} will be
+     * thrown.
      *
      * @param instant the instant that the event occurred.
      *
      * @throws NullPointerException if {@code instant} is null.
-     * @since 1.9
+     * @throws ArithmeticException if numeric overflow would occur while
+     *         calling {@link Instant#toEpochMilli() instant.toEpochMilli()}.
+     *
+     * @since 9
      */
     public void setInstant(Instant instant) {
-        this.instant = Objects.requireNonNull(instant);
+        instant.toEpochMilli();
+        this.instant = instant;
     }
 
     /**
@@ -608,13 +619,21 @@ public class LogRecord implements java.io.Serializable {
             throw new IOException("LogRecord: bad version: " + major + "." + minor);
         }
         int len = in.readInt();
-        if (len == -1) {
+        if (len < -1) {
+            throw new NegativeArraySizeException();
+        } else if (len == -1) {
             parameters = null;
-        } else {
+        } else if (len < 255) {
             parameters = new Object[len];
             for (int i = 0; i < parameters.length; i++) {
                 parameters[i] = in.readObject();
             }
+        } else {
+            List<Object> params = new ArrayList<>(Math.min(len, 1024));
+            for (int i = 0; i < len; i++) {
+                params.add(in.readObject());
+            }
+            parameters = params.toArray(new Object[params.size()]);
         }
         // If necessary, try to regenerate the resource bundle.
         if (resourceBundleName != null) {
@@ -637,45 +656,87 @@ public class LogRecord implements java.io.Serializable {
     }
 
     // Private method to infer the caller's class and method names
+    //
+    // Note:
+    // For testing purposes - it is possible to customize the process
+    // by which LogRecord will infer the source class name and source method name
+    // when analyzing the call stack.
+    // <p>
+    // The system property {@code jdk.logger.packages} can define a comma separated
+    // list of strings corresponding to additional package name prefixes that
+    // should be ignored when trying to infer the source caller class name.
+    // Those stack frames whose {@linkplain StackTraceElement#getClassName()
+    // declaring class name} start with one such prefix will be ignored.
+    // <p>
+    // This is primarily useful when providing utility logging classes wrapping
+    // a logger instance, as it makes it possible to instruct LogRecord to skip
+    // those utility frames when inferring the caller source class name.
+    // <p>
+    // The {@code jdk.logger.packages} system property is consulted only once.
+    // <p>
+    // This property is not standard, implementation specific, and yet
+    // undocumented (and thus subject to changes without notice).
+    //
     private void inferCaller() {
         needToInferCaller = false;
-        JavaLangAccess access = SharedSecrets.getJavaLangAccess();
-        Throwable throwable = new Throwable();
-        int depth = access.getStackTraceDepth(throwable);
+        // Skip all frames until we have found the first logger frame.
+        Optional<StackWalker.StackFrame> frame = new CallerFinder().get();
+        frame.ifPresent(f -> {
+            setSourceClassName(f.getClassName());
+            setSourceMethodName(f.getMethodName());
+        });
 
-        boolean lookingForLogger = true;
-        for (int ix = 0; ix < depth; ix++) {
-            // Calling getStackTraceElement directly prevents the VM
-            // from paying the cost of building the entire stack frame.
-            StackTraceElement frame =
-                access.getStackTraceElement(throwable, ix);
-            String cname = frame.getClassName();
-            boolean isLoggerImpl = isLoggerImplFrame(cname);
-            if (lookingForLogger) {
-                // Skip all frames until we have found the first logger frame.
-                if (isLoggerImpl) {
-                    lookingForLogger = false;
-                }
-            } else {
-                if (!isLoggerImpl) {
-                    // skip reflection call
-                    if (!cname.startsWith("java.lang.reflect.") && !cname.startsWith("sun.reflect.")) {
-                       // We've found the relevant frame.
-                       setSourceClassName(cname);
-                       setSourceMethodName(frame.getMethodName());
-                       return;
-                    }
-                }
-            }
-        }
         // We haven't found a suitable frame, so just punt.  This is
         // OK as we are only committed to making a "best effort" here.
     }
 
-    private boolean isLoggerImplFrame(String cname) {
-        // the log record could be created for a platform logger
-        return (cname.equals("java.util.logging.Logger") ||
-                cname.startsWith("java.util.logging.LoggingProxyImpl") ||
-                cname.startsWith("sun.util.logging."));
+    /*
+     * CallerFinder is a stateful predicate.
+     */
+    static final class CallerFinder implements Predicate<StackWalker.StackFrame> {
+        private static final StackWalker WALKER;
+        static {
+            final PrivilegedAction<StackWalker> action =
+                    () -> StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE);
+            WALKER = AccessController.doPrivileged(action);
+        }
+
+        /**
+         * Returns StackFrame of the caller's frame.
+         * @return StackFrame of the caller's frame.
+         */
+        Optional<StackWalker.StackFrame> get() {
+            return WALKER.walk((s) -> s.filter(this).findFirst());
+        }
+
+        private boolean lookingForLogger = true;
+        /**
+         * Returns true if we have found the caller's frame, false if the frame
+         * must be skipped.
+         *
+         * @param t The frame info.
+         * @return true if we have found the caller's frame, false if the frame
+         * must be skipped.
+         */
+        @Override
+        public boolean test(StackWalker.StackFrame t) {
+            final String cname = t.getClassName();
+            // We should skip all frames until we have found the logger,
+            // because these frames could be frames introduced by e.g. custom
+            // sub classes of Handler.
+            if (lookingForLogger) {
+                // the log record could be created for a platform logger
+                lookingForLogger = !isLoggerImplFrame(cname);
+                return false;
+            }
+            // Continue walking until we've found the relevant calling frame.
+            // Skips logging/logger infrastructure.
+            return !isFilteredFrame(t);
+        }
+
+        private boolean isLoggerImplFrame(String cname) {
+            return (cname.equals("java.util.logging.Logger") ||
+                    cname.startsWith("sun.util.logging.PlatformLogger"));
+        }
     }
 }

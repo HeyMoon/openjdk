@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,9 +33,6 @@
 
 
 # include <ctype.h>
-#define __USE_LEGACY_PROTOTYPES__
-# include <dirent.h>
-#undef __USE_LEGACY_PROTOTYPES__
 # include <string.h>
 # include <strings.h>     // for bsd'isms
 # include <stdarg.h>
@@ -177,16 +174,6 @@ typedef unsigned int       juint;
 typedef unsigned long long julong;
 
 
-//----------------------------------------------------------------------------------------------------
-// Constant for jlong (specifying an long long constant is C++ compiler specific)
-
-// Build a 64bit integer constant
-#define CONST64(x)  (x ## LL)
-#define UCONST64(x) (x ## ULL)
-
-const jlong min_jlong = CONST64(0x8000000000000000);
-const jlong max_jlong = CONST64(0x7fffffffffffffff);
-
 #ifdef SOLARIS
 //----------------------------------------------------------------------------------------------------
 // ANSI C++ fixes
@@ -272,5 +259,13 @@ inline int wcslen(const jchar* x) { return wcslen((const wchar_t*)x); }
 #endif // _LP64
 
 #define offset_of(klass,field) offsetof(klass,field)
+
+#ifndef USE_LIBRARY_BASED_TLS_ONLY
+#define THREAD_LOCAL_DECL __thread
+#endif
+
+// Inlining support
+#define NOINLINE
+#define ALWAYSINLINE inline __attribute__((always_inline))
 
 #endif // SHARE_VM_UTILITIES_GLOBALDEFINITIONS_SPARCWORKS_HPP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -81,12 +81,13 @@ public:
   virtual const Type *bottom_type() const;
   virtual const TypePtr *adr_type() const;
   virtual bool pinned() const;
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual uint ideal_reg() const;
   virtual const RegMask &out_RegMask() const;
 
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const;
+  virtual void dump_compact_spec(outputStream *st) const;
 #endif
 
   // Return uncommon trap call node if proj is for "proj->[region->..]call_uct"

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  */
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
@@ -22,7 +22,6 @@ package com.sun.org.apache.xerces.internal.jaxp.validation;
 
 import java.util.HashMap;
 import java.util.Locale;
-import java.util.Iterator;
 import java.util.Map;
 
 import javax.xml.XMLConstants;
@@ -48,6 +47,8 @@ import com.sun.org.apache.xerces.internal.xni.XNIException;
 import com.sun.org.apache.xerces.internal.xni.parser.XMLComponent;
 import com.sun.org.apache.xerces.internal.xni.parser.XMLComponentManager;
 import com.sun.org.apache.xerces.internal.xni.parser.XMLConfigurationException;
+import javax.xml.catalog.CatalogFeatures;
+import jdk.xml.internal.JdkXmlUtils;
 import org.w3c.dom.ls.LSResourceResolver;
 import org.xml.sax.ErrorHandler;
 
@@ -176,7 +177,7 @@ final class XMLSchemaValidatorComponentManager extends ParserConfigurationSettin
     private boolean fUseGrammarPoolOnly;
 
     /** Lookup map for components required for validation. **/
-    private final HashMap fComponents = new HashMap();
+    private final HashMap<String, Object> fComponents = new HashMap<>();
 
     //
     // Components
@@ -202,10 +203,10 @@ final class XMLSchemaValidatorComponentManager extends ParserConfigurationSettin
     //
 
     /** Stores initial feature values for validator reset. */
-    private final HashMap fInitFeatures = new HashMap();
+    private final HashMap<String, Boolean> fInitFeatures = new HashMap<>();
 
     /** Stores initial property values for validator reset. */
-    private final HashMap fInitProperties = new HashMap();
+    private final HashMap<String, Object> fInitProperties = new HashMap<>();
 
     /** Stores the initial security manager. */
     private XMLSecurityManager fInitSecurityManager;
@@ -262,13 +263,15 @@ final class XMLSchemaValidatorComponentManager extends ParserConfigurationSettin
                 DISALLOW_DOCTYPE_DECL_FEATURE,
                 NORMALIZE_DATA,
                 SCHEMA_ELEMENT_DEFAULT,
-                SCHEMA_AUGMENT_PSVI
+                SCHEMA_AUGMENT_PSVI,
+                XMLConstants.USE_CATALOG
         };
         addRecognizedFeatures(recognizedFeatures);
         fFeatures.put(DISALLOW_DOCTYPE_DECL_FEATURE, Boolean.FALSE);
         fFeatures.put(NORMALIZE_DATA, Boolean.FALSE);
         fFeatures.put(SCHEMA_ELEMENT_DEFAULT, Boolean.FALSE);
         fFeatures.put(SCHEMA_AUGMENT_PSVI, Boolean.TRUE);
+        fFeatures.put(XMLConstants.USE_CATALOG, grammarContainer.getFeature(XMLConstants.USE_CATALOG));
 
         addRecognizedParamsAndSetDefaults(fEntityManager, grammarContainer);
         addRecognizedParamsAndSetDefaults(fErrorReporter, grammarContainer);
@@ -304,6 +307,14 @@ final class XMLSchemaValidatorComponentManager extends ParserConfigurationSettin
         fSecurityPropertyMgr = (XMLSecurityPropertyManager)
                 grammarContainer.getProperty(Constants.XML_SECURITY_PROPERTY_MANAGER);
         setProperty(XML_SECURITY_PROPERTY_MANAGER, fSecurityPropertyMgr);
+
+        //initialize Catalog properties
+        for( CatalogFeatures.Feature f : CatalogFeatures.Feature.values()) {
+            setProperty(f.getPropertyName(), grammarContainer.getProperty(f.getPropertyName()));
+        }
+
+        setProperty(JdkXmlUtils.CDATA_CHUNK_SIZE,
+                grammarContainer.getProperty(JdkXmlUtils.CDATA_CHUNK_SIZE));
     }
 
     /**
@@ -364,7 +375,7 @@ final class XMLSchemaValidatorComponentManager extends ParserConfigurationSettin
             fInitSecurityManager.setSecureProcessing(value);
             setProperty(SECURITY_MANAGER, fInitSecurityManager);
 
-            if (value && Constants.IS_JDK8_OR_ABOVE) {
+            if (value) {
                 fSecurityPropertyMgr.setValue(XMLSecurityPropertyManager.Property.ACCESS_EXTERNAL_DTD,
                         XMLSecurityPropertyManager.State.FSP, Constants.EXTERNAL_ACCESS_DEFAULT_FSP);
                 fSecurityPropertyMgr.setValue(XMLSecurityPropertyManager.Property.ACCESS_EXTERNAL_SCHEMA,
@@ -541,20 +552,16 @@ final class XMLSchemaValidatorComponentManager extends ParserConfigurationSettin
 
         // Reset feature and property values to their initial values
         if (!fInitFeatures.isEmpty()) {
-            Iterator iter = fInitFeatures.entrySet().iterator();
-            while (iter.hasNext()) {
-                Map.Entry entry = (Map.Entry) iter.next();
-                String name = (String) entry.getKey();
-                boolean value = ((Boolean) entry.getValue()).booleanValue();
+            for (Map.Entry<String, Boolean> entry : fInitFeatures.entrySet()) {
+                String name = entry.getKey();
+                boolean value = entry.getValue();
                 super.setFeature(name, value);
             }
             fInitFeatures.clear();
         }
         if (!fInitProperties.isEmpty()) {
-            Iterator iter = fInitProperties.entrySet().iterator();
-            while (iter.hasNext()) {
-                Map.Entry entry = (Map.Entry) iter.next();
-                String name = (String) entry.getKey();
+            for (Map.Entry<String, Object> entry : fInitProperties.entrySet()) {
+                String name = entry.getKey();
                 Object value = entry.getValue();
                 super.setProperty(name, value);
             }

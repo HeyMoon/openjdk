@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,13 +21,16 @@
  * questions.
  */
 
+package compiler.intrinsics.sha.cli.testcases;
+
+import compiler.intrinsics.sha.cli.SHAOptionsBase;
+import compiler.testlibrary.sha.predicate.IntrinsicPredicates;
 import jdk.test.lib.Asserts;
-import jdk.test.lib.ExitCode;
+import jdk.test.lib.process.ExitCode;
 import jdk.test.lib.Platform;
 import jdk.test.lib.cli.CommandLineOptionTest;
 import jdk.test.lib.cli.predicate.AndPredicate;
 import jdk.test.lib.cli.predicate.OrPredicate;
-import sha.predicate.IntrinsicPredicates;
 
 /**
  * UseSHA specific test case targeted to SPARC and AArch64 CPUs which
@@ -57,6 +60,7 @@ public class UseSHASpecificTestCaseForSupportedCPU
         CommandLineOptionTest.verifySameJVMStartup(
                 null, new String[] { ".*UseSHA.*" }, shouldPassMessage,
                 shouldPassMessage, ExitCode.OK,
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(
                         SHAOptionsBase.USE_SHA_OPTION, true),
                 CommandLineOptionTest.prepareBooleanFlag(
@@ -75,6 +79,7 @@ public class UseSHASpecificTestCaseForSupportedCPU
                 SHAOptionsBase.USE_SHA_OPTION, "false", String.format(
                 "'%s' option should be disabled when all UseSHA*Intrinsics are"
                         + " disabled", SHAOptionsBase.USE_SHA_OPTION),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(
                         SHAOptionsBase.USE_SHA1_INTRINSICS_OPTION, false),
                 CommandLineOptionTest.prepareBooleanFlag(
@@ -91,6 +96,7 @@ public class UseSHASpecificTestCaseForSupportedCPU
                         + "to JVM", SHAOptionsBase.USE_SHA_OPTION,
                         CommandLineOptionTest.prepareBooleanFlag(
                              SHAOptionsBase.USE_SHA_OPTION, true)),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(
                         SHAOptionsBase.USE_SHA_OPTION, true),
                 CommandLineOptionTest.prepareBooleanFlag(
@@ -109,6 +115,7 @@ public class UseSHASpecificTestCaseForSupportedCPU
                         SHAOptionsBase.USE_SHA_OPTION,
                         CommandLineOptionTest.prepareBooleanFlag(
                             SHAOptionsBase.USE_SHA_OPTION, false)),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(
                         SHAOptionsBase.USE_SHA_OPTION, false),
                 CommandLineOptionTest.prepareBooleanFlag(

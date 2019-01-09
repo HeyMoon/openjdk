@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2004, 2017, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2014, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -61,6 +61,7 @@ address JNI_FastGetField::generate_fast_get_int_field0(BasicType type) {
     case T_FLOAT:   name = "jni_fast_GetFloatField";   break;
     case T_DOUBLE:  name = "jni_fast_GetDoubleField";  break;
     default:        ShouldNotReachHere();
+      name = NULL;  // unreachable
   }
   ResourceMark rm;
   BufferBlob* blob = BufferBlob::create(name, BUFFER_SIZE);
@@ -81,6 +82,11 @@ address JNI_FastGetField::generate_fast_get_int_field0(BasicType type) {
   __ eor(robj, robj, rcounter);               // obj, since
                                               // robj ^ rcounter ^ rcounter == robj
                                               // robj is address dependent on rcounter.
+
+  // If mask changes we need to ensure that the inverse is still encodable as an immediate
+  STATIC_ASSERT(JNIHandles::weak_tag_mask == 1);
+  __ andr(robj, robj, ~JNIHandles::weak_tag_mask);
+
   __ ldr(robj, Address(robj, 0));             // *obj
   __ lsr(roffset, c_rarg2, 2);                // offset
 
@@ -125,6 +131,7 @@ address JNI_FastGetField::generate_fast_get_int_field0(BasicType type) {
     case T_FLOAT:   slow_case_addr = jni_GetFloatField_addr();   break;
     case T_DOUBLE:  slow_case_addr = jni_GetDoubleField_addr();  break;
     default:        ShouldNotReachHere();
+      slow_case_addr = NULL;  // unreachable
   }
 
   {

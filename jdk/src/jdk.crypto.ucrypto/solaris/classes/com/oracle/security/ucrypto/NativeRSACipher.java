@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,9 +37,11 @@ import java.security.Key;
 import java.security.PublicKey;
 import java.security.PrivateKey;
 import java.security.spec.RSAPrivateCrtKeySpec;
+import java.security.spec.RSAPrivateKeySpec;
 import java.security.spec.RSAPublicKeySpec;
 import java.security.interfaces.RSAKey;
 import java.security.interfaces.RSAPrivateCrtKey;
+import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 
 import java.security.KeyFactory;
@@ -61,6 +63,7 @@ import javax.crypto.ShortBufferException;
 import javax.crypto.spec.SecretKeySpec;
 
 import sun.security.internal.spec.TlsRsaPremasterSecretParameterSpec;
+import sun.security.jca.JCAUtil;
 import sun.security.util.KeyUtil;
 
 /**
@@ -69,7 +72,7 @@ import sun.security.util.KeyUtil;
  * - RSA/ECB/NOPADDING
  * - RSA/ECB/PKCS1PADDING
  *
- * @since 1.9
+ * @since 9
  */
 public class NativeRSACipher extends CipherSpi {
     // fields set in constructor
@@ -157,7 +160,8 @@ public class NativeRSACipher extends CipherSpi {
     @Override
     protected int engineGetKeySize(Key key) throws InvalidKeyException {
         if (!(key instanceof RSAKey)) {
-            throw new InvalidKeyException("RSAKey required");
+            throw new InvalidKeyException("RSAKey required. Got: " +
+                key.getClass().getName());
         }
         int n = ((RSAKey)key).getModulus().bitLength();
         // strip off the leading extra 0x00 byte prefix
@@ -198,15 +202,20 @@ public class NativeRSACipher extends CipherSpi {
                         "No Parameters can be specified");
             }
             spec = params;
+            if (random == null) {
+                random = JCAUtil.getSecureRandom();
+            }
             this.random = random;   // for TLS RSA premaster secret
         }
         boolean doEncrypt = (opmode == Cipher.ENCRYPT_MODE || opmode == Cipher.WRAP_MODE);
 
         // Make sure the proper opmode uses the proper key
         if (doEncrypt && (!(newKey instanceof RSAPublicKey))) {
-            throw new InvalidKeyException("RSAPublicKey required for encryption");
-        } else if (!doEncrypt && (!(newKey instanceof RSAPrivateCrtKey))) {
-            throw new InvalidKeyException("RSAPrivateCrtKey required for decryption");
+            throw new InvalidKeyException("RSAPublicKey required for encryption." +
+                " Received: " + newKey.getClass().getName());
+        } else if (!doEncrypt && (!(newKey instanceof RSAPrivateKey))) {
+            throw new InvalidKeyException("RSAPrivateKey required for decryption." +
+                " Received: " + newKey.getClass().getName());
         }
 
         NativeKey nativeKey = null;
@@ -223,17 +232,27 @@ public class NativeRSACipher extends CipherSpi {
                     throw new InvalidKeyException(ikse);
                 }
             } else {
-                RSAPrivateCrtKey privateKey = (RSAPrivateCrtKey) newKey;
                 try {
-                    nativeKey = (NativeKey) keyFactory.engineGeneratePrivate
-                        (new RSAPrivateCrtKeySpec(privateKey.getModulus(),
-                                                  privateKey.getPublicExponent(),
-                                                  privateKey.getPrivateExponent(),
-                                                  privateKey.getPrimeP(),
-                                                  privateKey.getPrimeQ(),
-                                                  privateKey.getPrimeExponentP(),
-                                                  privateKey.getPrimeExponentQ(),
-                                                  privateKey.getCrtCoefficient()));
+                    if (newKey instanceof RSAPrivateCrtKey) {
+                        RSAPrivateCrtKey privateKey = (RSAPrivateCrtKey) newKey;
+                        nativeKey = (NativeKey) keyFactory.engineGeneratePrivate
+                            (new RSAPrivateCrtKeySpec(privateKey.getModulus(),
+                                                      privateKey.getPublicExponent(),
+                                                      privateKey.getPrivateExponent(),
+                                                      privateKey.getPrimeP(),
+                                                      privateKey.getPrimeQ(),
+                                                      privateKey.getPrimeExponentP(),
+                                                      privateKey.getPrimeExponentQ(),
+                                                      privateKey.getCrtCoefficient()));
+                    } else if (newKey instanceof RSAPrivateKey) {
+                        RSAPrivateKey privateKey = (RSAPrivateKey) newKey;
+                        nativeKey = (NativeKey) keyFactory.engineGeneratePrivate
+                            (new RSAPrivateKeySpec(privateKey.getModulus(),
+                                                   privateKey.getPrivateExponent()));
+                    } else {
+                        throw new InvalidKeyException("Unsupported type of RSAPrivateKey." +
+                            " Received: " + newKey.getClass().getName());
+                    }
                 } catch (InvalidKeySpecException ikse) {
                     throw new InvalidKeyException(ikse);
                 }
@@ -271,7 +290,8 @@ public class NativeRSACipher extends CipherSpi {
     protected synchronized int engineUpdate(byte[] in, int inOfs, int inLen, byte[] out,
             int outOfs) throws ShortBufferException {
         if (out.length - outOfs < outputSize) {
-            throw new ShortBufferException("Output buffer too small");
+            throw new ShortBufferException("Output buffer too small. outputSize: " +
+                outputSize + ". out.length: " + out.length + ". outOfs: " + outOfs);
         }
         if (inLen > 0) {
             update(in, inOfs, inLen);
@@ -321,7 +341,9 @@ public class NativeRSACipher extends CipherSpi {
                                               "the key to be wrapped");
             }
             if (encodedKey.length > buffer.length) {
-                throw new InvalidKeyException("Key is too long for wrapping");
+                throw new InvalidKeyException("Key is too long for wrapping. " +
+                    "encodedKey.length: " + encodedKey.length +
+                    ". buffer.length: " + buffer.length);
             }
             return engineDoFinal(encodedKey, 0, encodedKey.length);
         } catch (BadPaddingException e) {
@@ -338,7 +360,9 @@ public class NativeRSACipher extends CipherSpi {
             throws InvalidKeyException, NoSuchAlgorithmException {
 
         if (wrappedKey.length > buffer.length) {
-            throw new InvalidKeyException("Key is too long for unwrapping");
+            throw new InvalidKeyException("Key is too long for unwrapping." +
+                " wrappedKey.length: " + wrappedKey.length +
+                ". buffer.length: " + buffer.length);
         }
 
         boolean isTlsRsaPremasterSecret =
@@ -377,7 +401,7 @@ public class NativeRSACipher extends CipherSpi {
 
     /**
      * calls ucrypto_encrypt(...) or ucrypto_decrypt(...)
-     * @returns the length of output or an negative error status code
+     * @return the length of output or an negative error status code
      */
     private native static int nativeAtomic(int mech, boolean encrypt,
                                            long keyValue, int keyLength,

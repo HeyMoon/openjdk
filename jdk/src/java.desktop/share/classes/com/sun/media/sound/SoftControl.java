@@ -22,15 +22,16 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package com.sun.media.sound;
 
 /**
- * <code>SoftControl</code> are the basic controls
+ * {@code SoftControl} are the basic controls
  * used for control-rate processing.
  *
  * @author Karl Helgason
  */
 public interface SoftControl {
 
-    public double[] get(int instance, String name);
+    double[] get(int instance, String name);
 }

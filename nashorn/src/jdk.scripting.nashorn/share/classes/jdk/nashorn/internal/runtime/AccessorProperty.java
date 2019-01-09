@@ -127,7 +127,7 @@ public class AccessorProperty extends Property {
      *
      * @return  New {@link AccessorProperty} created.
      */
-    public static AccessorProperty create(final String key, final int propertyFlags, final MethodHandle getter, final MethodHandle setter) {
+    public static AccessorProperty create(final Object key, final int propertyFlags, final MethodHandle getter, final MethodHandle setter) {
         return new AccessorProperty(key, propertyFlags, -1, getter, setter);
     }
 
@@ -180,7 +180,7 @@ public class AccessorProperty extends Property {
      * @param objectSetter    object setter
      */
     protected AccessorProperty(
-            final String key,
+            final Object key,
             final int flags,
             final int slot,
             final MethodHandle primitiveGetter,
@@ -209,7 +209,7 @@ public class AccessorProperty extends Property {
      * @param getter the property getter
      * @param setter the property setter or null if non writable, non configurable
      */
-    private AccessorProperty(final String key, final int flags, final int slot, final MethodHandle getter, final MethodHandle setter) {
+    private AccessorProperty(final Object key, final int flags, final int slot, final MethodHandle getter, final MethodHandle setter) {
         super(key, flags | IS_BUILTIN | DUAL_FIELDS | (getter.type().returnType().isPrimitive() ? IS_NASGEN_PRIMITIVE : 0), slot);
         assert !isSpill();
 
@@ -221,7 +221,7 @@ public class AccessorProperty extends Property {
 
         assert setterType == null || setterType == getterType;
 
-        if (getterType == int.class || getterType == long.class) {
+        if (getterType == int.class) {
             primitiveGetter = MH.asType(getter, Lookup.GET_PRIMITIVE_TYPE);
             primitiveSetter = setter == null ? null : MH.asType(setter, Lookup.SET_PRIMITIVE_TYPE);
         } else if (getterType == double.class) {
@@ -249,7 +249,7 @@ public class AccessorProperty extends Property {
      * @param structure        structure for objects associated with this property
      * @param slot             property field number or spill slot
      */
-    public AccessorProperty(final String key, final int flags, final Class<?> structure, final int slot) {
+    public AccessorProperty(final Object key, final int flags, final Class<?> structure, final int slot) {
         super(key, flags, slot);
 
         initGetterSetter(structure);
@@ -292,7 +292,7 @@ public class AccessorProperty extends Property {
      * @param owner        owner of property
      * @param initialValue initial value to which the property can be set
      */
-    protected AccessorProperty(final String key, final int flags, final int slot, final ScriptObject owner, final Object initialValue) {
+    protected AccessorProperty(final Object key, final int flags, final int slot, final ScriptObject owner, final Object initialValue) {
         this(key, flags, owner.getClass(), slot);
         setInitialValue(owner, initialValue);
     }
@@ -307,7 +307,7 @@ public class AccessorProperty extends Property {
      * @param slot         field slot index
      * @param initialType  initial type of the property
      */
-    public AccessorProperty(final String key, final int flags, final Class<?> structure, final int slot, final Class<?> initialType) {
+    public AccessorProperty(final Object key, final int flags, final Class<?> structure, final int slot, final Class<?> initialType) {
         this(key, flags, structure, slot);
         setType(hasDualFields() ? initialType : Object.class);
     }
@@ -400,17 +400,6 @@ public class AccessorProperty extends Property {
         }
      }
 
-    @Override
-    public long getLongValue(final ScriptObject self, final ScriptObject owner) {
-        try {
-            return (long)getGetter(long.class).invokeExact((Object)self);
-        } catch (final Error | RuntimeException e) {
-            throw e;
-        } catch (final Throwable e) {
-            throw new RuntimeException(e);
-        }
-    }
-
      @Override
      public double getDoubleValue(final ScriptObject self, final ScriptObject owner) {
         try {
@@ -441,21 +430,6 @@ public class AccessorProperty extends Property {
     protected final void invokeSetter(final ScriptObject self, final int value) {
         try {
             getSetter(int.class, self.getMap()).invokeExact((Object)self, value);
-        } catch (final Error | RuntimeException e) {
-            throw e;
-        } catch (final Throwable e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    /**
-     * Invoke setter for this property with a value
-     * @param self  owner
-     * @param value value
-     */
-    protected final void invokeSetter(final ScriptObject self, final long value) {
-        try {
-            getSetter(long.class, self.getMap()).invokeExact((Object)self, value);
         } catch (final Error | RuntimeException e) {
             throw e;
         } catch (final Throwable e) {
@@ -500,12 +474,6 @@ public class AccessorProperty extends Property {
     }
 
     @Override
-    public void setValue(final ScriptObject self, final ScriptObject owner, final long value, final boolean strict)  {
-        assert isConfigurable() || isWritable() : getKey() + " is not writable or configurable";
-        invokeSetter(self, value);
-    }
-
-    @Override
     public void setValue(final ScriptObject self, final ScriptObject owner, final double value, final boolean strict)  {
         assert isConfigurable() || isWritable() : getKey() + " is not writable or configurable";
         invokeSetter(self, value);
@@ -533,7 +501,6 @@ public class AccessorProperty extends Property {
         final int i = getAccessorTypeIndex(type);
 
         assert type == int.class ||
-                type == long.class ||
                 type == double.class ||
                 type == Object.class :
                 "invalid getter type " + type + " for " + getKey();
@@ -603,7 +570,7 @@ public class AccessorProperty extends Property {
     private void checkUndeclared() {
         if ((getFlags() & NEEDS_DECLARATION) != 0) {
             // a lexically defined variable that hasn't seen its declaration - throw ReferenceError
-            throw ECMAErrors.referenceError("not.defined", getKey());
+            throw ECMAErrors.referenceError("not.defined", getKey().toString());
         }
     }
 
@@ -635,6 +602,11 @@ public class AccessorProperty extends Property {
     }
 
     @Override
+    public boolean hasNativeSetter() {
+        return objectSetter != null;
+    }
+
+    @Override
     public MethodHandle getSetter(final Class<?> type, final PropertyMap currentMap) {
         checkUndeclared();
 
@@ -659,7 +631,7 @@ public class AccessorProperty extends Property {
         }
 
         if (isBuiltin()) {
-           mh = MH.filterArguments(mh, 0, debugInvalidate(MH.insertArguments(INVALIDATE_SP, 0, this), getKey()));
+           mh = MH.filterArguments(mh, 0, debugInvalidate(MH.insertArguments(INVALIDATE_SP, 0, this), getKey().toString()));
         }
 
         assert mh.type().returnType() == void.class : mh.type();

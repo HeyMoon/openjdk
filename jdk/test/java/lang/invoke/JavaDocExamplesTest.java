@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@
 
 package test.java.lang.invoke;
 
+import java.io.StringWriter;
 import java.lang.invoke.*;
 import static java.lang.invoke.MethodHandles.*;
 import static java.lang.invoke.MethodType.*;
@@ -36,7 +37,6 @@ import static java.lang.invoke.MethodType.*;
 import java.util.*;
 
 import org.testng.*;
-import static org.testng.AssertJUnit.*;
 import org.testng.annotations.*;
 
 /**
@@ -57,7 +57,9 @@ public class JavaDocExamplesTest {
         testFindVirtual();
         testFindSpecial();
         testPermuteArguments();
+        testZero();
         testDropArguments();
+        testDropArgumentsToMatch();
         testFilterArguments();
         testFoldArguments();
         testFoldArguments2();
@@ -75,14 +77,14 @@ public class JavaDocExamplesTest {
 
 
 {}
-static final private Lookup LOOKUP = lookup();
+private static final Lookup LOOKUP = lookup();
 // static final private MethodHandle CONCAT_1 = LOOKUP.findVirtual(String.class,
 //     "concat", methodType(String.class, String.class));
 // static final private MethodHandle HASHCODE_1 = LOOKUP.findVirtual(Object.class,
 //     "hashCode", methodType(int.class));
 
 // form required if ReflectiveOperationException is intercepted:
-    static final private MethodHandle CONCAT_2, HASHCODE_2, ADD_2, SUB_2;
+    private static final MethodHandle CONCAT_2, HASHCODE_2, ADD_2, SUB_2;
 static {
   try {
     Class<?> THIS_CLASS = LOOKUP.lookupClass();
@@ -235,6 +237,17 @@ assertEquals("xz", (String) d12.invokeExact("x", 12, true, "z"));
             }}
     }
 
+@Test public void testZero() throws Throwable {
+        {{
+{} /// JAVADOC
+Class<?> type = Double.class;
+MethodHandle mh1 = MethodHandles.explicitCastArguments(MethodHandles.constant(Object.class, null), methodType(type));
+assertEquals("()Double", mh1.type().toString());
+MethodHandle mh2 = MethodHandles.empty(methodType(type));
+assertEquals("()Double", mh2.type().toString());
+        }}
+   }
+
     @Test public void testDropArguments() throws Throwable {
         {{
 {} /// JAVADOC
@@ -260,6 +273,24 @@ assertEquals("xy", (String) d2.invokeExact("x", "y", "z"));
 MethodHandle d12 = dropArguments(cat, 1, int.class, boolean.class);
 assertEquals("xz", (String) d12.invokeExact("x", 12, true, "z"));
             }}
+    }
+
+    @Test public void testDropArgumentsToMatch() throws Throwable {
+        {{
+{} /// JAVADOC
+MethodHandle h0= constant(boolean.class, true);
+MethodHandle h1 = lookup().findVirtual(String.class, "concat", methodType(String.class, String.class));
+MethodType bigType = h1.type().insertParameterTypes(1, String.class, int.class);
+MethodHandle h2 = dropArguments(h1, 0, bigType.parameterList());
+if (h1.type().parameterCount() < h2.type().parameterCount()) {
+    h1 = dropArgumentsToMatch(h1, 0, h2.type().parameterList(), 0);  // lengthen h1
+}
+else {
+    h2 = dropArgumentsToMatch(h2, 0, h1.type().parameterList(), 0);    // lengthen h2
+}
+MethodHandle h3 = guardWithTest(h0, h1, h2);
+assertEquals("xy", h3.invoke("x", "y", 1, "a", "b", "c"));
+        }}
     }
 
     @Test public void testFilterArguments() throws Throwable {
@@ -320,6 +351,13 @@ assertEquals("boojum", (String) catTrace.invokeExact("boo", "jum"));
         if (verbosity > 0)
             System.out.println("result: "+act);
         Assert.assertEquals(exp, act);
+    }
+
+    static void assertTrue(boolean b) {
+        if (verbosity > 0) {
+            System.out.println("result: " + b);
+        }
+        Assert.assertTrue(b);
     }
 
     @Test public void testMethodHandlesSummary() throws Throwable {
@@ -637,6 +675,270 @@ assert(!(boolean) invokeDispatched.invokeExact(x, "endsWith", "foo"));
 assert( (boolean) invokeDispatched.invokeExact(y, "hasNext", "[abc]+[rst]"));
 assert(!(boolean) invokeDispatched.invokeExact(y, "hasNext", "[123]+[789]"));
             }}
+    }
+
+    static int one(int k) { return 1; }
+    static int inc(int i, int acc, int k) { return i + 1; }
+    static int mult(int i, int acc, int k) { return i * acc; }
+    static boolean pred(int i, int acc, int k) { return i < k; }
+    static int fin(int i, int acc, int k) { return acc; }
+
+    @Test public void testLoop() throws Throwable {
+        MethodHandle MH_inc, MH_one, MH_mult, MH_pred, MH_fin;
+        Class<?> I = int.class;
+        MH_inc = LOOKUP.findStatic(THIS_CLASS, "inc", methodType(I, I, I, I));
+        MH_one = LOOKUP.findStatic(THIS_CLASS, "one", methodType(I, I));
+        MH_mult = LOOKUP.findStatic(THIS_CLASS, "mult", methodType(I, I, I, I));
+        MH_pred = LOOKUP.findStatic(THIS_CLASS, "pred", methodType(boolean.class, I, I, I));
+        MH_fin = LOOKUP.findStatic(THIS_CLASS, "fin", methodType(I, I, I, I));
+        {{
+{} /// JAVADOC
+// iterative implementation of the factorial function as a loop handle
+// null initializer for counter, should initialize to 0
+MethodHandle[] counterClause = new MethodHandle[]{null, MH_inc};
+MethodHandle[] accumulatorClause = new MethodHandle[]{MH_one, MH_mult, MH_pred, MH_fin};
+MethodHandle loop = MethodHandles.loop(counterClause, accumulatorClause);
+assertEquals(120, loop.invoke(5));
+{}
+        }}
+    }
+
+    static int inc(int i) { return i + 1; } // drop acc, k
+    static int mult(int i, int acc) { return i * acc; } //drop k
+    static boolean cmp(int i, int k) { return i < k; }
+
+    @Test public void testSimplerLoop() throws Throwable {
+        MethodHandle MH_inc, MH_mult, MH_cmp;
+        Class<?> I = int.class;
+        MH_inc = LOOKUP.findStatic(THIS_CLASS, "inc", methodType(I, I));
+        MH_mult = LOOKUP.findStatic(THIS_CLASS, "mult", methodType(I, I, I));
+        MH_cmp = LOOKUP.findStatic(THIS_CLASS, "cmp", methodType(boolean.class, I, I));
+        {{
+{} /// JAVADOC
+// simplified implementation of the factorial function as a loop handle
+// null initializer for counter, should initialize to 0
+MethodHandle MH_one = MethodHandles.constant(int.class, 1);
+MethodHandle MH_pred = MethodHandles.dropArguments(MH_cmp, 1, int.class); // drop acc
+MethodHandle MH_fin = MethodHandles.dropArguments(MethodHandles.identity(int.class), 0, int.class); // drop i
+MethodHandle[] counterClause = new MethodHandle[]{null, MH_inc};
+MethodHandle[] accumulatorClause = new MethodHandle[]{MH_one, MH_mult, MH_pred, MH_fin};
+MethodHandle loop = MethodHandles.loop(counterClause, accumulatorClause);
+assertEquals(720, loop.invoke(6));
+{}
+        }}
+    }
+
+    // for testFacLoop
+{}
+static class FacLoop {
+  final int k;
+  FacLoop(int k) { this.k = k; }
+  int inc(int i) { return i + 1; }
+  int mult(int i, int acc) { return i * acc; }
+  boolean pred(int i) { return i < k; }
+  int fin(int i, int acc) { return acc; }
+}
+{}
+
+    // assume MH_inc, MH_mult, and MH_pred are handles to the above methods
+    @Test public void testFacLoop() throws Throwable {
+        MethodHandle MH_FacLoop, MH_inc, MH_mult, MH_pred, MH_fin;
+        Class<?> I = int.class;
+        MH_FacLoop = LOOKUP.findConstructor(FacLoop.class, methodType(void.class, I));
+        MH_inc = LOOKUP.findVirtual(FacLoop.class, "inc", methodType(I, I));
+        MH_mult = LOOKUP.findVirtual(FacLoop.class, "mult", methodType(I, I, I));
+        MH_pred = LOOKUP.findVirtual(FacLoop.class, "pred", methodType(boolean.class, I));
+        MH_fin = LOOKUP.findVirtual(FacLoop.class, "fin", methodType(I, I, I));
+        {{
+{} /// JAVADOC
+// instance-based implementation of the factorial function as a loop handle
+// null initializer for counter, should initialize to 0
+MethodHandle MH_one = MethodHandles.constant(int.class, 1);
+MethodHandle[] instanceClause = new MethodHandle[]{MH_FacLoop};
+MethodHandle[] counterClause = new MethodHandle[]{null, MH_inc};
+MethodHandle[] accumulatorClause = new MethodHandle[]{MH_one, MH_mult, MH_pred, MH_fin};
+MethodHandle loop = MethodHandles.loop(instanceClause, counterClause, accumulatorClause);
+assertEquals(5040, loop.invoke(7));
+{}
+        }}
+    }
+
+    static List<String> initZip(Iterator<String> a, Iterator<String> b) { return new ArrayList<>(); }
+    static boolean zipPred(List<String> zip, Iterator<String> a, Iterator<String> b) { return a.hasNext() && b.hasNext(); }
+    static List<String> zipStep(List<String> zip, Iterator<String> a, Iterator<String> b) {
+        zip.add(a.next());
+        zip.add(b.next());
+        return zip;
+    }
+
+    @Test public void testWhileLoop() throws Throwable {
+        MethodHandle MH_initZip, MH_zipPred, MH_zipStep;
+        Class<?> IT = Iterator.class;
+        Class<?> L = List.class;
+        MH_initZip = LOOKUP.findStatic(THIS_CLASS, "initZip", methodType(L, IT, IT));
+        MH_zipPred = LOOKUP.findStatic(THIS_CLASS, "zipPred", methodType(boolean.class, L, IT, IT));
+        MH_zipStep = LOOKUP.findStatic(THIS_CLASS, "zipStep", methodType(L, L, IT, IT));
+        {{
+{} /// JAVADOC
+// implement the zip function for lists as a loop handle
+MethodHandle loop = MethodHandles.whileLoop(MH_initZip, MH_zipPred, MH_zipStep);
+List<String> a = Arrays.asList("a", "b", "c", "d");
+List<String> b = Arrays.asList("e", "f", "g", "h");
+List<String> zipped = Arrays.asList("a", "e", "b", "f", "c", "g", "d", "h");
+assertEquals(zipped, (List<String>) loop.invoke(a.iterator(), b.iterator()));
+{}
+        }}
+    }
+
+    static int zero(int limit) { return 0; }
+    static int step(int i, int limit) { return i + 1; }
+    static boolean pred(int i, int limit) { return i < limit; }
+
+    @Test public void testDoWhileLoop() throws Throwable {
+        MethodHandle MH_zero, MH_step, MH_pred;
+        Class<?> I = int.class;
+        MH_zero = LOOKUP.findStatic(THIS_CLASS, "zero", methodType(I, I));
+        MH_step = LOOKUP.findStatic(THIS_CLASS, "step", methodType(I, I, I));
+        MH_pred = LOOKUP.findStatic(THIS_CLASS, "pred", methodType(boolean.class, I, I));
+        {{
+{} /// JAVADOC
+// int i = 0; while (i < limit) { ++i; } return i; => limit
+MethodHandle loop = MethodHandles.doWhileLoop(MH_zero, MH_step, MH_pred);
+assertEquals(23, loop.invoke(23));
+{}
+        }}
+    }
+
+    static String step(String v, int counter, String start_) { return "na " + v; }  //#0
+    static String step(String v, int counter ) { return "na " + v; } //#1
+    static String step(String v, int counter, int iterations_, String pre, String start_) { return pre + " " + v; } //#2
+    static String step3(String v, int counter, String pre) { return pre + " " + v; } //#3
+
+    @Test public void testCountedLoop() throws Throwable {
+        MethodHandle MH_step;
+        Class<?> S = String.class, I = int.class;
+        // Theme:
+        MH_step = LOOKUP.findStatic(THIS_CLASS, "step", methodType(S, S, I, S));
+        {{
+{} /// JAVADOC
+// String s = "Lambdaman!"; for (int i = 0; i < 13; ++i) { s = "na " + s; } return s;
+// => a variation on a well known theme
+MethodHandle fit13 = MethodHandles.constant(int.class, 13);
+MethodHandle start = MethodHandles.identity(String.class);
+MethodHandle loop = MethodHandles.countedLoop(fit13, start, MH_step);  // (v, i, _) -> "na " + v
+assertEquals("na na na na na na na na na na na na na Lambdaman!", loop.invoke("Lambdaman!"));
+{}
+        }}
+        // Variation #1:
+        MH_step = LOOKUP.findStatic(THIS_CLASS, "step", methodType(S, S, I));
+        {{
+{} /// JAVADOC
+// String s = "Lambdaman!"; for (int i = 0; i < 13; ++i) { s = "na " + s; } return s;
+// => a variation on a well known theme
+MethodHandle count = MethodHandles.dropArguments(MethodHandles.identity(int.class), 1, String.class);
+MethodHandle start = MethodHandles.dropArguments(MethodHandles.identity(String.class), 0, int.class);
+MethodHandle loop = MethodHandles.countedLoop(count, start, MH_step);  // (v, i) -> "na " + v
+assertEquals("na na na na na na na na na na na na na Lambdaman!", loop.invoke(13, "Lambdaman!"));
+{}
+            assertEquals("na na Lambdaman!", loop.invoke(2, "Lambdaman!"));
+            assertEquals("Lambdaman!", loop.invoke(0, "Lambdaman!"));
+            assertEquals("Lambdaman!", loop.invoke(-1, "Lambdaman!"));
+            assertEquals("Lambdaman!", loop.invoke(Integer.MIN_VALUE, "Lambdaman!"));
+        }}
+        // Variation #2:
+        MH_step = LOOKUP.findStatic(THIS_CLASS, "step", methodType(S, S, I, I, S, S));
+        {{
+{} /// JAVADOC
+// String s = "Lambdaman!", t = "na"; for (int i = 0; i < 13; ++i) { s = t + " " + s; } return s;
+// => a variation on a well known theme
+MethodHandle count = MethodHandles.identity(int.class);
+MethodHandle start = MethodHandles.dropArguments(MethodHandles.identity(String.class), 0, int.class, String.class);
+MethodHandle loop = MethodHandles.countedLoop(count, start, MH_step);  // (v, i, _, pre, _) -> pre + " " + v
+assertEquals("na na na na na na na na na na na na na Lambdaman!", loop.invoke(13, "na", "Lambdaman!"));
+{}
+        }}
+        // Variation #3:
+        MH_step = LOOKUP.findStatic(THIS_CLASS, "step3", methodType(S, S, I, S));
+        {{
+{} /// JAVADOC
+// String s = "Lambdaman!", t = "na"; for (int i = 0; i < 13; ++i) { s = t + " " + s; } return s;
+// => a variation on a well known theme
+MethodType loopType = methodType(String.class, String.class, int.class, String.class);
+MethodHandle count = MethodHandles.dropArgumentsToMatch(MethodHandles.identity(int.class),    0, loopType.parameterList(), 1);
+MethodHandle start = MethodHandles.dropArgumentsToMatch(MethodHandles.identity(String.class), 0, loopType.parameterList(), 2);
+MethodHandle body  = MethodHandles.dropArgumentsToMatch(MH_step,                              2, loopType.parameterList(), 0);
+MethodHandle loop = MethodHandles.countedLoop(count, start, body);  // (v, i, pre, _, _) -> pre + " " + v
+assertEquals("na na na na na na na na na na na na na Lambdaman!", loop.invoke("na", 13, "Lambdaman!"));
+{}
+        }}
+    }
+
+    static List<String> reverseStep(List<String> r, String e) {
+        r.add(0, e);
+        return r;
+    }
+    static List<String> newArrayList() { return new ArrayList<>(); }
+
+    @Test public void testIteratedLoop() throws Throwable {
+        MethodHandle MH_newArrayList, MH_reverseStep;
+        Class<?> L = List.class, S = String.class;
+        MH_newArrayList = LOOKUP.findStatic(THIS_CLASS, "newArrayList", methodType(L));
+        MH_reverseStep = LOOKUP.findStatic(THIS_CLASS, "reverseStep", methodType(L, L, S));
+        {{
+{} /// JAVADOC
+// reverse a list
+MethodHandle loop = MethodHandles.iteratedLoop(null, MH_newArrayList, MH_reverseStep);
+List<String> list = Arrays.asList("a", "b", "c", "d", "e");
+List<String> reversedList = Arrays.asList("e", "d", "c", "b", "a");
+assertEquals(reversedList, (List<String>) loop.invoke(list));
+{}
+        }}
+    }
+
+    @Test public void testFoldArguments3() throws Throwable {
+        {{
+{} /// JAVADOC
+MethodHandle trace = publicLookup().findVirtual(java.io.PrintStream.class,
+        "println", methodType(void.class, String.class))
+        .bindTo(System.out);
+MethodHandle cat = lookup().findVirtual(String.class,
+        "concat", methodType(String.class, String.class));
+assertEquals("boojum", (String) cat.invokeExact("boo", "jum"));
+MethodHandle catTrace = foldArguments(cat, 1, trace);
+// also prints "jum":
+assertEquals("boojum", (String) catTrace.invokeExact("boo", "jum"));
+{}
+        }}
+    }
+
+    @Test public void testAsCollector2() throws Throwable {
+        {{
+{} /// JAVADOC
+StringWriter swr = new StringWriter();
+MethodHandle swWrite = LOOKUP.findVirtual(StringWriter.class, "write", methodType(void.class, char[].class, int.class, int.class)).bindTo(swr);
+MethodHandle swWrite4 = swWrite.asCollector(0, char[].class, 4);
+swWrite4.invoke('A', 'B', 'C', 'D', 1, 2);
+assertEquals("BC", swr.toString());
+swWrite4.invoke('P', 'Q', 'R', 'S', 0, 4);
+assertEquals("BCPQRS", swr.toString());
+swWrite4.invoke('W', 'X', 'Y', 'Z', 3, 1);
+assertEquals("BCPQRSZ", swr.toString());
+{}
+        }}
+    }
+
+    @Test public void testAsSpreader2() throws Throwable {
+        {{
+{} /// JAVADOC
+MethodHandle compare = LOOKUP.findStatic(Objects.class, "compare", methodType(int.class, Object.class, Object.class, Comparator.class));
+MethodHandle compare2FromArray = compare.asSpreader(0, Object[].class, 2);
+Object[] ints = new Object[]{3, 9, 7, 7};
+Comparator<Integer> cmp = (a, b) -> a - b;
+assertTrue((int) compare2FromArray.invoke(Arrays.copyOfRange(ints, 0, 2), cmp) < 0);
+assertTrue((int) compare2FromArray.invoke(Arrays.copyOfRange(ints, 1, 3), cmp) > 0);
+assertTrue((int) compare2FromArray.invoke(Arrays.copyOfRange(ints, 2, 4), cmp) == 0);
+{}
+        }}
     }
 
     /* ---- TEMPLATE ----

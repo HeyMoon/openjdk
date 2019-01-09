@@ -59,7 +59,6 @@ typedef struct {
   unsigned int isThreadContentionMonitoringSupported : 1;
   unsigned int isCurrentThreadCpuTimeSupported : 1;
   unsigned int isOtherThreadCpuTimeSupported : 1;
-  unsigned int isBootClassPathSupported : 1;
   unsigned int isObjectMonitorUsageSupported : 1;
   unsigned int isSynchronizerUsageSupported : 1;
   unsigned int isThreadAllocatedMemorySupported : 1;
@@ -227,16 +226,10 @@ typedef struct jmmInterface_1_ {
   jint         (JNICALL *GetOptionalSupport)     (JNIEnv *env,
                                                   jmmOptionalSupport* support_ptr);
 
-  /* This is used by JDK 6 and earlier.
-   * For JDK 7 and after, use GetInputArgumentArray.
-   */
-  jobject      (JNICALL *GetInputArguments)      (JNIEnv *env);
-
   jint         (JNICALL *GetThreadInfo)          (JNIEnv *env,
                                                   jlongArray ids,
                                                   jint maxDepth,
                                                   jobjectArray infoArray);
-  jobjectArray (JNICALL *GetInputArgumentArray)  (JNIEnv *env);
 
   jobjectArray (JNICALL *GetMemoryPools)         (JNIEnv* env, jobject mgr);
 

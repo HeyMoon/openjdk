@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -79,6 +79,13 @@ void AwtRobot::MouseMove( jint x, jint y)
                 // compile.  -bchristi 10/02/2001
                                      (PVOID)newSpeed,
                                      SPIF_SENDCHANGE);
+
+      int primaryIndex = AwtWin32GraphicsDevice::GetDefaultDeviceIndex();
+      Devices::InstanceAccess devices;
+      AwtWin32GraphicsDevice *device = devices->GetDevice(primaryIndex);
+
+      x = (device == NULL) ? x : device->ScaleUpX(x);
+      y = (device == NULL) ? y : device->ScaleUpY(y);
 
       POINT curPos;
       ::GetCursorPos(&curPos);
@@ -221,7 +228,7 @@ void AwtRobot::GetRGBPixels(jint x, jint y, jint width, jint height, jintArray p
     // CAPTUREBLT flag is required to capture WS_EX_LAYERED windows' contents
     // correctly on Win2K/XP
     VERIFY(::BitBlt(hdcMem, 0, 0, width, height, hdcScreen, x, y,
-                                                SRCCOPY|CAPTUREBLT) != 0);
+           SRCCOPY | CAPTUREBLT) != 0);
 
     static const int BITS_PER_PIXEL = 32;
     static const int BYTES_PER_PIXEL = BITS_PER_PIXEL/8;
@@ -315,6 +322,19 @@ void AwtRobot::DoKeyEvent( jint jkey, DWORD dwFlags )
     } else {
         // get the scancode from the virtual key
         scancode = ::MapVirtualKey(vkey, 0);
+        if (vkey == VK_RMENU ||
+            vkey == VK_DELETE ||
+            vkey == VK_INSERT ||
+            vkey == VK_NEXT ||
+            vkey == VK_PRIOR ||
+            vkey == VK_HOME ||
+            vkey == VK_END ||
+            vkey == VK_LEFT ||
+            vkey == VK_RIGHT ||
+            vkey == VK_UP ||
+            vkey == VK_DOWN) {
+            dwFlags |= KEYEVENTF_EXTENDEDKEY;
+        }
         keybd_event(vkey, scancode, dwFlags, 0);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,25 +21,30 @@
  * questions.
  */
 
-/**
+/*
  * @test
  * @bug 4856966
  * @summary
  * @author Andreas Sterbenz
  * @library ..
  * @key randomness
+ * @modules jdk.crypto.cryptoki
+ * @run main/othervm ReinitDigest
+ * @run main/othervm ReinitDigest sm
  */
 
-import java.util.*;
-
-import java.security.*;
+import java.security.MessageDigest;
+import java.security.Provider;
+import java.util.Arrays;
+import java.util.Random;
 
 public class ReinitDigest extends PKCS11Test {
 
     public static void main(String[] args) throws Exception {
-        main(new ReinitDigest());
+        main(new ReinitDigest(), args);
     }
 
+    @Override
     public void main(Provider p) throws Exception {
         if (p.getService("MessageDigest", "MD5") == null) {
             System.out.println("Provider does not support MD5, skipping");

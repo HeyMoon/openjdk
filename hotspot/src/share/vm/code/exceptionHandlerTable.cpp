@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,8 +26,6 @@
 #include "code/exceptionHandlerTable.hpp"
 #include "code/nmethod.hpp"
 #include "memory/allocation.inline.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 void ExceptionHandlerTable::add_entry(HandlerTableEntry entry) {
   _nesting.check();
@@ -67,9 +65,9 @@ ExceptionHandlerTable::ExceptionHandlerTable(int initial_size) {
 }
 
 
-ExceptionHandlerTable::ExceptionHandlerTable(const nmethod* nm) {
-  _table  = (HandlerTableEntry*)nm->handler_table_begin();
-  _length = nm->handler_table_size() / sizeof(HandlerTableEntry);
+ExceptionHandlerTable::ExceptionHandlerTable(const CompiledMethod* cm) {
+  _table  = (HandlerTableEntry*)cm->handler_table_begin();
+  _length = cm->handler_table_size() / sizeof(HandlerTableEntry);
   _size   = 0; // no space allocated by ExeptionHandlerTable!
 }
 
@@ -100,11 +98,14 @@ void ExceptionHandlerTable::add_subtable(
 }
 
 
-void ExceptionHandlerTable::copy_to(nmethod* nm) {
-  assert(size_in_bytes() == nm->handler_table_size(), "size of space allocated in nmethod incorrect");
-  memmove(nm->handler_table_begin(), _table, size_in_bytes());
+void ExceptionHandlerTable::copy_to(CompiledMethod* cm) {
+  assert(size_in_bytes() == cm->handler_table_size(), "size of space allocated in compiled method incorrect");
+  copy_bytes_to(cm->handler_table_begin());
 }
 
+void ExceptionHandlerTable::copy_bytes_to(address addr) {
+  memmove(addr, _table, size_in_bytes());
+}
 
 HandlerTableEntry* ExceptionHandlerTable::entry_for(int catch_pco, int handler_bci, int scope_depth) const {
   HandlerTableEntry* t = subtable_for(catch_pco);
@@ -186,7 +187,7 @@ uint ImplicitExceptionTable::at( uint exec_off ) const {
 void ImplicitExceptionTable::print(address base) const {
   tty->print("{");
   for( uint i=0; i<len(); i++ )
-    tty->print("< " INTPTR_FORMAT ", " INTPTR_FORMAT " > ",base + *adr(i), base + *(adr(i)+1));
+    tty->print("< " INTPTR_FORMAT ", " INTPTR_FORMAT " > ", p2i(base + *adr(i)), p2i(base + *(adr(i)+1)));
   tty->print_cr("}");
 }
 
@@ -225,6 +226,6 @@ void ImplicitExceptionTable::verify(nmethod *nm) const {
   for (uint i = 0; i < len(); i++) {
      if ((*adr(i) > (unsigned int)nm->insts_size()) ||
          (*(adr(i)+1) > (unsigned int)nm->insts_size()))
-       fatal(err_msg("Invalid offset in ImplicitExceptionTable at " PTR_FORMAT, _data));
+       fatal("Invalid offset in ImplicitExceptionTable at " PTR_FORMAT, p2i(_data));
   }
 }

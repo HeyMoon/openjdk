@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,8 @@
 #include "precompiled.hpp"
 #include "libadt/vectset.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/resourceArea.hpp"
+#include "compiler/compilerDirectives.hpp"
 #include "opto/block.hpp"
 #include "opto/cfgnode.hpp"
 #include "opto/chaitin.hpp"
@@ -71,7 +73,7 @@ void Block_List::print() {
 }
 #endif
 
-uint Block::code_alignment() {
+uint Block::code_alignment() const {
   // Check for Root block
   if (_pre_order == 0) return CodeEntryAlignment;
   // Check for Start block
@@ -358,12 +360,14 @@ void Block::dump(const PhaseCFG* cfg) const {
 PhaseCFG::PhaseCFG(Arena* arena, RootNode* root, Matcher& matcher)
 : Phase(CFG)
 , _block_arena(arena)
+, _regalloc(NULL)
+, _scheduling_for_pressure(false)
 , _root(root)
 , _matcher(matcher)
 , _node_to_block_mapping(arena)
 , _node_latency(NULL)
 #ifndef PRODUCT
-, _trace_opto_pipelining(TraceOptoPipelining || C->method_has_option("TraceOptoPipelining"))
+, _trace_opto_pipelining(C->directive()->TraceOptoPipeliningOption)
 #endif
 #ifdef ASSERT
 , _raw_oops(arena)
@@ -393,7 +397,7 @@ uint PhaseCFG::build_cfg() {
   VectorSet visited(a);
 
   // Allocate stack with enough space to avoid frequent realloc
-  Node_Stack nstack(a, C->unique() >> 1);
+  Node_Stack nstack(a, C->live_nodes() >> 1);
   nstack.push(_root, 0);
   uint sum = 0;                 // Counter for blocks
 
@@ -1208,6 +1212,9 @@ void PhaseCFG::verify() const {
       if (j >= 1 && n->is_Mach() && n->as_Mach()->ideal_Opcode() == Op_CreateEx) {
         assert(j == 1 || block->get_node(j-1)->is_Phi(), "CreateEx must be first instruction in block");
       }
+      if (n->needs_anti_dependence_check()) {
+        verify_anti_dependences(block, n);
+      }
       for (uint k = 0; k < n->req(); k++) {
         Node *def = n->in(k);
         if (def && def != n) {
@@ -1426,7 +1433,7 @@ void PhaseBlockLayout::find_edges() {
       if (n->num_preds() != 1) break;
 
       i++;
-      assert(n = _cfg.get_block(i), "expecting next block");
+      assert(n == _cfg.get_block(i), "expecting next block");
       tr->append(n);
       uf->map(n->_pre_order, tr->id());
       traces[n->_pre_order] = NULL;
@@ -1723,8 +1730,14 @@ bool Trace::backedge(CFGEdge *e) {
     first_block()->set_loop_alignment(targ_block);
 
   } else {
-    // Backbranch into the middle of a trace
-    targ_block->set_loop_alignment(targ_block);
+    // That loop may already have a loop top (we're reaching it again
+    // through the backedge of an outer loop)
+    Block* b = prev(targ_block);
+    bool has_top = targ_block->head()->is_Loop() && b->has_loop_alignment() && !b->head()->is_Loop();
+    if (!has_top) {
+      // Backbranch into the middle of a trace
+      targ_block->set_loop_alignment(targ_block);
+    }
   }
 
   return loop_rotated;

@@ -30,7 +30,7 @@ import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.*;
 import java.io.IOException;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 import static sun.nio.fs.UnixConstants.*;
 
@@ -272,9 +272,11 @@ class SolarisWatchService
                 for (WatchEvent.Modifier modifier: modifiers) {
                     if (modifier == null)
                         return new NullPointerException();
-                    if (modifier instanceof com.sun.nio.file.SensitivityWatchEventModifier)
-                        continue; // ignore
-                    return new UnsupportedOperationException("Modifier not supported");
+                    if (!ExtendedOptions.SENSITIVITY_HIGH.matches(modifier) &&
+                            !ExtendedOptions.SENSITIVITY_MEDIUM.matches(modifier) &&
+                            !ExtendedOptions.SENSITIVITY_LOW.matches(modifier)) {
+                        return new UnsupportedOperationException("Modifier not supported");
+                    }
                 }
             }
 

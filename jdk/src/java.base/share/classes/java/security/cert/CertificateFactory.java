@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,10 +29,9 @@ import java.io.InputStream;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Objects;
 import java.security.Provider;
 import java.security.Security;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 
@@ -102,11 +101,11 @@ import sun.security.jca.GetInstance.Instance;
  * <li>{@code PkiPath}</li>
  * </ul>
  * The type and encodings are described in the <a href=
- * "{@docRoot}/../technotes/guides/security/StandardNames.html#CertificateFactory">
+ * "{@docRoot}/../specs/security/standard-names.html#certificatefactory-types">
  * CertificateFactory section</a> and the <a href=
- * "{@docRoot}/../technotes/guides/security/StandardNames.html#CertPathEncodings">
+ * "{@docRoot}/../specs/security/standard-names.html#certpath-encodings">
  * CertPath Encodings section</a> of the
- * Java Cryptography Architecture Standard Algorithm Name Documentation.
+ * Java Security Standard Algorithm Names Specification.
  * Consult the release documentation for your implementation to see if any
  * other types or encodings are supported.
  *
@@ -163,22 +162,33 @@ public class CertificateFactory {
      * <p> Note that the list of registered providers may be retrieved via
      * the {@link Security#getProviders() Security.getProviders()} method.
      *
+     * @implNote
+     * The JDK Reference Implementation additionally uses the
+     * {@code jdk.security.provider.preferred}
+     * {@link Security#getProperty(String) Security} property to determine
+     * the preferred provider order for the specified algorithm. This
+     * may be different than the order of providers returned by
+     * {@link Security#getProviders() Security.getProviders()}.
+     *
      * @param type the name of the requested certificate type.
      * See the CertificateFactory section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#CertificateFactory">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#certificatefactory-types">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard certificate types.
      *
-     * @return a certificate factory object for the specified type.
+     * @return a certificate factory object for the specified type
      *
-     * @exception CertificateException if no Provider supports a
-     *          CertificateFactorySpi implementation for the
-     *          specified type.
+     * @throws CertificateException if no {@code Provider} supports a
+     *         {@code CertificateFactorySpi} implementation for the
+     *         specified type
+     *
+     * @throws NullPointerException if {@code type} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final CertificateFactory getInstance(String type)
             throws CertificateException {
+        Objects.requireNonNull(type, "null type name");
         try {
             Instance instance = GetInstance.getInstance("CertificateFactory",
                 CertificateFactorySpi.class, type);
@@ -203,29 +213,32 @@ public class CertificateFactory {
      *
      * @param type the certificate type.
      * See the CertificateFactory section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#CertificateFactory">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#certificatefactory-types">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard certificate types.
      *
      * @param provider the name of the provider.
      *
-     * @return a certificate factory object for the specified type.
+     * @return a certificate factory object for the specified type
      *
-     * @exception CertificateException if a CertificateFactorySpi
-     *          implementation for the specified algorithm is not
-     *          available from the specified provider.
+     * @throws CertificateException if a {@code CertificateFactorySpi}
+     *         implementation for the specified algorithm is not
+     *         available from the specified provider
      *
-     * @exception NoSuchProviderException if the specified provider is not
-     *          registered in the security provider list.
+     * @throws IllegalArgumentException if the provider name is {@code null}
+     *         or empty
      *
-     * @exception IllegalArgumentException if the provider name is null
-     *          or empty.
+     * @throws NoSuchProviderException if the specified provider is not
+     *         registered in the security provider list
+     *
+     * @throws NullPointerException if {@code type} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final CertificateFactory getInstance(String type,
             String provider) throws CertificateException,
             NoSuchProviderException {
+        Objects.requireNonNull(type, "null type name");
         try {
             Instance instance = GetInstance.getInstance("CertificateFactory",
                 CertificateFactorySpi.class, type, provider);
@@ -247,19 +260,21 @@ public class CertificateFactory {
      *
      * @param type the certificate type.
      * See the CertificateFactory section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#CertificateFactory">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#certificatefactory-types">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard certificate types.
      * @param provider the provider.
      *
-     * @return a certificate factory object for the specified type.
+     * @return a certificate factory object for the specified type
      *
-     * @exception CertificateException if a CertificateFactorySpi
-     *          implementation for the specified algorithm is not available
-     *          from the specified Provider object.
+     * @throws CertificateException if a {@code CertificateFactorySpi}
+     *         implementation for the specified algorithm is not available
+     *         from the specified {@code Provider} object
      *
-     * @exception IllegalArgumentException if the {@code provider} is
-     *          null.
+     * @throws IllegalArgumentException if the {@code provider} is
+     *         {@code null}
+     *
+     * @throws NullPointerException if {@code type} is {@code null}
      *
      * @see java.security.Provider
      *
@@ -267,6 +282,7 @@ public class CertificateFactory {
      */
     public static final CertificateFactory getInstance(String type,
             Provider provider) throws CertificateException {
+        Objects.requireNonNull(type, "null type name");
         try {
             Instance instance = GetInstance.getInstance("CertificateFactory",
                 CertificateFactorySpi.class, type, provider);
@@ -343,8 +359,8 @@ public class CertificateFactory {
      * Returns an iteration of the {@code CertPath} encodings supported
      * by this certificate factory, with the default encoding first. See
      * the CertPath Encodings section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#CertPathEncodings">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#certpath-encodings">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard encoding names and their formats.
      * <p>
      * Attempts to modify the returned {@code Iterator} via its
@@ -383,8 +399,8 @@ public class CertificateFactory {
      * the data read from the {@code InputStream} inStream. The data
      * is assumed to be in the specified encoding. See
      * the CertPath Encodings section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#CertPathEncodings">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#certpath-encodings">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard encoding names and their formats.
      *
      * @param inStream an {@code InputStream} containing the data

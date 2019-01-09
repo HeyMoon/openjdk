@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,51 +27,47 @@
 
 #include "gc/g1/dirtyCardQueue.hpp"
 #include "gc/g1/g1CollectedHeap.hpp"
-#include "gc/g1/g1CollectorPolicy.hpp"
 #include "gc/g1/g1OopClosures.hpp"
+#include "gc/g1/g1Policy.hpp"
 #include "gc/g1/g1RemSet.hpp"
 #include "gc/g1/g1SATBCardTableModRefBS.hpp"
 #include "gc/shared/ageTable.hpp"
 #include "memory/allocation.hpp"
 #include "oops/oop.hpp"
 
+class G1PLABAllocator;
+class G1EvacuationRootClosures;
 class HeapRegion;
 class outputStream;
 
-class G1ParScanThreadState : public StackObj {
+class G1ParScanThreadState : public CHeapObj<mtGC> {
  private:
   G1CollectedHeap* _g1h;
   RefToScanQueue*  _refs;
   DirtyCardQueue   _dcq;
   G1SATBCardTableModRefBS* _ct_bs;
-  G1RemSet* _g1_rem;
+  G1EvacuationRootClosures* _closures;
 
-  G1ParGCAllocator* _g1_par_allocator;
+  G1PLABAllocator*  _plab_allocator;
 
-  ageTable          _age_table;
+  AgeTable          _age_table;
   InCSetState       _dest[InCSetState::Num];
   // Local tenuring threshold.
   uint              _tenuring_threshold;
   G1ParScanClosure  _scanner;
 
-  OopsInHeapRegionClosure*      _evac_failure_cl;
-
   int  _hash_seed;
-  uint _queue_num;
-
-  size_t _term_attempts;
-
-  double _start;
-  double _start_strong_roots;
-  double _strong_roots_time;
-  double _start_term;
-  double _term_time;
+  uint _worker_id;
 
   // Map from young-age-index (0 == not young, 1 is youngest) to
   // surviving words. base is what we get back from the malloc call
   size_t* _surviving_young_words_base;
   // this points into the array, as we use the first few entries for padding
   size_t* _surviving_young_words;
+
+  // Indicates whether in the last generation (old) there is no more space
+  // available for allocation.
+  bool _old_gen_is_full;
 
 #define PADDING_ELEM_NUM (DEFAULT_CACHE_LINE_SIZE / sizeof(size_t))
 
@@ -80,17 +76,17 @@ class G1ParScanThreadState : public StackObj {
 
   InCSetState dest(InCSetState original) const {
     assert(original.is_valid(),
-           err_msg("Original state invalid: " CSETSTATE_FORMAT, original.value()));
+           "Original state invalid: " CSETSTATE_FORMAT, original.value());
     assert(_dest[original.value()].is_valid_gen(),
-           err_msg("Dest state is invalid: " CSETSTATE_FORMAT, _dest[original.value()].value()));
+           "Dest state is invalid: " CSETSTATE_FORMAT, _dest[original.value()].value());
     return _dest[original.value()];
   }
 
  public:
-  G1ParScanThreadState(G1CollectedHeap* g1h, uint queue_num, ReferenceProcessor* rp);
-  ~G1ParScanThreadState();
+  G1ParScanThreadState(G1CollectedHeap* g1h, uint worker_id, size_t young_cset_length);
+  virtual ~G1ParScanThreadState();
 
-  ageTable*         age_table()       { return &_age_table;       }
+  void set_ref_processor(ReferenceProcessor* rp) { _scanner.set_ref_processor(rp); }
 
 #ifdef ASSERT
   bool queue_is_empty() const { return _refs->is_empty(); }
@@ -100,12 +96,13 @@ class G1ParScanThreadState : public StackObj {
   bool verify_task(StarTask ref) const;
 #endif // ASSERT
 
+  template <class T> void do_oop_ext(T* ref);
   template <class T> void push_on_queue(T* ref);
 
-  template <class T> void update_rs(HeapRegion* from, T* p, uint tid) {
+  template <class T> void update_rs(HeapRegion* from, T* p, oop o) {
     // If the new value of the field points to the same region or
     // is the to-space, we don't need to include it in the Rset updates.
-    if (!from->is_in_reserved(oopDesc::load_decode_heap_oop(p)) && !from->is_survivor()) {
+    if (!HeapRegion::is_in_same_region(p, o) && !from->is_young()) {
       size_t card_index = ctbs()->index_for(p);
       // If the card hasn't been added to the buffer, do it.
       if (ctbs()->mark_card_deferred(card_index)) {
@@ -114,47 +111,20 @@ class G1ParScanThreadState : public StackObj {
     }
   }
 
-  void set_evac_failure_closure(OopsInHeapRegionClosure* evac_failure_cl) {
-    _evac_failure_cl = evac_failure_cl;
-  }
+  G1EvacuationRootClosures* closures() { return _closures; }
+  uint worker_id() { return _worker_id; }
 
-  OopsInHeapRegionClosure* evac_failure_closure() { return _evac_failure_cl; }
-
-  int* hash_seed() { return &_hash_seed; }
-  uint queue_num() { return _queue_num; }
-
-  size_t term_attempts() const  { return _term_attempts; }
-  void note_term_attempt() { _term_attempts++; }
-
-  void start_strong_roots() {
-    _start_strong_roots = os::elapsedTime();
-  }
-  void end_strong_roots() {
-    _strong_roots_time += (os::elapsedTime() - _start_strong_roots);
-  }
-  double strong_roots_time() const { return _strong_roots_time; }
-
-  void start_term_time() {
-    note_term_attempt();
-    _start_term = os::elapsedTime();
-  }
-  void end_term_time() {
-    _term_time += (os::elapsedTime() - _start_term);
-  }
-  double term_time() const { return _term_time; }
-
-  double elapsed_time() const {
-    return os::elapsedTime() - _start;
-  }
-
-  static void print_termination_stats_hdr(outputStream* const st = gclog_or_tty);
-  void print_termination_stats(int i, outputStream* const st = gclog_or_tty) const;
+  // Returns the current amount of waste due to alignment or not being able to fit
+  // objects within LABs and the undo waste.
+  virtual void waste(size_t& wasted, size_t& undo_wasted);
 
   size_t* surviving_young_words() {
-    // We add on to hide entry 0 which accumulates surviving words for
+    // We add one to hide entry 0 which accumulates surviving words for
     // age -1 regions (i.e. non-young ones)
-    return _surviving_young_words;
+    return _surviving_young_words + 1;
   }
+
+  void flush(size_t* surviving_young_words);
 
  private:
   #define G1_PARTIAL_ARRAY_MASK 0x2
@@ -196,14 +166,22 @@ class G1ParScanThreadState : public StackObj {
 
   // Tries to allocate word_sz in the PLAB of the next "generation" after trying to
   // allocate into dest. State is the original (source) cset state for the object
-  // that is allocated for.
+  // that is allocated for. Previous_plab_refill_failed indicates whether previously
+  // a PLAB refill into "state" failed.
   // Returns a non-NULL pointer if successful, and updates dest if required.
+  // Also determines whether we should continue to try to allocate into the various
+  // generations or just end trying to allocate.
   HeapWord* allocate_in_next_plab(InCSetState const state,
                                   InCSetState* dest,
                                   size_t word_sz,
-                                  AllocationContext_t const context);
+                                  AllocationContext_t const context,
+                                  bool previous_plab_refill_failed);
 
   inline InCSetState next_state(InCSetState const state, markOop const m, uint& age);
+
+  void report_promotion_event(InCSetState const dest_state,
+                              oop const old, size_t word_sz, uint age,
+                              HeapWord * const obj_ptr, const AllocationContext_t context) const;
  public:
 
   oop copy_to_survivor_space(InCSetState const state, oop const obj, markOop const old_mark);
@@ -211,6 +189,55 @@ class G1ParScanThreadState : public StackObj {
   void trim_queue();
 
   inline void steal_and_trim_queue(RefToScanQueueSet *task_queues);
+
+  // An attempt to evacuate "obj" has failed; take necessary steps.
+  oop handle_evacuation_failure_par(oop obj, markOop m);
+};
+
+class G1ParScanThreadStateSet : public StackObj {
+  G1CollectedHeap* _g1h;
+  G1ParScanThreadState** _states;
+  size_t* _surviving_young_words_total;
+  size_t* _cards_scanned;
+  size_t _total_cards_scanned;
+  size_t _young_cset_length;
+  uint _n_workers;
+  bool _flushed;
+
+ public:
+  G1ParScanThreadStateSet(G1CollectedHeap* g1h, uint n_workers, size_t young_cset_length) :
+      _g1h(g1h),
+      _states(NEW_C_HEAP_ARRAY(G1ParScanThreadState*, n_workers, mtGC)),
+      _surviving_young_words_total(NEW_C_HEAP_ARRAY(size_t, young_cset_length, mtGC)),
+      _cards_scanned(NEW_C_HEAP_ARRAY(size_t, n_workers, mtGC)),
+      _total_cards_scanned(0),
+      _young_cset_length(young_cset_length),
+      _n_workers(n_workers),
+      _flushed(false) {
+    for (uint i = 0; i < n_workers; ++i) {
+      _states[i] = NULL;
+    }
+    memset(_surviving_young_words_total, 0, young_cset_length * sizeof(size_t));
+    memset(_cards_scanned, 0, n_workers * sizeof(size_t));
+  }
+
+  ~G1ParScanThreadStateSet() {
+    assert(_flushed, "thread local state from the per thread states should have been flushed");
+    FREE_C_HEAP_ARRAY(G1ParScanThreadState*, _states);
+    FREE_C_HEAP_ARRAY(size_t, _surviving_young_words_total);
+    FREE_C_HEAP_ARRAY(size_t, _cards_scanned);
+  }
+
+  void flush();
+
+  G1ParScanThreadState* state_for_worker(uint worker_id);
+
+  void add_cards_scanned(uint worker_id, size_t cards_scanned);
+  size_t total_cards_scanned() const;
+  const size_t* surviving_young_words() const;
+
+ private:
+  G1ParScanThreadState* new_par_scan_state(uint worker_id, size_t young_cset_length);
 };
 
 #endif // SHARE_VM_GC_G1_G1PARSCANTHREADSTATE_HPP

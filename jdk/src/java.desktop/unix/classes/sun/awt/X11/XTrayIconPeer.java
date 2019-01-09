@@ -63,8 +63,8 @@ public class XTrayIconPeer implements TrayIconPeer,
     int old_x, old_y;
     int ex_width, ex_height;
 
-    final static int TRAY_ICON_WIDTH = 24;
-    final static int TRAY_ICON_HEIGHT = 24;
+    static final int TRAY_ICON_WIDTH = 24;
+    static final int TRAY_ICON_HEIGHT = 24;
 
     XTrayIconPeer(TrayIcon target)
       throws AWTException
@@ -93,7 +93,6 @@ public class XTrayIconPeer implements TrayIconPeer,
 
         if (XWM.getWMID() != XWM.METACITY_WM) {
             parentXED = dummyXED; // We don't like to leave it 'null'.
-
         } else {
             parentXED = new XEventDispatcher() {
                 // It's executed under AWTLock.
@@ -300,10 +299,19 @@ public class XTrayIconPeer implements TrayIconPeer,
 
         removeXED(getWindow(), eframeXED);
         removeXED(eframeParentID, parentXED);
+        removeListeners();
         eframe.realDispose();
         balloon.dispose();
+        tooltip.dispose();
         isTrayIconDisplayed = false;
+        canvas.dispose();
+        canvas = null;
+        popup = null;
+        balloon = null;
+        tooltip = null;
         XToolkit.targetDisposedPeer(target, this);
+        target = null;
+        eframe = null;
     }
 
     public static void suppressWarningString(Window w) {
@@ -413,6 +421,13 @@ public class XTrayIconPeer implements TrayIconPeer,
     void addListeners() {
         canvas.addMouseListener(eventProxy);
         canvas.addMouseMotionListener(eventProxy);
+        eframe.addMouseListener(eventProxy);
+    }
+
+    void removeListeners() {
+        canvas.removeMouseListener(eventProxy);
+        canvas.removeMouseMotionListener(eventProxy);
+        eframe.removeMouseListener(eventProxy);
     }
 
     long getWindow() {
@@ -462,8 +477,9 @@ public class XTrayIconPeer implements TrayIconPeer,
             e.setSource(xtiPeer.target);
             XToolkit.postEvent(XToolkit.targetToAppContext(e.getSource()), e);
         }
+        @SuppressWarnings("deprecation")
         public void mouseClicked(MouseEvent e) {
-            if ((e.getClickCount() > 1 || xtiPeer.balloon.isVisible()) &&
+            if ((e.getClickCount() == 1 || xtiPeer.balloon.isVisible()) &&
                 e.getButton() == MouseEvent.BUTTON1)
             {
                 ActionEvent aev = new ActionEvent(xtiPeer.target, ActionEvent.ACTION_PERFORMED,
@@ -549,6 +565,11 @@ public class XTrayIconPeer implements TrayIconPeer,
 
             super.repaintImage(doClear || (old_autosize != autosize));
         }
+
+        public void dispose() {
+            super.dispose();
+            target = null;
+        }
     }
 
     @SuppressWarnings("serial") // JDK-implementation class
@@ -570,6 +591,10 @@ public class XTrayIconPeer implements TrayIconPeer,
                 observer = new IconObserver();
             }
             repaintImage(true);
+        }
+
+        public void dispose() {
+            observer = null;
         }
 
         // Invoke on EDT.

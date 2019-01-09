@@ -31,9 +31,8 @@ import java.util.List;
  * Represents the abstract syntax tree for compilation units (source
  * files)
  *
- * @since 1.9
+ * @since 9
  */
-@jdk.Exported
 public interface CompilationUnitTree extends Tree {
     /**
      * Return the list of source elements in this compilation unit.
@@ -63,4 +62,12 @@ public interface CompilationUnitTree extends Tree {
      * @return the line map for this compilation unit
      */
     LineMap getLineMap();
+
+    /**
+     * Return the {@link ModuleTree} associated with this compilation unit. This is null,
+     * if there is no module information from this compilation unit.
+     *
+     * @return the Module info or null
+     */
+    ModuleTree getModule();
 }

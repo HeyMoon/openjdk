@@ -67,9 +67,7 @@ inline bool LinearScan::is_caller_save(int assigned_reg) {
 
 inline void LinearScan::pd_add_temps(LIR_Op* op) {
   switch (op->code()) {
-    case lir_tan:
-    case lir_sin:
-    case lir_cos: {
+    case lir_tan: {
       // The slow path for these functions may need to save and
       // restore all live registers but we don't want to save and
       // restore everything all the time, so mark the xmms as being
@@ -102,9 +100,11 @@ inline void LinearScan::pd_add_temps(LIR_Op* op) {
 
 inline bool LinearScanWalker::pd_init_regs_for_alloc(Interval* cur) {
   int last_xmm_reg = pd_last_xmm_reg;
+#ifdef _LP64
   if (UseAVX < 3) {
     last_xmm_reg = pd_first_xmm_reg + (pd_nof_xmm_regs_frame_map / 2) - 1;
   }
+#endif
   if (allocator()->gen()->is_vreg_flag_set(cur->reg_num(), LIRGenerator::byte_reg)) {
     assert(cur->type() != T_FLOAT && cur->type() != T_DOUBLE, "cpu regs only");
     _first_reg = pd_first_byte_reg;

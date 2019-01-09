@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,8 +26,8 @@ import java.security.Policy;
 import java.security.ProtectionDomain;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
-import sun.misc.JavaAWTAccess;
-import sun.misc.SharedSecrets;
+import jdk.internal.misc.JavaAWTAccess;
+import jdk.internal.misc.SharedSecrets;
 
 /*
  * @test
@@ -35,7 +35,8 @@ import sun.misc.SharedSecrets;
  *
  * @summary NPE with logging while launching webstart
  *
- * @modules java.base/sun.misc
+ * @modules java.base/jdk.internal.misc
+ *          java.logging
  * @build TestGetLoggerNPE
  * @run main/othervm TestGetLoggerNPE getLogger
  * @run main/othervm TestGetLoggerNPE getLogManager

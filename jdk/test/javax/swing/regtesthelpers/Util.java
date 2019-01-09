@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,6 @@ import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.Callable;
-//import sun.swing.*;
 
 /**
  * <p>This class contains utilities useful for regression testing.
@@ -42,6 +41,7 @@ import java.util.concurrent.Callable;
  */
 
 public class Util {
+
     /**
      * Convert a rectangle from coordinate system of Component c to
      * screen coordinate system.
@@ -81,7 +81,8 @@ public class Util {
 
     /**
      * Fills the heap until OutOfMemoryError occurs. This method is useful for
-     * WeakReferences removing.
+     * WeakReferences removing. To minimize the amount of filled memory the
+     * test should provide reasonable heap size via -mx option.
      */
     public static void generateOOME() {
         List<Object> bigLeak = new LinkedList<Object>();
@@ -264,7 +265,45 @@ public class Util {
         if (osName.contains("OS X")) {
             result.add(KeyEvent.VK_CONTROL);
         }
-        result.add(KeyEvent.ALT_MASK);
+        result.add(KeyEvent.VK_ALT);
         return result;
+    }
+
+   /**
+    * Creates and returns a JDialog with two button, one that says pass,
+    * another that says fail. The fail button is wired to call
+    * <code>uiTestFailed</code> with <code>failString</code> and the pass
+    * button is wired to invoked <code>uiTestPassed</code>.
+    * <p>The content pane of the JDialog uses a BorderLayout with the
+    * buttons inside a horizontal box with filler between them and the
+    * pass button on the left.
+    * <p>The returned Dialog has not been packed, or made visible, it is
+    * up to the caller to do that (after putting in some useful components).
+    */
+    public static JDialog createModalDialogWithPassFailButtons(final String failString) {
+        JDialog  retDialog = new JDialog();
+        Box      buttonBox = Box.createHorizontalBox();
+        JButton  passButton = new JButton("Pass");
+        JButton  failButton = new JButton("Fail");
+
+        passButton.addActionListener(new ActionListener() {
+            public void actionPerformed(ActionEvent ae) {
+                retDialog.dispose();
+            }
+        });
+        failButton.addActionListener(new ActionListener() {
+            public void actionPerformed(ActionEvent ae) {
+                retDialog.dispose();
+                throw new RuntimeException("Test failed. " + failString);
+            }
+        });
+        retDialog.setTitle("Test");
+        retDialog.setModalityType(Dialog.ModalityType.APPLICATION_MODAL);
+        buttonBox.add(passButton);
+        buttonBox.add(Box.createGlue());
+        buttonBox.add(failButton);
+        retDialog.getContentPane().add(buttonBox, BorderLayout.SOUTH);
+        retDialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        return retDialog;
     }
 }

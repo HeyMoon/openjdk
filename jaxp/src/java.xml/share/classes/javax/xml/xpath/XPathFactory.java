@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,8 @@
  */
 
 package javax.xml.xpath;
+
+import com.sun.org.apache.xpath.internal.jaxp.XPathFactoryImpl;
 
 /**
  * <p>An {@code XPathFactory} instance can be used to create
@@ -74,6 +76,25 @@ public abstract class XPathFactory {
     }
 
     /**
+     * Creates a new instance of the {@code XPathFactory} builtin
+     * system-default implementation.
+     *
+     * @implSpec The {@code XPathFactory} builtin
+     * system-default implementation is only required to support the
+     * {@link #DEFAULT_OBJECT_MODEL_URI default object model}, the
+     * {@linkplain org.w3c.dom W3C DOM}, but may support additional
+     * object models.
+     *
+     * @return A new instance of the {@code XPathFactory} builtin
+     *         system-default implementation.
+     *
+     * @since 9
+     */
+    public static XPathFactory newDefaultInstance() {
+        return XPathFactoryImpl.newXPathFactoryNoServiceLoader();
+    }
+
+    /**
      * <p>Get a new {@code XPathFactory} instance using the default object model,
      * {@link #DEFAULT_OBJECT_MODEL_URI},
      * the W3C DOM.</p>
@@ -93,14 +114,14 @@ public abstract class XPathFactory {
     public static XPathFactory newInstance() {
 
         try {
-                return newInstance(DEFAULT_OBJECT_MODEL_URI);
-        } catch (XPathFactoryConfigurationException xpathFactoryConfigurationException) {
-                throw new RuntimeException(
-                        "XPathFactory#newInstance() failed to create an XPathFactory for the default object model: "
-                        + DEFAULT_OBJECT_MODEL_URI
-                        + " with the XPathFactoryConfigurationException: "
-                        + xpathFactoryConfigurationException.toString()
-                );
+            return newInstance(DEFAULT_OBJECT_MODEL_URI);
+        } catch (XPathFactoryConfigurationException e) {
+            throw new RuntimeException(
+                    "XPathFactory#newInstance() failed to create an XPathFactory for the default object model: "
+                    + DEFAULT_OBJECT_MODEL_URI
+                    + " with the XPathFactoryConfigurationException: "
+                    + e.getMessage(), e
+            );
         }
     }
 
@@ -153,8 +174,11 @@ public abstract class XPathFactory {
     *   </li>
     *   <li>
     *     <p>
-    *     Platform default {@code XPathFactory} is located in a platform specific way.
-    *     There must be a platform default XPathFactory for the W3C DOM, i.e. {@link #DEFAULT_OBJECT_MODEL_URI}.
+    *     Platform default {@code XPathFactory} is located in a platform
+    *     specific way.
+    *     There must be a {@linkplain #newDefaultInstance() platform default}
+    *     {@code XPathFactory} for the W3C DOM, i.e.
+    *     {@link #DEFAULT_OBJECT_MODEL_URI}.
     *   </li>
     * </ol>
     * <p>If everything fails, an {@code XPathFactoryConfigurationException} will be thrown.

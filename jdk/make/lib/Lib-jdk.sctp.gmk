@@ -30,9 +30,6 @@ include LibCommon.gmk
 ifeq ($(OPENJDK_TARGET_OS_TYPE), unix)
 
   ifeq (, $(filter $(OPENJDK_TARGET_OS), macosx aix))
-    # DISABLED_WARNINGS_gcc := unused-parameter needed to
-    # suppress unused parameters required by exported JNI functions.
-
     $(eval $(call SetupNativeCompilation,BUILD_LIBSCTP, \
         LIBRARY := sctp, \
         OUTPUT_DIR := $(INSTALL_LIBRARIES_HERE), \
@@ -45,16 +42,14 @@ ifeq ($(OPENJDK_TARGET_OS_TYPE), unix)
             $(LIBJAVA_HEADER_FLAGS) \
             -I$(SUPPORT_OUTPUTDIR)/headers/jdk.sctp \
             -I$(SUPPORT_OUTPUTDIR)/headers/java.base, \
-        DISABLED_WARNINGS_gcc := unused-parameter, \
         MAPFILE := $(JDK_TOPDIR)/make/mapfiles/libsctp/mapfile-vers, \
         LDFLAGS := $(LDFLAGS_JDKLIB) \
             $(call SET_SHARED_LIBRARY_ORIGIN), \
-        LDFLAGS_SUFFIX_linux := -lpthread $(LIBDL) -ljava -ljvm, \
-        LDFLAGS_SUFFIX_unix := -lnio -lnet, \
-        LDFLAGS_SUFFIX_solaris := -lsocket -ljava -ljvm -lc, \
-        LDFLAGS_SUFFIX_macosx := -ljava -ljvm, \
+        LIBS_unix := -lnio -lnet -ljava -ljvm, \
+        LIBS_linux := -lpthread $(LIBDL), \
+        LIBS_solaris := -lsocket -lc, \
         OBJECT_DIR := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libsctp, \
-        DEBUG_SYMBOLS := $(DEBUG_ALL_BINARIES)))
+    ))
 
     TARGETS += $(BUILD_LIBSCTP)
 

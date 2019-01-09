@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@
 #ifndef CC_INTERP
 
 class InterpreterMacroAssembler;
+class InterpreterCodelet;
 
 //------------------------------------------------------------------------------------------------------------------------
 // A little wrapper class to group tosca-specific entry points into a unit.
@@ -46,7 +47,7 @@ class EntryPoint VALUE_OBJ_CLASS_SPEC {
  public:
   // Construction
   EntryPoint();
-  EntryPoint(address bentry, address centry, address sentry, address aentry, address ientry, address lentry, address fentry, address dentry, address ventry);
+  EntryPoint(address bentry, address zentry, address centry, address sentry, address aentry, address ientry, address lentry, address fentry, address dentry, address ventry);
 
   // Attributes
   address entry(TosState state) const;                // return target address for a given tosca state
@@ -85,7 +86,6 @@ class TemplateInterpreter: public AbstractInterpreter {
   friend class VMStructs;
   friend class InterpreterMacroAssembler;
   friend class TemplateInterpreterGenerator;
-  friend class InterpreterGenerator;
   friend class TemplateTable;
   friend class CodeCacheExtensions;
   // friend class Interpreter;
@@ -137,6 +137,9 @@ class TemplateInterpreter: public AbstractInterpreter {
   static void       initialize();
   // this only returns whether a pc is within generated code for the interpreter.
   static bool       contains(address pc)                        { return _code != NULL && _code->contains(pc); }
+  // Debugging/printing
+  static InterpreterCodelet* codelet_containing(address pc);
+
 
  public:
 
@@ -188,26 +191,8 @@ class TemplateInterpreter: public AbstractInterpreter {
   // Compute the address for reexecution
   static address deopt_reexecute_entry(Method* method, address bcp);
 
-#ifdef TARGET_ARCH_x86
-# include "templateInterpreter_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "templateInterpreter_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "templateInterpreter_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "templateInterpreter_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "templateInterpreter_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "templateInterpreter_aarch64.hpp"
-#endif
-
-
+  // Size of interpreter code.  Max size with JVMTI
+  static int InterpreterCodeSize;
 };
 
 #endif // !CC_INTERP

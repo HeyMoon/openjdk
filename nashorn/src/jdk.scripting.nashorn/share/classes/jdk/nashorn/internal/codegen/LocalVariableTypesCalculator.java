@@ -33,6 +33,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -54,7 +55,6 @@ import jdk.nashorn.internal.ir.Expression;
 import jdk.nashorn.internal.ir.ExpressionStatement;
 import jdk.nashorn.internal.ir.ForNode;
 import jdk.nashorn.internal.ir.FunctionNode;
-import jdk.nashorn.internal.ir.FunctionNode.CompilationState;
 import jdk.nashorn.internal.ir.GetSplitState;
 import jdk.nashorn.internal.ir.IdentNode;
 import jdk.nashorn.internal.ir.IfNode;
@@ -88,6 +88,7 @@ import jdk.nashorn.internal.ir.VarNode;
 import jdk.nashorn.internal.ir.WhileNode;
 import jdk.nashorn.internal.ir.WithNode;
 import jdk.nashorn.internal.ir.visitor.NodeVisitor;
+import jdk.nashorn.internal.ir.visitor.SimpleNodeVisitor;
 import jdk.nashorn.internal.parser.TokenType;
 
 /**
@@ -106,7 +107,7 @@ import jdk.nashorn.internal.parser.TokenType;
  * instances of the calculator to be run on nested functions (when not lazy compiling).
  *
  */
-final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
+final class LocalVariableTypesCalculator extends SimpleNodeVisitor {
 
     private static class JumpOrigin {
         final JoinPredecessor node;
@@ -122,16 +123,15 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
         private final List<JumpOrigin> origins = new LinkedList<>();
         private Map<Symbol, LvarType> types = Collections.emptyMap();
 
-        void addOrigin(final JoinPredecessor originNode, final Map<Symbol, LvarType> originTypes) {
+        void addOrigin(final JoinPredecessor originNode, final Map<Symbol, LvarType> originTypes, final LocalVariableTypesCalculator calc) {
             origins.add(new JumpOrigin(originNode, originTypes));
-            this.types = getUnionTypes(this.types, originTypes);
+            this.types = calc.getUnionTypes(this.types, originTypes);
         }
     }
     private enum LvarType {
         UNDEFINED(Type.UNDEFINED),
         BOOLEAN(Type.BOOLEAN),
         INT(Type.INT),
-        LONG(Type.LONG),
         DOUBLE(Type.NUMBER),
         OBJECT(Type.OBJECT);
 
@@ -186,12 +186,15 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
     }
 
     @SuppressWarnings("unchecked")
-    private static IdentityHashMap<Symbol, LvarType> cloneMap(final Map<Symbol, LvarType> map) {
-        return (IdentityHashMap<Symbol, LvarType>)((IdentityHashMap<?,?>)map).clone();
+    private static HashMap<Symbol, LvarType> cloneMap(final Map<Symbol, LvarType> map) {
+        return (HashMap<Symbol, LvarType>)((HashMap<?,?>)map).clone();
     }
 
     private LocalVariableConversion createConversion(final Symbol symbol, final LvarType branchLvarType,
             final Map<Symbol, LvarType> joinLvarTypes, final LocalVariableConversion next) {
+        if (invalidatedSymbols.contains(symbol)) {
+            return next;
+        }
         final LvarType targetType = joinLvarTypes.get(symbol);
         assert targetType != null;
         if(targetType == branchLvarType) {
@@ -209,7 +212,7 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
         return new LocalVariableConversion(symbol, branchLvarType.type, targetType.type, next);
     }
 
-    private static Map<Symbol, LvarType> getUnionTypes(final Map<Symbol, LvarType> types1, final Map<Symbol, LvarType> types2) {
+    private Map<Symbol, LvarType> getUnionTypes(final Map<Symbol, LvarType> types1, final Map<Symbol, LvarType> types2) {
         if(types1 == types2 || types1.isEmpty()) {
             return types2;
         } else if(types2.isEmpty()) {
@@ -262,6 +265,11 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
             final LvarType type2 = types2.get(symbol);
             union.put(symbol, widestLvarType(type1,  type2));
         }
+        // If the two sets of symbols differ, there's a good chance that some of
+        // symbols only appearing in one of the sets are lexically invalidated,
+        // so we remove them from further consideration.
+        // This is not strictly necessary, just a working set size optimization.
+        union.keySet().removeAll(invalidatedSymbols);
         return union;
     }
 
@@ -272,12 +280,9 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
     }
 
     private static class SymbolConversions {
-        private static final byte I2L = 1 << 0;
-        private static final byte I2D = 1 << 1;
-        private static final byte I2O = 1 << 2;
-        private static final byte L2D = 1 << 3;
-        private static final byte L2O = 1 << 4;
-        private static final byte D2O = 1 << 5;
+        private static final byte I2D = 1 << 0;
+        private static final byte I2O = 1 << 1;
+        private static final byte D2O = 1 << 2;
 
         private byte conversions;
 
@@ -288,26 +293,11 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
             case INT:
             case BOOLEAN:
                 switch (to) {
-                case LONG:
-                    recordConversion(I2L);
-                    return;
                 case DOUBLE:
                     recordConversion(I2D);
                     return;
                 case OBJECT:
                     recordConversion(I2O);
-                    return;
-                default:
-                    illegalConversion(from, to);
-                    return;
-                }
-            case LONG:
-                switch (to) {
-                case DOUBLE:
-                    recordConversion(L2D);
-                    return;
-                case OBJECT:
-                    recordConversion(L2O);
                     return;
                 default:
                     illegalConversion(from, to);
@@ -340,23 +330,12 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
                 if(hasConversion(D2O)) {
                     symbol.setHasSlotFor(Type.NUMBER);
                 }
-                if(hasConversion(L2O)) {
-                    symbol.setHasSlotFor(Type.LONG);
-                }
                 if(hasConversion(I2O)) {
                     symbol.setHasSlotFor(Type.INT);
                 }
             }
             if(symbol.hasSlotFor(Type.NUMBER)) {
-                if(hasConversion(L2D)) {
-                    symbol.setHasSlotFor(Type.LONG);
-                }
                 if(hasConversion(I2D)) {
-                    symbol.setHasSlotFor(Type.INT);
-                }
-            }
-            if(symbol.hasSlotFor(Type.LONG)) {
-                if(hasConversion(I2L)) {
                     symbol.setHasSlotFor(Type.INT);
                 }
             }
@@ -378,7 +357,7 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
         if(lvarType != null) {
             return lvarType;
         }
-        assert type.isObject();
+        assert type.isObject() : "Unsupported primitive type: " + type;
         return LvarType.OBJECT;
     }
     private static LvarType widestLvarType(final LvarType t1, final LvarType t2) {
@@ -389,8 +368,6 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
         if(t1.ordinal() < LvarType.INT.ordinal() || t2.ordinal() < LvarType.INT.ordinal()) {
             return LvarType.OBJECT;
         }
-        // NOTE: we allow "widening" of long to double even though it can lose precision. ECMAScript doesn't have an
-        // Int64 type anyway, so this loss of precision is actually more conformant to the specification...
         return LvarType.values()[Math.max(t1.ordinal(), t2.ordinal())];
     }
     private final Compiler compiler;
@@ -398,7 +375,10 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
     // Local variable type mapping at the currently evaluated point. No map instance is ever modified; setLvarType() always
     // allocates a new map. Immutability of maps allows for cheap snapshots by just keeping the reference to the current
     // value.
-    private Map<Symbol, LvarType> localVariableTypes = new IdentityHashMap<>();
+    private Map<Symbol, LvarType> localVariableTypes = Collections.emptyMap();
+    // Set of symbols whose lexical scope has already ended.
+    private final Set<Symbol> invalidatedSymbols = new HashSet<>();
+
     // Stack for evaluated expression types.
     private final Deque<LvarType> typeStack = new ArrayDeque<>();
 
@@ -426,7 +406,6 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
     private final Deque<Label> catchLabels = new ArrayDeque<>();
 
     LocalVariableTypesCalculator(final Compiler compiler) {
-        super(new LexicalContext());
         this.compiler = compiler;
     }
 
@@ -495,9 +474,19 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
 
     @Override
     public boolean enterBlock(final Block block) {
+        boolean cloned = false;
         for(final Symbol symbol: block.getSymbols()) {
-            if(symbol.isBytecodeLocal() && getLocalVariableTypeOrNull(symbol) == null) {
-                setType(symbol, LvarType.UNDEFINED);
+            if(symbol.isBytecodeLocal()) {
+                if (getLocalVariableTypeOrNull(symbol) == null) {
+                    if (!cloned) {
+                        cloneOrNewLocalVariableTypes();
+                        cloned = true;
+                    }
+                    localVariableTypes.put(symbol, LvarType.UNDEFINED);
+                }
+                // In case we're repeating analysis of a lexical scope (e.g. it's in a loop),
+                // make sure all symbols lexically scoped by the block become valid again.
+                invalidatedSymbols.remove(symbol);
             }
         }
         return true;
@@ -626,7 +615,7 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
         }
 
         final Expression init = forNode.getInit();
-        if(forNode.isForIn()) {
+        if(forNode.isForInOrOf()) {
             final JoinPredecessorExpression iterable = forNode.getModify();
             visitExpression(iterable);
             enterTestFirstLoop(forNode, null, init,
@@ -1064,7 +1053,7 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
 
         joinOnLabel(catchLabel);
         for(final CatchNode catchNode: tryNode.getCatches()) {
-            final IdentNode exception = catchNode.getException();
+            final IdentNode exception = catchNode.getExceptionIdentifier();
             onAssignment(exception, LvarType.OBJECT);
             final Expression condition = catchNode.getExceptionCondition();
             if(condition != null) {
@@ -1077,15 +1066,11 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
             // throw an exception.
             reachable = true;
             catchBody.accept(this);
-            final Symbol exceptionSymbol = exception.getSymbol();
             if(reachable) {
-                localVariableTypes = cloneMap(localVariableTypes);
-                localVariableTypes.remove(exceptionSymbol);
                 jumpToLabel(catchBody, endLabel);
                 canExit = true;
             }
-            localVariableTypes = cloneMap(afterConditionTypes);
-            localVariableTypes.remove(exceptionSymbol);
+            localVariableTypes = afterConditionTypes;
         }
         // NOTE: if we had one or more conditional catch blocks with no unconditional catch block following them, then
         // there will be an unconditional rethrow, so the join point can never be reached from the last
@@ -1235,7 +1220,7 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
     }
 
     private void jumpToLabel(final JoinPredecessor jumpOrigin, final Label label, final Map<Symbol, LvarType> types) {
-        getOrCreateJumpTarget(label).addOrigin(jumpOrigin, types);
+        getOrCreateJumpTarget(label).addOrigin(jumpOrigin, types, this);
     }
 
     @Override
@@ -1257,16 +1242,18 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
 
         boolean cloned = false;
         for(final Symbol symbol: block.getSymbols()) {
-            // Undefine the symbol outside the block
-            if(localVariableTypes.containsKey(symbol)) {
-                if(!cloned) {
-                    localVariableTypes = cloneMap(localVariableTypes);
-                    cloned = true;
-                }
-                localVariableTypes.remove(symbol);
-            }
-
             if(symbol.hasSlot()) {
+                // Invalidate the symbol when its defining block ends
+                if (symbol.isBytecodeLocal()) {
+                    if(localVariableTypes.containsKey(symbol)) {
+                        if(!cloned) {
+                            localVariableTypes = cloneMap(localVariableTypes);
+                            cloned = true;
+                        }
+                    }
+                    invalidateSymbol(symbol);
+                }
+
                 final SymbolConversions conversions = symbolConversions.get(symbol);
                 if(conversions != null) {
                     // Potentially make some currently dead types live if they're needed as a source of a type
@@ -1331,7 +1318,7 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
         // Sets the return type of the function and also performs the bottom-up pass of applying type and conversion
         // information to nodes as well as doing the calculation on nested functions as required.
         FunctionNode newFunction = functionNode;
-        final NodeVisitor<LexicalContext> applyChangesVisitor = new NodeVisitor<LexicalContext>(new LexicalContext()) {
+        final SimpleNodeVisitor applyChangesVisitor = new SimpleNodeVisitor() {
             private boolean inOuterFunction = true;
             private final Deque<JoinPredecessor> joinPredecessors = new ArrayDeque<>();
 
@@ -1478,7 +1465,6 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
         newFunction = newFunction.setReturnType(lc, returnType);
 
 
-        newFunction = newFunction.setState(lc, CompilationState.LOCAL_VARIABLE_TYPES_CALCULATED);
         newFunction = newFunction.setParameters(lc, newFunction.visitParameters(applyChangesVisitor));
         return newFunction;
     }
@@ -1637,8 +1623,17 @@ final class LocalVariableTypesCalculator extends NodeVisitor<LexicalContext>{
         }
         assert symbol.hasSlot();
         assert !symbol.isGlobal();
-        localVariableTypes = localVariableTypes.isEmpty() ? new IdentityHashMap<Symbol, LvarType>() : cloneMap(localVariableTypes);
+        cloneOrNewLocalVariableTypes();
         localVariableTypes.put(symbol, type);
+    }
+
+    private void cloneOrNewLocalVariableTypes() {
+        localVariableTypes = localVariableTypes.isEmpty() ? new HashMap<Symbol, LvarType>() : cloneMap(localVariableTypes);
+    }
+
+    private void invalidateSymbol(final Symbol symbol) {
+        localVariableTypes.remove(symbol);
+        invalidatedSymbols.add(symbol);
     }
 
     /**

@@ -93,6 +93,12 @@ AwtTrayIcon::~AwtTrayIcon() {
 
 void AwtTrayIcon::Dispose() {
     SendTrayMessage(NIM_DELETE);
+
+    // Destroy the icon to avoid leak of GDI objects
+    if (m_nid.hIcon != NULL) {
+        ::DestroyIcon(m_nid.hIcon);
+    }
+
     UnlinkObjects();
 
     if (--sm_instCount == 0) {
@@ -409,7 +415,7 @@ MsgRouting AwtTrayIcon::WmBalloonUserClick(UINT flags, int x, int y)
         MSG msg;
         AwtComponent::InitMessage(&msg, lastMessage, flags, MAKELPARAM(x, y), x, y);
         SendActionEvent(java_awt_event_ActionEvent_ACTION_PERFORMED, ::JVM_CurrentTimeMillis(NULL, 0),
-                        AwtComponent::GetJavaModifiers(), &msg);
+                        AwtComponent::GetActionModifiers(), &msg);
     }
     return mrConsume;
 }
@@ -425,7 +431,7 @@ MsgRouting AwtTrayIcon::WmKeySelect(UINT flags, int x, int y)
         MSG msg;
         AwtComponent::InitMessage(&msg, lastMessage, flags, MAKELPARAM(x, y), x, y);
         SendActionEvent(java_awt_event_ActionEvent_ACTION_PERFORMED, ::JVM_CurrentTimeMillis(NULL, 0),
-                        AwtComponent::GetJavaModifiers(), &msg);
+                        AwtComponent::GetActionModifiers(), &msg);
     }
     lastKeySelectTime = now;
 
@@ -442,7 +448,7 @@ MsgRouting AwtTrayIcon::WmSelect(UINT flags, int x, int y)
         MSG msg;
         AwtComponent::InitMessage(&msg, lastMessage, flags, MAKELPARAM(x, y), x, y);
         SendActionEvent(java_awt_event_ActionEvent_ACTION_PERFORMED, ::JVM_CurrentTimeMillis(NULL, 0),
-                        AwtComponent::GetJavaModifiers(), &msg);
+                        AwtComponent::GetActionModifiers(), &msg);
     }
     return mrConsume;
 }

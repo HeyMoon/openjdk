@@ -29,7 +29,6 @@
 #include "memory/allocation.hpp"
 #include "runtime/icache.hpp"
 #include "runtime/os.hpp"
-#include "utilities/top.hpp"
 
 // We have interfaces for the following instructions:
 // - NativeInstruction
@@ -39,6 +38,7 @@
 // - - NativeMovRegMem
 // - - NativeMovRegMemPatching
 // - - NativeJump
+// - - NativeFarJump
 // - - NativeIllegalOpCode
 // - - NativeGeneralJump
 // - - NativeReturn
@@ -60,9 +60,12 @@ class NativeInstruction VALUE_OBJ_CLASS_SPEC {
 
   bool is_nop()                        { return ubyte_at(0) == nop_instruction_code; }
   inline bool is_call();
+  inline bool is_call_reg();
   inline bool is_illegal();
   inline bool is_return();
   inline bool is_jump();
+  inline bool is_jump_reg();
+  inline bool is_far_jump();
   inline bool is_cond_jump();
   inline bool is_safepoint_poll();
   inline bool is_mov_literal64();
@@ -105,6 +108,47 @@ inline NativeInstruction* nativeInstruction_at(address address) {
   return inst;
 }
 
+class NativePltCall: public NativeInstruction {
+public:
+  enum Intel_specific_constants {
+    instruction_code           = 0xE8,
+    instruction_size           =    5,
+    instruction_offset         =    0,
+    displacement_offset        =    1,
+    return_address_offset      =    5
+  };
+  address instruction_address() const { return addr_at(instruction_offset); }
+  address next_instruction_address() const { return addr_at(return_address_offset); }
+  address displacement_address() const { return addr_at(displacement_offset); }
+  int displacement() const { return (jint) int_at(displacement_offset); }
+  address return_address() const { return addr_at(return_address_offset); }
+  address destination() const;
+  address plt_entry() const;
+  address plt_jump() const;
+  address plt_load_got() const;
+  address plt_resolve_call() const;
+  address plt_c2i_stub() const;
+  void set_stub_to_clean();
+
+  void  reset_to_plt_resolve_call();
+  void  set_destination_mt_safe(address dest);
+
+  void verify() const;
+};
+
+inline NativePltCall* nativePltCall_at(address address) {
+  NativePltCall* call = (NativePltCall*) address;
+#ifdef ASSERT
+  call->verify();
+#endif
+  return call;
+}
+
+inline NativePltCall* nativePltCall_before(address addr) {
+  address at = addr - NativePltCall::instruction_size;
+  return nativePltCall_at(at);
+}
+
 inline NativeCall* nativeCall_at(address address);
 // The NativeCall is an abstraction for accessing/manipulating native call imm32/rel32off
 // instructions (used to manipulate inline caches, primitive & dll calls, etc.).
@@ -129,9 +173,8 @@ class NativeCall: public NativeInstruction {
   address destination() const;
   void  set_destination(address dest)       {
 #ifdef AMD64
-    assert((labs((intptr_t) dest - (intptr_t) return_address())  &
-            0xFFFFFFFF00000000) == 0,
-           "must be 32bit offset");
+    intptr_t disp = dest - return_address();
+    guarantee(disp == (intptr_t)(jint)disp, "must be 32-bit offset");
 #endif // AMD64
     set_int_at(displacement_offset, dest - return_address());
   }
@@ -158,6 +201,13 @@ class NativeCall: public NativeInstruction {
       nativeCall_at(instr)->destination() == target;
   }
 
+#if INCLUDE_AOT
+  static bool is_far_call(address instr, address target) {
+    intptr_t disp = target - (instr + sizeof(int32_t));
+    return !Assembler::is_simm32(disp);
+  }
+#endif
+
   // MT-safe patching of a call instruction.
   static void insert(address code_pos, address entry);
 
@@ -179,6 +229,24 @@ inline NativeCall* nativeCall_before(address return_address) {
 #endif
   return call;
 }
+
+class NativeCallReg: public NativeInstruction {
+ public:
+  enum Intel_specific_constants {
+    instruction_code            = 0xFF,
+    instruction_offset          =    0,
+    return_address_offset_norex =    2,
+    return_address_offset_rex   =    3
+  };
+
+  int next_instruction_offset() const  {
+    if (ubyte_at(0) == NativeCallReg::instruction_code) {
+      return return_address_offset_norex;
+    } else {
+      return return_address_offset_rex;
+    }
+  }
+};
 
 // An interface for accessing/manipulating native mov reg, imm32 instructions.
 // (used to manipulate inlined 32bit data dll calls, etc.)
@@ -288,6 +356,7 @@ class NativeMovRegMem: public NativeInstruction {
 
     instruction_VEX_prefix_2bytes       = Assembler::VEX_2bytes,
     instruction_VEX_prefix_3bytes       = Assembler::VEX_3bytes,
+    instruction_EVEX_prefix_4bytes      = Assembler::EVEX_4bytes,
 
     instruction_size                    = 4,
     instruction_offset                  = 0,
@@ -362,6 +431,51 @@ class NativeLoadAddress: public NativeMovRegMem {
   }
 };
 
+// destination is rbx or rax
+// mov rbx, [rip + offset]
+class NativeLoadGot: public NativeInstruction {
+#ifdef AMD64
+  static const bool has_rex = true;
+  static const int rex_size = 1;
+#else
+  static const bool has_rex = false;
+  static const int rex_size = 0;
+#endif
+public:
+  enum Intel_specific_constants {
+    rex_prefix = 0x48,
+    instruction_code = 0x8b,
+    modrm_rbx_code = 0x1d,
+    modrm_rax_code = 0x05,
+    instruction_length = 6 + rex_size,
+    offset_offset = 2 + rex_size
+  };
+
+  address instruction_address() const { return addr_at(0); }
+  address rip_offset_address() const { return addr_at(offset_offset); }
+  int rip_offset() const { return int_at(offset_offset); }
+  address return_address() const { return addr_at(instruction_length); }
+  address got_address() const { return return_address() + rip_offset(); }
+  address next_instruction_address() const { return return_address(); }
+  intptr_t data() const;
+  void set_data(intptr_t data) {
+    intptr_t *addr = (intptr_t *) got_address();
+    *addr = data;
+  }
+
+  void verify() const;
+private:
+  void report_and_fail() const;
+};
+
+inline NativeLoadGot* nativeLoadGot_at(address addr) {
+  NativeLoadGot* load = (NativeLoadGot*) addr;
+#ifdef ASSERT
+  load->verify();
+#endif
+  return load;
+}
+
 // jump rel32off
 
 class NativeJump: public NativeInstruction {
@@ -422,6 +536,29 @@ inline NativeJump* nativeJump_at(address address) {
   return jump;
 }
 
+// far jump reg
+class NativeFarJump: public NativeInstruction {
+ public:
+  address jump_destination() const;
+
+  // Creation
+  inline friend NativeFarJump* nativeFarJump_at(address address);
+
+  void verify();
+
+  // Unit testing stuff
+  static void test() {}
+
+};
+
+inline NativeFarJump* nativeFarJump_at(address address) {
+  NativeFarJump* jump = (NativeFarJump*)(address);
+#ifdef ASSERT
+  jump->verify();
+#endif
+  return jump;
+}
+
 // Handles all kinds of jump on Intel. Long/far, conditional/unconditional
 class NativeGeneralJump: public NativeInstruction {
  public:
@@ -452,6 +589,36 @@ class NativeGeneralJump: public NativeInstruction {
 inline NativeGeneralJump* nativeGeneralJump_at(address address) {
   NativeGeneralJump* jump = (NativeGeneralJump*)(address);
   debug_only(jump->verify();)
+  return jump;
+}
+
+class NativeGotJump: public NativeInstruction {
+public:
+  enum Intel_specific_constants {
+    instruction_code = 0xff,
+    instruction_offset = 0,
+    instruction_size = 6,
+    rip_offset = 2
+  };
+
+  void verify() const;
+  address instruction_address() const { return addr_at(instruction_offset); }
+  address destination() const;
+  address return_address() const { return addr_at(instruction_size); }
+  int got_offset() const { return (jint) int_at(rip_offset); }
+  address got_address() const { return return_address() + got_offset(); }
+  address next_instruction_address() const { return addr_at(instruction_size); }
+  bool is_GotJump() const { return ubyte_at(0) == instruction_code; }
+
+  void set_jump_destination(address dest)  {
+    address *got_entry = (address *) got_address();
+    *got_entry = dest;
+  }
+};
+
+inline NativeGotJump* nativeGotJump_at(address addr) {
+  NativeGotJump* jump = (NativeGotJump*)(addr);
+  debug_only(jump->verify());
   return jump;
 }
 
@@ -519,34 +686,41 @@ class NativeTstRegMem: public NativeInstruction {
 
 inline bool NativeInstruction::is_illegal()      { return (short)int_at(0) == (short)NativeIllegalInstruction::instruction_code; }
 inline bool NativeInstruction::is_call()         { return ubyte_at(0) == NativeCall::instruction_code; }
+inline bool NativeInstruction::is_call_reg()     { return ubyte_at(0) == NativeCallReg::instruction_code ||
+                                                          (ubyte_at(1) == NativeCallReg::instruction_code &&
+                                                           (ubyte_at(0) == Assembler::REX || ubyte_at(0) == Assembler::REX_B)); }
 inline bool NativeInstruction::is_return()       { return ubyte_at(0) == NativeReturn::instruction_code ||
                                                           ubyte_at(0) == NativeReturnX::instruction_code; }
 inline bool NativeInstruction::is_jump()         { return ubyte_at(0) == NativeJump::instruction_code ||
                                                           ubyte_at(0) == 0xEB; /* short jump */ }
+inline bool NativeInstruction::is_jump_reg()     {
+  int pos = 0;
+  if (ubyte_at(0) == Assembler::REX_B) pos = 1;
+  return ubyte_at(pos) == 0xFF && (ubyte_at(pos + 1) & 0xF0) == 0xE0;
+}
+inline bool NativeInstruction::is_far_jump()     { return is_mov_literal64(); }
 inline bool NativeInstruction::is_cond_jump()    { return (int_at(0) & 0xF0FF) == 0x800F /* long jump */ ||
                                                           (ubyte_at(0) & 0xF0) == 0x70;  /* short jump */ }
 inline bool NativeInstruction::is_safepoint_poll() {
 #ifdef AMD64
-  if (Assembler::is_polling_page_far()) {
-    // two cases, depending on the choice of the base register in the address.
-    if (((ubyte_at(0) & NativeTstRegMem::instruction_rex_prefix_mask) == NativeTstRegMem::instruction_rex_prefix &&
-         ubyte_at(1) == NativeTstRegMem::instruction_code_memXregl &&
-         (ubyte_at(2) & NativeTstRegMem::modrm_mask) == NativeTstRegMem::modrm_reg) ||
-        ubyte_at(0) == NativeTstRegMem::instruction_code_memXregl &&
-        (ubyte_at(1) & NativeTstRegMem::modrm_mask) == NativeTstRegMem::modrm_reg) {
-      return true;
-    } else {
-      return false;
-    }
-  } else {
-    if (ubyte_at(0) == NativeTstRegMem::instruction_code_memXregl &&
-        ubyte_at(1) == 0x05) { // 00 rax 101
-      address fault = addr_at(6) + int_at(2);
-      return os::is_poll_address(fault);
-    } else {
-      return false;
-    }
+  // Try decoding a near safepoint first:
+  if (ubyte_at(0) == NativeTstRegMem::instruction_code_memXregl &&
+      ubyte_at(1) == 0x05) { // 00 rax 101
+    address fault = addr_at(6) + int_at(2);
+    NOT_JVMCI(assert(!Assembler::is_polling_page_far(), "unexpected poll encoding");)
+    return os::is_poll_address(fault);
   }
+  // Now try decoding a far safepoint:
+  // two cases, depending on the choice of the base register in the address.
+  if (((ubyte_at(0) & NativeTstRegMem::instruction_rex_prefix_mask) == NativeTstRegMem::instruction_rex_prefix &&
+       ubyte_at(1) == NativeTstRegMem::instruction_code_memXregl &&
+       (ubyte_at(2) & NativeTstRegMem::modrm_mask) == NativeTstRegMem::modrm_reg) ||
+      ubyte_at(0) == NativeTstRegMem::instruction_code_memXregl &&
+      (ubyte_at(1) & NativeTstRegMem::modrm_mask) == NativeTstRegMem::modrm_reg) {
+    NOT_JVMCI(assert(Assembler::is_polling_page_far(), "unexpected poll encoding");)
+    return true;
+  }
+  return false;
 #else
   return ( ubyte_at(0) == NativeMovRegMem::instruction_code_mem2reg ||
            ubyte_at(0) == NativeTstRegMem::instruction_code_memXregl ) &&

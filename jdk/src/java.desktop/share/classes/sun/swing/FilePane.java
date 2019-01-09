@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -63,14 +63,14 @@ public class FilePane extends JPanel implements PropertyChangeListener {
     // Constants for actions. These are used for the actions' ACTION_COMMAND_KEY
     // and as keys in the action maps for FilePane and the corresponding UI classes
 
-    public final static String ACTION_APPROVE_SELECTION = "approveSelection";
-    public final static String ACTION_CANCEL            = "cancelSelection";
-    public final static String ACTION_EDIT_FILE_NAME    = "editFileName";
-    public final static String ACTION_REFRESH           = "refresh";
-    public final static String ACTION_CHANGE_TO_PARENT_DIRECTORY = "Go Up";
-    public final static String ACTION_NEW_FOLDER        = "New Folder";
-    public final static String ACTION_VIEW_LIST         = "viewTypeList";
-    public final static String ACTION_VIEW_DETAILS      = "viewTypeDetails";
+    public static final String ACTION_APPROVE_SELECTION = "approveSelection";
+    public static final String ACTION_CANCEL            = "cancelSelection";
+    public static final String ACTION_EDIT_FILE_NAME    = "editFileName";
+    public static final String ACTION_REFRESH           = "refresh";
+    public static final String ACTION_CHANGE_TO_PARENT_DIRECTORY = "Go Up";
+    public static final String ACTION_NEW_FOLDER        = "New Folder";
+    public static final String ACTION_VIEW_LIST         = "viewTypeList";
+    public static final String ACTION_VIEW_DETAILS      = "viewTypeDetails";
 
     private Action[] actions;
 
@@ -548,7 +548,7 @@ public class FilePane extends JPanel implements PropertyChangeListener {
             actions = actionList.toArray(new Action[actionList.size()]);
         }
 
-        return actions;
+        return Arrays.copyOf(actions, actions.length);
     }
 
     protected void createActionMap() {
@@ -913,7 +913,15 @@ public class FilePane extends JPanel implements PropertyChangeListener {
 
     private class DetailsTableRowSorter extends TableRowSorter<TableModel> {
         public DetailsTableRowSorter() {
-            setModelWrapper(new SorterModelWrapper());
+            SorterModelWrapper modelWrapper = new SorterModelWrapper();
+            setModelWrapper(modelWrapper);
+            modelWrapper.getModel().addTableModelListener(
+                new TableModelListener() {
+                    @Override
+                    public void tableChanged(TableModelEvent e) {
+                        modelStructureChanged();
+                    }
+                });
         }
 
         public void updateComparators(ShellFolderColumnInfo [] columns) {
@@ -1740,8 +1748,8 @@ public class FilePane extends JPanel implements PropertyChangeListener {
         if (listSelectionModel != null) {
             listSelectionModel.clearSelection();
             if (listSelectionModel instanceof DefaultListSelectionModel) {
-                ((DefaultListSelectionModel)listSelectionModel).moveLeadSelectionIndex(0);
-                listSelectionModel.setAnchorSelectionIndex(0);
+                ((DefaultListSelectionModel)listSelectionModel).moveLeadSelectionIndex(-1);
+                listSelectionModel.setAnchorSelectionIndex(-1);
             }
         }
     }
@@ -1823,6 +1831,7 @@ public class FilePane extends JPanel implements PropertyChangeListener {
     private class Handler implements MouseListener {
         private MouseListener doubleClickListener;
 
+        @SuppressWarnings("deprecation")
         public void mouseClicked(MouseEvent evt) {
             JComponent source = (JComponent)evt.getSource();
 

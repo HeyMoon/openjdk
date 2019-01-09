@@ -26,13 +26,25 @@
  * @bug 6384064
  * @summary Check proper handling of interrupts
  * @author Martin Buchholz
+ * @library /lib/testlibrary/
  */
 
-import java.util.*;
-import java.util.concurrent.*;
-import static java.util.concurrent.TimeUnit.*;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingDeque;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import jdk.testlibrary.Utils;
 
 public class Interrupt {
+    static final long LONG_DELAY_MS = Utils.adjustTimeout(10_000);
 
     static void checkInterrupted0(Iterable<Fun> fs, Executor ex) {
         for (Fun f : fs) {
@@ -48,7 +60,8 @@ public class Interrupt {
         }
     }
 
-    static void checkInterrupted(Iterable<Fun> fs) {
+    static void checkInterrupted(Iterable<Fun> fs)
+            throws InterruptedException {
         final Executor immediateExecutor = new Executor() {
                 public void execute(Runnable r) {
                     r.run(); }};
@@ -60,6 +73,7 @@ public class Interrupt {
         checkInterrupted0(fs, immediateExecutor);
         checkInterrupted0(fs, delayedExecutor);
         stpe.shutdown();
+        check(stpe.awaitTermination(LONG_DELAY_MS, MILLISECONDS));
     }
 
     static void testQueue(final BlockingQueue<Object> q) {
@@ -68,14 +82,14 @@ public class Interrupt {
                 (q instanceof BlockingDeque<?>) ?
                 (BlockingDeque<Object>) q : null;
             q.clear();
-            List<Fun> fs = new ArrayList<Fun>();
+            List<Fun> fs = new ArrayList<>();
             fs.add(() -> q.take());
-            fs.add(() -> q.poll(60, SECONDS));
+            fs.add(() -> q.poll(LONG_DELAY_MS, MILLISECONDS));
             if (deq != null) {
                 fs.add(() -> deq.takeFirst());
                 fs.add(() -> deq.takeLast());
-                fs.add(() -> deq.pollFirst(7, SECONDS));
-                fs.add(() -> deq.pollLast(7, SECONDS));
+                fs.add(() -> deq.pollFirst(LONG_DELAY_MS, MILLISECONDS));
+                fs.add(() -> deq.pollLast(LONG_DELAY_MS, MILLISECONDS));
             }
 
             checkInterrupted(fs);
@@ -87,17 +101,19 @@ public class Interrupt {
 
             fs.clear();
             fs.add(() -> q.put(1));
-            fs.add(() -> q.offer(1, 7, SECONDS));
+            fs.add(() -> q.offer(1, LONG_DELAY_MS, MILLISECONDS));
             if (deq != null) {
                 fs.add(() -> deq.putFirst(1));
                 fs.add(() -> deq.putLast(1));
-                fs.add(() -> deq.offerFirst(1, 7, SECONDS));
-                fs.add(() -> deq.offerLast(1, 7, SECONDS));
+                fs.add(() -> deq.offerFirst(1, LONG_DELAY_MS, MILLISECONDS));
+                fs.add(() -> deq.offerLast(1, LONG_DELAY_MS, MILLISECONDS));
             }
             checkInterrupted(fs);
         } catch (Throwable t) {
-          System.out.printf("Failed: %s%n", q.getClass().getSimpleName());
-          unexpected(t);
+            System.out.printf("Failed: %s%n", q.getClass().getSimpleName());
+            unexpected(t);
+        } finally {
+            Thread.interrupted();       // clear interrupts, just in case
         }
     }
 

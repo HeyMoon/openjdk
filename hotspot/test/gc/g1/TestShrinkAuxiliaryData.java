@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,9 +22,9 @@
  */
 
 import jdk.test.lib.Asserts;
-import jdk.test.lib.OutputAnalyzer;
 import jdk.test.lib.Platform;
-import jdk.test.lib.ProcessTools;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.Utils;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
@@ -36,7 +36,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
-import sun.misc.Unsafe; // for ADDRESS_SIZE
+import jdk.internal.misc.Unsafe; // for ADDRESS_SIZE
 import sun.hotspot.WhiteBox;
 
 public class TestShrinkAuxiliaryData {
@@ -44,14 +44,16 @@ public class TestShrinkAuxiliaryData {
     private static final int REGION_SIZE = 1024 * 1024;
 
     private final static String[] initialOpts = new String[]{
+        "-XX:NewSize=16m",
         "-XX:MinHeapFreeRatio=10",
         "-XX:MaxHeapFreeRatio=11",
         "-XX:+UseG1GC",
         "-XX:G1HeapRegionSize=" + REGION_SIZE,
         "-XX:-ExplicitGCInvokesConcurrent",
-        "-XX:+PrintGCDetails",
+        "-Xlog:gc=debug",
         "-XX:+UnlockDiagnosticVMOptions",
         "-XX:+WhiteBoxAPI",
+        "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED",
         "-Xbootclasspath/a:.",
     };
 

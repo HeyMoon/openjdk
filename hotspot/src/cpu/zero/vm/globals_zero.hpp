@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -32,24 +32,39 @@
 // Set the default values for platform dependent flags used by the
 // runtime system.  See globals.hpp for details of what they do.
 
-define_pd_global(bool,  ConvertSleepToYield,  true);
 define_pd_global(bool,  ShareVtableStubs,     true);
-define_pd_global(bool,  CountInterpCalls,     true);
 define_pd_global(bool,  NeedsDeoptSuspend,    false);
 
 define_pd_global(bool,  ImplicitNullChecks,   true);
 define_pd_global(bool,  TrapBasedNullChecks,  false);
 define_pd_global(bool,  UncommonNullCast,     true);
 
+define_pd_global(uintx, CodeCacheSegmentSize, 64 TIERED_ONLY(+64)); // Tiered compilation has large code-entry alignment.
 define_pd_global(intx,  CodeEntryAlignment,   32);
 define_pd_global(intx,  OptoLoopAlignment,    16);
 define_pd_global(intx,  InlineFrequencyCount, 100);
-define_pd_global(intx,  InlineSmallCode,      1000 );
-define_pd_global(intx,  PreInflateSpin,       10);
+define_pd_global(intx,  InlineSmallCode,      1000);
 
-define_pd_global(intx,  StackYellowPages,     2);
-define_pd_global(intx,  StackRedPages,        1);
-define_pd_global(intx,  StackShadowPages,     5 LP64_ONLY(+1) DEBUG_ONLY(+3));
+// not used, but must satisfy following constraints:
+// 1.) <VALUE> must be in the allowed range for intx *and*
+// 2.) <VALUE> % BytesPerLong == 0 so as to not
+//     violate the constraint verifier on JVM start-up.
+define_pd_global(intx,  InitArrayShortSize,   0);
+
+#define DEFAULT_STACK_YELLOW_PAGES (2)
+#define DEFAULT_STACK_RED_PAGES (1)
+#define DEFAULT_STACK_SHADOW_PAGES (5 LP64_ONLY(+1) DEBUG_ONLY(+3))
+#define DEFAULT_STACK_RESERVED_PAGES (0)
+
+#define MIN_STACK_YELLOW_PAGES DEFAULT_STACK_YELLOW_PAGES
+#define MIN_STACK_RED_PAGES DEFAULT_STACK_RED_PAGES
+#define MIN_STACK_SHADOW_PAGES DEFAULT_STACK_SHADOW_PAGES
+#define MIN_STACK_RESERVED_PAGES (0)
+
+define_pd_global(intx,  StackYellowPages,     DEFAULT_STACK_YELLOW_PAGES);
+define_pd_global(intx,  StackRedPages,        DEFAULT_STACK_RED_PAGES);
+define_pd_global(intx,  StackShadowPages,     DEFAULT_STACK_SHADOW_PAGES);
+define_pd_global(intx,  StackReservedPages,   DEFAULT_STACK_RESERVED_PAGES);
 
 define_pd_global(bool,  RewriteBytecodes,     true);
 define_pd_global(bool,  RewriteFrequentPairs, true);
@@ -63,7 +78,17 @@ define_pd_global(uintx, TypeProfileLevel, 0);
 
 define_pd_global(bool, PreserveFramePointer, false);
 
-#define ARCH_FLAGS(develop, product, diagnostic, experimental, notproduct, range, constraint)  \
+// No performance work done here yet.
+define_pd_global(bool, CompactStrings, false);
+
+#define ARCH_FLAGS(develop, \
+                   product, \
+                   diagnostic, \
+                   experimental, \
+                   notproduct, \
+                   range, \
+                   constraint, \
+                   writeable)  \
                                                                             \
   product(bool, UseFastEmptyMethods, true,                                  \
           "Use fast method entry code for empty methods")                   \

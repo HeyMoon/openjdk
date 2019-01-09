@@ -24,10 +24,15 @@
  */
 package jdk.nashorn.internal.parser;
 
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import jdk.nashorn.internal.codegen.Namespace;
+import jdk.nashorn.internal.ir.Expression;
 import jdk.nashorn.internal.ir.FunctionNode;
 import jdk.nashorn.internal.ir.IdentNode;
+import jdk.nashorn.internal.ir.Module;
 
 /**
  * ParserContextNode that represents a function that is currently being parsed
@@ -46,11 +51,11 @@ class ParserContextFunctionNode extends ParserContextBaseNode {
     /** Line number for function declaration */
     private final int line;
 
-    /** Function node kind, see {@link FunctionNode#Kind} */
+    /** Function node kind, see {@link FunctionNode.Kind} */
     private final FunctionNode.Kind kind;
 
     /** List of parameter identifiers for function */
-    private final List<IdentNode> parameters;
+    private List<IdentNode> parameters;
 
     /** Token for function start */
     private final long token;
@@ -60,6 +65,15 @@ class ParserContextFunctionNode extends ParserContextBaseNode {
 
     /** Opaque node for parser end state, see {@link Parser} */
     private Object endParserState;
+
+    private HashSet<String> parameterBoundNames;
+    private IdentNode duplicateParameterBinding;
+    private boolean simpleParameterList = true;
+
+    private Module module;
+
+    private int debugFlags;
+    private Map<IdentNode, Expression> parameterExpressions;
 
     /**
      * @param token The token for the function
@@ -155,6 +169,26 @@ class ParserContextFunctionNode extends ParserContextBaseNode {
         return parameters;
     }
 
+    void setParameters(final List<IdentNode> parameters) {
+        this.parameters = parameters;
+    }
+
+    /**
+     * Return ES6 function parameter expressions
+     *
+     * @return ES6 function parameter expressions
+     */
+    public Map<IdentNode, Expression> getParameterExpressions() {
+        return parameterExpressions;
+    }
+
+    void addParameterExpression(final IdentNode ident, final Expression node) {
+        if (parameterExpressions == null) {
+            parameterExpressions = new HashMap<>();
+        }
+        parameterExpressions.put(ident, node);
+    }
+
     /**
      * Set last token
      * @param token New last token
@@ -193,5 +227,71 @@ class ParserContextFunctionNode extends ParserContextBaseNode {
      */
     public int getId() {
         return isProgram() ? -1 : Token.descPosition(token);
+    }
+
+    /**
+     * Returns the debug flags for this function.
+     *
+     * @return the debug flags
+     */
+    int getDebugFlags() {
+        return debugFlags;
+    }
+
+    /**
+     * Sets a debug flag for this function.
+     *
+     * @param debugFlag the debug flag
+     */
+    void setDebugFlag(final int debugFlag) {
+        debugFlags |= debugFlag;
+    }
+
+    public boolean isMethod() {
+        return getFlag(FunctionNode.ES6_IS_METHOD) != 0;
+    }
+
+    public boolean isClassConstructor() {
+        return getFlag(FunctionNode.ES6_IS_CLASS_CONSTRUCTOR) != 0;
+    }
+
+    public boolean isSubclassConstructor() {
+        return getFlag(FunctionNode.ES6_IS_SUBCLASS_CONSTRUCTOR) != 0;
+    }
+
+    boolean addParameterBinding(final IdentNode bindingIdentifier) {
+        if (Parser.isArguments(bindingIdentifier)) {
+            setFlag(FunctionNode.DEFINES_ARGUMENTS);
+        }
+
+        if (parameterBoundNames == null) {
+            parameterBoundNames = new HashSet<>();
+        }
+        if (parameterBoundNames.add(bindingIdentifier.getName())) {
+            return true;
+        } else {
+            duplicateParameterBinding = bindingIdentifier;
+            return false;
+        }
+    }
+
+    public IdentNode getDuplicateParameterBinding() {
+        return duplicateParameterBinding;
+    }
+
+    public boolean isSimpleParameterList() {
+        return simpleParameterList;
+    }
+
+    public void setSimpleParameterList(final boolean simpleParameterList) {
+        this.simpleParameterList = simpleParameterList;
+    }
+
+    public Module getModule() {
+        return module;
+    }
+
+    public void setModule(final Module module) {
+        this.module = module;
     }
 }

@@ -29,7 +29,7 @@
 #include "memory/allocation.hpp"
 #include "oops/oop.hpp"
 #include "runtime/thread.hpp"
-#include "utilities/top.hpp"
+#include "code/codeCache.hpp"
 
 // The following classes are used for operations
 // initiated by a Java thread but that must
@@ -44,6 +44,7 @@
   template(ThreadDump)                            \
   template(PrintThreads)                          \
   template(FindDeadlocks)                         \
+  template(ClearICs)                              \
   template(ForceSafepoint)                        \
   template(ForceAsyncSafepoint)                   \
   template(Deoptimize)                            \
@@ -101,10 +102,9 @@
   template(WhiteBoxOperation)                     \
   template(ClassLoaderStatsOperation)             \
   template(DumpHashtable)                         \
+  template(DumpTouchedMethods)                    \
   template(MarkActiveNMethods)                    \
   template(PrintCompileQueue)                     \
-  template(PrintCodeList)                         \
-  template(PrintCodeCache)                        \
   template(PrintClassHierarchy)                   \
 
 class VM_Operation: public CHeapObj<mtInternal> {
@@ -229,6 +229,15 @@ class VM_ThreadStop: public VM_Operation {
   }
 };
 
+class VM_ClearICs: public VM_Operation {
+ private:
+  bool _preserve_static_stubs;
+ public:
+  VM_ClearICs(bool preserve_static_stubs) { _preserve_static_stubs = preserve_static_stubs; }
+  void doit();
+  VMOp_Type type() const { return VMOp_ClearICs; }
+};
+
 // dummy vm op, evaluated just to force a safepoint
 class VM_ForceSafepoint: public VM_Operation {
  public:
@@ -271,7 +280,8 @@ class VM_DeoptimizeFrame: public VM_Operation {
  private:
   JavaThread* _thread;
   intptr_t*   _id;
-  VM_DeoptimizeFrame(JavaThread* thread, intptr_t* id);
+  int _reason;
+  VM_DeoptimizeFrame(JavaThread* thread, intptr_t* id, int reason);
 
  public:
   VMOp_Type type() const                         { return VMOp_DeoptimizeFrame; }
@@ -309,10 +319,7 @@ class VM_UnlinkSymbols: public VM_Operation {
 };
 
 class VM_Verify: public VM_Operation {
- private:
-  bool _silent;
  public:
-  VM_Verify(bool silent = VerifySilently) : _silent(silent) {}
   VMOp_Type type() const { return VMOp_Verify; }
   void doit();
 };
@@ -416,17 +423,6 @@ class VM_Exit: public VM_Operation {
   void doit();
 };
 
-
-class VM_RotateGCLog: public VM_Operation {
- private:
-  outputStream* _out;
-
- public:
-  VM_RotateGCLog(outputStream* st) : _out(st) {}
-  VMOp_Type type() const { return VMOp_RotateGCLog; }
-  void doit() { gclog_or_tty->rotate_log(true, _out); }
-};
-
 class VM_PrintCompileQueue: public VM_Operation {
  private:
   outputStream* _out;
@@ -434,27 +430,7 @@ class VM_PrintCompileQueue: public VM_Operation {
  public:
   VM_PrintCompileQueue(outputStream* st) : _out(st) {}
   VMOp_Type type() const { return VMOp_PrintCompileQueue; }
-  Mode evaluation_mode() const { return _no_safepoint; }
-  void doit();
-};
-
-class VM_PrintCodeList: public VM_Operation {
- private:
-  outputStream* _out;
-
- public:
-  VM_PrintCodeList(outputStream* st) : _out(st) {}
-  VMOp_Type type() const { return VMOp_PrintCodeList; }
-  void doit();
-};
-
-class VM_PrintCodeCache: public VM_Operation {
- private:
-  outputStream* _out;
-
- public:
-  VM_PrintCodeCache(outputStream* st) : _out(st) {}
-  VMOp_Type type() const { return VMOp_PrintCodeCache; }
+  Mode evaluation_mode() const { return _safepoint; }
   void doit();
 };
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,13 +34,14 @@ import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.assertSame;
+import static org.testng.Assert.assertNotSame;
 
 import java.io.BufferedReader;
 import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
-import java.io.FilePermission;
 import java.io.FileReader;
 
 import javax.xml.parsers.DocumentBuilder;
@@ -55,9 +56,9 @@ import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.sax.SAXResult;
 
 import jaxp.library.JAXPDataProvider;
-import jaxp.library.JAXPFileBaseTest;
 
 import org.testng.annotations.DataProvider;
+import org.testng.annotations.Listeners;
 import org.testng.annotations.Test;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
@@ -67,14 +68,28 @@ import org.xml.sax.SAXException;
 import org.xml.sax.helpers.DefaultHandler;
 
 /**
- * @bug 8080907
+ * @bug 8080907 8169778
  * This checks the methods of DocumentBuilderFactoryImpl.
  */
-public class DocumentBuilderFactoryTest extends JAXPFileBaseTest {
+/*
+ * @test
+ * @library /javax/xml/jaxp/libs
+ * @run testng/othervm -DrunSecMngr=true javax.xml.parsers.ptests.DocumentBuilderFactoryTest
+ * @run testng/othervm javax.xml.parsers.ptests.DocumentBuilderFactoryTest
+ */
+@Listeners({jaxp.library.FilePolicy.class})
+public class DocumentBuilderFactoryTest {
+
+    /**
+     * DocumentBuilderFactory builtin system-default implementation class name.
+     */
+    private static final String DEFAULT_IMPL_CLASS =
+        "com.sun.org.apache.xerces.internal.jaxp.DocumentBuilderFactoryImpl";
+
     /**
      * DocumentBuilderFactory implementation class name.
      */
-    private static final String DOCUMENT_BUILDER_FACTORY_CLASSNAME = "com.sun.org.apache.xerces.internal.jaxp.DocumentBuilderFactoryImpl";
+    private static final String DOCUMENT_BUILDER_FACTORY_CLASSNAME = DEFAULT_IMPL_CLASS;
 
     /**
      * Provide valid DocumentBuilderFactory instantiation parameters.
@@ -84,6 +99,21 @@ public class DocumentBuilderFactoryTest extends JAXPFileBaseTest {
     @DataProvider(name = "parameters")
     public Object[][] getValidateParameters() {
         return new Object[][] { { DOCUMENT_BUILDER_FACTORY_CLASSNAME, null }, { DOCUMENT_BUILDER_FACTORY_CLASSNAME, this.getClass().getClassLoader() } };
+    }
+
+    /**
+     * Test if newDefaultInstance() method returns an instance
+     * of the expected factory.
+     * @throws Exception If any errors occur.
+     */
+    @Test
+    public void testDefaultInstance() throws Exception {
+        DocumentBuilderFactory dbf1 = DocumentBuilderFactory.newDefaultInstance();
+        DocumentBuilderFactory dbf2 = DocumentBuilderFactory.newInstance();
+        assertNotSame(dbf1, dbf2, "same instance returned:");
+        assertSame(dbf1.getClass(), dbf2.getClass(),
+                  "unexpected class mismatch for newDefaultInstance():");
+        assertEquals(dbf1.getClass().getName(), DEFAULT_IMPL_CLASS);
     }
 
     /**
@@ -419,8 +449,6 @@ public class DocumentBuilderFactoryTest extends JAXPFileBaseTest {
     @Test
     public void testCheckDocumentBuilderFactory13() throws Exception {
         // Accesing default working directory.
-        String workingDir = getSystemProperty("user.dir");
-        setPermissions(new FilePermission(workingDir + "/*", "read"));
         DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
         DocumentBuilder docBuilder = dbf.newDocumentBuilder();
         Document doc = docBuilder.parse(new File(XML_DIR + "dbf10import.xsl")
@@ -436,8 +464,6 @@ public class DocumentBuilderFactoryTest extends JAXPFileBaseTest {
     @Test(expectedExceptions = SAXException.class)
     public void testCheckDocumentBuilderFactory14() throws Exception {
         // Accesing default working directory.
-        String workingDir = getSystemProperty("user.dir");
-        setPermissions(new FilePermission(workingDir, "read"));
         DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
         DocumentBuilder docBuilder = dbf.newDocumentBuilder();
         docBuilder.parse("");

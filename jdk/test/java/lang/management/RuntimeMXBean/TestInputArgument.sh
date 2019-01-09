@@ -24,9 +24,9 @@
 #
 # @test
 # @bug     4530538
-# @summary 
+# @summary
 # @author  Mandy Chung
-# @modules java.management
+#
 # @run compile InputArgument.java
 # @run shell TestInputArgument.sh
 #
@@ -41,15 +41,15 @@ else
 fi
 
 runOne()
-{ 
+{
    echo "runOne $@"
    $TESTJAVA/bin/java $TESTVMOPTS -classpath $TESTCLASSES "$@" || exit 2
 }
 
-runOne InputArgument 
+runOne InputArgument
 
-runOne -XX:+UseFastJNIAccessors -XX:+PrintGCDetails InputArgument -XX:+PrintGCDetails
-runOne -XX:+UseFastJNIAccessors -XX:+PrintGCDetails InputArgument -XX:+UseFastJNIAccessors
+runOne -XX:+UseFastJNIAccessors -Xlog:gc*=debug InputArgument
+runOne -XX:+UseFastJNIAccessors -Xlog:gc*=debug InputArgument -XX:+UseFastJNIAccessors
 runOne "-Dprops=one two three" InputArgument "-Dprops=one two three"
 
 exit 0

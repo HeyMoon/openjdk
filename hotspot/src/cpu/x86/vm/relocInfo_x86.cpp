@@ -26,6 +26,7 @@
 #include "asm/macroAssembler.hpp"
 #include "code/relocInfo.hpp"
 #include "nativeInst_x86.hpp"
+#include "oops/klass.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/safepoint.hpp"
 
@@ -40,7 +41,7 @@ void Relocation::pd_set_data_value(address x, intptr_t o, bool verify_only) {
          which == Assembler::imm_operand, "format unpacks ok");
   if (which == Assembler::imm_operand) {
     if (verify_only) {
-      assert(*pd_address_in_code() == x, "instructions must match");
+      guarantee(*pd_address_in_code() == x, "instructions must match");
     } else {
       *pd_address_in_code() = x;
     }
@@ -49,13 +50,13 @@ void Relocation::pd_set_data_value(address x, intptr_t o, bool verify_only) {
     // both compressed oops and compressed classes look the same
     if (Universe::heap()->is_in_reserved((oop)x)) {
     if (verify_only) {
-      assert(*(uint32_t*) disp == oopDesc::encode_heap_oop((oop)x), "instructions must match");
+      guarantee(*(uint32_t*) disp == oopDesc::encode_heap_oop((oop)x), "instructions must match");
     } else {
       *(int32_t*) disp = oopDesc::encode_heap_oop((oop)x);
     }
   } else {
       if (verify_only) {
-        assert(*(uint32_t*) disp == Klass::encode_klass((Klass*)x), "instructions must match");
+        guarantee(*(uint32_t*) disp == Klass::encode_klass((Klass*)x), "instructions must match");
       } else {
         *(int32_t*) disp = Klass::encode_klass((Klass*)x);
       }
@@ -66,14 +67,14 @@ void Relocation::pd_set_data_value(address x, intptr_t o, bool verify_only) {
     address disp = Assembler::locate_operand(ip, which);
     address next_ip = Assembler::locate_next_instruction(ip);
     if (verify_only) {
-      assert(*(int32_t*) disp == (x - next_ip), "instructions must match");
+      guarantee(*(int32_t*) disp == (x - next_ip), "instructions must match");
     } else {
       *(int32_t*) disp = x - next_ip;
     }
   }
 #else
   if (verify_only) {
-    assert(*pd_address_in_code() == (x + o), "instructions must match");
+    guarantee(*pd_address_in_code() == (x + o), "instructions must match");
   } else {
     *pd_address_in_code() = x + o;
   }
@@ -179,39 +180,17 @@ address Relocation::pd_get_address_from_code() {
 
 void poll_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) {
 #ifdef _LP64
-  if (!Assembler::is_polling_page_far()) {
-    typedef Assembler::WhichOperand WhichOperand;
-    WhichOperand which = (WhichOperand) format();
-    // This format is imm but it is really disp32
-    which = Assembler::disp32_operand;
+  typedef Assembler::WhichOperand WhichOperand;
+  WhichOperand which = (WhichOperand) format();
+#if !INCLUDE_JVMCI
+  assert((which == Assembler::disp32_operand) == !Assembler::is_polling_page_far(), "format not set correctly");
+#endif
+  if (which == Assembler::disp32_operand) {
     address orig_addr = old_addr_for(addr(), src, dest);
     NativeInstruction* oni = nativeInstruction_at(orig_addr);
     int32_t* orig_disp = (int32_t*) Assembler::locate_operand(orig_addr, which);
     // This poll_addr is incorrect by the size of the instruction it is irrelevant
     intptr_t poll_addr = (intptr_t)oni + *orig_disp;
-
-    NativeInstruction* ni = nativeInstruction_at(addr());
-    intptr_t new_disp = poll_addr - (intptr_t) ni;
-
-    int32_t* disp = (int32_t*) Assembler::locate_operand(addr(), which);
-    * disp = (int32_t)new_disp;
-  }
-#endif // _LP64
-}
-
-void poll_return_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) {
-#ifdef _LP64
-  if (!Assembler::is_polling_page_far()) {
-    typedef Assembler::WhichOperand WhichOperand;
-    WhichOperand which = (WhichOperand) format();
-    // This format is imm but it is really disp32
-    which = Assembler::disp32_operand;
-    address orig_addr = old_addr_for(addr(), src, dest);
-    NativeInstruction* oni = nativeInstruction_at(orig_addr);
-    int32_t* orig_disp = (int32_t*) Assembler::locate_operand(orig_addr, which);
-    // This poll_addr is incorrect by the size of the instruction it is irrelevant
-    intptr_t poll_addr = (intptr_t)oni + *orig_disp;
-
     NativeInstruction* ni = nativeInstruction_at(addr());
     intptr_t new_disp = poll_addr - (intptr_t) ni;
 

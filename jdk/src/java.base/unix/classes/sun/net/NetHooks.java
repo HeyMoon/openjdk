@@ -28,9 +28,6 @@ package sun.net;
 import java.net.InetAddress;
 import java.io.FileDescriptor;
 import java.io.IOException;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
-import sun.security.action.GetPropertyAction;
 
 /**
  * Defines static methods to be invoked prior to binding or connecting TCP sockets.
@@ -45,7 +42,7 @@ public final class NetHooks {
      * <p> Concrete implementations of this class should define a zero-argument
      * constructor and implement the abstract methods specified below.
      */
-    public static abstract class Provider {
+    public abstract static class Provider {
         /**
          * Initializes a new instance of this class.
          */

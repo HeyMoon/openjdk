@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,7 +42,22 @@ protected:
   static void print_libversion_info(outputStream* st);
   static void print_load_average(outputStream* st);
 
+  // Minimum stack size a thread can be created with (allowing
+  // the VM to completely create the thread and enter user code).
+  // The initial values exclude any guard pages (by HotSpot or libc).
+  // set_minimum_stack_sizes() will add the size required for
+  // HotSpot guard pages depending on page size and flag settings.
+  // Libc guard pages are never considered by these values.
+  static size_t _compiler_thread_min_stack_allowed;
+  static size_t _java_thread_min_stack_allowed;
+  static size_t _vm_internal_thread_min_stack_allowed;
+
 public:
+  // Return default stack size for the specified thread type
+  static size_t default_stack_size(os::ThreadType thr_type);
+  // Check and sets minimum stack sizes
+  static jint set_minimum_stack_sizes();
+  static size_t get_initial_stack_size(ThreadType thr_type, size_t req_stack_size);
 
   // Returns true if signal is valid.
   static bool is_valid_signal(int sig);
@@ -51,11 +66,20 @@ public:
   // Returned string is a constant. For unknown signals "UNKNOWN" is returned.
   static const char* get_signal_name(int sig, char* out, size_t outlen);
 
+  // Helper function, returns a signal number for a given signal name, e.g. 11
+  // for "SIGSEGV". Name can be given with or without "SIG" prefix, so both
+  // "SEGV" or "SIGSEGV" work. Name must be uppercase.
+  // Returns -1 for an unknown signal name.
+  static int get_signal_number(const char* signal_name);
+
   // Returns one-line short description of a signal set in a user provided buffer.
   static const char* describe_signal_set_short(const sigset_t* set, char* buffer, size_t size);
 
   // Prints a short one-line description of a signal set.
   static void print_signal_set_short(outputStream* st, const sigset_t* set);
+
+  // unblocks the signal masks for current thread
+  static int unblock_thread_signal_mask(const sigset_t *set);
 
   // Writes a one-line description of a combination of sigaction.sa_flags
   // into a user provided buffer. Returns that buffer.
@@ -64,8 +88,13 @@ public:
   // Prints a one-line description of a combination of sigaction.sa_flags.
   static void print_sa_flags(outputStream* st, int flags);
 
-  // A POSIX conform, platform-independend siginfo print routine.
-  static void print_siginfo_brief(outputStream* os, const siginfo_t* si);
+  static address ucontext_get_pc(const ucontext_t* ctx);
+  // Set PC into context. Needed for continuation after signal.
+  static void ucontext_set_pc(ucontext_t* ctx, address pc);
+
+  // Helper function; describes pthread attributes as short string. String is written
+  // to buf with len buflen; buf is returned.
+  static char* describe_pthread_attr(char* buf, size_t buflen, const pthread_attr_t* attr);
 
 };
 

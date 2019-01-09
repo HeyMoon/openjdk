@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,10 @@ import java.util.List;
  * @summary Tests that cached constructors have synchronized access
  * @author Sergey Malenkov
  * @modules java.desktop/com.sun.beans.finder
+ *          java.activation
+ *          java.transaction
+ *          java.corba
+ *          java.xml.bind
  * @compile -XDignore.symbol.file TestConstructorFinder.java
  * @run main TestConstructorFinder
  */
@@ -73,8 +77,7 @@ public class TestConstructorFinder {
             }
             Task.print(working + " out of " + alive + " threads are working");
             if ((working == 0) && (++alarm == 10)) {
-                Task.print("DEADLOCK DETECTED");
-                System.exit(100);
+                throw new RuntimeException("FAIL - DEADLOCK DETECTED");
             }
             Thread.sleep(1000);
         }

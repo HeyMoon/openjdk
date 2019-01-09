@@ -45,6 +45,7 @@ import jdk.nashorn.internal.ir.BreakNode;
 import jdk.nashorn.internal.ir.CallNode;
 import jdk.nashorn.internal.ir.CaseNode;
 import jdk.nashorn.internal.ir.CatchNode;
+import jdk.nashorn.internal.ir.ClassNode;
 import jdk.nashorn.internal.ir.ContinueNode;
 import jdk.nashorn.internal.ir.DebuggerNode;
 import jdk.nashorn.internal.ir.EmptyNode;
@@ -52,7 +53,6 @@ import jdk.nashorn.internal.ir.Expression;
 import jdk.nashorn.internal.ir.ExpressionStatement;
 import jdk.nashorn.internal.ir.ForNode;
 import jdk.nashorn.internal.ir.FunctionNode;
-import jdk.nashorn.internal.ir.FunctionNode.CompilationState;
 import jdk.nashorn.internal.ir.IdentNode;
 import jdk.nashorn.internal.ir.IfNode;
 import jdk.nashorn.internal.ir.IndexNode;
@@ -61,9 +61,11 @@ import jdk.nashorn.internal.ir.JumpToInlinedFinally;
 import jdk.nashorn.internal.ir.LabelNode;
 import jdk.nashorn.internal.ir.LexicalContext;
 import jdk.nashorn.internal.ir.LiteralNode;
+import jdk.nashorn.internal.ir.LiteralNode.ArrayLiteralNode;
 import jdk.nashorn.internal.ir.LiteralNode.PrimitiveLiteralNode;
 import jdk.nashorn.internal.ir.LoopNode;
 import jdk.nashorn.internal.ir.Node;
+import jdk.nashorn.internal.ir.ObjectNode;
 import jdk.nashorn.internal.ir.ReturnNode;
 import jdk.nashorn.internal.ir.RuntimeNode;
 import jdk.nashorn.internal.ir.Statement;
@@ -71,14 +73,17 @@ import jdk.nashorn.internal.ir.SwitchNode;
 import jdk.nashorn.internal.ir.Symbol;
 import jdk.nashorn.internal.ir.ThrowNode;
 import jdk.nashorn.internal.ir.TryNode;
+import jdk.nashorn.internal.ir.UnaryNode;
 import jdk.nashorn.internal.ir.VarNode;
 import jdk.nashorn.internal.ir.WhileNode;
 import jdk.nashorn.internal.ir.WithNode;
 import jdk.nashorn.internal.ir.visitor.NodeOperatorVisitor;
-import jdk.nashorn.internal.ir.visitor.NodeVisitor;
+import jdk.nashorn.internal.ir.visitor.SimpleNodeVisitor;
 import jdk.nashorn.internal.parser.Token;
 import jdk.nashorn.internal.parser.TokenType;
 import jdk.nashorn.internal.runtime.Context;
+import jdk.nashorn.internal.runtime.ECMAErrors;
+import jdk.nashorn.internal.runtime.ErrorManager;
 import jdk.nashorn.internal.runtime.JSType;
 import jdk.nashorn.internal.runtime.Source;
 import jdk.nashorn.internal.runtime.logging.DebugLogger;
@@ -98,6 +103,8 @@ import jdk.nashorn.internal.runtime.logging.Logger;
 final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Loggable {
 
     private final DebugLogger log;
+    private final boolean es6;
+    private final Source source;
 
     // Conservative pattern to test if element names consist of characters valid for identifiers.
     // This matches any non-zero length alphanumeric string including _ and $ and not starting with a digit.
@@ -122,13 +129,7 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
                             terminated = true;
                         }
                     } else {
-                        statement.accept(new NodeVisitor<LexicalContext>(new LexicalContext()) {
-                            @Override
-                            public boolean enterVarNode(final VarNode varNode) {
-                                newStatements.add(varNode.setInit(null));
-                                return false;
-                            }
-                        });
+                        FoldConstants.extractVarNodesFromDeadCode(statement, newStatements);
                     }
                 }
                 return newStatements;
@@ -151,6 +152,8 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
         });
 
         this.log = initLogger(compiler.getContext());
+        this.es6 = compiler.getScriptEnvironment()._es6;
+        this.source = compiler.getSource();
     }
 
     @Override
@@ -172,6 +175,15 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
     @Override
     public Node leaveCallNode(final CallNode callNode) {
         return checkEval(callNode.setFunction(markerFunction(callNode.getFunction())));
+    }
+
+    @Override
+    public boolean enterCatchNode(final CatchNode catchNode) {
+        Expression exception = catchNode.getException();
+        if ((exception != null) && !(exception instanceof IdentNode)) {
+            throwNotImplementedYet("es6.destructuring", exception);
+        }
+        return true;
     }
 
     @Override
@@ -246,6 +258,10 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
             }
         }
 
+        if (es6 && expressionStatement.destructuringDeclarationType() != null) {
+            throwNotImplementedYet("es6.destructuring", expressionStatement);
+        }
+
         return addStatement(node);
     }
 
@@ -255,17 +271,26 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
     }
 
     @Override
+    public boolean enterForNode(final ForNode forNode) {
+        if (es6 && (forNode.getInit() instanceof ObjectNode || forNode.getInit() instanceof ArrayLiteralNode)) {
+            throwNotImplementedYet("es6.destructuring", forNode);
+        }
+        return super.enterForNode(forNode);
+    }
+
+    @Override
     public Node leaveForNode(final ForNode forNode) {
         ForNode newForNode = forNode;
 
         final Expression test = forNode.getTest();
-        if (!forNode.isForIn() && isAlwaysTrue(test)) {
+        if (!forNode.isForInOrOf() && isAlwaysTrue(test)) {
             newForNode = forNode.setTest(lc, null);
         }
 
         newForNode = checkEscape(newForNode);
-        if(newForNode.isForIn()) {
-            // Wrap it in a block so its internally created iterator is restricted in scope
+        if(!es6 && newForNode.isForInOrOf()) {
+            // Wrap it in a block so its internally created iterator is restricted in scope, unless we are running
+            // in ES6 mode, in which case the parser already created a block to capture let/const declarations.
             addStatementEnclosedInBlock(newForNode);
         } else {
             addStatement(newForNode);
@@ -274,9 +299,40 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
     }
 
     @Override
+    public boolean enterFunctionNode(final FunctionNode functionNode) {
+        if (es6) {
+            if (functionNode.getKind() == FunctionNode.Kind.MODULE) {
+                throwNotImplementedYet("es6.module", functionNode);
+            }
+
+            if (functionNode.getKind() == FunctionNode.Kind.GENERATOR) {
+                throwNotImplementedYet("es6.generator", functionNode);
+            }
+            if (functionNode.usesSuper()) {
+                throwNotImplementedYet("es6.super", functionNode);
+            }
+
+            final int numParams = functionNode.getNumOfParams();
+            if (numParams > 0) {
+                final IdentNode lastParam = functionNode.getParameter(numParams - 1);
+                if (lastParam.isRestParameter()) {
+                    throwNotImplementedYet("es6.rest.param", lastParam);
+                }
+            }
+            for (final IdentNode param : functionNode.getParameters()) {
+                if (param.isDestructuredParameter()) {
+                    throwNotImplementedYet("es6.destructuring", functionNode);
+                }
+            }
+        }
+
+        return super.enterFunctionNode(functionNode);
+    }
+
+    @Override
     public Node leaveFunctionNode(final FunctionNode functionNode) {
         log.info("END FunctionNode: ", functionNode.getName());
-        return functionNode.setState(lc, CompilationState.LOWERED);
+        return functionNode;
     }
 
     @Override
@@ -338,7 +394,7 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
 
     @SuppressWarnings("unchecked")
     private static <T extends Node> T ensureUniqueNamesIn(final T node) {
-        return (T)node.accept(new NodeVisitor<LexicalContext>(new LexicalContext()) {
+        return (T)node.accept(new SimpleNodeVisitor() {
             @Override
             public Node leaveFunctionNode(final FunctionNode functionNode) {
                 final String name = functionNode.getName();
@@ -403,7 +459,7 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
         final Block finallyBlock = createFinallyBlock(finallyBody);
         final ArrayList<Block> inlinedFinallies = new ArrayList<>();
         final FunctionNode fn = lc.getCurrentFunction();
-        final TryNode newTryNode = (TryNode)tryNode.accept(new NodeVisitor<LexicalContext>(new LexicalContext()) {
+        final TryNode newTryNode = (TryNode)tryNode.accept(new SimpleNodeVisitor() {
 
             @Override
             public boolean enterFunctionNode(final FunctionNode functionNode) {
@@ -521,7 +577,7 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
         }
 
         /*
-         * create a new trynode
+         * create a new try node
          *    if we have catches:
          *
          *    try            try
@@ -532,7 +588,7 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
          *                   catchall
          *                        rethrow
          *
-         *   otheriwse
+         *   otherwise
          *
          *   try              try
          *      x               x
@@ -546,7 +602,7 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
         final Block catchAll = catchAllBlock(tryNode);
 
         final List<ThrowNode> rethrows = new ArrayList<>(1);
-        catchAll.accept(new NodeVisitor<LexicalContext>(new LexicalContext()) {
+        catchAll.accept(new SimpleNodeVisitor() {
             @Override
             public boolean enterThrowNode(final ThrowNode throwNode) {
                 rethrows.add(throwNode);
@@ -582,6 +638,29 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
     }
 
     @Override
+    public boolean enterUnaryNode(final UnaryNode unaryNode) {
+        if (es6) {
+            if (unaryNode.isTokenType(TokenType.YIELD) ||
+                unaryNode.isTokenType(TokenType.YIELD_STAR)) {
+                throwNotImplementedYet("es6.yield", unaryNode);
+            } else if (unaryNode.isTokenType(TokenType.SPREAD_ARGUMENT) ||
+                       unaryNode.isTokenType(TokenType.SPREAD_ARRAY)) {
+                throwNotImplementedYet("es6.spread", unaryNode);
+            }
+        }
+
+        return super.enterUnaryNode(unaryNode);
+    }
+
+    @Override
+    public boolean enterASSIGN(BinaryNode binaryNode) {
+        if (es6 && (binaryNode.lhs() instanceof ObjectNode || binaryNode.lhs() instanceof ArrayLiteralNode)) {
+            throwNotImplementedYet("es6.destructuring", binaryNode);
+        }
+        return super.enterASSIGN(binaryNode);
+    }
+
+    @Override
     public Node leaveVarNode(final VarNode varNode) {
         addStatement(varNode);
         if (varNode.getFlag(VarNode.IS_LAST_FUNCTION_DECLARATION)
@@ -610,6 +689,12 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
     @Override
     public Node leaveWithNode(final WithNode withNode) {
         return addStatement(withNode);
+    }
+
+    @Override
+    public boolean enterClassNode(final ClassNode classNode) {
+        throwNotImplementedYet("es6.class", classNode);
+        return super.enterClassNode(classNode);
     }
 
     /**
@@ -693,7 +778,7 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
     private static boolean controlFlowEscapes(final LexicalContext lex, final Block loopBody) {
         final List<Node> escapes = new ArrayList<>();
 
-        loopBody.accept(new NodeVisitor<LexicalContext>(new LexicalContext()) {
+        loopBody.accept(new SimpleNodeVisitor() {
             @Override
             public Node leaveBreakNode(final BreakNode node) {
                 escapes.add(node);
@@ -769,5 +854,14 @@ final class Lower extends NodeOperatorVisitor<BlockLexicalContext> implements Lo
             }
         }
         return false;
+    }
+
+    private void throwNotImplementedYet(final String msgId, final Node node) {
+        final long token = node.getToken();
+        final int line = source.getLine(node.getStart());
+        final int column = source.getColumn(node.getStart());
+        final String message = ECMAErrors.getMessage("unimplemented." + msgId);
+        final String formatted = ErrorManager.format(message, source, line, column, token);
+        throw new RuntimeException(formatted);
     }
 }

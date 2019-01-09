@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,13 +30,16 @@ import com.sun.jmx.remote.util.ClassLogger;
 import com.sun.jmx.remote.util.EnvHelp;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.MalformedURLException;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
+import java.util.ServiceLoader.Provider;
+import java.util.function.Predicate;
 
 import javax.management.MBeanServer;
+import javax.management.remote.JMXConnectorFactory.ConnectorFactory;
 
 /**
  * <p>Factory to create JMX API connector servers.  There
@@ -124,16 +127,13 @@ import javax.management.MBeanServer;
  * <code><em>protocol</em></code>, or it will throw a
  * <code>MalformedURLException</code> if there is none.  An
  * implementation may choose to find providers by other means.  For
- * example, it may support the <a
- * href="{@docRoot}/../technotes/guides/jar/jar.html#Service%20Provider">
- * JAR conventions for service providers</a>, where the service
- * interface is <code>JMXConnectorServerProvider</code>.</p>
+ * example, it may support <a
+ * href="{@docRoot}/../java/util/ServiceLoader.html#developing-service-providers">service providers</a>,
+ * where the service interface is <code>JMXConnectorServerProvider</code>.</p>
  *
  * <p>Every implementation must support the RMI connector protocol with
  * the default RMI transport, specified with string <code>rmi</code>.
- * An implementation may optionally support the RMI connector protocol
- * with the RMI/IIOP transport, specified with the string
- * <code>iiop</code>.</p>
+ * </p>
  *
  * <p>Once a provider is found, the result of the
  * <code>newJMXConnectorServer</code> method is the result of calling
@@ -207,43 +207,15 @@ public class JMXConnectorServerFactory {
     }
 
     private static JMXConnectorServer
-        getConnectorServerAsService(ClassLoader loader,
-                                    JMXServiceURL url,
-                                    Map<String, ?> map,
-                                    MBeanServer mbs)
+        getConnectorServerAsService(ClassLoader loader, JMXServiceURL url,
+                                    Map<String, ?> map, MBeanServer mbs,
+                                    Predicate<Provider<?>> filter)
         throws IOException {
-        Iterator<JMXConnectorServerProvider> providers =
-                JMXConnectorFactory.
-                getProviderIterator(JMXConnectorServerProvider.class, loader);
-
-        IOException exception = null;
-        while (providers.hasNext()) {
-            try {
-                return providers.next().newJMXConnectorServer(url, map, mbs);
-            } catch (JMXProviderException e) {
-                throw e;
-            } catch (Exception e) {
-                if (logger.traceOn())
-                    logger.trace("getConnectorAsService",
-                                 "URL[" + url +
-                                 "] Service provider exception: " + e);
-                if (!(e instanceof MalformedURLException)) {
-                    if (exception == null) {
-                        if (e instanceof IOException) {
-                            exception = (IOException) e;
-                        } else {
-                            exception = EnvHelp.initCause(
-                                new IOException(e.getMessage()), e);
-                        }
-                    }
-                }
-                continue;
-            }
-        }
-        if (exception == null)
-            return null;
-        else
-            throw exception;
+        final ConnectorFactory<JMXConnectorServerProvider,JMXConnectorServer>
+              factory = (p) -> p.newJMXConnectorServer(url, map, mbs);
+        return JMXConnectorFactory.getConnectorAsService(
+                                     JMXConnectorServerProvider.class,
+                                     loader, url, filter, factory);
     }
 
     /**
@@ -311,18 +283,22 @@ public class JMXConnectorServerFactory {
                                             loader);
 
         IOException exception = null;
+        JMXConnectorServer connection = null;
         if (provider == null) {
+            Predicate<Provider<?>> systemProvider =
+                    JMXConnectorFactory::isSystemProvider;
             // Loader is null when context class loader is set to null
             // and no loader has been provided in map.
             // com.sun.jmx.remote.util.Service class extracted from j2se
             // provider search algorithm doesn't handle well null classloader.
             if (loader != null) {
                 try {
-                    JMXConnectorServer connection =
+                    connection =
                         getConnectorServerAsService(loader,
                                                     serviceURL,
                                                     envcopy,
-                                                    mbeanServer);
+                                                    mbeanServer,
+                                                    systemProvider.negate());
                     if (connection != null)
                         return connection;
                 } catch (JMXProviderException e) {
@@ -331,13 +307,13 @@ public class JMXConnectorServerFactory {
                     exception = e;
                 }
             }
-            provider =
-                JMXConnectorFactory.getProvider(
-                    protocol,
-                    PROTOCOL_PROVIDER_DEFAULT_PACKAGE,
-                    JMXConnectorFactory.class.getClassLoader(),
-                    providerClassName,
-                    targetInterface);
+            connection = getConnectorServerAsService(
+                            JMXConnectorFactory.class.getClassLoader(),
+                            serviceURL,
+                            Collections.unmodifiableMap(envcopy),
+                            mbeanServer,
+                            systemProvider);
+            if (connection != null) return connection;
         }
 
         if (provider == null) {

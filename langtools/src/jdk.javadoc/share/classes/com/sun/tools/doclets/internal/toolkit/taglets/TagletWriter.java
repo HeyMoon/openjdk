@@ -41,6 +41,7 @@ import com.sun.tools.doclets.internal.toolkit.util.*;
  * @author Jamie Ho
  */
 
+@Deprecated
 public abstract class TagletWriter {
 
     /**
@@ -64,6 +65,14 @@ public abstract class TagletWriter {
      * @return the output of the taglet.
      */
     protected abstract Content codeTagOutput(Tag tag);
+
+    /**
+     * Return the output for a {@index...} tag.
+     *
+     * @param tag the tag.
+     * @return the output of the taglet.
+     */
+    protected abstract Content indexTagOutput(Tag tag);
 
     /**
      * Returns the output for the DocRoot inline tag.

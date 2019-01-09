@@ -24,15 +24,15 @@
  */
 /**
  * This package comprises the interfaces and classes used to define the
- * signing mechanism used by the <tt>jarsigner</tt> tool.
+ * signing mechanism used by the {@code jarsigner} tool.
  * <p>
- * Clients may override the default signing mechanism of the <tt>jarsigner</tt>
+ * Clients may override the default signing mechanism of the {@code jarsigner}
  * tool by supplying an alternative implementation of
  * {@link com.sun.jarsigner.ContentSigner}.
  *
- * This package has been deprecated.
+ * The classes in this package have been deprecated. New classes should not be
+ * added to this package. Use the {@link jdk.security.jarsigner.JarSigner} API
+ * to sign JAR files.
  */
 
-@jdk.Exported
-@Deprecated
 package com.sun.jarsigner;

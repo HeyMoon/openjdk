@@ -433,36 +433,49 @@ bool MachNode::rematerialize() const {
   if (is_MachTemp()) return true;
 
   uint r = rule();              // Match rule
-  if( r <  Matcher::_begin_rematerialize ||
-      r >= Matcher::_end_rematerialize )
+  if (r <  Matcher::_begin_rematerialize ||
+      r >= Matcher::_end_rematerialize) {
     return false;
-
-  // For 2-address instructions, the input live range is also the output
-  // live range.  Remateralizing does not make progress on the that live range.
-  if( two_adr() )  return false;
-
-  // Check for rematerializing float constants, or not
-  if( !Matcher::rematerialize_float_constants ) {
-    int op = ideal_Opcode();
-    if( op == Op_ConF || op == Op_ConD )
-      return false;
   }
 
-  // Defining flags - can't spill these!  Must remateralize.
-  if( ideal_reg() == Op_RegFlags )
+  // For 2-address instructions, the input live range is also the output
+  // live range. Remateralizing does not make progress on the that live range.
+  if (two_adr()) return false;
+
+  // Check for rematerializing float constants, or not
+  if (!Matcher::rematerialize_float_constants) {
+    int op = ideal_Opcode();
+    if (op == Op_ConF || op == Op_ConD) {
+      return false;
+    }
+  }
+
+  // Defining flags - can't spill these! Must remateralize.
+  if (ideal_reg() == Op_RegFlags) {
     return true;
+  }
 
   // Stretching lots of inputs - don't do it.
-  if( req() > 2 )
+  if (req() > 2) {
     return false;
+  }
+
+  if (req() == 2 && in(1) && in(1)->ideal_reg() == Op_RegFlags) {
+    // In(1) will be rematerialized, too.
+    // Stretching lots of inputs - don't do it.
+    if (in(1)->req() > 2) {
+      return false;
+    }
+  }
 
   // Don't remateralize somebody with bound inputs - it stretches a
   // fixed register lifetime.
   uint idx = oper_input_base();
   if (req() > idx) {
     const RegMask &rm = in_RegMask(idx);
-    if (rm.is_bound(ideal_reg()))
+    if (rm.is_bound(ideal_reg())) {
       return false;
+    }
   }
 
   return true;
@@ -587,8 +600,8 @@ const TypePtr *MachProjNode::adr_type() const {
 void MachProjNode::dump_spec(outputStream *st) const {
   ProjNode::dump_spec(st);
   switch (_ideal_reg) {
-  case unmatched_proj:  st->print("/unmatched");                         break;
-  case fat_proj:        st->print("/fat"); if (WizardMode) _rout.dump(); break;
+  case unmatched_proj:  st->print("/unmatched");                           break;
+  case fat_proj:        st->print("/fat"); if (WizardMode) _rout.dump(st); break;
   }
 }
 #endif
@@ -630,6 +643,7 @@ const RegMask &MachSafePointNode::in_RegMask( uint idx ) const {
   }
 
   // Values outside the domain represent debug info
+  assert(in(idx)->ideal_reg() != Op_RegFlags, "flags register is not spillable");
   return *Compile::current()->matcher()->idealreg2spillmask[in(idx)->ideal_reg()];
 }
 
@@ -639,7 +653,7 @@ const RegMask &MachSafePointNode::in_RegMask( uint idx ) const {
 uint MachCallNode::cmp( const Node &n ) const
 { return _tf == ((MachCallNode&)n)._tf; }
 const Type *MachCallNode::bottom_type() const { return tf()->range(); }
-const Type *MachCallNode::Value(PhaseTransform *phase) const { return tf()->range(); }
+const Type* MachCallNode::Value(PhaseGVN* phase) const { return tf()->range(); }
 
 #ifndef PRODUCT
 void MachCallNode::dump_spec(outputStream *st) const {
@@ -694,7 +708,8 @@ const RegMask &MachCallNode::in_RegMask(uint idx) const {
 uint MachCallJavaNode::size_of() const { return sizeof(*this); }
 uint MachCallJavaNode::cmp( const Node &n ) const {
   MachCallJavaNode &call = (MachCallJavaNode&)n;
-  return MachCallNode::cmp(call) && _method->equals(call._method);
+  return MachCallNode::cmp(call) && _method->equals(call._method) &&
+         _override_symbolic_info == call._override_symbolic_info;
 }
 #ifndef PRODUCT
 void MachCallJavaNode::dump_spec(outputStream *st) const {

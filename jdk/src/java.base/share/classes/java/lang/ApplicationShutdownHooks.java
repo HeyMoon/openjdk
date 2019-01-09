@@ -28,7 +28,7 @@ import java.util.*;
 
 /*
  * Class to track and run user level shutdown hooks registered through
- * <tt>{@link Runtime#addShutdownHook Runtime.addShutdownHook}</tt>.
+ * {@link Runtime#addShutdownHook Runtime.addShutdownHook}.
  *
  * @see java.lang.Runtime#addShutdownHook
  * @see java.lang.Runtime#removeShutdownHook
@@ -102,9 +102,13 @@ class ApplicationShutdownHooks {
             hook.start();
         }
         for (Thread hook : threads) {
-            try {
-                hook.join();
-            } catch (InterruptedException x) { }
+            while (true) {
+                try {
+                    hook.join();
+                    break;
+                } catch (InterruptedException ignored) {
+                }
+            }
         }
     }
 }

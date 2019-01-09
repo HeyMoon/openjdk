@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #
-# Copyright (c) 2012, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -27,10 +27,10 @@
 # @test
 # @bug 7106773
 # @summary 512 bits RSA key cannot work with SHA384 and SHA512
+# @requires os.family == "windows"
 # @run shell ShortRSAKey1024.sh 1024
 # @run shell ShortRSAKey1024.sh 768
 # @run shell ShortRSAKey1024.sh 512
-# @key intermittent
 
 # set a few environment variables so that the shell-script can run stand-alone
 # in the source directory
@@ -88,9 +88,11 @@ case "$OS" in
 
         echo
         echo "Running the test..."
-        ${TESTJAVA}${FS}bin${FS}javac ${TESTTOOLVMOPTS} ${TESTJAVACOPTS} -d . \
+        ${TESTJAVA}${FS}bin${FS}javac --add-exports java.base/sun.security.util=ALL-UNNAMED \
+            ${TESTTOOLVMOPTS} ${TESTJAVACOPTS} -d . \
             ${TESTSRC}${FS}ShortRSAKeyWithinTLS.java
-        ${TESTJAVA}${FS}bin${FS}java ${TESTVMOPTS} ShortRSAKeyWithinTLS 7106773.$BITS $BITS \
+        ${TESTJAVA}${FS}bin${FS}java --add-exports java.base/sun.security.util=ALL-UNNAMED \
+            ${TESTVMOPTS} ShortRSAKeyWithinTLS 7106773.$BITS $BITS \
             TLSv1.2 TLS_DHE_RSA_WITH_AES_128_CBC_SHA
 
         rc=$?

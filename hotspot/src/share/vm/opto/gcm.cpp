@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #include "precompiled.hpp"
 #include "libadt/vectset.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "opto/block.hpp"
 #include "opto/c2compiler.hpp"
 #include "opto/callnode.hpp"
@@ -34,6 +35,7 @@
 #include "opto/phaseX.hpp"
 #include "opto/rootnode.hpp"
 #include "opto/runtime.hpp"
+#include "opto/chaitin.hpp"
 #include "runtime/deoptimization.hpp"
 
 // Portions of code courtesy of Clifford Click
@@ -100,15 +102,40 @@ void PhaseCFG::replace_block_proj_ctrl( Node *n ) {
   }
 }
 
-static bool is_dominator(Block* d, Block* n) {
+bool PhaseCFG::is_dominator(Node* dom_node, Node* node) {
+  if (dom_node == node) {
+    return true;
+  }
+  Block* d = get_block_for_node(dom_node);
+  Block* n = get_block_for_node(node);
+  if (d == n) {
+    if (dom_node->is_block_start()) {
+      return true;
+    }
+    if (node->is_block_start()) {
+      return false;
+    }
+    if (dom_node->is_block_proj()) {
+      return false;
+    }
+    if (node->is_block_proj()) {
+      return true;
+    }
+#ifdef ASSERT
+    node->dump();
+    dom_node->dump();
+#endif
+    fatal("unhandled");
+    return false;
+  }
   return d->dom_lca(n) == d;
 }
 
 //------------------------------schedule_pinned_nodes--------------------------
 // Set the basic block for Nodes pinned into blocks
 void PhaseCFG::schedule_pinned_nodes(VectorSet &visited) {
-  // Allocate node stack of size C->unique()+8 to avoid frequent realloc
-  GrowableArray <Node *> spstack(C->unique() + 8);
+  // Allocate node stack of size C->live_nodes()+8 to avoid frequent realloc
+  GrowableArray <Node *> spstack(C->live_nodes() + 8);
   spstack.push(_root);
   while (spstack.is_nonempty()) {
     Node* node = spstack.pop();
@@ -144,19 +171,15 @@ void PhaseCFG::schedule_pinned_nodes(VectorSet &visited) {
           if (n == NULL) {
             n = m;
           } else {
-            Block* bn = get_block_for_node(n);
-            Block* bm = get_block_for_node(m);
-            assert(is_dominator(bn, bm) || is_dominator(bm, bn), "one must dominate the other");
-            n = is_dominator(bn, bm) ? m : n;
+            assert(is_dominator(n, m) || is_dominator(m, n), "one must dominate the other");
+            n = is_dominator(n, m) ? m : n;
           }
         }
       }
       if (n != NULL) {
         assert(node->in(0), "control should have been set");
-        Block* bn = get_block_for_node(n);
-        Block* bnode = get_block_for_node(node->in(0));
-        assert(is_dominator(bn, bnode) || is_dominator(bnode, bn), "one must dominate the other");
-        if (!is_dominator(bn, bnode)) {
+        assert(is_dominator(n, node->in(0)) || is_dominator(node->in(0), n), "one must dominate the other");
+        if (!is_dominator(n, node->in(0))) {
           node->set_req(0, n);
         }
       }
@@ -227,18 +250,19 @@ static Block* find_deepest_input(Node* n, const PhaseCFG* cfg) {
 // Find the earliest Block any instruction can be placed in.  Some instructions
 // are pinned into Blocks.  Unpinned instructions can appear in last block in
 // which all their inputs occur.
-bool PhaseCFG::schedule_early(VectorSet &visited, Node_List &roots) {
+bool PhaseCFG::schedule_early(VectorSet &visited, Node_Stack &roots) {
   // Allocate stack with enough space to avoid frequent realloc
-  Node_Stack nstack(roots.Size() + 8);
+  Node_Stack nstack(roots.size() + 8);
   // _root will be processed among C->top() inputs
-  roots.push(C->top());
+  roots.push(C->top(), 0);
   visited.set(C->top()->_idx);
 
   while (roots.size() != 0) {
     // Use local variables nstack_top_n & nstack_top_i to cache values
     // on stack's top.
-    Node* parent_node = roots.pop();
+    Node* parent_node = roots.node();
     uint  input_index = 0;
+    roots.pop();
 
     while (true) {
       if (input_index == 0) {
@@ -273,6 +297,7 @@ bool PhaseCFG::schedule_early(VectorSet &visited, Node_List &roots) {
         int is_visited = visited.test_set(in->_idx);
         if (!has_block(in)) {
           if (is_visited) {
+            assert(false, "graph should be schedulable");
             return false;
           }
           // Save parent node and next input's index.
@@ -285,7 +310,7 @@ bool PhaseCFG::schedule_early(VectorSet &visited, Node_List &roots) {
           break;
         } else if (!is_visited) {
           // Visit this guy later, using worklist
-          roots.push(in);
+          roots.push(in, 0);
         }
       }
 
@@ -503,8 +528,12 @@ Block* PhaseCFG::insert_anti_dependences(Block* LCA, Node* load, bool verify) {
          "String equals is a 'load' that does not conflict with any stores");
   assert(load_alias_idx || (load->is_Mach() && load->as_Mach()->ideal_Opcode() == Op_StrIndexOf),
          "String indexOf is a 'load' that does not conflict with any stores");
+  assert(load_alias_idx || (load->is_Mach() && load->as_Mach()->ideal_Opcode() == Op_StrIndexOfChar),
+         "String indexOfChar is a 'load' that does not conflict with any stores");
   assert(load_alias_idx || (load->is_Mach() && load->as_Mach()->ideal_Opcode() == Op_AryEq),
-         "Arrays equals is a 'load' that do not conflict with any stores");
+         "Arrays equals is a 'load' that does not conflict with any stores");
+  assert(load_alias_idx || (load->is_Mach() && load->as_Mach()->ideal_Opcode() == Op_HasNegatives),
+         "HasNegatives is a 'load' that does not conflict with any stores");
 
   if (!C->alias_type(load_alias_idx)->is_rewritable()) {
     // It is impossible to spoil this load by putting stores before it,
@@ -786,23 +815,23 @@ private:
 
 public:
   // Constructor for the iterator
-  Node_Backward_Iterator(Node *root, VectorSet &visited, Node_List &stack, PhaseCFG &cfg);
+  Node_Backward_Iterator(Node *root, VectorSet &visited, Node_Stack &stack, PhaseCFG &cfg);
 
   // Postincrement operator to iterate over the nodes
   Node *next();
 
 private:
   VectorSet   &_visited;
-  Node_List   &_stack;
+  Node_Stack  &_stack;
   PhaseCFG &_cfg;
 };
 
 // Constructor for the Node_Backward_Iterator
-Node_Backward_Iterator::Node_Backward_Iterator( Node *root, VectorSet &visited, Node_List &stack, PhaseCFG &cfg)
+Node_Backward_Iterator::Node_Backward_Iterator( Node *root, VectorSet &visited, Node_Stack &stack, PhaseCFG &cfg)
   : _visited(visited), _stack(stack), _cfg(cfg) {
   // The stack should contain exactly the root
   stack.clear();
-  stack.push(root);
+  stack.push(root, root->outcnt());
 
   // Clear the visited bits
   visited.Clear();
@@ -815,12 +844,14 @@ Node *Node_Backward_Iterator::next() {
   if ( !_stack.size() )
     return NULL;
 
-  // '_stack' is emulating a real _stack.  The 'visit-all-users' loop has been
-  // made stateless, so I do not need to record the index 'i' on my _stack.
-  // Instead I visit all users each time, scanning for unvisited users.
   // I visit unvisited not-anti-dependence users first, then anti-dependent
-  // children next.
-  Node *self = _stack.pop();
+  // children next. I iterate backwards to support removal of nodes.
+  // The stack holds states consisting of 3 values:
+  // current Def node, flag which indicates 1st/2nd pass, index of current out edge
+  Node *self = (Node*)(((uintptr_t)_stack.node()) & ~1);
+  bool iterate_anti_dep = (((uintptr_t)_stack.node()) & 1);
+  uint idx = MIN2(_stack.index(), self->outcnt()); // Support removal of nodes.
+  _stack.pop();
 
   // I cycle here when I am entering a deeper level of recursion.
   // The key variable 'self' was set prior to jumping here.
@@ -836,9 +867,9 @@ Node *Node_Backward_Iterator::next() {
     Node *unvisited = NULL;  // Unvisited anti-dependent Node, if any
 
     // Scan for unvisited nodes
-    for (DUIterator_Fast imax, i = self->fast_outs(imax); i < imax; i++) {
+    while (idx > 0) {
       // For all uses, schedule late
-      Node* n = self->fast_out(i); // Use
+      Node* n = self->raw_out(--idx); // Use
 
       // Skip already visited children
       if ( _visited.test(n->_idx) )
@@ -858,19 +889,31 @@ Node *Node_Backward_Iterator::next() {
       unvisited = n;      // Found unvisited
 
       // Check for possible-anti-dependent
-      if( !n->needs_anti_dependence_check() )
-        break;            // Not visited, not anti-dep; schedule it NOW
+      // 1st pass: No such nodes, 2nd pass: Only such nodes.
+      if (n->needs_anti_dependence_check() == iterate_anti_dep) {
+        unvisited = n;      // Found unvisited
+        break;
+      }
     }
 
     // Did I find an unvisited not-anti-dependent Node?
-    if ( !unvisited )
+    if (!unvisited) {
+      if (!iterate_anti_dep) {
+        // 2nd pass: Iterate over nodes which needs_anti_dependence_check.
+        iterate_anti_dep = true;
+        idx = self->outcnt();
+        continue;
+      }
       break;                  // All done with children; post-visit 'self'
+    }
 
     // Visit the unvisited Node.  Contains the obvious push to
     // indicate I'm entering a deeper level of recursion.  I push the
     // old state onto the _stack and set a new state and loop (recurse).
-    _stack.push(self);
+    _stack.push((Node*)((uintptr_t)self | (uintptr_t)iterate_anti_dep), idx);
     self = unvisited;
+    iterate_anti_dep = false;
+    idx = self->outcnt();
   } // End recursion loop
 
   return self;
@@ -878,7 +921,7 @@ Node *Node_Backward_Iterator::next() {
 
 //------------------------------ComputeLatenciesBackwards----------------------
 // Compute the latency of all the instructions.
-void PhaseCFG::compute_latencies_backwards(VectorSet &visited, Node_List &stack) {
+void PhaseCFG::compute_latencies_backwards(VectorSet &visited, Node_Stack &stack) {
 #ifndef PRODUCT
   if (trace_opto_pipelining())
     tty->print("\n#---- ComputeLatenciesBackwards ----\n");
@@ -1087,6 +1130,7 @@ Block* PhaseCFG::hoist_to_cheaper_block(Block* LCA, Block* early, Node* self) {
 
     if (LCA == NULL) {
       // Bailout without retry
+      assert(false, "graph should be schedulable");
       C->record_method_not_compilable("late schedule failed: LCA == NULL");
       return least;
     }
@@ -1152,7 +1196,7 @@ Block* PhaseCFG::hoist_to_cheaper_block(Block* LCA, Block* early, Node* self) {
 // dominator tree of all USES of a value.  Pick the block with the least
 // loop nesting depth that is lowest in the dominator tree.
 extern const char must_clone[];
-void PhaseCFG::schedule_late(VectorSet &visited, Node_List &stack) {
+void PhaseCFG::schedule_late(VectorSet &visited, Node_Stack &stack) {
 #ifndef PRODUCT
   if (trace_opto_pipelining())
     tty->print("\n#---- schedule_late ----\n");
@@ -1241,6 +1285,7 @@ void PhaseCFG::schedule_late(VectorSet &visited, Node_List &stack) {
         C->record_failure(C2Compiler::retry_no_subsuming_loads());
       } else {
         // Bailout without retry when (early->_dom_depth > LCA->_dom_depth)
+        assert(false, "graph should be schedulable");
         C->record_method_not_compilable("late schedule failed: incorrect graph");
       }
       return;
@@ -1308,9 +1353,7 @@ void PhaseCFG::global_code_motion() {
   // instructions are pinned into Blocks.  Unpinned instructions can
   // appear in last block in which all their inputs occur.
   visited.Clear();
-  Node_List stack(arena);
-  // Pre-grow the list
-  stack.map((C->unique() >> 1) + 16, NULL);
+  Node_Stack stack(arena, (C->live_nodes() >> 2) + 16); // pre-grow
   if (!schedule_early(visited, stack)) {
     // Bailout without retry
     C->record_method_not_compilable("early schedule failed");
@@ -1363,6 +1406,44 @@ void PhaseCFG::global_code_motion() {
     }
   }
 
+  bool block_size_threshold_ok = false;
+  intptr_t *recalc_pressure_nodes = NULL;
+  if (OptoRegScheduling) {
+    for (uint i = 0; i < number_of_blocks(); i++) {
+      Block* block = get_block(i);
+      if (block->number_of_nodes() > 10) {
+        block_size_threshold_ok = true;
+        break;
+      }
+    }
+  }
+
+  // Enabling the scheduler for register pressure plus finding blocks of size to schedule for it
+  // is key to enabling this feature.
+  PhaseChaitin regalloc(C->unique(), *this, _matcher, true);
+  ResourceArea live_arena;      // Arena for liveness
+  ResourceMark rm_live(&live_arena);
+  PhaseLive live(*this, regalloc._lrg_map.names(), &live_arena, true);
+  PhaseIFG ifg(&live_arena);
+  if (OptoRegScheduling && block_size_threshold_ok) {
+    regalloc.mark_ssa();
+    Compile::TracePhase tp("computeLive", &timers[_t_computeLive]);
+    rm_live.reset_to_mark();           // Reclaim working storage
+    IndexSet::reset_memory(C, &live_arena);
+    uint node_size = regalloc._lrg_map.max_lrg_id();
+    ifg.init(node_size); // Empty IFG
+    regalloc.set_ifg(ifg);
+    regalloc.set_live(live);
+    regalloc.gather_lrg_masks(false);    // Collect LRG masks
+    live.compute(node_size); // Compute liveness
+
+    recalc_pressure_nodes = NEW_RESOURCE_ARRAY(intptr_t, node_size);
+    for (uint i = 0; i < node_size; i++) {
+      recalc_pressure_nodes[i] = 0;
+    }
+  }
+  _regalloc = &regalloc;
+
 #ifndef PRODUCT
   if (trace_opto_pipelining()) {
     tty->print("\n---- Start Local Scheduling ----\n");
@@ -1375,13 +1456,15 @@ void PhaseCFG::global_code_motion() {
   visited.Clear();
   for (uint i = 0; i < number_of_blocks(); i++) {
     Block* block = get_block(i);
-    if (!schedule_local(block, ready_cnt, visited)) {
+    if (!schedule_local(block, ready_cnt, visited, recalc_pressure_nodes)) {
       if (!C->failure_reason_is(C2Compiler::retry_no_subsuming_loads())) {
         C->record_method_not_compilable("local schedule failed");
       }
+      _regalloc = NULL;
       return;
     }
   }
+  _regalloc = NULL;
 
   // If we inserted any instructions between a Call and his CatchNode,
   // clone the instructions on all paths below the Catch.

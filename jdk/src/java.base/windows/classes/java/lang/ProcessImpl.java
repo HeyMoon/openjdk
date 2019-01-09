@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,6 +43,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import jdk.internal.misc.JavaIOFileDescriptorAccess;
+import jdk.internal.misc.SharedSecrets;
+import jdk.internal.ref.CleanerFactory;
+
 /* This class is for the exclusive use of ProcessBuilder.start() to
  * create new processes.
  *
@@ -51,8 +55,8 @@ import java.util.regex.Pattern;
  */
 
 final class ProcessImpl extends Process {
-    private static final sun.misc.JavaIOFileDescriptorAccess fdAccess
-        = sun.misc.SharedSecrets.getJavaIOFileDescriptorAccess();
+    private static final JavaIOFileDescriptorAccess fdAccess
+        = SharedSecrets.getJavaIOFileDescriptorAccess();
 
     // Windows platforms support a forcible kill signal.
     static final boolean SUPPORTS_NORMAL_TERMINATION = false;
@@ -108,38 +112,63 @@ final class ProcessImpl extends Process {
             } else {
                 stdHandles = new long[3];
 
-                if (redirects[0] == Redirect.PIPE)
+                if (redirects[0] == Redirect.PIPE) {
                     stdHandles[0] = -1L;
-                else if (redirects[0] == Redirect.INHERIT)
+                } else if (redirects[0] == Redirect.INHERIT) {
                     stdHandles[0] = fdAccess.getHandle(FileDescriptor.in);
-                else {
+                } else if (redirects[0] instanceof ProcessBuilder.RedirectPipeImpl) {
+                    stdHandles[0] = fdAccess.getHandle(((ProcessBuilder.RedirectPipeImpl) redirects[0]).getFd());
+                } else {
                     f0 = new FileInputStream(redirects[0].file());
                     stdHandles[0] = fdAccess.getHandle(f0.getFD());
                 }
 
-                if (redirects[1] == Redirect.PIPE)
+                if (redirects[1] == Redirect.PIPE) {
                     stdHandles[1] = -1L;
-                else if (redirects[1] == Redirect.INHERIT)
+                } else if (redirects[1] == Redirect.INHERIT) {
                     stdHandles[1] = fdAccess.getHandle(FileDescriptor.out);
-                else {
+                } else if (redirects[1] instanceof ProcessBuilder.RedirectPipeImpl) {
+                    stdHandles[1] = fdAccess.getHandle(((ProcessBuilder.RedirectPipeImpl) redirects[1]).getFd());
+                } else {
                     f1 = newFileOutputStream(redirects[1].file(),
                                              redirects[1].append());
                     stdHandles[1] = fdAccess.getHandle(f1.getFD());
                 }
 
-                if (redirects[2] == Redirect.PIPE)
+                if (redirects[2] == Redirect.PIPE) {
                     stdHandles[2] = -1L;
-                else if (redirects[2] == Redirect.INHERIT)
+                } else if (redirects[2] == Redirect.INHERIT) {
                     stdHandles[2] = fdAccess.getHandle(FileDescriptor.err);
-                else {
+                } else if (redirects[2] instanceof ProcessBuilder.RedirectPipeImpl) {
+                    stdHandles[2] = fdAccess.getHandle(((ProcessBuilder.RedirectPipeImpl) redirects[2]).getFd());
+                } else {
                     f2 = newFileOutputStream(redirects[2].file(),
                                              redirects[2].append());
                     stdHandles[2] = fdAccess.getHandle(f2.getFD());
                 }
             }
 
-            return new ProcessImpl(cmdarray, envblock, dir,
+            Process p = new ProcessImpl(cmdarray, envblock, dir,
                                    stdHandles, redirectErrorStream);
+            if (redirects != null) {
+                // Copy the handles's if they are to be redirected to another process
+                if (stdHandles[0] >= 0
+                        && redirects[0] instanceof ProcessBuilder.RedirectPipeImpl) {
+                    fdAccess.setHandle(((ProcessBuilder.RedirectPipeImpl) redirects[0]).getFd(),
+                            stdHandles[0]);
+                }
+                if (stdHandles[1] >= 0
+                        && redirects[1] instanceof ProcessBuilder.RedirectPipeImpl) {
+                    fdAccess.setHandle(((ProcessBuilder.RedirectPipeImpl) redirects[1]).getFd(),
+                            stdHandles[1]);
+                }
+                if (stdHandles[2] >= 0
+                        && redirects[2] instanceof ProcessBuilder.RedirectPipeImpl) {
+                    fdAccess.setHandle(((ProcessBuilder.RedirectPipeImpl) redirects[2]).getFd(),
+                            stdHandles[2]);
+                }
+            }
+            return p;
         } finally {
             // In theory, close() can throw IOException
             // (although it is rather unlikely to happen here)
@@ -390,6 +419,10 @@ final class ProcessImpl extends Process {
 
         handle = create(cmdstr, envblock, path,
                         stdHandles, redirectErrorStream);
+        // Register a cleaning function to close the handle
+        final long local_handle = handle;    // local to prevent capture of this
+        CleanerFactory.cleaner().register(this, () -> closeHandle(local_handle));
+
         processHandle = ProcessHandleImpl.getInternal(getProcessId0(handle));
 
         java.security.AccessController.doPrivileged(
@@ -410,7 +443,7 @@ final class ProcessImpl extends Process {
                 FileDescriptor stdout_fd = new FileDescriptor();
                 fdAccess.setHandle(stdout_fd, stdHandles[1]);
                 stdout_stream = new BufferedInputStream(
-                    new FileInputStream(stdout_fd));
+                    new PipeInputStream(stdout_fd));
             }
 
             if (stdHandles[2] == -1L)
@@ -418,7 +451,7 @@ final class ProcessImpl extends Process {
             else {
                 FileDescriptor stderr_fd = new FileDescriptor();
                 fdAccess.setHandle(stderr_fd, stdHandles[2]);
-                stderr_stream = new FileInputStream(stderr_fd);
+                stderr_stream = new PipeInputStream(stderr_fd);
             }
 
             return null; }});
@@ -434,10 +467,6 @@ final class ProcessImpl extends Process {
 
     public InputStream getErrorStream() {
         return stderr_stream;
-    }
-
-    protected void finalize() {
-        closeHandle(handle);
     }
 
     private static final int STILL_ACTIVE = getStillActive();
@@ -494,7 +523,7 @@ final class ProcessImpl extends Process {
 
     @Override
     public CompletableFuture<Process> onExit() {
-        return ProcessHandleImpl.completion(getPid(), false)
+        return ProcessHandleImpl.completion(pid(), false)
                 .handleAsync((exitStatus, unusedThrowable) -> this);
     }
 
@@ -521,8 +550,8 @@ final class ProcessImpl extends Process {
     private static native void terminateProcess(long handle);
 
     @Override
-    public long getPid() {
-        return processHandle.getPid();
+    public long pid() {
+        return processHandle.pid();
     }
 
     private static native int getProcessId0(long handle);
@@ -533,6 +562,20 @@ final class ProcessImpl extends Process {
     }
 
     private static native boolean isProcessAlive(long handle);
+
+    /**
+     * The {@code toString} method returns a string consisting of
+     * the native process ID of the process and the exit value of the process.
+     *
+     * @return a string representation of the object.
+     */
+    @Override
+    public String toString() {
+        int exitCode = getExitCodeProcess(handle);
+        return new StringBuilder("Process[pid=").append(pid())
+                .append(", exitValue=").append(exitCode == STILL_ACTIVE ? "\"not exited\"" : exitCode)
+                .append("]").toString();
+    }
 
     /**
      * Create a process using the win32 function CreateProcess.

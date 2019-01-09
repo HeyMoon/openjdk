@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,18 +24,24 @@
 /*
  * @test IsMethodCompilableTest
  * @bug 8007270 8006683 8007288 8022832
- * @library /testlibrary /../../test/lib
- * @modules java.base/sun.misc
- *          java.management
- * @build jdk.test.lib.* sun.hotspot.WhiteBox
- * @build IsMethodCompilableTest
- * @run main ClassFileInstaller sun.hotspot.WhiteBox
- *                              sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main ClassFileInstaller jdk.test.lib.Platform
- * @run main/othervm/timeout=2400 -Xbootclasspath/a:. -Xmixed -XX:-TieredCompilation -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:PerMethodRecompilationCutoff=3 -XX:CompileCommand=compileonly,SimpleTestCase$Helper::* IsMethodCompilableTest
  * @summary testing of WB::isMethodCompilable()
- * @author igor.ignatyev@oracle.com
+ * @requires vm.flavor == "server" & (vm.opt.TieredStopAtLevel == null | vm.opt.TieredStopAtLevel == 4)
+ * @requires !vm.emulatedClient
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ *          java.management
+ *
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *                                sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @run main/othervm/timeout=2400 -XX:-TieredCompilation -Xmixed
+ *      -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
+ *      -XX:PerMethodRecompilationCutoff=3 -XX:-UseCounterDecay
+ *      -XX:CompileCommand=compileonly,compiler.whitebox.SimpleTestCaseHelper::*
+ *      compiler.whitebox.IsMethodCompilableTest
  */
+
+package compiler.whitebox;
 
 import jdk.test.lib.Platform;
 
@@ -77,8 +83,8 @@ public class IsMethodCompilableTest extends CompilerWhiteBoxTest {
     protected void test() throws Exception {
 
         // Only c2 compilations can be disabled through PerMethodRecompilationCutoff
-        if (!Platform.isServer()) {
-            return;
+        if (!Platform.isServer() || Platform.isEmulatedClient()) {
+            throw new Error("TESTBUG: Not server mode");
         }
 
         if (skipXcompOSR()) {

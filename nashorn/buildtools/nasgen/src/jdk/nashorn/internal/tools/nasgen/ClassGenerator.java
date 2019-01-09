@@ -48,20 +48,24 @@ import static jdk.nashorn.internal.tools.nasgen.StringConstants.GET_CLASS_NAME;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.GET_CLASS_NAME_DESC;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.INIT;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.LIST_DESC;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.NATIVESYMBOL_TYPE;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.OBJECT_DESC;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.PROPERTYMAP_DESC;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.PROPERTYMAP_FIELD_NAME;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.PROPERTYMAP_NEWMAP;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.PROPERTYMAP_NEWMAP_DESC;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.PROPERTYMAP_TYPE;
-import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTFUNCTIONIMPL_MAKEFUNCTION;
-import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTFUNCTIONIMPL_MAKEFUNCTION_DESC;
-import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTFUNCTIONIMPL_MAKEFUNCTION_SPECS_DESC;
-import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTFUNCTIONIMPL_TYPE;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTFUNCTION_CREATEBUILTIN;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTFUNCTION_CREATEBUILTIN_DESC;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTFUNCTION_CREATEBUILTIN_SPECS_DESC;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTFUNCTION_SETARITY;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTFUNCTION_SETARITY_DESC;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTFUNCTION_SETDOCUMENTATIONKEY;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTFUNCTION_SETDOCUMENTATIONKEY_DESC;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.SCRIPTFUNCTION_TYPE;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.SETTER_PREFIX;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.SYMBOL_DESC;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.SYMBOL_PREFIX;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.TYPE_OBJECT;
 
 import java.io.BufferedInputStream;
@@ -139,6 +143,9 @@ public class ClassGenerator {
                 try {
                     return super.getCommonSuperClass(type1, type2);
                 } catch (final RuntimeException | LinkageError e) {
+                    if (MemberInfo.isScriptObject(type1) && MemberInfo.isScriptObject(type2)) {
+                        return StringConstants.SCRIPTOBJECT_TYPE;
+                    }
                     return StringConstants.OBJECT_TYPE;
                 }
             }
@@ -273,18 +280,18 @@ public class ClassGenerator {
         addField(cv, name, OBJECT_DESC);
     }
 
-    static void newFunction(final MethodGenerator mi, final String className, final MemberInfo memInfo, final List<MemberInfo> specs) {
+    static void newFunction(final MethodGenerator mi, final String objName, final String className, final MemberInfo memInfo, final List<MemberInfo> specs) {
         final boolean arityFound = (memInfo.getArity() != MemberInfo.DEFAULT_ARITY);
 
-        mi.loadLiteral(memInfo.getName());
-        mi.visitLdcInsn(new Handle(H_INVOKESTATIC, className, memInfo.getJavaName(), memInfo.getJavaDesc()));
+        loadFunctionName(mi, memInfo.getName());
+        mi.visitLdcInsn(new Handle(H_INVOKESTATIC, className, memInfo.getJavaName(), memInfo.getJavaDesc(), false));
 
         assert specs != null;
         if (!specs.isEmpty()) {
             mi.memberInfoArray(className, specs);
-            mi.invokeStatic(SCRIPTFUNCTIONIMPL_TYPE, SCRIPTFUNCTIONIMPL_MAKEFUNCTION, SCRIPTFUNCTIONIMPL_MAKEFUNCTION_SPECS_DESC);
+            mi.invokeStatic(SCRIPTFUNCTION_TYPE, SCRIPTFUNCTION_CREATEBUILTIN, SCRIPTFUNCTION_CREATEBUILTIN_SPECS_DESC);
         } else {
-            mi.invokeStatic(SCRIPTFUNCTIONIMPL_TYPE, SCRIPTFUNCTIONIMPL_MAKEFUNCTION, SCRIPTFUNCTIONIMPL_MAKEFUNCTION_DESC);
+            mi.invokeStatic(SCRIPTFUNCTION_TYPE, SCRIPTFUNCTION_CREATEBUILTIN, SCRIPTFUNCTION_CREATEBUILTIN_DESC);
         }
 
         if (arityFound) {
@@ -292,6 +299,10 @@ public class ClassGenerator {
             mi.push(memInfo.getArity());
             mi.invokeVirtual(SCRIPTFUNCTION_TYPE, SCRIPTFUNCTION_SETARITY, SCRIPTFUNCTION_SETARITY_DESC);
         }
+
+        mi.dup();
+        mi.loadLiteral(memInfo.getDocumentationKey(objName));
+        mi.invokeVirtual(SCRIPTFUNCTION_TYPE, SCRIPTFUNCTION_SETDOCUMENTATIONKEY, SCRIPTFUNCTION_SETDOCUMENTATIONKEY_DESC);
     }
 
     static void linkerAddGetterSetter(final MethodGenerator mi, final String className, final MemberInfo memInfo) {
@@ -300,20 +311,21 @@ public class ClassGenerator {
         // dup of Collection instance
         mi.dup();
 
-        // property = AccessorProperty.create(key, flags, getter, setter);
-        mi.loadLiteral(propertyName);
+        // Load property name, converting to Symbol if it begins with "@@"
+        loadPropertyKey(mi, propertyName);
         // setup flags
         mi.push(memInfo.getAttributes());
         // setup getter method handle
         String javaName = GETTER_PREFIX + memInfo.getJavaName();
-        mi.visitLdcInsn(new Handle(H_INVOKEVIRTUAL, className, javaName, getterDesc(memInfo)));
+        mi.visitLdcInsn(new Handle(H_INVOKEVIRTUAL, className, javaName, getterDesc(memInfo), false));
         // setup setter method handle
         if (memInfo.isFinal()) {
             mi.pushNull();
         } else {
             javaName = SETTER_PREFIX + memInfo.getJavaName();
-            mi.visitLdcInsn(new Handle(H_INVOKEVIRTUAL, className, javaName, setterDesc(memInfo)));
+            mi.visitLdcInsn(new Handle(H_INVOKEVIRTUAL, className, javaName, setterDesc(memInfo), false));
         }
+        // property = AccessorProperty.create(key, flags, getter, setter);
         mi.invokeStatic(ACCESSORPROPERTY_TYPE, ACCESSORPROPERTY_CREATE, ACCESSORPROPERTY_CREATE_DESC);
         // boolean Collection.add(property)
         mi.invokeInterface(COLLECTION_TYPE, COLLECTION_ADD, COLLECTION_ADD_DESC);
@@ -328,20 +340,21 @@ public class ClassGenerator {
         // dup of Collection instance
         mi.dup();
 
-        // property = AccessorProperty.create(key, flags, getter, setter);
-        mi.loadLiteral(propertyName);
+        // Load property name, converting to Symbol if it begins with "@@"
+        loadPropertyKey(mi, propertyName);
         // setup flags
         mi.push(getter.getAttributes());
         // setup getter method handle
         mi.visitLdcInsn(new Handle(H_INVOKESTATIC, className,
-                getter.getJavaName(), getter.getJavaDesc()));
+                getter.getJavaName(), getter.getJavaDesc(), false));
         // setup setter method handle
         if (setter == null) {
             mi.pushNull();
         } else {
             mi.visitLdcInsn(new Handle(H_INVOKESTATIC, className,
-                    setter.getJavaName(), setter.getJavaDesc()));
+                    setter.getJavaName(), setter.getJavaDesc(), false));
         }
+        // property = AccessorProperty.create(key, flags, getter, setter);
         mi.invokeStatic(ACCESSORPROPERTY_TYPE, ACCESSORPROPERTY_CREATE, ACCESSORPROPERTY_CREATE_DESC);
         // boolean Collection.add(property)
         mi.invokeInterface(COLLECTION_TYPE, COLLECTION_ADD, COLLECTION_ADD_DESC);
@@ -358,6 +371,22 @@ public class ClassGenerator {
 
     static ScriptClassInfo getScriptClassInfo(final byte[] classBuf) {
         return getScriptClassInfo(new ClassReader(classBuf));
+    }
+
+    private static void loadFunctionName(final MethodGenerator mi, final String propertyName) {
+        if (propertyName.startsWith(SYMBOL_PREFIX)) {
+            mi.loadLiteral("Symbol[" + propertyName.substring(2) + "]");
+        } else {
+            mi.loadLiteral(propertyName);
+        }
+    }
+
+    private static void loadPropertyKey(final MethodGenerator mi, final String propertyName) {
+        if (propertyName.startsWith(SYMBOL_PREFIX)) {
+            mi.getStatic(NATIVESYMBOL_TYPE, propertyName.substring(2), SYMBOL_DESC);
+        } else {
+            mi.loadLiteral(propertyName);
+        }
     }
 
     private static ScriptClassInfo getScriptClassInfo(final ClassReader reader) {

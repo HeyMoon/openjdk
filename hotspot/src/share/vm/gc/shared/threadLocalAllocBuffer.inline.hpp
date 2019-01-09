@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 
 #include "gc/shared/collectedHeap.hpp"
 #include "gc/shared/threadLocalAllocBuffer.hpp"
+#include "logging/log.hpp"
 #include "runtime/thread.hpp"
 #include "utilities/copy.hpp"
 
@@ -60,24 +61,18 @@ inline size_t ThreadLocalAllocBuffer::compute_size(size_t obj_size) {
   // unsafe_max_tlab_alloc is just a hint.
   const size_t available_size = Universe::heap()->unsafe_max_tlab_alloc(myThread()) /
                                                   HeapWordSize;
-  size_t new_tlab_size = MIN2(available_size, desired_size() + aligned_obj_size);
+  size_t new_tlab_size = MIN3(available_size, desired_size() + aligned_obj_size, max_size());
 
   // Make sure there's enough room for object and filler int[].
   const size_t obj_plus_filler_size = aligned_obj_size + alignment_reserve();
   if (new_tlab_size < obj_plus_filler_size) {
     // If there isn't enough room for the allocation, return failure.
-    if (PrintTLAB && Verbose) {
-      gclog_or_tty->print_cr("ThreadLocalAllocBuffer::compute_size(" SIZE_FORMAT ")"
-                    " returns failure",
-                    obj_size);
-    }
+    log_trace(gc, tlab)("ThreadLocalAllocBuffer::compute_size(" SIZE_FORMAT ") returns failure",
+                        obj_size);
     return 0;
   }
-  if (PrintTLAB && Verbose) {
-    gclog_or_tty->print_cr("ThreadLocalAllocBuffer::compute_size(" SIZE_FORMAT ")"
-                  " returns " SIZE_FORMAT,
-                  obj_size, new_tlab_size);
-  }
+  log_trace(gc, tlab)("ThreadLocalAllocBuffer::compute_size(" SIZE_FORMAT ") returns " SIZE_FORMAT,
+                      obj_size, new_tlab_size);
   return new_tlab_size;
 }
 
@@ -91,15 +86,12 @@ void ThreadLocalAllocBuffer::record_slow_allocation(size_t obj_size) {
 
   _slow_allocations++;
 
-  if (PrintTLAB && Verbose) {
-    Thread* thrd = myThread();
-    gclog_or_tty->print("TLAB: %s thread: " INTPTR_FORMAT " [id: %2d]"
-                        " obj: " SIZE_FORMAT
-                        " free: " SIZE_FORMAT
-                        " waste: " SIZE_FORMAT "\n",
-                        "slow", p2i(thrd), thrd->osthread()->thread_id(),
-                        obj_size, free(), refill_waste_limit());
-  }
+  log_develop_trace(gc, tlab)("TLAB: %s thread: " INTPTR_FORMAT " [id: %2d]"
+                              " obj: " SIZE_FORMAT
+                              " free: " SIZE_FORMAT
+                              " waste: " SIZE_FORMAT,
+                              "slow", p2i(myThread()), myThread()->osthread()->thread_id(),
+                              obj_size, free(), refill_waste_limit());
 }
 
 #endif // SHARE_VM_GC_SHARED_THREADLOCALALLOCBUFFER_INLINE_HPP

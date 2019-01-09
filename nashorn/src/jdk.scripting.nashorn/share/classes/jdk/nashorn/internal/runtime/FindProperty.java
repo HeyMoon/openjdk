@@ -29,7 +29,7 @@ import static jdk.nashorn.internal.lookup.Lookup.MH;
 import static jdk.nashorn.internal.runtime.UnwarrantedOptimismException.isValid;
 
 import java.lang.invoke.MethodHandle;
-import jdk.internal.dynalink.linker.LinkRequest;
+import jdk.dynalink.linker.LinkRequest;
 import jdk.nashorn.internal.codegen.ObjectClassGenerator;
 import jdk.nashorn.internal.objects.Global;
 
@@ -127,7 +127,7 @@ public final class FindProperty {
     // Fold an accessor getter into the method handle of a user accessor property.
     private MethodHandle insertAccessorsGetter(final UserAccessorProperty uap, final LinkRequest request, final MethodHandle mh) {
         MethodHandle superGetter = uap.getAccessorsGetter();
-        if (isInherited()) {
+        if (!isSelf()) {
             superGetter = ScriptObject.addProtoFilter(superGetter, getProtoChainLength());
         }
         if (request != null && !(request.getReceiver() instanceof ScriptObject)) {
@@ -163,7 +163,7 @@ public final class FindProperty {
      * @return appropriate receiver
      */
     public ScriptObject getGetterReceiver() {
-        return property != null && property instanceof UserAccessorProperty ? self : prototype;
+        return property != null && property.isAccessorProperty() ? self : prototype;
     }
 
     /**
@@ -183,11 +183,12 @@ public final class FindProperty {
     }
 
     /**
-     * Check if the property found was inherited, i.e. not directly in the self
-     * @return true if inherited property
+     * Check if the property found was inherited from a prototype and it is an ordinary
+     * property (one that has no accessor function).
+     * @return true if the found property is an inherited ordinary property
      */
-    public boolean isInherited() {
-        return self != prototype;
+    public boolean isInheritedOrdinaryProperty() {
+        return !isSelf() && !getProperty().isAccessorProperty();
     }
 
     /**
@@ -218,13 +219,6 @@ public final class FindProperty {
      * Get the property value from self as object.
      * @return the property value
      */
-    public long getLongValue() {
-        return property.getLongValue(getGetterReceiver(), getOwner());
-    }
-    /**
-     * Get the property value from self as object.
-     * @return the property value
-     */
     public double getDoubleValue() {
         return property.getDoubleValue(getGetterReceiver(), getOwner());
     }
@@ -243,16 +237,6 @@ public final class FindProperty {
      * @param strict strict flag
      */
     public void setValue(final int value, final boolean strict) {
-        property.setValue(getSetterReceiver(), getOwner(), value, strict);
-    }
-
-    /**
-     * Set the property value in self.
-     *
-     * @param value the new value
-     * @param strict strict flag
-     */
-    public void setValue(final long value, final boolean strict) {
         property.setValue(getSetterReceiver(), getOwner(), value, strict);
     }
 
@@ -297,4 +281,3 @@ public final class FindProperty {
     }
 
 }
-

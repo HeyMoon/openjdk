@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,18 +29,22 @@
 #include "runtime/globals.hpp"
 #include "runtime/globals_extension.hpp"
 #include "runtime/commandLineFlagConstraintList.hpp"
+#include "runtime/commandLineFlagWriteableList.hpp"
 #include "runtime/commandLineFlagRangeList.hpp"
 #include "runtime/os.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "trace/tracing.hpp"
+#include "utilities/defaultStream.hpp"
 #include "utilities/macros.hpp"
 #include "utilities/ostream.hpp"
-#include "utilities/top.hpp"
 #if INCLUDE_ALL_GCS
 #include "gc/g1/g1_globals.hpp"
 #endif // INCLUDE_ALL_GCS
 #ifdef COMPILER1
 #include "c1/c1_globals.hpp"
+#endif
+#if INCLUDE_JVMCI
+#include "jvmci/jvmci_globals.hpp"
 #endif
 #ifdef COMPILER2
 #include "opto/c2_globals.hpp"
@@ -49,29 +53,31 @@
 #include "shark/shark_globals.hpp"
 #endif
 
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
-
 RUNTIME_FLAGS(MATERIALIZE_DEVELOPER_FLAG, \
               MATERIALIZE_PD_DEVELOPER_FLAG, \
               MATERIALIZE_PRODUCT_FLAG, \
               MATERIALIZE_PD_PRODUCT_FLAG, \
               MATERIALIZE_DIAGNOSTIC_FLAG, \
+              MATERIALIZE_PD_DIAGNOSTIC_FLAG, \
               MATERIALIZE_EXPERIMENTAL_FLAG, \
               MATERIALIZE_NOTPRODUCT_FLAG, \
               MATERIALIZE_MANAGEABLE_FLAG, \
               MATERIALIZE_PRODUCT_RW_FLAG, \
               MATERIALIZE_LP64_PRODUCT_FLAG, \
               IGNORE_RANGE, \
-              IGNORE_CONSTRAINT)
+              IGNORE_CONSTRAINT, \
+              IGNORE_WRITEABLE)
 
 RUNTIME_OS_FLAGS(MATERIALIZE_DEVELOPER_FLAG, \
                  MATERIALIZE_PD_DEVELOPER_FLAG, \
                  MATERIALIZE_PRODUCT_FLAG, \
                  MATERIALIZE_PD_PRODUCT_FLAG, \
                  MATERIALIZE_DIAGNOSTIC_FLAG, \
+                 MATERIALIZE_PD_DIAGNOSTIC_FLAG, \
                  MATERIALIZE_NOTPRODUCT_FLAG, \
                  IGNORE_RANGE, \
-                 IGNORE_CONSTRAINT)
+                 IGNORE_CONSTRAINT, \
+                 IGNORE_WRITEABLE)
 
 ARCH_FLAGS(MATERIALIZE_DEVELOPER_FLAG, \
            MATERIALIZE_PRODUCT_FLAG, \
@@ -79,9 +85,60 @@ ARCH_FLAGS(MATERIALIZE_DEVELOPER_FLAG, \
            MATERIALIZE_EXPERIMENTAL_FLAG, \
            MATERIALIZE_NOTPRODUCT_FLAG, \
            IGNORE_RANGE, \
-           IGNORE_CONSTRAINT)
+           IGNORE_CONSTRAINT, \
+           IGNORE_WRITEABLE)
 
 MATERIALIZE_FLAGS_EXT
+
+#define DEFAULT_RANGE_STR_CHUNK_SIZE 64
+static char* create_range_str(const char *fmt, ...) {
+  static size_t string_length = DEFAULT_RANGE_STR_CHUNK_SIZE;
+  static char* range_string = NEW_C_HEAP_ARRAY(char, string_length, mtLogging);
+
+  int size_needed = 0;
+  do {
+    va_list args;
+    va_start(args, fmt);
+    size_needed = jio_vsnprintf(range_string, string_length, fmt, args);
+    va_end(args);
+
+    if (size_needed < 0) {
+      string_length += DEFAULT_RANGE_STR_CHUNK_SIZE;
+      range_string = REALLOC_C_HEAP_ARRAY(char, range_string, string_length, mtLogging);
+      guarantee(range_string != NULL, "create_range_str string should not be NULL");
+    }
+  } while (size_needed < 0);
+
+  return range_string;
+}
+
+const char* Flag::get_int_default_range_str() {
+  return create_range_str("[ " INT32_FORMAT_W(-25) " ... " INT32_FORMAT_W(25) " ]", INT_MIN, INT_MAX);
+}
+
+const char* Flag::get_uint_default_range_str() {
+  return create_range_str("[ " UINT32_FORMAT_W(-25) " ... " UINT32_FORMAT_W(25) " ]", 0, UINT_MAX);
+}
+
+const char* Flag::get_intx_default_range_str() {
+  return create_range_str("[ " INTX_FORMAT_W(-25) " ... " INTX_FORMAT_W(25) " ]", min_intx, max_intx);
+}
+
+const char* Flag::get_uintx_default_range_str() {
+  return create_range_str("[ " UINTX_FORMAT_W(-25) " ... " UINTX_FORMAT_W(25) " ]", 0, max_uintx);
+}
+
+const char* Flag::get_uint64_t_default_range_str() {
+  return create_range_str("[ " UINT64_FORMAT_W(-25) " ... " UINT64_FORMAT_W(25) " ]", 0, uint64_t(max_juint));
+}
+
+const char* Flag::get_size_t_default_range_str() {
+  return create_range_str("[ " SIZE_FORMAT_W(-25) " ... " SIZE_FORMAT_W(25) " ]", 0, SIZE_MAX);
+}
+
+const char* Flag::get_double_default_range_str() {
+  return create_range_str("[ %-25.3f ... %25.3f ]", DBL_MIN, DBL_MAX);
+}
 
 static bool is_product_build() {
 #ifdef PRODUCT
@@ -91,10 +148,35 @@ static bool is_product_build() {
 #endif
 }
 
-void Flag::check_writable() {
+Flag::Error Flag::check_writable(bool changed) {
   if (is_constant_in_binary()) {
-    fatal(err_msg("flag is constant: %s", _name));
+    fatal("flag is constant: %s", _name);
   }
+
+  Flag::Error error = Flag::SUCCESS;
+  if (changed) {
+    CommandLineFlagWriteable* writeable = CommandLineFlagWriteableList::find(_name);
+    if (writeable) {
+      if (writeable->is_writeable() == false) {
+        switch (writeable->type())
+        {
+          case CommandLineFlagWriteable::Once:
+            error = Flag::SET_ONLY_ONCE;
+            jio_fprintf(defaultStream::error_stream(), "Error: %s may not be set more than once\n", _name);
+            break;
+          case CommandLineFlagWriteable::CommandLineOnly:
+            error = Flag::COMMAND_LINE_ONLY;
+            jio_fprintf(defaultStream::error_stream(), "Error: %s may be modified only from commad line\n", _name);
+            break;
+          default:
+            ShouldNotReachHere();
+            break;
+        }
+      }
+      writeable->mark_once();
+    }
+  }
+  return error;
 }
 
 bool Flag::is_bool() const {
@@ -105,9 +187,12 @@ bool Flag::get_bool() const {
   return *((bool*) _addr);
 }
 
-void Flag::set_bool(bool value) {
-  check_writable();
-  *((bool*) _addr) = value;
+Flag::Error Flag::set_bool(bool value) {
+  Flag::Error error = check_writable(value!=get_bool());
+  if (error == Flag::SUCCESS) {
+    *((bool*) _addr) = value;
+  }
+  return error;
 }
 
 bool Flag::is_int() const {
@@ -118,9 +203,12 @@ int Flag::get_int() const {
   return *((int*) _addr);
 }
 
-void Flag::set_int(int value) {
-  check_writable();
-  *((int*) _addr) = value;
+Flag::Error Flag::set_int(int value) {
+  Flag::Error error = check_writable(value!=get_int());
+  if (error == Flag::SUCCESS) {
+    *((int*) _addr) = value;
+  }
+  return error;
 }
 
 bool Flag::is_uint() const {
@@ -131,9 +219,12 @@ uint Flag::get_uint() const {
   return *((uint*) _addr);
 }
 
-void Flag::set_uint(uint value) {
-  check_writable();
-  *((uint*) _addr) = value;
+Flag::Error Flag::set_uint(uint value) {
+  Flag::Error error = check_writable(value!=get_uint());
+  if (error == Flag::SUCCESS) {
+    *((uint*) _addr) = value;
+  }
+  return error;
 }
 
 bool Flag::is_intx() const {
@@ -144,9 +235,12 @@ intx Flag::get_intx() const {
   return *((intx*) _addr);
 }
 
-void Flag::set_intx(intx value) {
-  check_writable();
-  *((intx*) _addr) = value;
+Flag::Error Flag::set_intx(intx value) {
+  Flag::Error error = check_writable(value!=get_intx());
+  if (error == Flag::SUCCESS) {
+    *((intx*) _addr) = value;
+  }
+  return error;
 }
 
 bool Flag::is_uintx() const {
@@ -157,9 +251,12 @@ uintx Flag::get_uintx() const {
   return *((uintx*) _addr);
 }
 
-void Flag::set_uintx(uintx value) {
-  check_writable();
-  *((uintx*) _addr) = value;
+Flag::Error Flag::set_uintx(uintx value) {
+  Flag::Error error = check_writable(value!=get_uintx());
+  if (error == Flag::SUCCESS) {
+    *((uintx*) _addr) = value;
+  }
+  return error;
 }
 
 bool Flag::is_uint64_t() const {
@@ -170,9 +267,12 @@ uint64_t Flag::get_uint64_t() const {
   return *((uint64_t*) _addr);
 }
 
-void Flag::set_uint64_t(uint64_t value) {
-  check_writable();
-  *((uint64_t*) _addr) = value;
+Flag::Error Flag::set_uint64_t(uint64_t value) {
+  Flag::Error error = check_writable(value!=get_uint64_t());
+  if (error == Flag::SUCCESS) {
+    *((uint64_t*) _addr) = value;
+  }
+  return error;
 }
 
 bool Flag::is_size_t() const {
@@ -183,9 +283,12 @@ size_t Flag::get_size_t() const {
   return *((size_t*) _addr);
 }
 
-void Flag::set_size_t(size_t value) {
-  check_writable();
-  *((size_t*) _addr) = value;
+Flag::Error Flag::set_size_t(size_t value) {
+  Flag::Error error = check_writable(value!=get_size_t());
+  if (error == Flag::SUCCESS) {
+    *((size_t*) _addr) = value;
+  }
+  return error;
 }
 
 bool Flag::is_double() const {
@@ -196,9 +299,12 @@ double Flag::get_double() const {
   return *((double*) _addr);
 }
 
-void Flag::set_double(double value) {
-  check_writable();
-  *((double*) _addr) = value;
+Flag::Error Flag::set_double(double value) {
+  Flag::Error error = check_writable(value!=get_double());
+  if (error == Flag::SUCCESS) {
+    *((double*) _addr) = value;
+  }
+  return error;
 }
 
 bool Flag::is_ccstr() const {
@@ -213,9 +319,12 @@ ccstr Flag::get_ccstr() const {
   return *((ccstr*) _addr);
 }
 
-void Flag::set_ccstr(ccstr value) {
-  check_writable();
-  *((ccstr*) _addr) = value;
+Flag::Error Flag::set_ccstr(ccstr value) {
+  Flag::Error error = check_writable(value!=get_ccstr());
+  if (error == Flag::SUCCESS) {
+    *((ccstr*) _addr) = value;
+  }
+  return error;
 }
 
 
@@ -225,7 +334,8 @@ Flag::Flags Flag::get_origin() {
 
 void Flag::set_origin(Flags origin) {
   assert((origin & VALUE_ORIGIN_MASK) == origin, "sanity");
-  _flags = Flags((_flags & ~VALUE_ORIGIN_MASK) | origin);
+  Flags new_origin = Flags((origin == COMMAND_LINE) ? Flags(origin | ORIG_COMMAND_LINE) : origin);
+  _flags = Flags((_flags & ~VALUE_ORIGIN_MASK) | new_origin);
 }
 
 bool Flag::is_default() {
@@ -237,7 +347,11 @@ bool Flag::is_ergonomic() {
 }
 
 bool Flag::is_command_line() {
-  return (get_origin() == COMMAND_LINE);
+  return (_flags & ORIG_COMMAND_LINE) != 0;
+}
+
+void Flag::set_command_line() {
+  _flags = Flags(_flags | ORIG_COMMAND_LINE);
 }
 
 bool Flag::is_product() const {
@@ -305,31 +419,36 @@ void Flag::unlock_diagnostic() {
   _flags = Flags(_flags & ~KIND_DIAGNOSTIC);
 }
 
-// Get custom message for this locked flag, or return NULL if
-// none is available.
-void Flag::get_locked_message(char* buf, int buflen) const {
+// Get custom message for this locked flag, or NULL if
+// none is available. Returns message type produced.
+Flag::MsgType Flag::get_locked_message(char* buf, int buflen) const {
   buf[0] = '\0';
   if (is_diagnostic() && !is_unlocked()) {
-    jio_snprintf(buf, buflen, "Error: VM option '%s' is diagnostic and must be enabled via -XX:+UnlockDiagnosticVMOptions.\n",
-                 _name);
-    return;
+    jio_snprintf(buf, buflen,
+                 "Error: VM option '%s' is diagnostic and must be enabled via -XX:+UnlockDiagnosticVMOptions.\n"
+                 "Error: The unlock option must precede '%s'.\n",
+                 _name, _name);
+    return Flag::DIAGNOSTIC_FLAG_BUT_LOCKED;
   }
   if (is_experimental() && !is_unlocked()) {
-    jio_snprintf(buf, buflen, "Error: VM option '%s' is experimental and must be enabled via -XX:+UnlockExperimentalVMOptions.\n",
-                 _name);
-    return;
+    jio_snprintf(buf, buflen,
+                 "Error: VM option '%s' is experimental and must be enabled via -XX:+UnlockExperimentalVMOptions.\n"
+                 "Error: The unlock option must precede '%s'.\n",
+                 _name, _name);
+    return Flag::EXPERIMENTAL_FLAG_BUT_LOCKED;
   }
   if (is_develop() && is_product_build()) {
     jio_snprintf(buf, buflen, "Error: VM option '%s' is develop and is available only in debug version of VM.\n",
                  _name);
-    return;
+    return Flag::DEVELOPER_FLAG_BUT_PRODUCT_BUILD;
   }
   if (is_notproduct() && is_product_build()) {
     jio_snprintf(buf, buflen, "Error: VM option '%s' is notproduct and is available only in debug version of VM.\n",
                  _name);
-    return;
+    return Flag::NOTPRODUCT_FLAG_BUT_PRODUCT_BUILD;
   }
   get_locked_message_ext(buf, buflen);
+  return Flag::NONE;
 }
 
 bool Flag::is_writeable() const {
@@ -343,11 +462,6 @@ bool Flag::is_external() const {
   return is_manageable() || is_external_ext();
 }
 
-
-// Length of format string (e.g. "%.1234s") for printing ccstr below
-#define FORMAT_BUFFER_LEN 16
-
-PRAGMA_FORMAT_NONLITERAL_IGNORED_EXTERNAL
 void Flag::print_on(outputStream* st, bool withComments, bool printRanges) {
   // Don't print notproduct and develop flags in a product build.
   if (is_constant_in_binary()) {
@@ -355,49 +469,57 @@ void Flag::print_on(outputStream* st, bool withComments, bool printRanges) {
   }
 
   if (!printRanges) {
+    // Use some named constants to make code more readable.
+    const unsigned int nSpaces    = 10;
+    const unsigned int maxFlagLen = 40 + nSpaces;
 
-    st->print("%9s %-40s %c= ", _type, _name, (!is_default() ? ':' : ' '));
+    // The print below assumes that the flag name is 40 characters or less.
+    // This works for most flags, but there are exceptions. Our longest flag
+    // name right now is UseAdaptiveGenerationSizePolicyAtMajorCollection and
+    // its minor collection buddy. These are 48 characters. We use a buffer of
+    // nSpaces spaces below to adjust the space between the flag value and the
+    // column of flag type and origin that is printed in the end of the line.
+    char spaces[nSpaces + 1] = "          ";
+    st->print("%9s %-*s = ", _type, maxFlagLen-nSpaces, _name);
 
     if (is_bool()) {
-      st->print("%-16s", get_bool() ? "true" : "false");
+      st->print("%-20s", get_bool() ? "true" : "false");
     } else if (is_int()) {
-      st->print("%-16d", get_int());
+      st->print("%-20d", get_int());
     } else if (is_uint()) {
-      st->print("%-16u", get_uint());
+      st->print("%-20u", get_uint());
     } else if (is_intx()) {
-      st->print("%-16ld", get_intx());
+      st->print(INTX_FORMAT_W(-20), get_intx());
     } else if (is_uintx()) {
-      st->print("%-16lu", get_uintx());
+      st->print(UINTX_FORMAT_W(-20), get_uintx());
     } else if (is_uint64_t()) {
-      st->print("%-16lu", get_uint64_t());
+      st->print(UINT64_FORMAT_W(-20), get_uint64_t());
     } else if (is_size_t()) {
-      st->print(SIZE_FORMAT_W(-16), get_size_t());
+      st->print(SIZE_FORMAT_W(-20), get_size_t());
     } else if (is_double()) {
-      st->print("%-16f", get_double());
+      st->print("%-20f", get_double());
     } else if (is_ccstr()) {
       const char* cp = get_ccstr();
       if (cp != NULL) {
         const char* eol;
         while ((eol = strchr(cp, '\n')) != NULL) {
-          char format_buffer[FORMAT_BUFFER_LEN];
           size_t llen = pointer_delta(eol, cp, sizeof(char));
-          jio_snprintf(format_buffer, FORMAT_BUFFER_LEN,
-                       "%%." SIZE_FORMAT "s", llen);
-          PRAGMA_DIAG_PUSH
-          PRAGMA_FORMAT_NONLITERAL_IGNORED_INTERNAL
-          st->print(format_buffer, cp);
-          PRAGMA_DIAG_POP
+          st->print("%.*s", (int)llen, cp);
           st->cr();
           cp = eol+1;
           st->print("%5s %-35s += ", "", _name);
         }
-        st->print("%-16s", cp);
+        st->print("%-20s", cp);
       }
-      else st->print("%-16s", "");
+      else st->print("%-20s", "");
     }
-
-    st->print("%-20s", " ");
-    print_kind(st);
+    // Make sure we do not punch a '\0' at a negative char array index.
+    unsigned int nameLen = (unsigned int)strlen(_name);
+    if (nameLen <= maxFlagLen) {
+      spaces[maxFlagLen - MAX2(maxFlagLen-nSpaces, nameLen)] = '\0';
+      st->print("%s", spaces);
+    }
+    print_kind_and_origin(st);
 
 #ifndef PRODUCT
     if (withComments) {
@@ -408,35 +530,49 @@ void Flag::print_on(outputStream* st, bool withComments, bool printRanges) {
     st->cr();
 
   } else if (!is_bool() && !is_ccstr()) {
+    st->print("%9s %-50s ", _type, _name);
 
-    if (printRanges) {
+    RangeStrFunc func = NULL;
+    if (is_int()) {
+      func = Flag::get_int_default_range_str;
+    } else if (is_uint()) {
+      func = Flag::get_uint_default_range_str;
+    } else if (is_intx()) {
+      func = Flag::get_intx_default_range_str;
+    } else if (is_uintx()) {
+      func = Flag::get_uintx_default_range_str;
+    } else if (is_uint64_t()) {
+      func = Flag::get_uint64_t_default_range_str;
+    } else if (is_size_t()) {
+      func = Flag::get_size_t_default_range_str;
+    } else if (is_double()) {
+      func = Flag::get_double_default_range_str;
+    } else {
+      ShouldNotReachHere();
+    }
+    CommandLineFlagRangeList::print(st, _name, func);
 
-      st->print("%9s %-50s ", _type, _name);
-
-      CommandLineFlagRangeList::print(_name, st, true);
-
-      st->print(" %-20s", " ");
-      print_kind(st);
+    st->print(" %-16s", " ");
+    print_kind_and_origin(st);
 
 #ifndef PRODUCT
-      if (withComments) {
-        st->print("%s", _doc);
-      }
+    if (withComments) {
+      st->print("%s", _doc);
+    }
 #endif
 
-      st->cr();
-
-    }
+    st->cr();
   }
 }
 
-void Flag::print_kind(outputStream* st) {
+void Flag::print_kind_and_origin(outputStream* st) {
   struct Data {
     int flag;
     const char* name;
   };
 
   Data data[] = {
+      { KIND_JVMCI, "JVMCI" },
       { KIND_C1, "C1" },
       { KIND_C2, "C2" },
       { KIND_ARCH, "ARCH" },
@@ -455,23 +591,58 @@ void Flag::print_kind(outputStream* st) {
   };
 
   if ((_flags & KIND_MASK) != 0) {
-    st->print("{");
     bool is_first = true;
+    const size_t buffer_size = 64;
+    size_t buffer_used = 0;
+    char kind[buffer_size];
 
+    jio_snprintf(kind, buffer_size, "{");
+    buffer_used++;
     for (int i = 0; data[i].flag != -1; i++) {
       Data d = data[i];
       if ((_flags & d.flag) != 0) {
         if (is_first) {
           is_first = false;
         } else {
-          st->print(" ");
+          assert(buffer_used + 1 < buffer_size, "Too small buffer");
+          jio_snprintf(kind + buffer_used, buffer_size - buffer_used, " ");
+          buffer_used++;
         }
-        st->print("%s", d.name);
+        size_t length = strlen(d.name);
+        assert(buffer_used + length < buffer_size, "Too small buffer");
+        jio_snprintf(kind + buffer_used, buffer_size - buffer_used, "%s", d.name);
+        buffer_used += length;
       }
     }
-
-    st->print("}");
+    assert(buffer_used + 2 <= buffer_size, "Too small buffer");
+    jio_snprintf(kind + buffer_used, buffer_size - buffer_used, "}");
+    st->print("%20s", kind);
   }
+
+  int origin = _flags & VALUE_ORIGIN_MASK;
+  st->print(" {");
+  switch(origin) {
+    case DEFAULT:
+      st->print("default"); break;
+    case COMMAND_LINE:
+      st->print("command line"); break;
+    case ENVIRON_VAR:
+      st->print("environment"); break;
+    case CONFIG_FILE:
+      st->print("config file"); break;
+    case MANAGEMENT:
+      st->print("management"); break;
+    case ERGONOMIC:
+      if (_flags & ORIG_COMMAND_LINE) {
+        st->print("command line, ");
+      }
+      st->print("ergonomic"); break;
+    case ATTACH_ON_DEMAND:
+      st->print("attach"); break;
+    case INTERNAL:
+      st->print("internal"); break;
+  }
+  st->print("}");
 }
 
 void Flag::print_as_flag(outputStream* st) {
@@ -515,54 +686,79 @@ void Flag::print_as_flag(outputStream* st) {
   }
 }
 
+const char* Flag::flag_error_str(Flag::Error error) {
+  switch (error) {
+    case Flag::MISSING_NAME: return "MISSING_NAME";
+    case Flag::MISSING_VALUE: return "MISSING_VALUE";
+    case Flag::NON_WRITABLE: return "NON_WRITABLE";
+    case Flag::OUT_OF_BOUNDS: return "OUT_OF_BOUNDS";
+    case Flag::VIOLATES_CONSTRAINT: return "VIOLATES_CONSTRAINT";
+    case Flag::INVALID_FLAG: return "INVALID_FLAG";
+    case Flag::ERR_OTHER: return "ERR_OTHER";
+    case Flag::SUCCESS: return "SUCCESS";
+    default: ShouldNotReachHere(); return "NULL";
+  }
+}
+
 // 4991491 do not "optimize out" the was_set false values: omitting them
 // tickles a Microsoft compiler bug causing flagTable to be malformed
 
-#define NAME(name) NOT_PRODUCT(&name) PRODUCT_ONLY(&CONST_##name)
+#define RUNTIME_PRODUCT_FLAG_STRUCT(     type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_PRODUCT) },
+#define RUNTIME_PD_PRODUCT_FLAG_STRUCT(  type, name,        doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_PRODUCT | Flag::KIND_PLATFORM_DEPENDENT) },
+#define RUNTIME_DIAGNOSTIC_FLAG_STRUCT(  type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_DIAGNOSTIC) },
+#define RUNTIME_PD_DIAGNOSTIC_FLAG_STRUCT(type, name,       doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_DIAGNOSTIC | Flag::KIND_PLATFORM_DEPENDENT) },
+#define RUNTIME_EXPERIMENTAL_FLAG_STRUCT(type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_EXPERIMENTAL) },
+#define RUNTIME_MANAGEABLE_FLAG_STRUCT(  type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_MANAGEABLE) },
+#define RUNTIME_PRODUCT_RW_FLAG_STRUCT(  type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_PRODUCT | Flag::KIND_READ_WRITE) },
+#define RUNTIME_DEVELOP_FLAG_STRUCT(     type, name, value, doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_DEVELOP) },
+#define RUNTIME_PD_DEVELOP_FLAG_STRUCT(  type, name,        doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_DEVELOP | Flag::KIND_PLATFORM_DEPENDENT) },
+#define RUNTIME_NOTPRODUCT_FLAG_STRUCT(  type, name, value, doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_NOT_PRODUCT) },
 
-#define RUNTIME_PRODUCT_FLAG_STRUCT(     type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_PRODUCT) },
-#define RUNTIME_PD_PRODUCT_FLAG_STRUCT(  type, name,        doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_PRODUCT | Flag::KIND_PLATFORM_DEPENDENT) },
-#define RUNTIME_DIAGNOSTIC_FLAG_STRUCT(  type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_DIAGNOSTIC) },
-#define RUNTIME_EXPERIMENTAL_FLAG_STRUCT(type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_EXPERIMENTAL) },
-#define RUNTIME_MANAGEABLE_FLAG_STRUCT(  type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_MANAGEABLE) },
-#define RUNTIME_PRODUCT_RW_FLAG_STRUCT(  type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_PRODUCT | Flag::KIND_READ_WRITE) },
-#define RUNTIME_DEVELOP_FLAG_STRUCT(     type, name, value, doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_DEVELOP) },
-#define RUNTIME_PD_DEVELOP_FLAG_STRUCT(  type, name,        doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_DEVELOP | Flag::KIND_PLATFORM_DEPENDENT) },
-#define RUNTIME_NOTPRODUCT_FLAG_STRUCT(  type, name, value, doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_NOT_PRODUCT) },
+#define JVMCI_PRODUCT_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_JVMCI | Flag::KIND_PRODUCT) },
+#define JVMCI_PD_PRODUCT_FLAG_STRUCT(    type, name,        doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_JVMCI | Flag::KIND_PRODUCT | Flag::KIND_PLATFORM_DEPENDENT) },
+#define JVMCI_DIAGNOSTIC_FLAG_STRUCT(    type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_JVMCI | Flag::KIND_DIAGNOSTIC) },
+#define JVMCI_PD_DIAGNOSTIC_FLAG_STRUCT( type, name,        doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_JVMCI | Flag::KIND_DIAGNOSTIC | Flag::KIND_PLATFORM_DEPENDENT) },
+#define JVMCI_EXPERIMENTAL_FLAG_STRUCT(  type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_JVMCI | Flag::KIND_EXPERIMENTAL) },
+#define JVMCI_DEVELOP_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_JVMCI | Flag::KIND_DEVELOP) },
+#define JVMCI_PD_DEVELOP_FLAG_STRUCT(    type, name,        doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_JVMCI | Flag::KIND_DEVELOP | Flag::KIND_PLATFORM_DEPENDENT) },
+#define JVMCI_NOTPRODUCT_FLAG_STRUCT(    type, name, value, doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_JVMCI | Flag::KIND_NOT_PRODUCT) },
 
 #ifdef _LP64
-#define RUNTIME_LP64_PRODUCT_FLAG_STRUCT(type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_LP64_PRODUCT) },
+#define RUNTIME_LP64_PRODUCT_FLAG_STRUCT(type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_LP64_PRODUCT) },
 #else
 #define RUNTIME_LP64_PRODUCT_FLAG_STRUCT(type, name, value, doc) /* flag is constant */
 #endif // _LP64
 
-#define C1_PRODUCT_FLAG_STRUCT(          type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_PRODUCT) },
-#define C1_PD_PRODUCT_FLAG_STRUCT(       type, name,        doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_PRODUCT | Flag::KIND_PLATFORM_DEPENDENT) },
-#define C1_DIAGNOSTIC_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_DIAGNOSTIC) },
-#define C1_DEVELOP_FLAG_STRUCT(          type, name, value, doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_DEVELOP) },
-#define C1_PD_DEVELOP_FLAG_STRUCT(       type, name,        doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_DEVELOP | Flag::KIND_PLATFORM_DEPENDENT) },
-#define C1_NOTPRODUCT_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_NOT_PRODUCT) },
+#define C1_PRODUCT_FLAG_STRUCT(          type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_PRODUCT) },
+#define C1_PD_PRODUCT_FLAG_STRUCT(       type, name,        doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_PRODUCT | Flag::KIND_PLATFORM_DEPENDENT) },
+#define C1_DIAGNOSTIC_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_DIAGNOSTIC) },
+#define C1_PD_DIAGNOSTIC_FLAG_STRUCT(    type, name,        doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_DIAGNOSTIC | Flag::KIND_PLATFORM_DEPENDENT) },
+#define C1_DEVELOP_FLAG_STRUCT(          type, name, value, doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_DEVELOP) },
+#define C1_PD_DEVELOP_FLAG_STRUCT(       type, name,        doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_DEVELOP | Flag::KIND_PLATFORM_DEPENDENT) },
+#define C1_NOTPRODUCT_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C1 | Flag::KIND_NOT_PRODUCT) },
 
-#define C2_PRODUCT_FLAG_STRUCT(          type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_PRODUCT) },
-#define C2_PD_PRODUCT_FLAG_STRUCT(       type, name,        doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_PRODUCT | Flag::KIND_PLATFORM_DEPENDENT) },
-#define C2_DIAGNOSTIC_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_DIAGNOSTIC) },
-#define C2_EXPERIMENTAL_FLAG_STRUCT(     type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_EXPERIMENTAL) },
-#define C2_DEVELOP_FLAG_STRUCT(          type, name, value, doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_DEVELOP) },
-#define C2_PD_DEVELOP_FLAG_STRUCT(       type, name,        doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_DEVELOP | Flag::KIND_PLATFORM_DEPENDENT) },
-#define C2_NOTPRODUCT_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_NOT_PRODUCT) },
+#define C2_PRODUCT_FLAG_STRUCT(          type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_PRODUCT) },
+#define C2_PD_PRODUCT_FLAG_STRUCT(       type, name,        doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_PRODUCT | Flag::KIND_PLATFORM_DEPENDENT) },
+#define C2_DIAGNOSTIC_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_DIAGNOSTIC) },
+#define C2_PD_DIAGNOSTIC_FLAG_STRUCT(    type, name,        doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_DIAGNOSTIC | Flag::KIND_PLATFORM_DEPENDENT) },
+#define C2_EXPERIMENTAL_FLAG_STRUCT(     type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_EXPERIMENTAL) },
+#define C2_DEVELOP_FLAG_STRUCT(          type, name, value, doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_DEVELOP) },
+#define C2_PD_DEVELOP_FLAG_STRUCT(       type, name,        doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_DEVELOP | Flag::KIND_PLATFORM_DEPENDENT) },
+#define C2_NOTPRODUCT_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_C2 | Flag::KIND_NOT_PRODUCT) },
 
-#define ARCH_PRODUCT_FLAG_STRUCT(        type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_ARCH | Flag::KIND_PRODUCT) },
-#define ARCH_DIAGNOSTIC_FLAG_STRUCT(     type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_ARCH | Flag::KIND_DIAGNOSTIC) },
-#define ARCH_EXPERIMENTAL_FLAG_STRUCT(   type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_ARCH | Flag::KIND_EXPERIMENTAL) },
-#define ARCH_DEVELOP_FLAG_STRUCT(        type, name, value, doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_ARCH | Flag::KIND_DEVELOP) },
-#define ARCH_NOTPRODUCT_FLAG_STRUCT(     type, name, value, doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_ARCH | Flag::KIND_NOT_PRODUCT) },
+#define ARCH_PRODUCT_FLAG_STRUCT(        type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_ARCH | Flag::KIND_PRODUCT) },
+#define ARCH_DIAGNOSTIC_FLAG_STRUCT(     type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_ARCH | Flag::KIND_DIAGNOSTIC) },
+#define ARCH_EXPERIMENTAL_FLAG_STRUCT(   type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_ARCH | Flag::KIND_EXPERIMENTAL) },
+#define ARCH_DEVELOP_FLAG_STRUCT(        type, name, value, doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_ARCH | Flag::KIND_DEVELOP) },
+#define ARCH_NOTPRODUCT_FLAG_STRUCT(     type, name, value, doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_ARCH | Flag::KIND_NOT_PRODUCT) },
 
-#define SHARK_PRODUCT_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_PRODUCT) },
-#define SHARK_PD_PRODUCT_FLAG_STRUCT(    type, name,        doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_PRODUCT | Flag::KIND_PLATFORM_DEPENDENT) },
-#define SHARK_DIAGNOSTIC_FLAG_STRUCT(    type, name, value, doc) { #type, XSTR(name), &name,      NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_DIAGNOSTIC) },
-#define SHARK_DEVELOP_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_DEVELOP) },
-#define SHARK_PD_DEVELOP_FLAG_STRUCT(    type, name,        doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_DEVELOP | Flag::KIND_PLATFORM_DEPENDENT) },
-#define SHARK_NOTPRODUCT_FLAG_STRUCT(    type, name, value, doc) { #type, XSTR(name), NAME(name), NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_NOT_PRODUCT) },
+#define SHARK_PRODUCT_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_PRODUCT) },
+#define SHARK_PD_PRODUCT_FLAG_STRUCT(    type, name,        doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_PRODUCT | Flag::KIND_PLATFORM_DEPENDENT) },
+#define SHARK_DIAGNOSTIC_FLAG_STRUCT(    type, name, value, doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_DIAGNOSTIC) },
+#define SHARK_PD_DIAGNOSTIC_FLAG_STRUCT( type, name,        doc) { #type, XSTR(name), &name,         NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_DIAGNOSTIC | Flag::KIND_PLATFORM_DEPENDENT) },
+#define SHARK_DEVELOP_FLAG_STRUCT(       type, name, value, doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_DEVELOP) },
+#define SHARK_PD_DEVELOP_FLAG_STRUCT(    type, name,        doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_DEVELOP | Flag::KIND_PLATFORM_DEPENDENT) },
+#define SHARK_NOTPRODUCT_FLAG_STRUCT(    type, name, value, doc) { #type, XSTR(name), (void*) &name, NOT_PRODUCT_ARG(doc) Flag::Flags(Flag::DEFAULT | Flag::KIND_SHARK | Flag::KIND_NOT_PRODUCT) },
 
 static Flag flagTable[] = {
  RUNTIME_FLAGS(RUNTIME_DEVELOP_FLAG_STRUCT, \
@@ -570,43 +766,64 @@ static Flag flagTable[] = {
                RUNTIME_PRODUCT_FLAG_STRUCT, \
                RUNTIME_PD_PRODUCT_FLAG_STRUCT, \
                RUNTIME_DIAGNOSTIC_FLAG_STRUCT, \
+               RUNTIME_PD_DIAGNOSTIC_FLAG_STRUCT, \
                RUNTIME_EXPERIMENTAL_FLAG_STRUCT, \
                RUNTIME_NOTPRODUCT_FLAG_STRUCT, \
                RUNTIME_MANAGEABLE_FLAG_STRUCT, \
                RUNTIME_PRODUCT_RW_FLAG_STRUCT, \
                RUNTIME_LP64_PRODUCT_FLAG_STRUCT, \
                IGNORE_RANGE, \
-               IGNORE_CONSTRAINT)
+               IGNORE_CONSTRAINT, \
+               IGNORE_WRITEABLE)
  RUNTIME_OS_FLAGS(RUNTIME_DEVELOP_FLAG_STRUCT, \
                   RUNTIME_PD_DEVELOP_FLAG_STRUCT, \
                   RUNTIME_PRODUCT_FLAG_STRUCT, \
                   RUNTIME_PD_PRODUCT_FLAG_STRUCT, \
                   RUNTIME_DIAGNOSTIC_FLAG_STRUCT, \
+                  RUNTIME_PD_DIAGNOSTIC_FLAG_STRUCT, \
                   RUNTIME_NOTPRODUCT_FLAG_STRUCT, \
                   IGNORE_RANGE, \
-                  IGNORE_CONSTRAINT)
+                  IGNORE_CONSTRAINT, \
+                  IGNORE_WRITEABLE)
 #if INCLUDE_ALL_GCS
  G1_FLAGS(RUNTIME_DEVELOP_FLAG_STRUCT, \
           RUNTIME_PD_DEVELOP_FLAG_STRUCT, \
           RUNTIME_PRODUCT_FLAG_STRUCT, \
           RUNTIME_PD_PRODUCT_FLAG_STRUCT, \
           RUNTIME_DIAGNOSTIC_FLAG_STRUCT, \
+          RUNTIME_PD_DIAGNOSTIC_FLAG_STRUCT, \
           RUNTIME_EXPERIMENTAL_FLAG_STRUCT, \
           RUNTIME_NOTPRODUCT_FLAG_STRUCT, \
           RUNTIME_MANAGEABLE_FLAG_STRUCT, \
           RUNTIME_PRODUCT_RW_FLAG_STRUCT, \
           IGNORE_RANGE, \
-          IGNORE_CONSTRAINT)
+          IGNORE_CONSTRAINT, \
+          IGNORE_WRITEABLE)
 #endif // INCLUDE_ALL_GCS
+#if INCLUDE_JVMCI
+ JVMCI_FLAGS(JVMCI_DEVELOP_FLAG_STRUCT, \
+             JVMCI_PD_DEVELOP_FLAG_STRUCT, \
+             JVMCI_PRODUCT_FLAG_STRUCT, \
+             JVMCI_PD_PRODUCT_FLAG_STRUCT, \
+             JVMCI_DIAGNOSTIC_FLAG_STRUCT, \
+             JVMCI_PD_DIAGNOSTIC_FLAG_STRUCT, \
+             JVMCI_EXPERIMENTAL_FLAG_STRUCT, \
+             JVMCI_NOTPRODUCT_FLAG_STRUCT, \
+             IGNORE_RANGE, \
+             IGNORE_CONSTRAINT, \
+             IGNORE_WRITEABLE)
+#endif // INCLUDE_JVMCI
 #ifdef COMPILER1
  C1_FLAGS(C1_DEVELOP_FLAG_STRUCT, \
           C1_PD_DEVELOP_FLAG_STRUCT, \
           C1_PRODUCT_FLAG_STRUCT, \
           C1_PD_PRODUCT_FLAG_STRUCT, \
           C1_DIAGNOSTIC_FLAG_STRUCT, \
+          C1_PD_DIAGNOSTIC_FLAG_STRUCT, \
           C1_NOTPRODUCT_FLAG_STRUCT, \
           IGNORE_RANGE, \
-          IGNORE_CONSTRAINT)
+          IGNORE_CONSTRAINT, \
+          IGNORE_WRITEABLE)
 #endif // COMPILER1
 #ifdef COMPILER2
  C2_FLAGS(C2_DEVELOP_FLAG_STRUCT, \
@@ -614,10 +831,12 @@ static Flag flagTable[] = {
           C2_PRODUCT_FLAG_STRUCT, \
           C2_PD_PRODUCT_FLAG_STRUCT, \
           C2_DIAGNOSTIC_FLAG_STRUCT, \
+          C2_PD_DIAGNOSTIC_FLAG_STRUCT, \
           C2_EXPERIMENTAL_FLAG_STRUCT, \
           C2_NOTPRODUCT_FLAG_STRUCT, \
           IGNORE_RANGE, \
-          IGNORE_CONSTRAINT)
+          IGNORE_CONSTRAINT, \
+          IGNORE_WRITEABLE)
 #endif // COMPILER2
 #ifdef SHARK
  SHARK_FLAGS(SHARK_DEVELOP_FLAG_STRUCT, \
@@ -625,7 +844,11 @@ static Flag flagTable[] = {
              SHARK_PRODUCT_FLAG_STRUCT, \
              SHARK_PD_PRODUCT_FLAG_STRUCT, \
              SHARK_DIAGNOSTIC_FLAG_STRUCT, \
-             SHARK_NOTPRODUCT_FLAG_STRUCT)
+             SHARK_PD_DIAGNOSTIC_FLAG_STRUCT, \
+             SHARK_NOTPRODUCT_FLAG_STRUCT, \
+             IGNORE_RANGE, \
+             IGNORE_CONSTRAINT, \
+             IGNORE_WRITEABLE)
 #endif // SHARK
  ARCH_FLAGS(ARCH_DEVELOP_FLAG_STRUCT, \
             ARCH_PRODUCT_FLAG_STRUCT, \
@@ -633,7 +856,8 @@ static Flag flagTable[] = {
             ARCH_EXPERIMENTAL_FLAG_STRUCT, \
             ARCH_NOTPRODUCT_FLAG_STRUCT, \
             IGNORE_RANGE, \
-            IGNORE_CONSTRAINT)
+            IGNORE_CONSTRAINT, \
+            IGNORE_WRITEABLE)
  FLAGTABLE_EXT
  {0, NULL, NULL}
 };
@@ -748,29 +972,25 @@ bool CommandLineFlags::wasSetOnCmdline(const char* name, bool* value) {
   return true;
 }
 
+void CommandLineFlagsEx::setOnCmdLine(CommandLineFlagWithType flag) {
+  Flag* faddr = address_of_flag(flag);
+  assert(faddr != NULL, "Unknown flag");
+  faddr->set_command_line();
+}
+
 template<class E, class T>
 static void trace_flag_changed(const char* name, const T old_value, const T new_value, const Flag::Flags origin) {
   E e;
   e.set_name(name);
-  e.set_old_value(old_value);
-  e.set_new_value(new_value);
+  e.set_oldValue(old_value);
+  e.set_newValue(new_value);
   e.set_origin(origin);
   e.commit();
 }
 
-static Flag::Error get_status_error(Flag::Error status_range, Flag::Error status_constraint) {
-  if (status_range != Flag::SUCCESS) {
-    return status_range;
-  } else if (status_constraint != Flag::SUCCESS) {
-    return status_constraint;
-  } else {
-    return Flag::SUCCESS;
-  }
-}
-
-static Flag::Error apply_constraint_and_check_range_bool(const char* name, bool* new_value, bool verbose = true) {
+static Flag::Error apply_constraint_and_check_range_bool(const char* name, bool new_value, bool verbose) {
   Flag::Error status = Flag::SUCCESS;
-  CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find(name);
+  CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find_if_needs_check(name);
   if (constraint != NULL) {
     status = constraint->apply_bool(new_value, verbose);
   }
@@ -785,43 +1005,45 @@ Flag::Error CommandLineFlags::boolAt(const char* name, size_t len, bool* value, 
   return Flag::SUCCESS;
 }
 
+Flag::Error CommandLineFlags::boolAtPut(Flag* flag, bool* value, Flag::Flags origin) {
+  const char* name;
+  if (flag == NULL) return Flag::INVALID_FLAG;
+  if (!flag->is_bool()) return Flag::WRONG_FORMAT;
+  name = flag->_name;
+  Flag::Error check = apply_constraint_and_check_range_bool(name, *value, !CommandLineFlagConstraintList::validated_after_ergo());
+  if (check != Flag::SUCCESS) return check;
+  bool old_value = flag->get_bool();
+  trace_flag_changed<EventBooleanFlagChanged, bool>(name, old_value, *value, origin);
+  check = flag->set_bool(*value);
+  *value = old_value;
+  flag->set_origin(origin);
+  return check;
+}
+
 Flag::Error CommandLineFlags::boolAtPut(const char* name, size_t len, bool* value, Flag::Flags origin) {
   Flag* result = Flag::find_flag(name, len);
-  if (result == NULL) return Flag::INVALID_FLAG;
-  if (!result->is_bool()) return Flag::WRONG_FORMAT;
-  Flag::Error check = apply_constraint_and_check_range_bool(name, value, !CommandLineFlags::finishedInitializing());
-  if (check != Flag::SUCCESS) return check;
-  bool old_value = result->get_bool();
-  trace_flag_changed<EventBooleanFlagChanged, bool>(name, old_value, *value, origin);
-  result->set_bool(*value);
-  *value = old_value;
-  result->set_origin(origin);
-  return Flag::SUCCESS;
+  return boolAtPut(result, value, origin);
 }
 
 Flag::Error CommandLineFlagsEx::boolAtPut(CommandLineFlagWithType flag, bool value, Flag::Flags origin) {
   Flag* faddr = address_of_flag(flag);
   guarantee(faddr != NULL && faddr->is_bool(), "wrong flag type");
-  Flag::Error check = apply_constraint_and_check_range_bool(faddr->_name, &value);
-  if (check != Flag::SUCCESS) return check;
-  trace_flag_changed<EventBooleanFlagChanged, bool>(faddr->_name, faddr->get_bool(), value, origin);
-  faddr->set_bool(value);
-  faddr->set_origin(origin);
-  return Flag::SUCCESS;
+  return CommandLineFlags::boolAtPut(faddr, &value, origin);
 }
 
-static Flag::Error apply_constraint_and_check_range_int(const char* name, int* new_value, bool verbose = true) {
-  Flag::Error range_status = Flag::SUCCESS;
+static Flag::Error apply_constraint_and_check_range_int(const char* name, int new_value, bool verbose) {
+  Flag::Error status = Flag::SUCCESS;
   CommandLineFlagRange* range = CommandLineFlagRangeList::find(name);
   if (range != NULL) {
-    range_status = range->check_int(*new_value, verbose);
+    status = range->check_int(new_value, verbose);
   }
-  Flag::Error constraint_status = Flag::SUCCESS;
-  CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find(name);
-  if (constraint != NULL) {
-    constraint_status = constraint->apply_int(new_value, verbose);
+  if (status == Flag::SUCCESS) {
+    CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find_if_needs_check(name);
+    if (constraint != NULL) {
+      status = constraint->apply_int(new_value, verbose);
+    }
   }
-  return get_status_error(range_status, constraint_status);
+  return status;
 }
 
 Flag::Error CommandLineFlags::intAt(const char* name, size_t len, int* value, bool allow_locked, bool return_flag) {
@@ -832,41 +1054,45 @@ Flag::Error CommandLineFlags::intAt(const char* name, size_t len, int* value, bo
   return Flag::SUCCESS;
 }
 
+Flag::Error CommandLineFlags::intAtPut(Flag* flag, int* value, Flag::Flags origin) {
+  const char* name;
+  if (flag == NULL) return Flag::INVALID_FLAG;
+  if (!flag->is_int()) return Flag::WRONG_FORMAT;
+  name = flag->_name;
+  Flag::Error check = apply_constraint_and_check_range_int(name, *value, !CommandLineFlagConstraintList::validated_after_ergo());
+  if (check != Flag::SUCCESS) return check;
+  int old_value = flag->get_int();
+  trace_flag_changed<EventIntFlagChanged, s4>(name, old_value, *value, origin);
+  check = flag->set_int(*value);
+  *value = old_value;
+  flag->set_origin(origin);
+  return check;
+}
+
 Flag::Error CommandLineFlags::intAtPut(const char* name, size_t len, int* value, Flag::Flags origin) {
   Flag* result = Flag::find_flag(name, len);
-  if (result == NULL) return Flag::INVALID_FLAG;
-  if (!result->is_int()) return Flag::WRONG_FORMAT;
-  Flag::Error check = apply_constraint_and_check_range_int(name, value, !CommandLineFlags::finishedInitializing());
-  if (check != Flag::SUCCESS) return check;
-  int old_value = result->get_int();
-  trace_flag_changed<EventIntFlagChanged, s4>(name, old_value, *value, origin);
-  result->set_int(*value);
-  *value = old_value;
-  result->set_origin(origin);
-  return Flag::SUCCESS;
+  return intAtPut(result, value, origin);
 }
 
 Flag::Error CommandLineFlagsEx::intAtPut(CommandLineFlagWithType flag, int value, Flag::Flags origin) {
   Flag* faddr = address_of_flag(flag);
   guarantee(faddr != NULL && faddr->is_int(), "wrong flag type");
-  trace_flag_changed<EventIntFlagChanged, s4>(faddr->_name, faddr->get_int(), value, origin);
-  faddr->set_int(value);
-  faddr->set_origin(origin);
-  return Flag::SUCCESS;
+  return CommandLineFlags::intAtPut(faddr, &value, origin);
 }
 
-static Flag::Error apply_constraint_and_check_range_uint(const char* name, uint* new_value, bool verbose = true) {
-  Flag::Error range_status = Flag::SUCCESS;
+static Flag::Error apply_constraint_and_check_range_uint(const char* name, uint new_value, bool verbose) {
+  Flag::Error status = Flag::SUCCESS;
   CommandLineFlagRange* range = CommandLineFlagRangeList::find(name);
   if (range != NULL) {
-    range_status = range->check_uint(*new_value, verbose);
+    status = range->check_uint(new_value, verbose);
   }
-  Flag::Error constraint_status = Flag::SUCCESS;
-  CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find(name);
-  if (constraint != NULL) {
-    constraint_status = constraint->apply_uint(new_value, verbose);
+  if (status == Flag::SUCCESS) {
+    CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find_if_needs_check(name);
+    if (constraint != NULL) {
+      status = constraint->apply_uint(new_value, verbose);
+    }
   }
-  return get_status_error(range_status, constraint_status);
+  return status;
 }
 
 Flag::Error CommandLineFlags::uintAt(const char* name, size_t len, uint* value, bool allow_locked, bool return_flag) {
@@ -877,27 +1103,30 @@ Flag::Error CommandLineFlags::uintAt(const char* name, size_t len, uint* value, 
   return Flag::SUCCESS;
 }
 
+Flag::Error CommandLineFlags::uintAtPut(Flag* flag, uint* value, Flag::Flags origin) {
+  const char* name;
+  if (flag == NULL) return Flag::INVALID_FLAG;
+  if (!flag->is_uint()) return Flag::WRONG_FORMAT;
+  name = flag->_name;
+  Flag::Error check = apply_constraint_and_check_range_uint(name, *value, !CommandLineFlagConstraintList::validated_after_ergo());
+  if (check != Flag::SUCCESS) return check;
+  uint old_value = flag->get_uint();
+  trace_flag_changed<EventUnsignedIntFlagChanged, u4>(name, old_value, *value, origin);
+  check = flag->set_uint(*value);
+  *value = old_value;
+  flag->set_origin(origin);
+  return check;
+}
+
 Flag::Error CommandLineFlags::uintAtPut(const char* name, size_t len, uint* value, Flag::Flags origin) {
   Flag* result = Flag::find_flag(name, len);
-  if (result == NULL) return Flag::INVALID_FLAG;
-  if (!result->is_uint()) return Flag::WRONG_FORMAT;
-  Flag::Error check = apply_constraint_and_check_range_uint(name, value, !CommandLineFlags::finishedInitializing());
-  if (check != Flag::SUCCESS) return check;
-  uint old_value = result->get_uint();
-  trace_flag_changed<EventUnsignedIntFlagChanged, u4>(name, old_value, *value, origin);
-  result->set_uint(*value);
-  *value = old_value;
-  result->set_origin(origin);
-  return Flag::SUCCESS;
+  return uintAtPut(result, value, origin);
 }
 
 Flag::Error CommandLineFlagsEx::uintAtPut(CommandLineFlagWithType flag, uint value, Flag::Flags origin) {
   Flag* faddr = address_of_flag(flag);
   guarantee(faddr != NULL && faddr->is_uint(), "wrong flag type");
-  trace_flag_changed<EventUnsignedIntFlagChanged, u4>(faddr->_name, faddr->get_uint(), value, origin);
-  faddr->set_uint(value);
-  faddr->set_origin(origin);
-  return Flag::SUCCESS;
+  return CommandLineFlags::uintAtPut(faddr, &value, origin);
 }
 
 Flag::Error CommandLineFlags::intxAt(const char* name, size_t len, intx* value, bool allow_locked, bool return_flag) {
@@ -908,43 +1137,45 @@ Flag::Error CommandLineFlags::intxAt(const char* name, size_t len, intx* value, 
   return Flag::SUCCESS;
 }
 
-static Flag::Error apply_constraint_and_check_range_intx(const char* name, intx* new_value, bool verbose = true) {
-  Flag::Error range_status = Flag::SUCCESS;
+static Flag::Error apply_constraint_and_check_range_intx(const char* name, intx new_value, bool verbose) {
+  Flag::Error status = Flag::SUCCESS;
   CommandLineFlagRange* range = CommandLineFlagRangeList::find(name);
   if (range != NULL) {
-    range_status = range->check_intx(*new_value, verbose);
+    status = range->check_intx(new_value, verbose);
   }
-  Flag::Error constraint_status = Flag::SUCCESS;
-  CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find(name);
-  if (constraint != NULL) {
-    constraint_status = constraint->apply_intx(new_value, verbose);
+  if (status == Flag::SUCCESS) {
+    CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find_if_needs_check(name);
+    if (constraint != NULL) {
+      status = constraint->apply_intx(new_value, verbose);
+    }
   }
-  return get_status_error(range_status, constraint_status);
+  return status;
+}
+
+Flag::Error CommandLineFlags::intxAtPut(Flag* flag, intx* value, Flag::Flags origin) {
+  const char* name;
+  if (flag == NULL) return Flag::INVALID_FLAG;
+  if (!flag->is_intx()) return Flag::WRONG_FORMAT;
+  name = flag->_name;
+  Flag::Error check = apply_constraint_and_check_range_intx(name, *value, !CommandLineFlagConstraintList::validated_after_ergo());
+  if (check != Flag::SUCCESS) return check;
+  intx old_value = flag->get_intx();
+  trace_flag_changed<EventLongFlagChanged, intx>(name, old_value, *value, origin);
+  check = flag->set_intx(*value);
+  *value = old_value;
+  flag->set_origin(origin);
+  return check;
 }
 
 Flag::Error CommandLineFlags::intxAtPut(const char* name, size_t len, intx* value, Flag::Flags origin) {
   Flag* result = Flag::find_flag(name, len);
-  if (result == NULL) return Flag::INVALID_FLAG;
-  if (!result->is_intx()) return Flag::WRONG_FORMAT;
-  Flag::Error check = apply_constraint_and_check_range_intx(name, value, !CommandLineFlags::finishedInitializing());
-  if (check != Flag::SUCCESS) return check;
-  intx old_value = result->get_intx();
-  trace_flag_changed<EventLongFlagChanged, intx>(name, old_value, *value, origin);
-  result->set_intx(*value);
-  *value = old_value;
-  result->set_origin(origin);
-  return Flag::SUCCESS;
+  return intxAtPut(result, value, origin);
 }
 
 Flag::Error CommandLineFlagsEx::intxAtPut(CommandLineFlagWithType flag, intx value, Flag::Flags origin) {
   Flag* faddr = address_of_flag(flag);
   guarantee(faddr != NULL && faddr->is_intx(), "wrong flag type");
-  Flag::Error check = apply_constraint_and_check_range_intx(faddr->_name, &value);
-  if (check != Flag::SUCCESS) return check;
-  trace_flag_changed<EventLongFlagChanged, intx>(faddr->_name, faddr->get_intx(), value, origin);
-  faddr->set_intx(value);
-  faddr->set_origin(origin);
-  return Flag::SUCCESS;
+  return CommandLineFlags::intxAtPut(faddr, &value, origin);
 }
 
 Flag::Error CommandLineFlags::uintxAt(const char* name, size_t len, uintx* value, bool allow_locked, bool return_flag) {
@@ -955,43 +1186,45 @@ Flag::Error CommandLineFlags::uintxAt(const char* name, size_t len, uintx* value
   return Flag::SUCCESS;
 }
 
-static Flag::Error apply_constraint_and_check_range_uintx(const char* name, uintx* new_value, bool verbose = true) {
-  Flag::Error range_status = Flag::SUCCESS;
+static Flag::Error apply_constraint_and_check_range_uintx(const char* name, uintx new_value, bool verbose) {
+  Flag::Error status = Flag::SUCCESS;
   CommandLineFlagRange* range = CommandLineFlagRangeList::find(name);
   if (range != NULL) {
-    range_status = range->check_uintx(*new_value, verbose);
+    status = range->check_uintx(new_value, verbose);
   }
-  Flag::Error constraint_status = Flag::SUCCESS;
-  CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find(name);
-  if (constraint != NULL) {
-    constraint_status = constraint->apply_uintx(new_value, verbose);
+  if (status == Flag::SUCCESS) {
+    CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find_if_needs_check(name);
+    if (constraint != NULL) {
+      status = constraint->apply_uintx(new_value, verbose);
+    }
   }
-  return get_status_error(range_status, constraint_status);
+  return status;
+}
+
+Flag::Error CommandLineFlags::uintxAtPut(Flag* flag, uintx* value, Flag::Flags origin) {
+  const char* name;
+  if (flag == NULL) return Flag::INVALID_FLAG;
+  if (!flag->is_uintx()) return Flag::WRONG_FORMAT;
+  name = flag->_name;
+  Flag::Error check = apply_constraint_and_check_range_uintx(name, *value, !CommandLineFlagConstraintList::validated_after_ergo());
+  if (check != Flag::SUCCESS) return check;
+  uintx old_value = flag->get_uintx();
+  trace_flag_changed<EventUnsignedLongFlagChanged, u8>(name, old_value, *value, origin);
+  check = flag->set_uintx(*value);
+  *value = old_value;
+  flag->set_origin(origin);
+  return check;
 }
 
 Flag::Error CommandLineFlags::uintxAtPut(const char* name, size_t len, uintx* value, Flag::Flags origin) {
   Flag* result = Flag::find_flag(name, len);
-  if (result == NULL) return Flag::INVALID_FLAG;
-  if (!result->is_uintx()) return Flag::WRONG_FORMAT;
-  Flag::Error check = apply_constraint_and_check_range_uintx(name, value, !CommandLineFlags::finishedInitializing());
-  if (check != Flag::SUCCESS) return check;
-  uintx old_value = result->get_uintx();
-  trace_flag_changed<EventUnsignedLongFlagChanged, u8>(name, old_value, *value, origin);
-  result->set_uintx(*value);
-  *value = old_value;
-  result->set_origin(origin);
-  return Flag::SUCCESS;
+  return uintxAtPut(result, value, origin);
 }
 
 Flag::Error CommandLineFlagsEx::uintxAtPut(CommandLineFlagWithType flag, uintx value, Flag::Flags origin) {
   Flag* faddr = address_of_flag(flag);
   guarantee(faddr != NULL && faddr->is_uintx(), "wrong flag type");
-  Flag::Error check = apply_constraint_and_check_range_uintx(faddr->_name, &value);
-  if (check != Flag::SUCCESS) return check;
-  trace_flag_changed<EventUnsignedLongFlagChanged, u8>(faddr->_name, faddr->get_uintx(), value, origin);
-  faddr->set_uintx(value);
-  faddr->set_origin(origin);
-  return Flag::SUCCESS;
+  return CommandLineFlags::uintxAtPut(faddr, &value, origin);
 }
 
 Flag::Error CommandLineFlags::uint64_tAt(const char* name, size_t len, uint64_t* value, bool allow_locked, bool return_flag) {
@@ -1002,43 +1235,45 @@ Flag::Error CommandLineFlags::uint64_tAt(const char* name, size_t len, uint64_t*
   return Flag::SUCCESS;
 }
 
-static Flag::Error apply_constraint_and_check_range_uint64_t(const char* name, uint64_t* new_value, bool verbose = true) {
-  Flag::Error range_status = Flag::SUCCESS;
+static Flag::Error apply_constraint_and_check_range_uint64_t(const char* name, uint64_t new_value, bool verbose) {
+  Flag::Error status = Flag::SUCCESS;
   CommandLineFlagRange* range = CommandLineFlagRangeList::find(name);
   if (range != NULL) {
-    range_status = range->check_uint64_t(*new_value, verbose);
+    status = range->check_uint64_t(new_value, verbose);
   }
-  Flag::Error constraint_status = Flag::SUCCESS;
-  CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find(name);
-  if (constraint != NULL) {
-    constraint_status = constraint->apply_uint64_t(new_value, verbose);
+  if (status == Flag::SUCCESS) {
+    CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find_if_needs_check(name);
+    if (constraint != NULL) {
+      status = constraint->apply_uint64_t(new_value, verbose);
+    }
   }
-  return get_status_error(range_status, constraint_status);
+  return status;
+}
+
+Flag::Error CommandLineFlags::uint64_tAtPut(Flag* flag, uint64_t* value, Flag::Flags origin) {
+  const char* name;
+  if (flag == NULL) return Flag::INVALID_FLAG;
+  if (!flag->is_uint64_t()) return Flag::WRONG_FORMAT;
+  name = flag->_name;
+  Flag::Error check = apply_constraint_and_check_range_uint64_t(name, *value, !CommandLineFlagConstraintList::validated_after_ergo());
+  if (check != Flag::SUCCESS) return check;
+  uint64_t old_value = flag->get_uint64_t();
+  trace_flag_changed<EventUnsignedLongFlagChanged, u8>(name, old_value, *value, origin);
+  check = flag->set_uint64_t(*value);
+  *value = old_value;
+  flag->set_origin(origin);
+  return check;
 }
 
 Flag::Error CommandLineFlags::uint64_tAtPut(const char* name, size_t len, uint64_t* value, Flag::Flags origin) {
   Flag* result = Flag::find_flag(name, len);
-  if (result == NULL) return Flag::INVALID_FLAG;
-  if (!result->is_uint64_t()) return Flag::WRONG_FORMAT;
-  Flag::Error check = apply_constraint_and_check_range_uint64_t(name, value, !CommandLineFlags::finishedInitializing());
-  if (check != Flag::SUCCESS) return check;
-  uint64_t old_value = result->get_uint64_t();
-  trace_flag_changed<EventUnsignedLongFlagChanged, u8>(name, old_value, *value, origin);
-  result->set_uint64_t(*value);
-  *value = old_value;
-  result->set_origin(origin);
-  return Flag::SUCCESS;
+  return uint64_tAtPut(result, value, origin);
 }
 
 Flag::Error CommandLineFlagsEx::uint64_tAtPut(CommandLineFlagWithType flag, uint64_t value, Flag::Flags origin) {
   Flag* faddr = address_of_flag(flag);
   guarantee(faddr != NULL && faddr->is_uint64_t(), "wrong flag type");
-  Flag::Error check = apply_constraint_and_check_range_uint64_t(faddr->_name, &value);
-  if (check != Flag::SUCCESS) return check;
-  trace_flag_changed<EventUnsignedLongFlagChanged, u8>(faddr->_name, faddr->get_uint64_t(), value, origin);
-  faddr->set_uint64_t(value);
-  faddr->set_origin(origin);
-  return Flag::SUCCESS;
+  return CommandLineFlags::uint64_tAtPut(faddr, &value, origin);
 }
 
 Flag::Error CommandLineFlags::size_tAt(const char* name, size_t len, size_t* value, bool allow_locked, bool return_flag) {
@@ -1049,43 +1284,46 @@ Flag::Error CommandLineFlags::size_tAt(const char* name, size_t len, size_t* val
   return Flag::SUCCESS;
 }
 
-static Flag::Error apply_constraint_and_check_range_size_t(const char* name, size_t* new_value, bool verbose = true) {
-  Flag::Error range_status = Flag::SUCCESS;
+static Flag::Error apply_constraint_and_check_range_size_t(const char* name, size_t new_value, bool verbose) {
+  Flag::Error status = Flag::SUCCESS;
   CommandLineFlagRange* range = CommandLineFlagRangeList::find(name);
   if (range != NULL) {
-    range_status = range->check_size_t(*new_value, verbose);
+    status = range->check_size_t(new_value, verbose);
   }
-  Flag::Error constraint_status = Flag::SUCCESS;
-  CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find(name);
-  if (constraint != NULL) {
-    constraint_status = constraint->apply_size_t(new_value, verbose);
+  if (status == Flag::SUCCESS) {
+    CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find_if_needs_check(name);
+    if (constraint != NULL) {
+      status = constraint->apply_size_t(new_value, verbose);
+    }
   }
-  return get_status_error(range_status, constraint_status);
+  return status;
+}
+
+
+Flag::Error CommandLineFlags::size_tAtPut(Flag* flag, size_t* value, Flag::Flags origin) {
+  const char* name;
+  if (flag == NULL) return Flag::INVALID_FLAG;
+  if (!flag->is_size_t()) return Flag::WRONG_FORMAT;
+  name = flag->_name;
+  Flag::Error check = apply_constraint_and_check_range_size_t(name, *value, !CommandLineFlagConstraintList::validated_after_ergo());
+  if (check != Flag::SUCCESS) return check;
+  size_t old_value = flag->get_size_t();
+  trace_flag_changed<EventUnsignedLongFlagChanged, u8>(name, old_value, *value, origin);
+  check = flag->set_size_t(*value);
+  *value = old_value;
+  flag->set_origin(origin);
+  return check;
 }
 
 Flag::Error CommandLineFlags::size_tAtPut(const char* name, size_t len, size_t* value, Flag::Flags origin) {
   Flag* result = Flag::find_flag(name, len);
-  if (result == NULL) return Flag::INVALID_FLAG;
-  if (!result->is_size_t()) return Flag::WRONG_FORMAT;
-  Flag::Error check = apply_constraint_and_check_range_size_t(name, value, !CommandLineFlags::finishedInitializing());
-  if (check != Flag::SUCCESS) return check;
-  size_t old_value = result->get_size_t();
-  trace_flag_changed<EventUnsignedLongFlagChanged, u8>(name, old_value, *value, origin);
-  result->set_size_t(*value);
-  *value = old_value;
-  result->set_origin(origin);
-  return Flag::SUCCESS;
+  return size_tAtPut(result, value, origin);
 }
 
 Flag::Error CommandLineFlagsEx::size_tAtPut(CommandLineFlagWithType flag, size_t value, Flag::Flags origin) {
   Flag* faddr = address_of_flag(flag);
   guarantee(faddr != NULL && faddr->is_size_t(), "wrong flag type");
-  Flag::Error check = apply_constraint_and_check_range_size_t(faddr->_name, &value);
-  if (check != Flag::SUCCESS) return check;
-  trace_flag_changed<EventUnsignedLongFlagChanged, u8>(faddr->_name, faddr->get_size_t(), value, origin);
-  faddr->set_size_t(value);
-  faddr->set_origin(origin);
-  return Flag::SUCCESS;
+  return CommandLineFlags::size_tAtPut(faddr, &value, origin);
 }
 
 Flag::Error CommandLineFlags::doubleAt(const char* name, size_t len, double* value, bool allow_locked, bool return_flag) {
@@ -1096,43 +1334,45 @@ Flag::Error CommandLineFlags::doubleAt(const char* name, size_t len, double* val
   return Flag::SUCCESS;
 }
 
-static Flag::Error apply_constraint_and_check_range_double(const char* name, double* new_value, bool verbose = true) {
-  Flag::Error range_status = Flag::SUCCESS;
+static Flag::Error apply_constraint_and_check_range_double(const char* name, double new_value, bool verbose) {
+  Flag::Error status = Flag::SUCCESS;
   CommandLineFlagRange* range = CommandLineFlagRangeList::find(name);
   if (range != NULL) {
-    range_status = range->check_double(*new_value, verbose);
+    status = range->check_double(new_value, verbose);
   }
-  Flag::Error constraint_status = Flag::SUCCESS;
-  CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find(name);
-  if (constraint != NULL) {
-    constraint_status = constraint->apply_double(new_value, verbose);
+  if (status == Flag::SUCCESS) {
+    CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::find_if_needs_check(name);
+    if (constraint != NULL) {
+      status = constraint->apply_double(new_value, verbose);
+    }
   }
-  return get_status_error(range_status, constraint_status);
+  return status;
+}
+
+Flag::Error CommandLineFlags::doubleAtPut(Flag* flag, double* value, Flag::Flags origin) {
+  const char* name;
+  if (flag == NULL) return Flag::INVALID_FLAG;
+  if (!flag->is_double()) return Flag::WRONG_FORMAT;
+  name = flag->_name;
+  Flag::Error check = apply_constraint_and_check_range_double(name, *value, !CommandLineFlagConstraintList::validated_after_ergo());
+  if (check != Flag::SUCCESS) return check;
+  double old_value = flag->get_double();
+  trace_flag_changed<EventDoubleFlagChanged, double>(name, old_value, *value, origin);
+  check = flag->set_double(*value);
+  *value = old_value;
+  flag->set_origin(origin);
+  return check;
 }
 
 Flag::Error CommandLineFlags::doubleAtPut(const char* name, size_t len, double* value, Flag::Flags origin) {
   Flag* result = Flag::find_flag(name, len);
-  if (result == NULL) return Flag::INVALID_FLAG;
-  if (!result->is_double()) return Flag::WRONG_FORMAT;
-  Flag::Error check = apply_constraint_and_check_range_double(name, value, !CommandLineFlags::finishedInitializing());
-  if (check != Flag::SUCCESS) return check;
-  double old_value = result->get_double();
-  trace_flag_changed<EventDoubleFlagChanged, double>(name, old_value, *value, origin);
-  result->set_double(*value);
-  *value = old_value;
-  result->set_origin(origin);
-  return Flag::SUCCESS;
+  return doubleAtPut(result, value, origin);
 }
 
 Flag::Error CommandLineFlagsEx::doubleAtPut(CommandLineFlagWithType flag, double value, Flag::Flags origin) {
   Flag* faddr = address_of_flag(flag);
   guarantee(faddr != NULL && faddr->is_double(), "wrong flag type");
-  Flag::Error check = apply_constraint_and_check_range_double(faddr->_name, &value, !CommandLineFlags::finishedInitializing());
-  if (check != Flag::SUCCESS) return check;
-  trace_flag_changed<EventDoubleFlagChanged, double>(faddr->_name, faddr->get_double(), value, origin);
-  faddr->set_double(value);
-  faddr->set_origin(origin);
-  return Flag::SUCCESS;
+  return CommandLineFlags::doubleAtPut(faddr, &value, origin);
 }
 
 Flag::Error CommandLineFlags::ccstrAt(const char* name, size_t len, ccstr* value, bool allow_locked, bool return_flag) {
@@ -1153,14 +1393,14 @@ Flag::Error CommandLineFlags::ccstrAtPut(const char* name, size_t len, ccstr* va
   if (*value != NULL) {
     new_value = os::strdup_check_oom(*value);
   }
-  result->set_ccstr(new_value);
+  Flag::Error check = result->set_ccstr(new_value);
   if (result->is_default() && old_value != NULL) {
     // Prior value is NOT heap allocated, but was a literal constant.
     old_value = os::strdup_check_oom(old_value);
   }
   *value = old_value;
   result->set_origin(origin);
-  return Flag::SUCCESS;
+  return check;
 }
 
 Flag::Error CommandLineFlagsEx::ccstrAtPut(CommandLineFlagWithType flag, ccstr value, Flag::Flags origin) {
@@ -1169,13 +1409,13 @@ Flag::Error CommandLineFlagsEx::ccstrAtPut(CommandLineFlagWithType flag, ccstr v
   ccstr old_value = faddr->get_ccstr();
   trace_flag_changed<EventStringFlagChanged, const char*>(faddr->_name, old_value, value, origin);
   char* new_value = os::strdup_check_oom(value);
-  faddr->set_ccstr(new_value);
+  Flag::Error check = faddr->set_ccstr(new_value);
   if (!faddr->is_default() && old_value != NULL) {
     // Prior value is heap allocated so free it.
     FREE_C_HEAP_ARRAY(char, old_value);
   }
   faddr->set_origin(origin);
-  return Flag::SUCCESS;
+  return check;
 }
 
 extern "C" {
@@ -1193,7 +1433,7 @@ void CommandLineFlags::printSetFlags(outputStream* out) {
   const size_t length = Flag::numFlags - 1;
 
   // Sort
-  Flag** array = NEW_C_HEAP_ARRAY(Flag*, length, mtInternal);
+  Flag** array = NEW_C_HEAP_ARRAY(Flag*, length, mtArguments);
   for (size_t i = 0; i < length; i++) {
     array[i] = &flagTable[i];
   }
@@ -1210,129 +1450,6 @@ void CommandLineFlags::printSetFlags(outputStream* out) {
   FREE_C_HEAP_ARRAY(Flag*, array);
 }
 
-bool CommandLineFlags::_finished_initializing = false;
-
-bool CommandLineFlags::check_all_ranges_and_constraints() {
-
-//#define PRINT_RANGES_AND_CONSTRAINTS_SIZES
-#ifdef PRINT_RANGES_AND_CONSTRAINTS_SIZES
-  {
-    size_t size_ranges = sizeof(CommandLineFlagRangeList);
-    for (int i=0; i<CommandLineFlagRangeList::length(); i++) {
-      size_ranges += sizeof(CommandLineFlagRange);
-      CommandLineFlagRange* range = CommandLineFlagRangeList::at(i);
-      const char* name = range->name();
-      Flag* flag = Flag::find_flag(name, strlen(name), true, true);
-      if (flag->is_intx()) {
-        size_ranges += 2*sizeof(intx);
-        size_ranges += sizeof(CommandLineFlagRange*);
-      } else if (flag->is_uintx()) {
-        size_ranges += 2*sizeof(uintx);
-        size_ranges += sizeof(CommandLineFlagRange*);
-      } else if (flag->is_uint64_t()) {
-        size_ranges += 2*sizeof(uint64_t);
-        size_ranges += sizeof(CommandLineFlagRange*);
-      } else if (flag->is_size_t()) {
-        size_ranges += 2*sizeof(size_t);
-        size_ranges += sizeof(CommandLineFlagRange*);
-      } else if (flag->is_double()) {
-        size_ranges += 2*sizeof(double);
-        size_ranges += sizeof(CommandLineFlagRange*);
-      }
-    }
-    fprintf(stderr, "Size of %d ranges: " SIZE_FORMAT " bytes\n",
-            CommandLineFlagRangeList::length(), size_ranges);
-  }
-  {
-    size_t size_constraints = sizeof(CommandLineFlagConstraintList);
-    for (int i=0; i<CommandLineFlagConstraintList::length(); i++) {
-      size_constraints += sizeof(CommandLineFlagConstraint);
-      CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::at(i);
-      const char* name = constraint->name();
-      Flag* flag = Flag::find_flag(name, strlen(name), true, true);
-      if (flag->is_bool()) {
-        size_constraints += sizeof(CommandLineFlagConstraintFunc_bool);
-        size_constraints += sizeof(CommandLineFlagConstraint*);
-      } else if (flag->is_intx()) {
-        size_constraints += sizeof(CommandLineFlagConstraintFunc_intx);
-        size_constraints += sizeof(CommandLineFlagConstraint*);
-      } else if (flag->is_uintx()) {
-        size_constraints += sizeof(CommandLineFlagConstraintFunc_uintx);
-        size_constraints += sizeof(CommandLineFlagConstraint*);
-      } else if (flag->is_uint64_t()) {
-        size_constraints += sizeof(CommandLineFlagConstraintFunc_uint64_t);
-        size_constraints += sizeof(CommandLineFlagConstraint*);
-      } else if (flag->is_size_t()) {
-        size_constraints += sizeof(CommandLineFlagConstraintFunc_size_t);
-        size_constraints += sizeof(CommandLineFlagConstraint*);
-      } else if (flag->is_double()) {
-        size_constraints += sizeof(CommandLineFlagConstraintFunc_double);
-        size_constraints += sizeof(CommandLineFlagConstraint*);
-      }
-    }
-    fprintf(stderr, "Size of %d constraints: " SIZE_FORMAT " bytes\n",
-            CommandLineFlagConstraintList::length(), size_constraints);
-  }
-#endif // PRINT_RANGES_AND_CONSTRAINTS_SIZES
-
-  _finished_initializing = true;
-
-  bool status = true;
-  for (int i=0; i<CommandLineFlagRangeList::length(); i++) {
-    CommandLineFlagRange* range = CommandLineFlagRangeList::at(i);
-    const char* name = range->name();
-    Flag* flag = Flag::find_flag(name, strlen(name), true, true);
-    if (flag != NULL) {
-      if (flag->is_intx()) {
-        intx value = flag->get_intx();
-        if (range->check_intx(value, true) != Flag::SUCCESS) status = false;
-      } else if (flag->is_uintx()) {
-        uintx value = flag->get_uintx();
-        if (range->check_uintx(value, true) != Flag::SUCCESS) status = false;
-      } else if (flag->is_uint64_t()) {
-        uint64_t value = flag->get_uint64_t();
-        if (range->check_uint64_t(value, true) != Flag::SUCCESS) status = false;
-      } else if (flag->is_size_t()) {
-        size_t value = flag->get_size_t();
-        if (range->check_size_t(value, true) != Flag::SUCCESS) status = false;
-      } else if (flag->is_double()) {
-        double value = flag->get_double();
-        if (range->check_double(value, true) != Flag::SUCCESS) status = false;
-      }
-    }
-  }
-  for (int i=0; i<CommandLineFlagConstraintList::length(); i++) {
-    CommandLineFlagConstraint* constraint = CommandLineFlagConstraintList::at(i);
-    const char*name = constraint->name();
-    Flag* flag = Flag::find_flag(name, strlen(name), true, true);
-    if (flag != NULL) {
-      if (flag->is_bool()) {
-        bool value = flag->get_bool();
-        if (constraint->apply_bool(&value, true) != Flag::SUCCESS) status = false;
-      } else if (flag->is_intx()) {
-        intx value = flag->get_intx();
-        if (constraint->apply_intx(&value, true) != Flag::SUCCESS) status = false;
-      } else if (flag->is_uintx()) {
-        uintx value = flag->get_uintx();
-        if (constraint->apply_uintx(&value, true) != Flag::SUCCESS) status = false;
-      } else if (flag->is_uint64_t()) {
-        uint64_t value = flag->get_uint64_t();
-        if (constraint->apply_uint64_t(&value, true) != Flag::SUCCESS) status = false;
-      } else if (flag->is_size_t()) {
-        size_t value = flag->get_size_t();
-        if (constraint->apply_size_t(&value, true) != Flag::SUCCESS) status = false;
-      } else if (flag->is_double()) {
-        double value = flag->get_double();
-        if (constraint->apply_double(&value, true) != Flag::SUCCESS) status = false;
-      }
-    }
-  }
-
-  Arguments::post_final_range_and_constraint_check(status);
-
-  return status;
-}
-
 #ifndef PRODUCT
 
 void CommandLineFlags::verify() {
@@ -1340,8 +1457,6 @@ void CommandLineFlags::verify() {
 }
 
 #endif // PRODUCT
-
-#define ONLY_PRINT_PRODUCT_FLAGS
 
 void CommandLineFlags::printFlags(outputStream* out, bool withComments, bool printRanges) {
   // Print the flags sorted by name
@@ -1352,7 +1467,7 @@ void CommandLineFlags::printFlags(outputStream* out, bool withComments, bool pri
   const size_t length = Flag::numFlags - 1;
 
   // Sort
-  Flag** array = NEW_C_HEAP_ARRAY(Flag*, length, mtInternal);
+  Flag** array = NEW_C_HEAP_ARRAY(Flag*, length, mtArguments);
   for (size_t i = 0; i < length; i++) {
     array[i] = &flagTable[i];
   }
@@ -1367,9 +1482,6 @@ void CommandLineFlags::printFlags(outputStream* out, bool withComments, bool pri
 
   for (size_t i = 0; i < length; i++) {
     if (array[i]->is_unlocked()) {
-#ifdef ONLY_PRINT_PRODUCT_FLAGS
-      if (!array[i]->is_notproduct() && !array[i]->is_develop())
-#endif // ONLY_PRINT_PRODUCT_FLAGS
       array[i]->print_on(out, withComments, printRanges);
     }
   }

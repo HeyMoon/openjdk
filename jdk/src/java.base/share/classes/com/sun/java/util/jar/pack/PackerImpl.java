@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -41,7 +42,6 @@ import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
 import java.util.SortedMap;
-import java.util.TimeZone;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.jar.JarInputStream;
@@ -84,13 +84,8 @@ public class PackerImpl  extends TLGlobals implements Pack200.Packer {
      */
     public synchronized void pack(JarFile in, OutputStream out) throws IOException {
         assert(Utils.currentInstance.get() == null);
-        TimeZone tz = (props.getBoolean(Utils.PACK_DEFAULT_TIMEZONE))
-                      ? null
-                      : TimeZone.getDefault();
         try {
             Utils.currentInstance.set(this);
-            if (tz != null) TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
-
             if ("0".equals(props.getProperty(Pack200.Packer.EFFORT))) {
                 Utils.copyJarFile(in, out);
             } else {
@@ -98,7 +93,6 @@ public class PackerImpl  extends TLGlobals implements Pack200.Packer {
             }
         } finally {
             Utils.currentInstance.set(null);
-            if (tz != null) TimeZone.setDefault(tz);
             in.close();
         }
     }
@@ -119,11 +113,8 @@ public class PackerImpl  extends TLGlobals implements Pack200.Packer {
      */
     public synchronized void pack(JarInputStream in, OutputStream out) throws IOException {
         assert(Utils.currentInstance.get() == null);
-        TimeZone tz = (props.getBoolean(Utils.PACK_DEFAULT_TIMEZONE)) ? null :
-            TimeZone.getDefault();
         try {
             Utils.currentInstance.set(this);
-            if (tz != null) TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
             if ("0".equals(props.getProperty(Pack200.Packer.EFFORT))) {
                 Utils.copyJarFile(in, out);
             } else {
@@ -131,7 +122,6 @@ public class PackerImpl  extends TLGlobals implements Pack200.Packer {
             }
         } finally {
             Utils.currentInstance.set(null);
-            if (tz != null) TimeZone.setDefault(tz);
             in.close();
         }
     }
@@ -282,22 +272,6 @@ public class PackerImpl  extends TLGlobals implements Pack200.Packer {
 
         // (Done collecting options from props.)
 
-        boolean isClassFile(String name) {
-            if (!name.endsWith(".class"))  return false;
-            for (String prefix = name; ; ) {
-                if (passFiles.contains(prefix))  return false;
-                int chop = prefix.lastIndexOf('/');
-                if (chop < 0)  break;
-                prefix = prefix.substring(0, chop);
-            }
-            return true;
-        }
-
-        boolean isMetaInfFile(String name) {
-            return name.startsWith("/" + Utils.METAINF) ||
-                        name.startsWith(Utils.METAINF);
-        }
-
         // Get a new package, based on the old one.
         private void makeNextPackage() {
             pkg.reset();
@@ -327,7 +301,9 @@ public class PackerImpl  extends TLGlobals implements Pack200.Packer {
                 this.f = null;
                 this.jf = jf;
                 this.je = je;
-                int timeSecs = getModtime(je.getTime());
+                int timeSecs = (int) je.getTimeLocal()
+                        .atOffset(ZoneOffset.UTC)
+                        .toEpochSecond();
                 if (keepModtime && timeSecs != Constants.NO_MODTIME) {
                      this.modtime = timeSecs;
                 } else if (latestModtime && timeSecs > pkg.default_modtime) {
@@ -339,6 +315,29 @@ public class PackerImpl  extends TLGlobals implements Pack200.Packer {
             }
             InFile(JarEntry je) {
                 this(null, je);
+            }
+            boolean isClassFile() {
+                if (!name.endsWith(".class") || name.endsWith("module-info.class")) {
+                    return false;
+                }
+                for (String prefix = name;;) {
+                    if (passFiles.contains(prefix)) {
+                        return false;
+                    }
+                    int chop = prefix.lastIndexOf('/');
+                    if (chop < 0) {
+                        break;
+                    }
+                    prefix = prefix.substring(0, chop);
+                }
+                return true;
+            }
+            boolean isMetaInfFile() {
+                return name.startsWith("/" + Utils.METAINF)
+                        || name.startsWith(Utils.METAINF);
+            }
+            boolean mustProcess() {
+                return !isMetaInfFile() && isClassFile();
             }
             long getInputLength() {
                 long len = (je != null)? je.getSize(): f.length();
@@ -399,7 +398,7 @@ public class PackerImpl  extends TLGlobals implements Pack200.Packer {
                 Package.File file = null;
                 // (5078608) : discount the resource files in META-INF
                 // from segment computation.
-                long inflen = (isMetaInfFile(name))
+                long inflen = (inFile.isMetaInfFile())
                               ? 0L
                               : inFile.getInputLength();
 
@@ -414,7 +413,7 @@ public class PackerImpl  extends TLGlobals implements Pack200.Packer {
 
                 assert(je.isDirectory() == name.endsWith("/"));
 
-                if (isClassFile(name)) {
+                if (inFile.mustProcess()) {
                     file = readClass(name, bits.getInputStream());
                 }
                 if (file == null) {
@@ -437,7 +436,7 @@ public class PackerImpl  extends TLGlobals implements Pack200.Packer {
             for (InFile inFile : inFiles) {
                 String name      = inFile.name;
                 // (5078608) : discount the resource files completely from segmenting
-                long inflen = (isMetaInfFile(name))
+                long inflen = (inFile.isMetaInfFile())
                                ? 0L
                                : inFile.getInputLength() ;
                 if ((segmentSize += inflen) > segmentLimit) {
@@ -455,7 +454,7 @@ public class PackerImpl  extends TLGlobals implements Pack200.Packer {
                 if (verbose > 1)
                     Utils.log.fine("Reading " + name);
                 Package.File file = null;
-                if (isClassFile(name)) {
+                if (inFile.mustProcess()) {
                     file = readClass(name, strm);
                     if (file == null) {
                         strm.close();

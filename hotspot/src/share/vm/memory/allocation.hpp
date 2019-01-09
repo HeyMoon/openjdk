@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,18 +40,6 @@
 #define ARENA_ALIGN_M1 (((size_t)(ARENA_AMALLOC_ALIGNMENT)) - 1)
 #define ARENA_ALIGN_MASK (~((size_t)ARENA_ALIGN_M1))
 #define ARENA_ALIGN(x) ((((size_t)(x)) + ARENA_ALIGN_M1) & ARENA_ALIGN_MASK)
-
-
-// noinline attribute
-#ifdef _WINDOWS
-  #define _NOINLINE_  __declspec(noinline)
-#else
-  #if __GNUC__ < 3    // gcc 2.x does not support noinline attribute
-    #define _NOINLINE_
-  #else
-    #define _NOINLINE_ __attribute__ ((noinline))
-  #endif
-#endif
 
 class AllocFailStrategy {
 public:
@@ -154,8 +142,11 @@ enum MemoryType {
   mtChunk             = 0x0C,  // chunk that holds content of arenas
   mtTest              = 0x0D,  // Test type for verifying NMT
   mtTracing           = 0x0E,  // memory used for Tracing
-  mtNone              = 0x0F,  // undefined
-  mt_number_of_types  = 0x10   // number of memory types (mtDontTrack
+  mtLogging           = 0x0F,  // memory for logging
+  mtArguments         = 0x10,  // memory for argument processing
+  mtModule            = 0x11,  // memory for module processing
+  mtNone              = 0x12,  // undefined
+  mt_number_of_types  = 0x13   // number of memory types (mtDontTrack
                                  // is not included as validate type)
 };
 
@@ -177,17 +168,17 @@ class NativeCallStack;
 
 template <MEMFLAGS F> class CHeapObj ALLOCATION_SUPER_CLASS_SPEC {
  public:
-  _NOINLINE_ void* operator new(size_t size, const NativeCallStack& stack) throw();
-  _NOINLINE_ void* operator new(size_t size) throw();
-  _NOINLINE_ void* operator new (size_t size, const std::nothrow_t&  nothrow_constant,
+  NOINLINE void* operator new(size_t size, const NativeCallStack& stack) throw();
+  NOINLINE void* operator new(size_t size) throw();
+  NOINLINE void* operator new (size_t size, const std::nothrow_t&  nothrow_constant,
                                const NativeCallStack& stack) throw();
-  _NOINLINE_ void* operator new (size_t size, const std::nothrow_t&  nothrow_constant)
+  NOINLINE void* operator new (size_t size, const std::nothrow_t&  nothrow_constant)
                                throw();
-  _NOINLINE_ void* operator new [](size_t size, const NativeCallStack& stack) throw();
-  _NOINLINE_ void* operator new [](size_t size) throw();
-  _NOINLINE_ void* operator new [](size_t size, const std::nothrow_t&  nothrow_constant,
+  NOINLINE void* operator new [](size_t size, const NativeCallStack& stack) throw();
+  NOINLINE void* operator new [](size_t size) throw();
+  NOINLINE void* operator new [](size_t size, const std::nothrow_t&  nothrow_constant,
                                const NativeCallStack& stack) throw();
-  _NOINLINE_ void* operator new [](size_t size, const std::nothrow_t&  nothrow_constant)
+  NOINLINE void* operator new [](size_t size, const std::nothrow_t&  nothrow_constant)
                                throw();
   void  operator delete(void* p);
   void  operator delete [] (void* p);
@@ -723,30 +714,43 @@ public:
 // is set so that we always use malloc except for Solaris where we set the
 // limit to get mapped memory.
 template <class E, MEMFLAGS F>
-class ArrayAllocator VALUE_OBJ_CLASS_SPEC {
-  char* _addr;
-  bool _use_malloc;
-  size_t _size;
-  bool _free_in_destructor;
+class ArrayAllocator : public AllStatic {
+ private:
+  static bool should_use_malloc(size_t length);
 
-  static bool should_use_malloc(size_t size) {
-    return size < ArrayAllocatorMallocLimit;
-  }
+  static E* allocate_malloc(size_t length);
+  static E* allocate_mmap(size_t length);
 
-  static char* allocate_inner(size_t& size, bool& use_malloc);
+  static void free_malloc(E* addr, size_t length);
+  static void free_mmap(E* addr, size_t length);
+
  public:
-  ArrayAllocator(bool free_in_destructor = true) :
-    _addr(NULL), _use_malloc(false), _size(0), _free_in_destructor(free_in_destructor) { }
+  static E* allocate(size_t length);
+  static E* reallocate(E* old_addr, size_t old_length, size_t new_length);
+  static void free(E* addr, size_t length);
+};
 
-  ~ArrayAllocator() {
-    if (_free_in_destructor) {
-      free();
-    }
-  }
+// Uses mmaped memory for all allocations. All allocations are initially
+// zero-filled. No pre-touching.
+template <class E, MEMFLAGS F>
+class MmapArrayAllocator : public AllStatic {
+ private:
+  static size_t size_for(size_t length);
 
-  E* allocate(size_t length);
-  E* reallocate(size_t new_length);
-  void free();
+ public:
+  static E* allocate_or_null(size_t length);
+  static E* allocate(size_t length);
+  static void free(E* addr, size_t length);
+};
+
+// Uses malloc:ed memory for all allocations.
+template <class E, MEMFLAGS F>
+class MallocArrayAllocator : public AllStatic {
+ public:
+  static size_t size_for(size_t length);
+
+  static E* allocate(size_t length);
+  static void free(E* addr, size_t length);
 };
 
 #endif // SHARE_VM_MEMORY_ALLOCATION_HPP

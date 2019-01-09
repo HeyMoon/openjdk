@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,7 +38,6 @@
 #include "runtime/stubCodeGenerator.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "runtime/thread.inline.hpp"
-#include "utilities/top.hpp"
 #ifdef COMPILER2
 #include "opto/runtime.hpp"
 #endif
@@ -63,21 +62,6 @@ const int FPU_CNTRL_WRD_MASK = 0xFFFF;
 
 // -------------------------------------------------------------------------------------------------------------------------
 // Stub Code definitions
-
-static address handle_unsafe_access() {
-  JavaThread* thread = JavaThread::current();
-  address pc  = thread->saved_exception_pc();
-  // pc is the instruction which we must emulate
-  // doing a no-op is fine:  return garbage from the load
-  // therefore, compute npc
-  address npc = Assembler::locate_next_instruction(pc);
-
-  // request an async exception
-  thread->set_pending_unsafe_access_error();
-
-  // return address of next instruction to execute
-  return npc;
-}
 
 class StubGenerator: public StubCodeGenerator {
  private:
@@ -170,7 +154,7 @@ class StubGenerator: public StubCodeGenerator {
     // provide initial value for required masks
     if (UseAVX > 2) {
       __ movl(rbx, 0xffff);
-      __ kmovdl(k1, rbx);
+      __ kmovwl(k1, rbx);
     }
 
     // save and initialize %mxcsr
@@ -624,27 +608,6 @@ class StubGenerator: public StubCodeGenerator {
   }
 
 
-  //---------------------------------------------------------------------------
-  // The following routine generates a subroutine to throw an asynchronous
-  // UnknownError when an unsafe access gets a fault that could not be
-  // reasonably prevented by the programmer.  (Example: SIGBUS/OBJERR.)
-  address generate_handler_for_unsafe_access() {
-    StubCodeMark mark(this, "StubRoutines", "handler_for_unsafe_access");
-    address start = __ pc();
-
-    __ push(0);                       // hole for return address-to-be
-    __ pusha();                       // push registers
-    Address next_pc(rsp, RegisterImpl::number_of_registers * BytesPerWord);
-    BLOCK_COMMENT("call handle_unsafe_access");
-    __ call(RuntimeAddress(CAST_FROM_FN_PTR(address, handle_unsafe_access)));
-    __ movptr(next_pc, rax);          // stuff next address
-    __ popa();
-    __ ret(0);                        // jump to next address
-
-    return start;
-  }
-
-
   //----------------------------------------------------------------------------------------------------
   // Non-destructive plausibility checks for oops
 
@@ -722,7 +685,7 @@ class StubGenerator: public StubCodeGenerator {
            __ popa();
          }
         break;
-      case BarrierSet::CardTableModRef:
+      case BarrierSet::CardTableForRS:
       case BarrierSet::CardTableExtension:
       case BarrierSet::ModRef:
         break;
@@ -754,7 +717,7 @@ class StubGenerator: public StubCodeGenerator {
         }
         break;
 
-      case BarrierSet::CardTableModRef:
+      case BarrierSet::CardTableForRS:
       case BarrierSet::CardTableExtension:
         {
           CardTableModRefBS* ct = barrier_set_cast<CardTableModRefBS>(bs);
@@ -795,6 +758,12 @@ class StubGenerator: public StubCodeGenerator {
   void xmm_copy_forward(Register from, Register to_from, Register qword_count) {
     assert( UseSSE >= 2, "supported cpu only" );
     Label L_copy_64_bytes_loop, L_copy_64_bytes, L_copy_8_bytes, L_exit;
+    if (UseAVX > 2) {
+      __ push(rbx);
+      __ movl(rbx, 0xffff);
+      __ kmovwl(k1, rbx);
+      __ pop(rbx);
+    }
     // Copy 64-byte chunks
     __ jmpb(L_copy_64_bytes);
     __ align(OptoLoopAlignment);
@@ -802,8 +771,8 @@ class StubGenerator: public StubCodeGenerator {
 
     if (UseUnalignedLoadStores) {
       if (UseAVX > 2) {
-        __ evmovdqu(xmm0, Address(from, 0), Assembler::AVX_512bit);
-        __ evmovdqu(Address(from, to_from, Address::times_1, 0), xmm0, Assembler::AVX_512bit);
+        __ evmovdqul(xmm0, Address(from, 0), Assembler::AVX_512bit);
+        __ evmovdqul(Address(from, to_from, Address::times_1, 0), xmm0, Assembler::AVX_512bit);
       } else if (UseAVX == 2) {
         __ vmovdqu(xmm0, Address(from,  0));
         __ vmovdqu(Address(from, to_from, Address::times_1,  0), xmm0);
@@ -2087,66 +2056,6 @@ class StubGenerator: public StubCodeGenerator {
                                entry_checkcast_arraycopy);
   }
 
-  void generate_math_stubs() {
-    {
-      StubCodeMark mark(this, "StubRoutines", "log");
-      StubRoutines::_intrinsic_log = (double (*)(double)) __ pc();
-
-      __ fld_d(Address(rsp, 4));
-      __ flog();
-      __ ret(0);
-    }
-    {
-      StubCodeMark mark(this, "StubRoutines", "log10");
-      StubRoutines::_intrinsic_log10 = (double (*)(double)) __ pc();
-
-      __ fld_d(Address(rsp, 4));
-      __ flog10();
-      __ ret(0);
-    }
-    {
-      StubCodeMark mark(this, "StubRoutines", "sin");
-      StubRoutines::_intrinsic_sin = (double (*)(double))  __ pc();
-
-      __ fld_d(Address(rsp, 4));
-      __ trigfunc('s');
-      __ ret(0);
-    }
-    {
-      StubCodeMark mark(this, "StubRoutines", "cos");
-      StubRoutines::_intrinsic_cos = (double (*)(double)) __ pc();
-
-      __ fld_d(Address(rsp, 4));
-      __ trigfunc('c');
-      __ ret(0);
-    }
-    {
-      StubCodeMark mark(this, "StubRoutines", "tan");
-      StubRoutines::_intrinsic_tan = (double (*)(double)) __ pc();
-
-      __ fld_d(Address(rsp, 4));
-      __ trigfunc('t');
-      __ ret(0);
-    }
-    {
-      StubCodeMark mark(this, "StubRoutines", "exp");
-      StubRoutines::_intrinsic_exp = (double (*)(double)) __ pc();
-
-      __ fld_d(Address(rsp, 4));
-      __ exp_with_fallback(0);
-      __ ret(0);
-    }
-    {
-      StubCodeMark mark(this, "StubRoutines", "pow");
-      StubRoutines::_intrinsic_pow = (double (*)(double,double)) __ pc();
-
-      __ fld_d(Address(rsp, 12));
-      __ fld_d(Address(rsp, 4));
-      __ pow_with_fallback(0);
-      __ ret(0);
-    }
-  }
-
   // AES intrinsic stubs
   enum {AESBlockSize = 16};
 
@@ -2158,6 +2067,17 @@ class StubGenerator: public StubCodeGenerator {
     __ emit_data(0x04050607, relocInfo::none, 0 );
     __ emit_data(0x08090a0b, relocInfo::none, 0 );
     __ emit_data(0x0c0d0e0f, relocInfo::none, 0 );
+    return start;
+  }
+
+  address generate_counter_shuffle_mask() {
+    __ align(16);
+    StubCodeMark mark(this, "StubRoutines", "counter_shuffle_mask");
+    address start = __ pc();
+    __ emit_data(0x0c0d0e0f, relocInfo::none, 0);
+    __ emit_data(0x08090a0b, relocInfo::none, 0);
+    __ emit_data(0x04050607, relocInfo::none, 0);
+    __ emit_data(0x00010203, relocInfo::none, 0);
     return start;
   }
 
@@ -2184,6 +2104,31 @@ class StubGenerator: public StubCodeGenerator {
   void aes_dec_key(XMMRegister xmmdst, XMMRegister xmmtmp, Register key, int offset, XMMRegister xmm_shuf_mask=NULL) {
     load_key(xmmtmp, key, offset, xmm_shuf_mask);
     __ aesdec(xmmdst, xmmtmp);
+  }
+
+  // Utility routine for increase 128bit counter (iv in CTR mode)
+  //  XMM_128bit,  D3, D2, D1, D0
+  void inc_counter(Register reg, XMMRegister xmmdst, int inc_delta, Label& next_block) {
+    __ pextrd(reg, xmmdst, 0x0);
+    __ addl(reg, inc_delta);
+    __ pinsrd(xmmdst, reg, 0x0);
+    __ jcc(Assembler::carryClear, next_block); // jump if no carry
+
+    __ pextrd(reg, xmmdst, 0x01); // Carry-> D1
+    __ addl(reg, 0x01);
+    __ pinsrd(xmmdst, reg, 0x01);
+    __ jcc(Assembler::carryClear, next_block); // jump if no carry
+
+    __ pextrd(reg, xmmdst, 0x02); // Carry-> D2
+    __ addl(reg, 0x01);
+    __ pinsrd(xmmdst, reg, 0x02);
+    __ jcc(Assembler::carryClear, next_block); // jump if no carry
+
+    __ pextrd(reg, xmmdst, 0x03); // Carry -> D3
+    __ addl(reg, 0x01);
+    __ pinsrd(xmmdst, reg, 0x03);
+
+    __ BIND(next_block);          // next instruction
   }
 
 
@@ -2217,6 +2162,15 @@ class StubGenerator: public StubCodeGenerator {
     const XMMRegister xmm_temp4  = xmm5;
 
     __ enter();   // required for proper stackwalking of RuntimeStub frame
+
+    // For EVEX with VL and BW, provide a standard mask, VL = 128 will guide the merge
+    // context for the registers used, where all instructions below are using 128-bit mode
+    // On EVEX without VL and BW, these instructions will all be AVX.
+    if (VM_Version::supports_avx512vlbw()) {
+      __ movl(rdx, 0xffff);
+      __ kmovdl(k1, rdx);
+    }
+
     __ movptr(from, from_param);
     __ movptr(key, key_param);
 
@@ -2315,6 +2269,15 @@ class StubGenerator: public StubCodeGenerator {
     const XMMRegister xmm_temp4  = xmm5;
 
     __ enter(); // required for proper stackwalking of RuntimeStub frame
+
+    // For EVEX with VL and BW, provide a standard mask, VL = 128 will guide the merge
+    // context for the registers used, where all instructions below are using 128-bit mode
+    // On EVEX without VL and BW, these instructions will all be AVX.
+    if (VM_Version::supports_avx512vlbw()) {
+      __ movl(rdx, 0xffff);
+      __ kmovdl(k1, rdx);
+    }
+
     __ movptr(from, from_param);
     __ movptr(key, key_param);
 
@@ -2440,6 +2403,14 @@ class StubGenerator: public StubCodeGenerator {
 
     __ enter(); // required for proper stackwalking of RuntimeStub frame
     handleSOERegisters(true /*saving*/);
+
+    // For EVEX with VL and BW, provide a standard mask, VL = 128 will guide the merge
+    // context for the registers used, where all instructions below are using 128-bit mode
+    // On EVEX without VL and BW, these instructions will all be AVX.
+    if (VM_Version::supports_avx512vlbw()) {
+      __ movl(rdx, 0xffff);
+      __ kmovdl(k1, rdx);
+    }
 
     // load registers from incoming parameters
     const Address  from_param(rbp, 8+0);
@@ -2573,15 +2544,12 @@ class StubGenerator: public StubCodeGenerator {
   //   rax       - input length
   //
 
-  address generate_cipherBlockChaining_decryptAESCrypt() {
+  address generate_cipherBlockChaining_decryptAESCrypt_Parallel() {
     assert(UseAES, "need AES instructions and misaligned SSE support");
     __ align(CodeEntryAlignment);
     StubCodeMark mark(this, "StubRoutines", "cipherBlockChaining_decryptAESCrypt");
     address start = __ pc();
 
-    Label L_exit, L_key_192_256, L_key_256;
-    Label L_singleBlock_loopTop_128;
-    Label L_singleBlock_loopTop_192, L_singleBlock_loopTop_256;
     const Register from        = rsi;      // source array address
     const Register to          = rdx;      // destination array address
     const Register key         = rcx;      // key array address
@@ -2590,17 +2558,35 @@ class StubGenerator: public StubCodeGenerator {
     const Register len_reg     = rbx;      // src len (must be multiple of blocksize 16)
     const Register pos         = rax;
 
-    // xmm register assignments for the loops below
-    const XMMRegister xmm_result = xmm0;
-    const XMMRegister xmm_temp   = xmm1;
-    // first 6 keys preloaded into xmm2-xmm7
-    const int XMM_REG_NUM_KEY_FIRST = 2;
-    const int XMM_REG_NUM_KEY_LAST  = 7;
-    const int FIRST_NON_REG_KEY_offset = 0x70;
-    const XMMRegister xmm_key_first   = as_XMMRegister(XMM_REG_NUM_KEY_FIRST);
+    const int PARALLEL_FACTOR = 4;
+    const int ROUNDS[3] = { 10, 12, 14 }; //aes rounds for key128, key192, key256
+
+    Label L_exit;
+    Label L_singleBlock_loopTop[3]; //128, 192, 256
+    Label L_multiBlock_loopTop[3]; //128, 192, 256
+
+    const XMMRegister xmm_prev_block_cipher = xmm0; // holds cipher of previous block
+    const XMMRegister xmm_key_shuf_mask = xmm1;
+
+    const XMMRegister xmm_key_tmp0 = xmm2;
+    const XMMRegister xmm_key_tmp1 = xmm3;
+
+    // registers holding the six results in the parallelized loop
+    const XMMRegister xmm_result0 = xmm4;
+    const XMMRegister xmm_result1 = xmm5;
+    const XMMRegister xmm_result2 = xmm6;
+    const XMMRegister xmm_result3 = xmm7;
 
     __ enter(); // required for proper stackwalking of RuntimeStub frame
     handleSOERegisters(true /*saving*/);
+
+    // For EVEX with VL and BW, provide a standard mask, VL = 128 will guide the merge
+    // context for the registers used, where all instructions below are using 128-bit mode
+    // On EVEX without VL and BW, these instructions will all be AVX.
+    if (VM_Version::supports_avx512vlbw()) {
+      __ movl(rdx, 0xffff);
+      __ kmovdl(k1, rdx);
+    }
 
     // load registers from incoming parameters
     const Address  from_param(rbp, 8+0);
@@ -2608,122 +2594,556 @@ class StubGenerator: public StubCodeGenerator {
     const Address  key_param (rbp, 8+8);
     const Address  rvec_param (rbp, 8+12);
     const Address  len_param  (rbp, 8+16);
+
     __ movptr(from , from_param);
     __ movptr(to   , to_param);
     __ movptr(key  , key_param);
     __ movptr(rvec , rvec_param);
     __ movptr(len_reg , len_param);
 
-    // the java expanded key ordering is rotated one position from what we want
-    // so we start from 0x10 here and hit 0x00 last
-    const XMMRegister xmm_key_shuf_mask = xmm1;  // used temporarily to swap key bytes up front
     __ movdqu(xmm_key_shuf_mask, ExternalAddress(StubRoutines::x86::key_shuffle_mask_addr()));
-    // load up xmm regs 2 thru 6 with first 5 keys
-    for (int rnum = XMM_REG_NUM_KEY_FIRST, offset = 0x10; rnum  <= XMM_REG_NUM_KEY_LAST; rnum++) {
-      load_key(as_XMMRegister(rnum), key, offset, xmm_key_shuf_mask);
-      offset += 0x10;
-    }
+    __ movdqu(xmm_prev_block_cipher, Address(rvec, 0x00)); // initialize with initial rvec
 
-    // inside here, use the rvec register to point to previous block cipher
-    // with which we xor at the end of each newly decrypted block
-    const Register  prev_block_cipher_ptr = rvec;
+    __ xorptr(pos, pos);
 
     // now split to different paths depending on the keylen (len in ints of AESCrypt.KLE array (52=192, or 60=256))
-    __ movl(rax, Address(key, arrayOopDesc::length_offset_in_bytes() - arrayOopDesc::base_offset_in_bytes(T_INT)));
-    __ cmpl(rax, 44);
-    __ jcc(Assembler::notEqual, L_key_192_256);
+    // rvec is reused
+    __ movl(rvec, Address(key, arrayOopDesc::length_offset_in_bytes() - arrayOopDesc::base_offset_in_bytes(T_INT)));
+    __ cmpl(rvec, 52);
+    __ jcc(Assembler::equal, L_multiBlock_loopTop[1]);
+    __ cmpl(rvec, 60);
+    __ jcc(Assembler::equal, L_multiBlock_loopTop[2]);
 
+#define DoFour(opc, src_reg)           \
+  __ opc(xmm_result0, src_reg);         \
+  __ opc(xmm_result1, src_reg);         \
+  __ opc(xmm_result2, src_reg);         \
+  __ opc(xmm_result3, src_reg);         \
 
-    // 128-bit code follows here, parallelized
-    __ movl(pos, 0);
-    __ align(OptoLoopAlignment);
-    __ BIND(L_singleBlock_loopTop_128);
-    __ cmpptr(len_reg, 0);           // any blocks left??
-    __ jcc(Assembler::equal, L_exit);
-    __ movdqu(xmm_result, Address(from, pos, Address::times_1, 0));   // get next 16 bytes of cipher input
-    __ pxor  (xmm_result, xmm_key_first);                             // do the aes dec rounds
-    for (int rnum = XMM_REG_NUM_KEY_FIRST + 1; rnum  <= XMM_REG_NUM_KEY_LAST; rnum++) {
-      __ aesdec(xmm_result, as_XMMRegister(rnum));
-    }
-    for (int key_offset = FIRST_NON_REG_KEY_offset; key_offset <= 0xa0; key_offset += 0x10) {   // 128-bit runs up to key offset a0
-      aes_dec_key(xmm_result, xmm_temp, key, key_offset);
-    }
-    load_key(xmm_temp, key, 0x00);                                     // final key is stored in java expanded array at offset 0
-    __ aesdeclast(xmm_result, xmm_temp);
-    __ movdqu(xmm_temp, Address(prev_block_cipher_ptr, 0x00));
-    __ pxor  (xmm_result, xmm_temp);                                  // xor with the current r vector
-    __ movdqu(Address(to, pos, Address::times_1, 0), xmm_result);     // store into the next 16 bytes of output
-    // no need to store r to memory until we exit
-    __ lea(prev_block_cipher_ptr, Address(from, pos, Address::times_1, 0));     // set up new ptr
-    __ addptr(pos, AESBlockSize);
-    __ subptr(len_reg, AESBlockSize);
-    __ jmp(L_singleBlock_loopTop_128);
+    for (int k = 0; k < 3; ++k) {
+      __ align(OptoLoopAlignment);
+      __ BIND(L_multiBlock_loopTop[k]);
+      __ cmpptr(len_reg, PARALLEL_FACTOR * AESBlockSize); // see if at least 4 blocks left
+      __ jcc(Assembler::less, L_singleBlock_loopTop[k]);
 
+      __ movdqu(xmm_result0, Address(from, pos, Address::times_1, 0 * AESBlockSize)); // get next 4 blocks into xmmresult registers
+      __ movdqu(xmm_result1, Address(from, pos, Address::times_1, 1 * AESBlockSize));
+      __ movdqu(xmm_result2, Address(from, pos, Address::times_1, 2 * AESBlockSize));
+      __ movdqu(xmm_result3, Address(from, pos, Address::times_1, 3 * AESBlockSize));
+
+      // the java expanded key ordering is rotated one position from what we want
+      // so we start from 0x10 here and hit 0x00 last
+      load_key(xmm_key_tmp0, key, 0x10, xmm_key_shuf_mask);
+      DoFour(pxor, xmm_key_tmp0); //xor with first key
+      // do the aes dec rounds
+      for (int rnum = 1; rnum <= ROUNDS[k];) {
+        //load two keys at a time
+        //k1->0x20, ..., k9->0xa0, k10->0x00
+        load_key(xmm_key_tmp1, key, (rnum + 1) * 0x10, xmm_key_shuf_mask);
+        load_key(xmm_key_tmp0, key, ((rnum + 2) % (ROUNDS[k] + 1)) * 0x10, xmm_key_shuf_mask); // hit 0x00 last!
+        DoFour(aesdec, xmm_key_tmp1);
+        rnum++;
+        if (rnum != ROUNDS[k]) {
+          DoFour(aesdec, xmm_key_tmp0);
+        }
+        else {
+          DoFour(aesdeclast, xmm_key_tmp0);
+        }
+        rnum++;
+      }
+
+      // for each result, xor with the r vector of previous cipher block
+      __ pxor(xmm_result0, xmm_prev_block_cipher);
+      __ movdqu(xmm_prev_block_cipher, Address(from, pos, Address::times_1, 0 * AESBlockSize));
+      __ pxor(xmm_result1, xmm_prev_block_cipher);
+      __ movdqu(xmm_prev_block_cipher, Address(from, pos, Address::times_1, 1 * AESBlockSize));
+      __ pxor(xmm_result2, xmm_prev_block_cipher);
+      __ movdqu(xmm_prev_block_cipher, Address(from, pos, Address::times_1, 2 * AESBlockSize));
+      __ pxor(xmm_result3, xmm_prev_block_cipher);
+      __ movdqu(xmm_prev_block_cipher, Address(from, pos, Address::times_1, 3 * AESBlockSize)); // this will carry over to next set of blocks
+
+            // store 4 results into the next 64 bytes of output
+       __ movdqu(Address(to, pos, Address::times_1, 0 * AESBlockSize), xmm_result0);
+       __ movdqu(Address(to, pos, Address::times_1, 1 * AESBlockSize), xmm_result1);
+       __ movdqu(Address(to, pos, Address::times_1, 2 * AESBlockSize), xmm_result2);
+       __ movdqu(Address(to, pos, Address::times_1, 3 * AESBlockSize), xmm_result3);
+
+       __ addptr(pos, 4 * AESBlockSize);
+       __ subptr(len_reg, 4 * AESBlockSize);
+       __ jmp(L_multiBlock_loopTop[k]);
+
+       //singleBlock starts here
+       __ align(OptoLoopAlignment);
+       __ BIND(L_singleBlock_loopTop[k]);
+       __ cmpptr(len_reg, 0); // any blocks left?
+       __ jcc(Assembler::equal, L_exit);
+       __ movdqu(xmm_result0, Address(from, pos, Address::times_1, 0)); // get next 16 bytes of cipher input
+       __ movdqa(xmm_result1, xmm_result0);
+
+       load_key(xmm_key_tmp0, key, 0x10, xmm_key_shuf_mask);
+       __ pxor(xmm_result0, xmm_key_tmp0);
+       // do the aes dec rounds
+       for (int rnum = 1; rnum < ROUNDS[k]; rnum++) {
+         // the java expanded key ordering is rotated one position from what we want
+         load_key(xmm_key_tmp0, key, (rnum + 1) * 0x10, xmm_key_shuf_mask);
+         __ aesdec(xmm_result0, xmm_key_tmp0);
+       }
+       load_key(xmm_key_tmp0, key, 0x00, xmm_key_shuf_mask);
+       __ aesdeclast(xmm_result0, xmm_key_tmp0);
+       __ pxor(xmm_result0, xmm_prev_block_cipher); // xor with the current r vector
+       __ movdqu(Address(to, pos, Address::times_1, 0), xmm_result0); // store into the next 16 bytes of output
+       // no need to store r to memory until we exit
+       __ movdqa(xmm_prev_block_cipher, xmm_result1); // set up next r vector with cipher input from this block
+
+       __ addptr(pos, AESBlockSize);
+       __ subptr(len_reg, AESBlockSize);
+       __ jmp(L_singleBlock_loopTop[k]);
+    }//for 128/192/256
 
     __ BIND(L_exit);
-    __ movdqu(xmm_temp, Address(prev_block_cipher_ptr, 0x00));
-    __ movptr(rvec , rvec_param);                                     // restore this since used in loop
-    __ movdqu(Address(rvec, 0), xmm_temp);                            // final value of r stored in rvec of CipherBlockChaining object
+    __ movptr(rvec, rvec_param);                        // restore this since reused earlier
+    __ movdqu(Address(rvec, 0), xmm_prev_block_cipher); // final value of r stored in rvec of CipherBlockChaining object
     handleSOERegisters(false /*restoring*/);
-    __ movptr(rax, len_param); // return length
-    __ leave();                                                       // required for proper stackwalking of RuntimeStub frame
+    __ movptr(rax, len_param);                          // return length
+    __ leave();                                         // required for proper stackwalking of RuntimeStub frame
     __ ret(0);
 
+    return start;
+  }
 
-    __ BIND(L_key_192_256);
-    // here rax = len in ints of AESCrypt.KLE array (52=192, or 60=256)
+  // CTR AES crypt.
+  // In 32-bit stub, parallelize 4 blocks at a time
+  // Arguments:
+  //
+  // Inputs:
+  //   c_rarg0   - source byte array address
+  //   c_rarg1   - destination byte array address
+  //   c_rarg2   - K (key) in little endian int array
+  //   c_rarg3   - counter vector byte array address
+  //   c_rarg4   - input length
+  //
+  // Output:
+  //   rax       - input length
+  //
+  address generate_counterMode_AESCrypt_Parallel() {
+    assert(UseAES, "need AES instructions and misaligned SSE support");
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "counterMode_AESCrypt");
+    address start = __ pc();
+    const Register from        = rsi;      // source array address
+    const Register to          = rdx;      // destination array address
+    const Register key         = rcx;      // key array address
+    const Register counter     = rdi;      // counter byte array initialized from initvector array address
+                                           // and updated with the incremented counter in the end
+    const Register len_reg     = rbx;
+    const Register pos         = rax;
+
+    __ enter(); // required for proper stackwalking of RuntimeStub frame
+    handleSOERegisters(true /*saving*/); // save rbx, rsi, rdi
+
+    // For EVEX with VL and BW, provide a standard mask, VL = 128 will guide the merge
+    // context for the registers used, where all instructions below are using 128-bit mode
+    // On EVEX without VL and BW, these instructions will all be AVX.
+    if (VM_Version::supports_avx512vlbw()) {
+      __ movl(rdx, 0xffff);
+      __ kmovdl(k1, rdx);
+    }
+
+    // load registers from incoming parameters
+    const Address  from_param(rbp, 8+0);
+    const Address  to_param  (rbp, 8+4);
+    const Address  key_param (rbp, 8+8);
+    const Address  rvec_param (rbp, 8+12);
+    const Address  len_param  (rbp, 8+16);
+    const Address  saved_counter_param(rbp, 8 + 20);
+    const Address  used_addr_param(rbp, 8 + 24);
+
+    __ movptr(from , from_param);
+    __ movptr(to   , to_param);
+    __ movptr(len_reg , len_param);
+
+    // Use the partially used encrpyted counter from last invocation
+    Label L_exit_preLoop, L_preLoop_start;
+
+    // Use the registers 'counter' and 'key' here in this preloop
+    // to hold of last 2 params 'used' and 'saved_encCounter_start'
+    Register used = counter;
+    Register saved_encCounter_start = key;
+    Register used_addr = saved_encCounter_start;
+
+    __ movptr(used_addr, used_addr_param);
+    __ movptr(used, Address(used_addr, 0));
+    __ movptr(saved_encCounter_start, saved_counter_param);
+
+    __ BIND(L_preLoop_start);
+    __ cmpptr(used, 16);
+    __ jcc(Assembler::aboveEqual, L_exit_preLoop);
+    __ cmpptr(len_reg, 0);
+    __ jcc(Assembler::lessEqual, L_exit_preLoop);
+    __ movb(rax, Address(saved_encCounter_start, used));
+    __ xorb(rax, Address(from, 0));
+    __ movb(Address(to, 0), rax);
+    __ addptr(from, 1);
+    __ addptr(to, 1);
+    __ addptr(used, 1);
+    __ subptr(len_reg, 1);
+
+    __ jmp(L_preLoop_start);
+
+    __ BIND(L_exit_preLoop);
+    __ movptr(used_addr, used_addr_param);
+    __ movptr(used_addr, used_addr_param);
+    __ movl(Address(used_addr, 0), used);
+
+    // load the parameters 'key' and 'counter'
+    __ movptr(key, key_param);
+    __ movptr(counter, rvec_param);
+
+    // xmm register assignments for the loops below
+    const XMMRegister xmm_curr_counter      = xmm0;
+    const XMMRegister xmm_counter_shuf_mask = xmm1;  // need to be reloaded
+    const XMMRegister xmm_key_shuf_mask     = xmm2;  // need to be reloaded
+    const XMMRegister xmm_key               = xmm3;
+    const XMMRegister xmm_result0           = xmm4;
+    const XMMRegister xmm_result1           = xmm5;
+    const XMMRegister xmm_result2           = xmm6;
+    const XMMRegister xmm_result3           = xmm7;
+    const XMMRegister xmm_from0             = xmm1;   //reuse XMM register
+    const XMMRegister xmm_from1             = xmm2;
+    const XMMRegister xmm_from2             = xmm3;
+    const XMMRegister xmm_from3             = xmm4;
+
+    //for key_128, key_192, key_256
+    const int rounds[3] = {10, 12, 14};
+    Label L_singleBlockLoopTop[3];
+    Label L_multiBlock_loopTop[3];
+    Label L_key192_top, L_key256_top;
+    Label L_incCounter[3][4]; // 3: different key length,  4: 4 blocks at a time
+    Label L_incCounter_single[3]; //for single block, key128, key192, key256
+    Label L_processTail_insr[3], L_processTail_4_insr[3], L_processTail_2_insr[3], L_processTail_1_insr[3], L_processTail_exit_insr[3];
+    Label L_processTail_extr[3], L_processTail_4_extr[3], L_processTail_2_extr[3], L_processTail_1_extr[3], L_processTail_exit_extr[3];
+
+    Label L_exit;
+    const int PARALLEL_FACTOR = 4;  //because of the limited register number
+
+    // initialize counter with initial counter
+    __ movdqu(xmm_curr_counter, Address(counter, 0x00));
+    __ movdqu(xmm_counter_shuf_mask, ExternalAddress(StubRoutines::x86::counter_shuffle_mask_addr()));
+    __ pshufb(xmm_curr_counter, xmm_counter_shuf_mask); //counter is shuffled for increase
+
+    // key length could be only {11, 13, 15} * 4 = {44, 52, 60}
+    __ movdqu(xmm_key_shuf_mask, ExternalAddress(StubRoutines::x86::key_shuffle_mask_addr()));
+    __ movl(rax, Address(key, arrayOopDesc::length_offset_in_bytes() - arrayOopDesc::base_offset_in_bytes(T_INT)));
     __ cmpl(rax, 52);
-    __ jcc(Assembler::notEqual, L_key_256);
+    __ jcc(Assembler::equal, L_key192_top);
+    __ cmpl(rax, 60);
+    __ jcc(Assembler::equal, L_key256_top);
 
-    // 192-bit code follows here (could be optimized to use parallelism)
-    __ movl(pos, 0);
-    __ align(OptoLoopAlignment);
-    __ BIND(L_singleBlock_loopTop_192);
-    __ movdqu(xmm_result, Address(from, pos, Address::times_1, 0));   // get next 16 bytes of cipher input
-    __ pxor  (xmm_result, xmm_key_first);                             // do the aes dec rounds
-    for (int rnum = XMM_REG_NUM_KEY_FIRST + 1; rnum <= XMM_REG_NUM_KEY_LAST; rnum++) {
-      __ aesdec(xmm_result, as_XMMRegister(rnum));
-    }
-    for (int key_offset = FIRST_NON_REG_KEY_offset; key_offset <= 0xc0; key_offset += 0x10) {   // 192-bit runs up to key offset c0
-      aes_dec_key(xmm_result, xmm_temp, key, key_offset);
-    }
-    load_key(xmm_temp, key, 0x00);                                     // final key is stored in java expanded array at offset 0
-    __ aesdeclast(xmm_result, xmm_temp);
-    __ movdqu(xmm_temp, Address(prev_block_cipher_ptr, 0x00));
-    __ pxor  (xmm_result, xmm_temp);                                  // xor with the current r vector
-    __ movdqu(Address(to, pos, Address::times_1, 0), xmm_result);     // store into the next 16 bytes of output
-    // no need to store r to memory until we exit
-    __ lea(prev_block_cipher_ptr, Address(from, pos, Address::times_1, 0));     // set up new ptr
-    __ addptr(pos, AESBlockSize);
-    __ subptr(len_reg, AESBlockSize);
-    __ jcc(Assembler::notEqual,L_singleBlock_loopTop_192);
-    __ jmp(L_exit);
+    //key128 begins here
+    __ movptr(pos, 0); // init pos before L_multiBlock_loopTop
 
-    __ BIND(L_key_256);
-    // 256-bit code follows here (could be optimized to use parallelism)
-    __ movl(pos, 0);
-    __ align(OptoLoopAlignment);
-    __ BIND(L_singleBlock_loopTop_256);
-    __ movdqu(xmm_result, Address(from, pos, Address::times_1, 0));   // get next 16 bytes of cipher input
-    __ pxor  (xmm_result, xmm_key_first);                             // do the aes dec rounds
-    for (int rnum = XMM_REG_NUM_KEY_FIRST + 1; rnum <= XMM_REG_NUM_KEY_LAST; rnum++) {
-      __ aesdec(xmm_result, as_XMMRegister(rnum));
-    }
-    for (int key_offset = FIRST_NON_REG_KEY_offset; key_offset <= 0xe0; key_offset += 0x10) {   // 256-bit runs up to key offset e0
-      aes_dec_key(xmm_result, xmm_temp, key, key_offset);
-    }
-    load_key(xmm_temp, key, 0x00);                                     // final key is stored in java expanded array at offset 0
-    __ aesdeclast(xmm_result, xmm_temp);
-    __ movdqu(xmm_temp, Address(prev_block_cipher_ptr, 0x00));
-    __ pxor  (xmm_result, xmm_temp);                                  // xor with the current r vector
-    __ movdqu(Address(to, pos, Address::times_1, 0), xmm_result);     // store into the next 16 bytes of output
-    // no need to store r to memory until we exit
-    __ lea(prev_block_cipher_ptr, Address(from, pos, Address::times_1, 0));     // set up new ptr
-    __ addptr(pos, AESBlockSize);
-    __ subptr(len_reg, AESBlockSize);
-    __ jcc(Assembler::notEqual,L_singleBlock_loopTop_256);
-    __ jmp(L_exit);
+#define CTR_DoFour(opc, src_reg)               \
+    __ opc(xmm_result0, src_reg);              \
+    __ opc(xmm_result1, src_reg);              \
+    __ opc(xmm_result2, src_reg);              \
+    __ opc(xmm_result3, src_reg);
 
+    // k == 0 :  generate code for key_128
+    // k == 1 :  generate code for key_192
+    // k == 2 :  generate code for key_256
+    for (int k = 0; k < 3; ++k) {
+      //multi blocks starts here
+      __ align(OptoLoopAlignment);
+      __ BIND(L_multiBlock_loopTop[k]);
+      __ cmpptr(len_reg, PARALLEL_FACTOR * AESBlockSize); // see if at least PARALLEL_FACTOR blocks left
+      __ jcc(Assembler::less, L_singleBlockLoopTop[k]);
+
+      __ movdqu(xmm_key_shuf_mask, ExternalAddress(StubRoutines::x86::key_shuffle_mask_addr()));
+      __ movdqu(xmm_counter_shuf_mask, ExternalAddress(StubRoutines::x86::counter_shuffle_mask_addr()));
+
+      //load, then increase counters
+      CTR_DoFour(movdqa, xmm_curr_counter);
+      __ push(rbx);
+      inc_counter(rbx, xmm_result1, 0x01, L_incCounter[k][0]);
+      inc_counter(rbx, xmm_result2, 0x02, L_incCounter[k][1]);
+      inc_counter(rbx, xmm_result3, 0x03, L_incCounter[k][2]);
+      inc_counter(rbx, xmm_curr_counter, 0x04, L_incCounter[k][3]);
+      __ pop (rbx);
+
+      load_key(xmm_key, key, 0x00, xmm_key_shuf_mask); // load Round 0 key. interleaving for better performance
+
+      CTR_DoFour(pshufb, xmm_counter_shuf_mask); // after increased, shuffled counters back for PXOR
+      CTR_DoFour(pxor, xmm_key);   //PXOR with Round 0 key
+
+      for (int i = 1; i < rounds[k]; ++i) {
+        load_key(xmm_key, key, (0x10 * i), xmm_key_shuf_mask);
+        CTR_DoFour(aesenc, xmm_key);
+      }
+      load_key(xmm_key, key, (0x10 * rounds[k]), xmm_key_shuf_mask);
+      CTR_DoFour(aesenclast, xmm_key);
+
+      // get next PARALLEL_FACTOR blocks into xmm_from registers
+      __ movdqu(xmm_from0, Address(from, pos, Address::times_1, 0 * AESBlockSize));
+      __ movdqu(xmm_from1, Address(from, pos, Address::times_1, 1 * AESBlockSize));
+      __ movdqu(xmm_from2, Address(from, pos, Address::times_1, 2 * AESBlockSize));
+
+      // PXOR with input text
+      __ pxor(xmm_result0, xmm_from0); //result0 is xmm4
+      __ pxor(xmm_result1, xmm_from1);
+      __ pxor(xmm_result2, xmm_from2);
+
+      // store PARALLEL_FACTOR results into the next 64 bytes of output
+      __ movdqu(Address(to, pos, Address::times_1, 0 * AESBlockSize), xmm_result0);
+      __ movdqu(Address(to, pos, Address::times_1, 1 * AESBlockSize), xmm_result1);
+      __ movdqu(Address(to, pos, Address::times_1, 2 * AESBlockSize), xmm_result2);
+
+      // do it here after xmm_result0 is saved, because xmm_from3 reuse the same register of xmm_result0.
+      __ movdqu(xmm_from3, Address(from, pos, Address::times_1, 3 * AESBlockSize));
+      __ pxor(xmm_result3, xmm_from3);
+      __ movdqu(Address(to, pos, Address::times_1, 3 * AESBlockSize), xmm_result3);
+
+      __ addptr(pos, PARALLEL_FACTOR * AESBlockSize); // increase the length of crypt text
+      __ subptr(len_reg, PARALLEL_FACTOR * AESBlockSize); // decrease the remaining length
+      __ jmp(L_multiBlock_loopTop[k]);
+
+      // singleBlock starts here
+      __ align(OptoLoopAlignment);
+      __ BIND(L_singleBlockLoopTop[k]);
+      __ cmpptr(len_reg, 0);
+      __ jcc(Assembler::equal, L_exit);
+      __ movdqu(xmm_key_shuf_mask, ExternalAddress(StubRoutines::x86::key_shuffle_mask_addr()));
+      __ movdqu(xmm_counter_shuf_mask, ExternalAddress(StubRoutines::x86::counter_shuffle_mask_addr()));
+      __ movdqa(xmm_result0, xmm_curr_counter);
+      load_key(xmm_key, key, 0x00, xmm_key_shuf_mask);
+      __ push(rbx);//rbx is used for increasing counter
+      inc_counter(rbx, xmm_curr_counter, 0x01, L_incCounter_single[k]);
+      __ pop (rbx);
+      __ pshufb(xmm_result0, xmm_counter_shuf_mask);
+      __ pxor(xmm_result0, xmm_key);
+      for (int i = 1; i < rounds[k]; i++) {
+        load_key(xmm_key, key, (0x10 * i), xmm_key_shuf_mask);
+        __ aesenc(xmm_result0, xmm_key);
+      }
+      load_key(xmm_key, key, (0x10 * rounds[k]), xmm_key_shuf_mask);
+      __ aesenclast(xmm_result0, xmm_key);
+      __ cmpptr(len_reg, AESBlockSize);
+      __ jcc(Assembler::less, L_processTail_insr[k]);
+        __ movdqu(xmm_from0, Address(from, pos, Address::times_1, 0 * AESBlockSize));
+        __ pxor(xmm_result0, xmm_from0);
+        __ movdqu(Address(to, pos, Address::times_1, 0 * AESBlockSize), xmm_result0);
+        __ addptr(pos, AESBlockSize);
+        __ subptr(len_reg, AESBlockSize);
+        __ jmp(L_singleBlockLoopTop[k]);
+
+      __ BIND(L_processTail_insr[k]);                                               // Process the tail part of the input array
+        __ addptr(pos, len_reg);                                                    // 1. Insert bytes from src array into xmm_from0 register
+        __ testptr(len_reg, 8);
+        __ jcc(Assembler::zero, L_processTail_4_insr[k]);
+          __ subptr(pos,8);
+          __ pinsrd(xmm_from0, Address(from, pos), 0);
+          __ pinsrd(xmm_from0, Address(from, pos, Address::times_1, 4), 1);
+        __ BIND(L_processTail_4_insr[k]);
+        __ testptr(len_reg, 4);
+        __ jcc(Assembler::zero, L_processTail_2_insr[k]);
+          __ subptr(pos,4);
+          __ pslldq(xmm_from0, 4);
+          __ pinsrd(xmm_from0, Address(from, pos), 0);
+        __ BIND(L_processTail_2_insr[k]);
+        __ testptr(len_reg, 2);
+        __ jcc(Assembler::zero, L_processTail_1_insr[k]);
+          __ subptr(pos, 2);
+          __ pslldq(xmm_from0, 2);
+          __ pinsrw(xmm_from0, Address(from, pos), 0);
+        __ BIND(L_processTail_1_insr[k]);
+        __ testptr(len_reg, 1);
+        __ jcc(Assembler::zero, L_processTail_exit_insr[k]);
+          __ subptr(pos, 1);
+          __ pslldq(xmm_from0, 1);
+          __ pinsrb(xmm_from0, Address(from, pos), 0);
+        __ BIND(L_processTail_exit_insr[k]);
+
+        __ movptr(saved_encCounter_start, saved_counter_param);
+        __ movdqu(Address(saved_encCounter_start, 0), xmm_result0);               // 2. Perform pxor of the encrypted counter and plaintext Bytes.
+        __ pxor(xmm_result0, xmm_from0);                                          //    Also the encrypted counter is saved for next invocation.
+
+        __ testptr(len_reg, 8);
+        __ jcc(Assembler::zero, L_processTail_4_extr[k]);                        // 3. Extract bytes from xmm_result0 into the dest. array
+          __ pextrd(Address(to, pos), xmm_result0, 0);
+          __ pextrd(Address(to, pos, Address::times_1, 4), xmm_result0, 1);
+          __ psrldq(xmm_result0, 8);
+          __ addptr(pos, 8);
+        __ BIND(L_processTail_4_extr[k]);
+        __ testptr(len_reg, 4);
+        __ jcc(Assembler::zero, L_processTail_2_extr[k]);
+          __ pextrd(Address(to, pos), xmm_result0, 0);
+          __ psrldq(xmm_result0, 4);
+          __ addptr(pos, 4);
+        __ BIND(L_processTail_2_extr[k]);
+        __ testptr(len_reg, 2);
+        __ jcc(Assembler::zero, L_processTail_1_extr[k]);
+          __ pextrb(Address(to, pos), xmm_result0, 0);
+          __ pextrb(Address(to, pos, Address::times_1, 1), xmm_result0, 1);
+          __ psrldq(xmm_result0, 2);
+          __ addptr(pos, 2);
+        __ BIND(L_processTail_1_extr[k]);
+        __ testptr(len_reg, 1);
+        __ jcc(Assembler::zero, L_processTail_exit_extr[k]);
+          __ pextrb(Address(to, pos), xmm_result0, 0);
+
+        __ BIND(L_processTail_exit_extr[k]);
+        __ movptr(used_addr, used_addr_param);
+        __ movl(Address(used_addr, 0), len_reg);
+        __ jmp(L_exit);
+    }
+
+    __ BIND(L_exit);
+    __ movdqu(xmm_counter_shuf_mask, ExternalAddress(StubRoutines::x86::counter_shuffle_mask_addr()));
+    __ pshufb(xmm_curr_counter, xmm_counter_shuf_mask); //counter is shuffled back.
+    __ movdqu(Address(counter, 0), xmm_curr_counter); //save counter back
+    handleSOERegisters(false /*restoring*/);
+    __ movptr(rax, len_param); // return length
+    __ leave();                // required for proper stackwalking of RuntimeStub frame
+    __ ret(0);
+
+    __ BIND (L_key192_top);
+    __ movptr(pos, 0); // init pos before L_multiBlock_loopTop
+    __ jmp(L_multiBlock_loopTop[1]); //key192
+
+    __ BIND (L_key256_top);
+    __ movptr(pos, 0); // init pos before L_multiBlock_loopTop
+    __ jmp(L_multiBlock_loopTop[2]); //key192
+
+    return start;
+  }
+
+  address generate_upper_word_mask() {
+    __ align(64);
+    StubCodeMark mark(this, "StubRoutines", "upper_word_mask");
+    address start = __ pc();
+    __ emit_data(0x00000000, relocInfo::none, 0);
+    __ emit_data(0x00000000, relocInfo::none, 0);
+    __ emit_data(0x00000000, relocInfo::none, 0);
+    __ emit_data(0xFFFFFFFF, relocInfo::none, 0);
+    return start;
+  }
+
+  address generate_shuffle_byte_flip_mask() {
+    __ align(64);
+    StubCodeMark mark(this, "StubRoutines", "shuffle_byte_flip_mask");
+    address start = __ pc();
+    __ emit_data(0x0c0d0e0f, relocInfo::none, 0);
+    __ emit_data(0x08090a0b, relocInfo::none, 0);
+    __ emit_data(0x04050607, relocInfo::none, 0);
+    __ emit_data(0x00010203, relocInfo::none, 0);
+    return start;
+  }
+
+  // ofs and limit are use for multi-block byte array.
+  // int com.sun.security.provider.DigestBase.implCompressMultiBlock(byte[] b, int ofs, int limit)
+  address generate_sha1_implCompress(bool multi_block, const char *name) {
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", name);
+    address start = __ pc();
+
+    Register buf   = rax;
+    Register state = rdx;
+    Register ofs   = rcx;
+    Register limit = rdi;
+
+    const Address  buf_param(rbp, 8 + 0);
+    const Address  state_param(rbp, 8 + 4);
+    const Address  ofs_param(rbp, 8 + 8);
+    const Address  limit_param(rbp, 8 + 12);
+
+    const XMMRegister abcd = xmm0;
+    const XMMRegister e0 = xmm1;
+    const XMMRegister e1 = xmm2;
+    const XMMRegister msg0 = xmm3;
+
+    const XMMRegister msg1 = xmm4;
+    const XMMRegister msg2 = xmm5;
+    const XMMRegister msg3 = xmm6;
+    const XMMRegister shuf_mask = xmm7;
+
+    __ enter();
+    __ subptr(rsp, 8 * wordSize);
+    if (multi_block) {
+      __ push(limit);
+    }
+    __ movptr(buf, buf_param);
+    __ movptr(state, state_param);
+    if (multi_block) {
+      __ movptr(ofs, ofs_param);
+      __ movptr(limit, limit_param);
+    }
+
+    __ fast_sha1(abcd, e0, e1, msg0, msg1, msg2, msg3, shuf_mask,
+      buf, state, ofs, limit, rsp, multi_block);
+
+    if (multi_block) {
+      __ pop(limit);
+    }
+    __ addptr(rsp, 8 * wordSize);
+    __ leave();
+    __ ret(0);
+    return start;
+  }
+
+  address generate_pshuffle_byte_flip_mask() {
+    __ align(64);
+    StubCodeMark mark(this, "StubRoutines", "pshuffle_byte_flip_mask");
+    address start = __ pc();
+    __ emit_data(0x00010203, relocInfo::none, 0);
+    __ emit_data(0x04050607, relocInfo::none, 0);
+    __ emit_data(0x08090a0b, relocInfo::none, 0);
+    __ emit_data(0x0c0d0e0f, relocInfo::none, 0);
+    return start;
+  }
+
+  // ofs and limit are use for multi-block byte array.
+  // int com.sun.security.provider.DigestBase.implCompressMultiBlock(byte[] b, int ofs, int limit)
+ address generate_sha256_implCompress(bool multi_block, const char *name) {
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", name);
+    address start = __ pc();
+
+    Register buf = rbx;
+    Register state = rsi;
+    Register ofs = rdx;
+    Register limit = rcx;
+
+    const Address  buf_param(rbp, 8 + 0);
+    const Address  state_param(rbp, 8 + 4);
+    const Address  ofs_param(rbp, 8 + 8);
+    const Address  limit_param(rbp, 8 + 12);
+
+    const XMMRegister msg = xmm0;
+    const XMMRegister state0 = xmm1;
+    const XMMRegister state1 = xmm2;
+    const XMMRegister msgtmp0 = xmm3;
+
+    const XMMRegister msgtmp1 = xmm4;
+    const XMMRegister msgtmp2 = xmm5;
+    const XMMRegister msgtmp3 = xmm6;
+    const XMMRegister msgtmp4 = xmm7;
+
+    __ enter();
+    __ subptr(rsp, 8 * wordSize);
+    handleSOERegisters(true /*saving*/);
+    __ movptr(buf, buf_param);
+    __ movptr(state, state_param);
+    if (multi_block) {
+     __ movptr(ofs, ofs_param);
+     __ movptr(limit, limit_param);
+    }
+
+    __ fast_sha256(msg, state0, state1, msgtmp0, msgtmp1, msgtmp2, msgtmp3, msgtmp4,
+      buf, state, ofs, limit, rsp, multi_block);
+
+    handleSOERegisters(false);
+    __ addptr(rsp, 8 * wordSize);
+    __ leave();
+    __ ret(0);
     return start;
   }
 
@@ -2780,6 +3200,15 @@ class StubGenerator: public StubCodeGenerator {
     const XMMRegister xmm_temp7 = xmm7;
 
     __ enter();
+    handleSOERegisters(true);  // Save registers
+
+    // For EVEX with VL and BW, provide a standard mask, VL = 128 will guide the merge
+    // context for the registers used, where all instructions below are using 128-bit mode
+    // On EVEX without VL and BW, these instructions will all be AVX.
+    if (VM_Version::supports_avx512vlbw()) {
+      __ movl(rdx, 0xffff);
+      __ kmovdl(k1, rdx);
+    }
 
     __ movptr(state, state_param);
     __ movptr(subkeyH, subkeyH_param);
@@ -2883,6 +3312,7 @@ class StubGenerator: public StubCodeGenerator {
     __ pshufb(xmm_temp6, ExternalAddress(StubRoutines::x86::ghash_long_swap_mask_addr()));
     __ movdqu(Address(state, 0), xmm_temp6);   // store the result
 
+    handleSOERegisters(false);  // restore registers
     __ leave();
     __ ret(0);
     return start;
@@ -2940,6 +3370,272 @@ class StubGenerator: public StubCodeGenerator {
 
     return start;
   }
+
+  /**
+  *  Arguments:
+  *
+  * Inputs:
+  *   rsp(4)   - int crc
+  *   rsp(8)   - byte* buf
+  *   rsp(12)  - int length
+  *   rsp(16)  - table_start - optional (present only when doing a library_calll,
+  *              not used by x86 algorithm)
+  *
+  * Ouput:
+  *       rax  - int crc result
+  */
+  address generate_updateBytesCRC32C(bool is_pclmulqdq_supported) {
+    assert(UseCRC32CIntrinsics, "need SSE4_2");
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "updateBytesCRC32C");
+    address start = __ pc();
+    const Register crc = rax;  // crc
+    const Register buf = rcx;  // source java byte array address
+    const Register len = rdx;  // length
+    const Register d = rbx;
+    const Register g = rsi;
+    const Register h = rdi;
+    const Register empty = 0; // will never be used, in order not
+                              // to change a signature for crc32c_IPL_Alg2_Alt2
+                              // between 64/32 I'm just keeping it here
+    assert_different_registers(crc, buf, len, d, g, h);
+
+    BLOCK_COMMENT("Entry:");
+    __ enter(); // required for proper stackwalking of RuntimeStub frame
+    Address crc_arg(rsp, 4 + 4 + 0); // ESP+4 +
+                                     // we need to add additional 4 because __ enter
+                                     // have just pushed ebp on a stack
+    Address buf_arg(rsp, 4 + 4 + 4);
+    Address len_arg(rsp, 4 + 4 + 8);
+      // Load up:
+      __ movl(crc, crc_arg);
+      __ movl(buf, buf_arg);
+      __ movl(len, len_arg);
+      __ push(d);
+      __ push(g);
+      __ push(h);
+      __ crc32c_ipl_alg2_alt2(crc, buf, len,
+                              d, g, h,
+                              empty, empty, empty,
+                              xmm0, xmm1, xmm2,
+                              is_pclmulqdq_supported);
+      __ pop(h);
+      __ pop(g);
+      __ pop(d);
+    __ leave(); // required for proper stackwalking of RuntimeStub frame
+    __ ret(0);
+
+    return start;
+  }
+
+ address generate_libmExp() {
+    address start = __ pc();
+
+    const XMMRegister x0  = xmm0;
+    const XMMRegister x1  = xmm1;
+    const XMMRegister x2  = xmm2;
+    const XMMRegister x3  = xmm3;
+
+    const XMMRegister x4  = xmm4;
+    const XMMRegister x5  = xmm5;
+    const XMMRegister x6  = xmm6;
+    const XMMRegister x7  = xmm7;
+
+    const Register tmp   = rbx;
+
+    BLOCK_COMMENT("Entry:");
+    __ enter(); // required for proper stackwalking of RuntimeStub frame
+    __ fast_exp(x0, x1, x2, x3, x4, x5, x6, x7, rax, rcx, rdx, tmp);
+    __ leave(); // required for proper stackwalking of RuntimeStub frame
+    __ ret(0);
+
+    return start;
+
+  }
+
+ address generate_libmLog() {
+   address start = __ pc();
+
+   const XMMRegister x0 = xmm0;
+   const XMMRegister x1 = xmm1;
+   const XMMRegister x2 = xmm2;
+   const XMMRegister x3 = xmm3;
+
+   const XMMRegister x4 = xmm4;
+   const XMMRegister x5 = xmm5;
+   const XMMRegister x6 = xmm6;
+   const XMMRegister x7 = xmm7;
+
+   const Register tmp = rbx;
+
+   BLOCK_COMMENT("Entry:");
+   __ enter(); // required for proper stackwalking of RuntimeStub frame
+   __ fast_log(x0, x1, x2, x3, x4, x5, x6, x7, rax, rcx, rdx, tmp);
+   __ leave(); // required for proper stackwalking of RuntimeStub frame
+   __ ret(0);
+
+   return start;
+
+ }
+
+ address generate_libmLog10() {
+   address start = __ pc();
+
+   const XMMRegister x0 = xmm0;
+   const XMMRegister x1 = xmm1;
+   const XMMRegister x2 = xmm2;
+   const XMMRegister x3 = xmm3;
+
+   const XMMRegister x4 = xmm4;
+   const XMMRegister x5 = xmm5;
+   const XMMRegister x6 = xmm6;
+   const XMMRegister x7 = xmm7;
+
+   const Register tmp = rbx;
+
+   BLOCK_COMMENT("Entry:");
+   __ enter(); // required for proper stackwalking of RuntimeStub frame
+   __ fast_log10(x0, x1, x2, x3, x4, x5, x6, x7, rax, rcx, rdx, tmp);
+   __ leave(); // required for proper stackwalking of RuntimeStub frame
+   __ ret(0);
+
+   return start;
+
+ }
+
+ address generate_libmPow() {
+   address start = __ pc();
+
+   const XMMRegister x0 = xmm0;
+   const XMMRegister x1 = xmm1;
+   const XMMRegister x2 = xmm2;
+   const XMMRegister x3 = xmm3;
+
+   const XMMRegister x4 = xmm4;
+   const XMMRegister x5 = xmm5;
+   const XMMRegister x6 = xmm6;
+   const XMMRegister x7 = xmm7;
+
+   const Register tmp = rbx;
+
+   BLOCK_COMMENT("Entry:");
+   __ enter(); // required for proper stackwalking of RuntimeStub frame
+   __ fast_pow(x0, x1, x2, x3, x4, x5, x6, x7, rax, rcx, rdx, tmp);
+   __ leave(); // required for proper stackwalking of RuntimeStub frame
+   __ ret(0);
+
+   return start;
+
+ }
+
+ address generate_libm_reduce_pi04l() {
+   address start = __ pc();
+
+   BLOCK_COMMENT("Entry:");
+   __ libm_reduce_pi04l(rax, rcx, rdx, rbx, rsi, rdi, rbp, rsp);
+
+   return start;
+
+ }
+
+ address generate_libm_sin_cos_huge() {
+   address start = __ pc();
+
+   const XMMRegister x0 = xmm0;
+   const XMMRegister x1 = xmm1;
+
+   BLOCK_COMMENT("Entry:");
+   __ libm_sincos_huge(x0, x1, rax, rcx, rdx, rbx, rsi, rdi, rbp, rsp);
+
+   return start;
+
+ }
+
+ address generate_libmSin() {
+   address start = __ pc();
+
+   const XMMRegister x0 = xmm0;
+   const XMMRegister x1 = xmm1;
+   const XMMRegister x2 = xmm2;
+   const XMMRegister x3 = xmm3;
+
+   const XMMRegister x4 = xmm4;
+   const XMMRegister x5 = xmm5;
+   const XMMRegister x6 = xmm6;
+   const XMMRegister x7 = xmm7;
+
+   BLOCK_COMMENT("Entry:");
+   __ enter(); // required for proper stackwalking of RuntimeStub frame
+   __ fast_sin(x0, x1, x2, x3, x4, x5, x6, x7, rax, rbx, rdx);
+   __ leave(); // required for proper stackwalking of RuntimeStub frame
+   __ ret(0);
+
+   return start;
+
+ }
+
+ address generate_libmCos() {
+   address start = __ pc();
+
+   const XMMRegister x0 = xmm0;
+   const XMMRegister x1 = xmm1;
+   const XMMRegister x2 = xmm2;
+   const XMMRegister x3 = xmm3;
+
+   const XMMRegister x4 = xmm4;
+   const XMMRegister x5 = xmm5;
+   const XMMRegister x6 = xmm6;
+   const XMMRegister x7 = xmm7;
+
+   const Register tmp = rbx;
+
+   BLOCK_COMMENT("Entry:");
+   __ enter(); // required for proper stackwalking of RuntimeStub frame
+   __ fast_cos(x0, x1, x2, x3, x4, x5, x6, x7, rax, rcx, rdx, tmp);
+   __ leave(); // required for proper stackwalking of RuntimeStub frame
+   __ ret(0);
+
+   return start;
+
+ }
+
+ address generate_libm_tan_cot_huge() {
+   address start = __ pc();
+
+   const XMMRegister x0 = xmm0;
+   const XMMRegister x1 = xmm1;
+
+   BLOCK_COMMENT("Entry:");
+   __ libm_tancot_huge(x0, x1, rax, rcx, rdx, rbx, rsi, rdi, rbp, rsp);
+
+   return start;
+
+ }
+
+ address generate_libmTan() {
+   address start = __ pc();
+
+   const XMMRegister x0 = xmm0;
+   const XMMRegister x1 = xmm1;
+   const XMMRegister x2 = xmm2;
+   const XMMRegister x3 = xmm3;
+
+   const XMMRegister x4 = xmm4;
+   const XMMRegister x5 = xmm5;
+   const XMMRegister x6 = xmm6;
+   const XMMRegister x7 = xmm7;
+
+   const Register tmp = rbx;
+
+   BLOCK_COMMENT("Entry:");
+   __ enter(); // required for proper stackwalking of RuntimeStub frame
+   __ fast_tan(x0, x1, x2, x3, x4, x5, x6, x7, rax, rcx, rdx, tmp);
+   __ leave(); // required for proper stackwalking of RuntimeStub frame
+   __ ret(0);
+
+   return start;
+
+ }
 
   // Safefetch stubs.
   void generate_safefetch(const char* name, int size, address* entry,
@@ -3070,7 +3766,7 @@ class StubGenerator: public StubCodeGenerator {
     // however can use the register value directly if it is callee saved.
     __ get_thread(java_thread);
 
-    __ reset_last_Java_frame(java_thread, true, false);
+    __ reset_last_Java_frame(java_thread, true);
 
     __ leave(); // required for proper stackwalking of RuntimeStub frame
 
@@ -3133,9 +3829,6 @@ class StubGenerator: public StubCodeGenerator {
     // These are currently used by Solaris/Intel
     StubRoutines::_atomic_xchg_entry            = generate_atomic_xchg();
 
-    StubRoutines::_handler_for_unsafe_access_entry =
-      generate_handler_for_unsafe_access();
-
     // platform dependent
     create_control_words();
 
@@ -3147,15 +3840,66 @@ class StubGenerator: public StubCodeGenerator {
                                                                                    CAST_FROM_FN_PTR(address, SharedRuntime::d2l));
 
     // Build this early so it's available for the interpreter
-    StubRoutines::_throw_StackOverflowError_entry          = generate_throw_exception("StackOverflowError throw_exception",           CAST_FROM_FN_PTR(address, SharedRuntime::throw_StackOverflowError));
+    StubRoutines::_throw_StackOverflowError_entry          = generate_throw_exception("StackOverflowError throw_exception",
+                                                                                      CAST_FROM_FN_PTR(address, SharedRuntime::throw_StackOverflowError));
+    StubRoutines::_throw_delayed_StackOverflowError_entry  = generate_throw_exception("delayed StackOverflowError throw_exception",
+                                                                                      CAST_FROM_FN_PTR(address, SharedRuntime::throw_delayed_StackOverflowError));
 
     if (UseCRC32Intrinsics) {
       // set table address before stub generation which use it
       StubRoutines::_crc_table_adr = (address)StubRoutines::x86::_crc_table;
       StubRoutines::_updateBytesCRC32 = generate_updateBytesCRC32();
     }
-  }
 
+    if (UseCRC32CIntrinsics) {
+      bool supports_clmul = VM_Version::supports_clmul();
+      StubRoutines::x86::generate_CRC32C_table(supports_clmul);
+      StubRoutines::_crc32c_table_addr = (address)StubRoutines::x86::_crc32c_table;
+      StubRoutines::_updateBytesCRC32C = generate_updateBytesCRC32C(supports_clmul);
+    }
+    if (VM_Version::supports_sse2() && UseLibmIntrinsic && InlineIntrinsics) {
+      if (vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dsin) ||
+          vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dcos) ||
+          vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dtan)) {
+        StubRoutines::x86::_L_2il0floatpacket_0_adr = (address)StubRoutines::x86::_L_2il0floatpacket_0;
+        StubRoutines::x86::_Pi4Inv_adr = (address)StubRoutines::x86::_Pi4Inv;
+        StubRoutines::x86::_Pi4x3_adr = (address)StubRoutines::x86::_Pi4x3;
+        StubRoutines::x86::_Pi4x4_adr = (address)StubRoutines::x86::_Pi4x4;
+        StubRoutines::x86::_ones_adr = (address)StubRoutines::x86::_ones;
+      }
+      if (vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dexp)) {
+        StubRoutines::_dexp = generate_libmExp();
+      }
+      if (vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dlog)) {
+        StubRoutines::_dlog = generate_libmLog();
+      }
+      if (vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dlog10)) {
+        StubRoutines::_dlog10 = generate_libmLog10();
+      }
+      if (vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dpow)) {
+        StubRoutines::_dpow = generate_libmPow();
+      }
+      if (vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dsin) ||
+        vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dcos) ||
+        vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dtan)) {
+        StubRoutines::_dlibm_reduce_pi04l = generate_libm_reduce_pi04l();
+      }
+      if (vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dsin) ||
+        vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dcos)) {
+        StubRoutines::_dlibm_sin_cos_huge = generate_libm_sin_cos_huge();
+      }
+      if (vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dsin)) {
+        StubRoutines::_dsin = generate_libmSin();
+      }
+      if (vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dcos)) {
+        StubRoutines::_dcos = generate_libmCos();
+      }
+      if (vmIntrinsics::is_intrinsic_available(vmIntrinsics::_dtan)) {
+        StubRoutines::_dlibm_tan_cot_huge = generate_libm_tan_cot_huge();
+        StubRoutines::_dtan = generate_libmTan();
+      }
+    }
+  }
 
   void generate_all() {
     // Generates all stubs and initializes the entry points
@@ -3175,8 +3919,6 @@ class StubGenerator: public StubCodeGenerator {
     // arraycopy stubs used by compilers
     generate_arraycopy_stubs();
 
-    generate_math_stubs();
-
     // don't bother generating these AES intrinsic stubs unless global flag is set
     if (UseAESIntrinsics) {
       StubRoutines::x86::_key_shuffle_mask_addr = generate_key_shuffle_mask();  // might be needed by the others
@@ -3184,7 +3926,25 @@ class StubGenerator: public StubCodeGenerator {
       StubRoutines::_aescrypt_encryptBlock = generate_aescrypt_encryptBlock();
       StubRoutines::_aescrypt_decryptBlock = generate_aescrypt_decryptBlock();
       StubRoutines::_cipherBlockChaining_encryptAESCrypt = generate_cipherBlockChaining_encryptAESCrypt();
-      StubRoutines::_cipherBlockChaining_decryptAESCrypt = generate_cipherBlockChaining_decryptAESCrypt();
+      StubRoutines::_cipherBlockChaining_decryptAESCrypt = generate_cipherBlockChaining_decryptAESCrypt_Parallel();
+    }
+
+    if (UseAESCTRIntrinsics) {
+      StubRoutines::x86::_counter_shuffle_mask_addr = generate_counter_shuffle_mask();
+      StubRoutines::_counterMode_AESCrypt = generate_counterMode_AESCrypt_Parallel();
+    }
+
+    if (UseSHA1Intrinsics) {
+      StubRoutines::x86::_upper_word_mask_addr = generate_upper_word_mask();
+      StubRoutines::x86::_shuffle_byte_flip_mask_addr = generate_shuffle_byte_flip_mask();
+      StubRoutines::_sha1_implCompress = generate_sha1_implCompress(false, "sha1_implCompress");
+      StubRoutines::_sha1_implCompressMB = generate_sha1_implCompress(true, "sha1_implCompressMB");
+    }
+    if (UseSHA256Intrinsics) {
+      StubRoutines::x86::_k256_adr = (address)StubRoutines::x86::_k256;
+      StubRoutines::x86::_pshuffle_byte_flip_mask_addr = generate_pshuffle_byte_flip_mask();
+      StubRoutines::_sha256_implCompress = generate_sha256_implCompress(false, "sha256_implCompress");
+      StubRoutines::_sha256_implCompressMB = generate_sha256_implCompress(true, "sha256_implCompressMB");
     }
 
     // Generate GHASH intrinsics code

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,13 +40,13 @@ import java.nio.channels.OverlappingFileLockException;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.SelectableChannel;
 import java.nio.channels.WritableByteChannel;
-import java.security.AccessController;
 import java.util.ArrayList;
 import java.util.List;
 
-import sun.misc.Cleaner;
-import sun.misc.JavaIOFileDescriptorAccess;
-import sun.misc.SharedSecrets;
+import jdk.internal.misc.JavaIOFileDescriptorAccess;
+import jdk.internal.misc.JavaNioAccess;
+import jdk.internal.misc.SharedSecrets;
+import jdk.internal.ref.Cleaner;
 import sun.security.action.GetPropertyAction;
 
 public class FileChannelImpl
@@ -82,6 +82,9 @@ public class FileChannelImpl
     // Lock for operations involving position and size
     private final Object positionLock = new Object();
 
+    // Positional-read is not interruptible
+    private volatile boolean uninterruptible;
+
     private FileChannelImpl(FileDescriptor fd, String path, boolean readable,
                             boolean writable, Object parent)
     {
@@ -105,6 +108,10 @@ public class FileChannelImpl
     private void ensureOpen() throws IOException {
         if (!isOpen())
             throw new ClosedChannelException();
+    }
+
+    public void setUninterruptible() {
+        uninterruptible = true;
     }
 
     // -- Standard channel operations --
@@ -328,6 +335,7 @@ public class FileChannelImpl
             int rv = -1;
             long p = -1;
             int ti = -1;
+            long rp = -1;
             try {
                 begin();
                 ti = threads.add();
@@ -363,8 +371,8 @@ public class FileChannelImpl
                 if (p > newSize)
                     p = newSize;
                 do {
-                    rv = (int)position0(fd, p);
-                } while ((rv == IOStatus.INTERRUPTED) && isOpen());
+                    rp = position0(fd, p);
+                } while ((rp == IOStatus.INTERRUPTED) && isOpen());
                 return this;
             } finally {
                 threads.remove(ti);
@@ -731,8 +739,10 @@ public class FileChannelImpl
         assert !nd.needsPositionLock() || Thread.holdsLock(positionLock);
         int n = 0;
         int ti = -1;
+
+        boolean interruptible = !uninterruptible;
         try {
-            begin();
+            if (interruptible) begin();
             ti = threads.add();
             if (!isOpen())
                 return -1;
@@ -742,7 +752,7 @@ public class FileChannelImpl
             return IOStatus.normalize(n);
         } finally {
             threads.remove(ti);
-            end(n > 0);
+            if (interruptible) end(n > 0);
             assert IOStatus.check(n);
         }
     }
@@ -888,57 +898,62 @@ public class FileChannelImpl
             if (!isOpen())
                 return null;
 
-            long filesize;
-            do {
-                filesize = nd.size(fd);
-            } while ((filesize == IOStatus.INTERRUPTED) && isOpen());
-            if (!isOpen())
-                return null;
-
-            if (filesize < position + size) { // Extend file size
-                if (!writable) {
-                    throw new IOException("Channel not open for writing " +
-                        "- cannot extend file to required size");
-                }
-                int rv;
+            long mapSize;
+            int pagePosition;
+            synchronized (positionLock) {
+                long filesize;
                 do {
-                    rv = nd.truncate(fd, position + size);
-                } while ((rv == IOStatus.INTERRUPTED) && isOpen());
+                    filesize = nd.size(fd);
+                } while ((filesize == IOStatus.INTERRUPTED) && isOpen());
                 if (!isOpen())
                     return null;
-            }
-            if (size == 0) {
-                addr = 0;
-                // a valid file descriptor is not required
-                FileDescriptor dummy = new FileDescriptor();
-                if ((!writable) || (imode == MAP_RO))
-                    return Util.newMappedByteBufferR(0, 0, dummy, null);
-                else
-                    return Util.newMappedByteBuffer(0, 0, dummy, null);
-            }
 
-            int pagePosition = (int)(position % allocationGranularity);
-            long mapPosition = position - pagePosition;
-            long mapSize = size + pagePosition;
-            try {
-                // If no exception was thrown from map0, the address is valid
-                addr = map0(imode, mapPosition, mapSize);
-            } catch (OutOfMemoryError x) {
-                // An OutOfMemoryError may indicate that we've exhausted memory
-                // so force gc and re-attempt map
-                System.gc();
-                try {
-                    Thread.sleep(100);
-                } catch (InterruptedException y) {
-                    Thread.currentThread().interrupt();
+                if (filesize < position + size) { // Extend file size
+                    if (!writable) {
+                        throw new IOException("Channel not open for writing " +
+                            "- cannot extend file to required size");
+                    }
+                    int rv;
+                    do {
+                        rv = nd.allocate(fd, position + size);
+                    } while ((rv == IOStatus.INTERRUPTED) && isOpen());
+                    if (!isOpen())
+                        return null;
                 }
+
+                if (size == 0) {
+                    addr = 0;
+                    // a valid file descriptor is not required
+                    FileDescriptor dummy = new FileDescriptor();
+                    if ((!writable) || (imode == MAP_RO))
+                        return Util.newMappedByteBufferR(0, 0, dummy, null);
+                    else
+                        return Util.newMappedByteBuffer(0, 0, dummy, null);
+                }
+
+                pagePosition = (int)(position % allocationGranularity);
+                long mapPosition = position - pagePosition;
+                mapSize = size + pagePosition;
                 try {
+                    // If map0 did not throw an exception, the address is valid
                     addr = map0(imode, mapPosition, mapSize);
-                } catch (OutOfMemoryError y) {
-                    // After a second OOME, fail
-                    throw new IOException("Map failed", y);
+                } catch (OutOfMemoryError x) {
+                    // An OutOfMemoryError may indicate that we've exhausted
+                    // memory so force gc and re-attempt map
+                    System.gc();
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException y) {
+                        Thread.currentThread().interrupt();
+                    }
+                    try {
+                        addr = map0(imode, mapPosition, mapSize);
+                    } catch (OutOfMemoryError y) {
+                        // After a second OOME, fail
+                        throw new IOException("Map failed", y);
+                    }
                 }
-            }
+            } // synchronized
 
             // On Windows, and potentially other platforms, we need an open
             // file descriptor for some mapping operations.
@@ -975,8 +990,8 @@ public class FileChannelImpl
      * Invoked by sun.management.ManagementFactoryHelper to create the management
      * interface for mapped buffers.
      */
-    public static sun.misc.JavaNioAccess.BufferPool getMappedBufferPool() {
-        return new sun.misc.JavaNioAccess.BufferPool() {
+    public static JavaNioAccess.BufferPool getMappedBufferPool() {
+        return new JavaNioAccess.BufferPool() {
             @Override
             public String getName() {
                 return "mapped";
@@ -1017,9 +1032,8 @@ public class FileChannelImpl
         if (!propertyChecked) {
             synchronized (FileChannelImpl.class) {
                 if (!propertyChecked) {
-                    String value = AccessController.doPrivileged(
-                        new GetPropertyAction(
-                            "sun.nio.ch.disableSystemWideOverlappingFileLockCheck"));
+                    String value = GetPropertyAction.privilegedGetProperty(
+                            "sun.nio.ch.disableSystemWideOverlappingFileLockCheck");
                     isSharedFileLockTable = ((value == null) || value.equals("false"));
                     propertyChecked = true;
                 }

@@ -152,8 +152,8 @@ defaultPath(void)
 #ifdef __solaris__
     /* These really are the Solaris defaults! */
     return (geteuid() == 0 || getuid() == 0) ?
-        "/usr/xpg4/bin:/usr/ccs/bin:/usr/bin:/opt/SUNWspro/bin:/usr/sbin" :
-        "/usr/xpg4/bin:/usr/ccs/bin:/usr/bin:/opt/SUNWspro/bin:";
+        "/usr/xpg4/bin:/usr/bin:/opt/SUNWspro/bin:/usr/sbin" :
+        "/usr/xpg4/bin:/usr/bin:/opt/SUNWspro/bin:";
 #else
     return ":/bin:/usr/bin";    /* glibc */
 #endif
@@ -248,12 +248,13 @@ throwIOException(JNIEnv *env, int errnum, const char *defaultDetail)
     const char *detail = defaultDetail;
     char *errmsg;
     size_t fmtsize;
+    char tmpbuf[1024];
     jstring s;
 
     if (errnum != 0) {
-        const char *s = strerror(errnum);
-        if (strcmp(s, "Unknown error") != 0)
-            detail = s;
+        int ret = getErrorString(errnum, tmpbuf, sizeof(tmpbuf));
+        if (ret != EINVAL)
+            detail = tmpbuf;
     }
     /* ASCII Decimal representation uses 2.4 times as many bits as binary. */
     fmtsize = sizeof(IOE_FORMAT) + strlen(detail) + 3 * sizeof(errnum);
@@ -348,6 +349,8 @@ static int copystrings(char *buf, int offset, const char * const *arg) {
 __attribute_noinline__
 #endif
 
+/* vfork(2) is deprecated on Solaris */
+#ifndef __solaris__
 static pid_t
 vforkChild(ChildStuff *c) {
     volatile pid_t resultPid;
@@ -366,6 +369,7 @@ vforkChild(ChildStuff *c) {
     assert(resultPid != 0);  /* childProcess never returns */
     return resultPid;
 }
+#endif
 
 static pid_t
 forkChild(ChildStuff *c) {
@@ -478,8 +482,11 @@ spawnChild(JNIEnv *env, jobject process, ChildStuff *c, const char *helperpath) 
 static pid_t
 startChild(JNIEnv *env, jobject process, ChildStuff *c, const char *helperpath) {
     switch (c->mode) {
+/* vfork(2) is deprecated on Solaris */
+#ifndef __solaris__
       case MODE_VFORK:
         return vforkChild(c);
+#endif
       case MODE_FORK:
         return forkChild(c);
 #if defined(__solaris__) || defined(_ALLBSD_SOURCE) || defined(_AIX)

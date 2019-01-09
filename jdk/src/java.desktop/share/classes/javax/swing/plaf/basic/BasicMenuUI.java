@@ -123,6 +123,7 @@ public class BasicMenuUI extends BasicMenuItemUI
                                            getPropertyPrefix() + ".actionMap");
     }
 
+    @SuppressWarnings("deprecation")
     void updateMnemonicBinding() {
         int mnemonic = menuItem.getModel().getMnemonic();
         int[] shortcutKeys = (int[])DefaultLookup.get(menuItem, this,
@@ -312,7 +313,8 @@ public class BasicMenuUI extends BasicMenuItemUI
             }
         }
 
-        public boolean isEnabled(Object c) {
+        @Override
+        public boolean accept(Object c) {
             if (c instanceof JMenu) {
                 return ((JMenu)c).isEnabled();
             }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,9 @@ import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotSame;
+import static org.testng.Assert.assertEquals;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -54,6 +57,7 @@ import jaxp.library.JAXPDataProvider;
 
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
+import org.testng.annotations.Listeners;
 import org.testng.annotations.Test;
 import org.w3c.dom.Document;
 import org.xml.sax.ErrorHandler;
@@ -64,10 +68,15 @@ import org.xml.sax.SAXNotSupportedException;
 import org.xml.sax.SAXParseException;
 
 /*
- * @bug 8080907
+ * @test
+ * @bug 8080907 8169778
+ * @library /javax/xml/jaxp/libs
+ * @run testng/othervm -DrunSecMngr=true javax.xml.validation.ptests.SchemaFactoryTest
+ * @run testng/othervm javax.xml.validation.ptests.SchemaFactoryTest
  * @summary Class containing the test cases for SchemaFactory
  */
 @Test(singleThreaded = true)
+@Listeners({jaxp.library.FilePolicy.class})
 public class SchemaFactoryTest {
 
     @BeforeClass
@@ -94,6 +103,25 @@ public class SchemaFactoryTest {
     public Object[][] getValidateParameters() {
         return new Object[][] { { W3C_XML_SCHEMA_NS_URI, SCHEMA_FACTORY_CLASSNAME, null },
                 { W3C_XML_SCHEMA_NS_URI, SCHEMA_FACTORY_CLASSNAME, this.getClass().getClassLoader() } };
+    }
+
+    /**
+     * Test if newDefaultInstance() method returns an instance
+     * of the expected factory.
+     * @throws Exception If any errors occur.
+     */
+    @Test
+    public void testDefaultInstance() throws Exception {
+        SchemaFactory sf1 = SchemaFactory.newDefaultInstance();
+        SchemaFactory sf2 = SchemaFactory.newInstance(W3C_XML_SCHEMA_NS_URI);
+        assertNotSame(sf1, sf2, "same instance returned:");
+        assertSame(sf1.getClass(), sf2.getClass(),
+                  "unexpected class mismatch for newDefaultInstance():");
+        assertEquals(sf1.getClass().getName(), DEFAULT_IMPL_CLASS);
+        assertTrue(sf1.isSchemaLanguageSupported(W3C_XML_SCHEMA_NS_URI),
+                   "isSchemaLanguageSupported(W3C_XML_SCHEMA_NS_URI):");
+        assertFalse(sf1.isSchemaLanguageSupported(UNRECOGNIZED_NAME),
+                   "isSchemaLanguageSupported(UNRECOGNIZED_NAME):");
     }
 
     /*
@@ -388,7 +416,10 @@ public class SchemaFactoryTest {
 
     private static final String UNRECOGNIZED_NAME = "http://xml.org/sax/features/namespace-prefixes";
 
-    private static final String SCHEMA_FACTORY_CLASSNAME = "com.sun.org.apache.xerces.internal.jaxp.validation.XMLSchemaFactory";
+    private static final String DEFAULT_IMPL_CLASS =
+        "com.sun.org.apache.xerces.internal.jaxp.validation.XMLSchemaFactory";
+
+    private static final String SCHEMA_FACTORY_CLASSNAME = DEFAULT_IMPL_CLASS;
 
     private SchemaFactory sf;
     private XMLInputFactory ifac;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -19,29 +19,37 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
-
-import java.util.ArrayList;
-
-import sun.hotspot.code.BlobType;
 
 /*
  * @test RandomAllocationTest
- * @library /testlibrary /../../test/lib
- * @modules java.base/sun.misc
- *          java.management
- * @build RandomAllocationTest
- * @run main ClassFileInstaller sun.hotspot.WhiteBox
- *                              sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
- *                   -XX:CompileCommand=dontinline,Helper$TestCase::method
- *                   -XX:+WhiteBoxAPI -XX:-SegmentedCodeCache RandomAllocationTest
- * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
- *                   -XX:CompileCommand=dontinline,Helper$TestCase::method
- *                   -XX:+WhiteBoxAPI -XX:+SegmentedCodeCache RandomAllocationTest
+ * @key stress
  * @summary stressing code cache by allocating randomly sized "dummy" code blobs
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ *          java.management
+ *
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *                                sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *                   -XX:+WhiteBoxAPI
+ *                   -XX:CompileCommand=dontinline,compiler.codecache.stress.Helper$TestCase::method
+ *                   -XX:-SegmentedCodeCache
+ *                   compiler.codecache.stress.RandomAllocationTest
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *                   -XX:+WhiteBoxAPI
+ *                   -XX:CompileCommand=dontinline,compiler.codecache.stress.Helper$TestCase::method
+ *                   -XX:+SegmentedCodeCache
+ *                   compiler.codecache.stress.RandomAllocationTest
  */
+
+package compiler.codecache.stress;
+
+import sun.hotspot.code.BlobType;
+
+import java.util.ArrayList;
+
 public class RandomAllocationTest implements Runnable {
     private static final long CODE_CACHE_SIZE
             = Helper.WHITE_BOX.getUintxVMFlag("ReservedCodeCacheSize");

@@ -96,9 +96,14 @@ public abstract class RenderingEngine {
      * </pre>
      *
      * If no specific {@code RenderingEngine} is specified on the command
-     * or Ductus renderer is specified, it will first attempt loading the
-     * sun.dc.DuctusRenderingEngine class using Class.forName, if that
-     * is not found, then it will look for Pisces.
+     * line or the requested class fails to load, then the Marlin
+     * renderer will be used as the default.
+     * <p>
+     * A printout of which RenderingEngine is loaded and used can be
+     * enabled by specifying the runtime flag:
+     * <pre>
+     *     java -Dsun.java2d.renderer.verbose=true
+     * </pre>
      * <p>
      * Runtime tracing of the actions of the {@code RenderingEngine}
      * can be enabled by specifying the runtime flag:
@@ -113,27 +118,36 @@ public abstract class RenderingEngine {
             return reImpl;
         }
 
-        /* Look first for ductus or an app-override renderer,
-         * if not specified or present, then look for pisces.
+        /* Look first for an app-override renderer,
+         * if not specified or present, then look for marlin.
          */
-        final String ductusREClass = "sun.dc.DuctusRenderingEngine";
-        final String piscesREClass = "sun.java2d.pisces.PiscesRenderingEngine";
         GetPropertyAction gpa =
-            new GetPropertyAction("sun.java2d.renderer", ductusREClass);
+            new GetPropertyAction("sun.java2d.renderer");
         String reClass = AccessController.doPrivileged(gpa);
-        try {
-            Class<?> cls = Class.forName(reClass);
-            reImpl = (RenderingEngine) cls.newInstance();
-        } catch (ReflectiveOperationException ignored0) {
+        if (reClass != null) {
             try {
-                Class<?> cls = Class.forName(piscesREClass);
-                reImpl = (RenderingEngine) cls.newInstance();
+                Class<?> cls = Class.forName(reClass);
+                reImpl = (RenderingEngine) cls.getConstructor().newInstance();
+            } catch (ReflectiveOperationException ignored0) {
+            }
+        }
+        if (reImpl == null) {
+            final String marlinREClass = "sun.java2d.marlin.MarlinRenderingEngine";
+            try {
+                Class<?> cls = Class.forName(marlinREClass);
+                reImpl = (RenderingEngine) cls.getConstructor().newInstance();
             } catch (ReflectiveOperationException ignored1) {
             }
         }
 
         if (reImpl == null) {
             throw new InternalError("No RenderingEngine module found");
+        }
+
+        gpa = new GetPropertyAction("sun.java2d.renderer.verbose");
+        String verbose = AccessController.doPrivileged(gpa);
+        if (verbose != null && verbose.startsWith("t")) {
+            System.out.println("RenderingEngine = "+reImpl);
         }
 
         gpa = new GetPropertyAction("sun.java2d.renderer.trace");
@@ -283,7 +297,7 @@ public abstract class RenderingEngine {
      * If {@code lw1} and {@code lw2} are both greater than zero, then
      * the parallelogram figure is doubled by both expanding and contracting
      * each delta vector by its corresponding {@code lw} value.
-     * If either (@code lw1) or {@code lw2} are also greater than 1, then
+     * If either {@code lw1} or {@code lw2} are also greater than 1, then
      * the inner (contracted) parallelogram disappears and the figure is
      * simply a single expanded parallelogram.
      * The {@code clip} parameter specifies the current clip in effect

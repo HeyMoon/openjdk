@@ -32,8 +32,6 @@ import java.awt.image.ColorModel;
 
 import java.lang.ref.WeakReference;
 
-import java.lang.reflect.Method;
-
 import sun.awt.AWTAccessor.ComponentAccessor;
 import sun.util.logging.PlatformLogger;
 
@@ -54,7 +52,7 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
    * allow a smudge factor so that moving the mouse by a small
    * amount does not wipe out the multi-click state variables.
    */
-    private final static int AWT_MULTICLICK_SMUDGE = 4;
+    private static final int AWT_MULTICLICK_SMUDGE = 4;
     // ButtonXXX events stuff
     static int lastX = 0, lastY = 0;
     static long lastTime = 0;
@@ -123,7 +121,7 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
     native void getWMInsets(long window, long left, long top, long right, long bottom, long border);
     native long getTopWindow(long window, long rootWin);
     native void getWindowBounds(long window, long x, long y, long width, long height);
-    private native static void initIDs();
+    private static native void initIDs();
 
     static {
         initIDs();
@@ -272,7 +270,8 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
     }
 
     protected String[] getWMClass() {
-        return new String[] {XToolkit.getCorrectXIDString(getClass().getName()), XToolkit.getAWTAppClassName()};
+        return new String[] {XToolkit.getAWTAppClassName(),
+                XToolkit.getAWTAppClassName()};
     }
 
     void setReparented(boolean newValue) {
@@ -340,12 +339,13 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
         return graphicsConfig.getColorModel (transparency);
     }
 
+    @Override
     public ColorModel getColorModel() {
         if (graphicsConfig != null) {
             return graphicsConfig.getColorModel ();
         }
         else {
-            return XToolkit.getStaticColorModel();
+            return Toolkit.getDefaultToolkit().getColorModel();
         }
     }
 
@@ -394,7 +394,6 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
         return false;
     }
 
-    static Method m_sendMessage;
     static void sendEvent(final AWTEvent e) {
         // The uses of this method imply that the incoming event is system-generated
         SunToolkit.setSystemGenerated(e);
@@ -441,7 +440,7 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
     // and one that does not get overridden. The problem is that in postInit
     // we call setBackground and we don't have all the stuff initialized to
     // do a full paint for most peers. So we cannot call setBackground in postInit.
-    final public void xSetBackground(Color c) {
+    public final void xSetBackground(Color c) {
         XToolkit.awtLock();
         try {
             winBackground(c);
@@ -547,10 +546,11 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
         if (isEventDisabled(xev)) {
             return;
         }
-        int x = xe.get_x();
-        int y = xe.get_y();
-        int w = xe.get_width();
-        int h = xe.get_height();
+
+        int x = scaleDown(xe.get_x());
+        int y = scaleDown(xe.get_y());
+        int w = scaleDown(xe.get_width());
+        int h = scaleDown(xe.get_height());
 
         Component target = getEventSource();
         ComponentAccessor compAccessor = AWTAccessor.getComponentAccessor();
@@ -572,6 +572,14 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
     }
 
     static int getModifiers(int state, int button, int keyCode) {
+        return getModifiers(state, button, keyCode, false);
+    }
+
+    static int getWheelModifiers(int state, int button) {
+        return getModifiers(state, button, 0, true);
+    }
+
+    private static int getModifiers(int state, int button, int keyCode, boolean isWheelMouse) {
         int modifiers = 0;
 
         if (((state & XConstants.ShiftMask) != 0) ^ (keyCode == KeyEvent.VK_SHIFT)) {
@@ -602,7 +610,7 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
             // ONLY one of these conditions should be TRUE to add that modifier.
             if (((state & XlibUtil.getButtonMask(i + 1)) != 0) != (button == XConstants.buttons[i])){
                 //exclude wheel buttons from adding their numbers as modifiers
-                if (!isWheel(XConstants.buttons[i])) {
+                if (!isWheelMouse || !isWheel(XConstants.buttons[i])) {
                     modifiers |= InputEvent.getMaskForButton(i+1);
                 }
             }
@@ -614,7 +622,7 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
         // 4 and 5 buttons are usually considered assigned to a first wheel
         return button == XConstants.buttons[3] || button == XConstants.buttons[4];
     }
-
+    @SuppressWarnings("deprecation")
     static int getXModifiers(AWTKeyStroke stroke) {
         int mods = stroke.getModifiers();
         int res = 0;
@@ -667,10 +675,11 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
         when = xbe.get_time();
         long jWhen = XToolkit.nowMillisUTC_offset(when);
 
-        int x = xbe.get_x();
-        int y = xbe.get_y();
+        int x = scaleDown(xbe.get_x());
+        int y = scaleDown(xbe.get_y());
         if (xev.get_xany().get_window() != window) {
-            Point localXY = toLocal(xbe.get_x_root(), xbe.get_y_root());
+            Point localXY = toLocal(scaleDown(xbe.get_x_root()),
+                                    scaleDown(xbe.get_y_root()));
             x = localXY.x;
             y = localXY.y;
         }
@@ -715,14 +724,14 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
         if (button > XConstants.buttons[4]){
             button -= 2;
         }
-        modifiers = getModifiers(xbe.get_state(),button,0);
 
         if (!isWheel(lbutton)) {
+            modifiers = getModifiers(xbe.get_state(), button, 0);
             MouseEvent me = new MouseEvent(getEventSource(),
                                            type == XConstants.ButtonPress ? MouseEvent.MOUSE_PRESSED : MouseEvent.MOUSE_RELEASED,
                                            jWhen,modifiers, x, y,
-                                           xbe.get_x_root(),
-                                           xbe.get_y_root(),
+                                           scaleDown(xbe.get_x_root()),
+                                           scaleDown(xbe.get_y_root()),
                                            clickCount,popupTrigger,button);
 
             postEventToEventQueue(me);
@@ -735,20 +744,21 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
                                                      jWhen,
                                                      modifiers,
                                                      x, y,
-                                                     xbe.get_x_root(),
-                                                     xbe.get_y_root(),
+                                                     scaleDown(xbe.get_x_root()),
+                                                     scaleDown(xbe.get_y_root()),
                                                      clickCount,
                                                      false, button));
             }
 
         }
         else {
+            modifiers = getWheelModifiers(xbe.get_state(), button);
             if (xev.get_type() == XConstants.ButtonPress) {
                 MouseWheelEvent mwe = new MouseWheelEvent(getEventSource(),MouseEvent.MOUSE_WHEEL, jWhen,
                                                           modifiers,
                                                           x, y,
-                                                          xbe.get_x_root(),
-                                                          xbe.get_y_root(),
+                                                          scaleDown(xbe.get_x_root()),
+                                                          scaleDown(xbe.get_y_root()),
                                                           1,false,MouseWheelEvent.WHEEL_UNIT_SCROLL,
                                                           3,button==4 ?  -1 : 1);
                 postEventToEventQueue(mwe);
@@ -795,8 +805,8 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
         /*
            Fix for 6176814 .  Add multiclick checking.
         */
-        int x = xme.get_x();
-        int y = xme.get_y();
+        int x = scaleDown(xme.get_x());
+        int y = scaleDown(xme.get_y());
         XWindow lastWindow = (lastWindowRef != null) ? (lastWindowRef.get()):(null);
 
         if (!(lastWindow == this &&
@@ -818,7 +828,8 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
         Component source = getEventSource();
 
         if (xme.get_window() != window) {
-            Point localXY = toLocal(xme.get_x_root(), xme.get_y_root());
+            Point localXY = toLocal(scaleDown(xme.get_x_root()),
+                                    scaleDown(xme.get_y_root()));
             x = localXY.x;
             y = localXY.y;
         }
@@ -827,7 +838,9 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
          */
         if ((isDragging && clickCount == 0) || !isDragging) {
             MouseEvent mme = new MouseEvent(source, mouseEventType, jWhen,
-                                            modifiers, x, y, xme.get_x_root(), xme.get_y_root(),
+                                            modifiers, x, y,
+                                            scaleDown(xme.get_x_root()),
+                                            scaleDown(xme.get_y_root()),
                                             clickCount, popupTrigger, MouseEvent.NOBUTTON);
             postEventToEventQueue(mme);
         }
@@ -939,10 +952,11 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
         int modifiers = getModifiers(xce.get_state(),0,0);
         int clickCount = 0;
         boolean popupTrigger = false;
-        int x = xce.get_x();
-        int y = xce.get_y();
+        int x = scaleDown(xce.get_x());
+        int y = scaleDown(xce.get_y());
         if (xce.get_window() != window) {
-            Point localXY = toLocal(xce.get_x_root(), xce.get_y_root());
+            Point localXY = toLocal(scaleDown(xce.get_x_root()),
+                                    scaleDown(xce.get_y_root()));
             x = localXY.x;
             y = localXY.y;
         }
@@ -950,18 +964,27 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
         // This code tracks boundary crossing and ensures MOUSE_ENTER/EXIT
         // are posted in alternate pairs
         if (compWithMouse != null) {
-            MouseEvent me = new MouseEvent(compWithMouse,
-                MouseEvent.MOUSE_EXITED, jWhen, modifiers, xce.get_x(),
-                xce.get_y(), xce.get_x_root(), xce.get_y_root(), clickCount, popupTrigger,
-                MouseEvent.NOBUTTON);
+            MouseEvent me = new MouseEvent(compWithMouse, MouseEvent.MOUSE_EXITED,
+                                           jWhen, modifiers,
+                                           scaleDown(xce.get_x()),
+                                           scaleDown(xce.get_y()),
+                                           scaleDown(xce.get_x_root()),
+                                           scaleDown(xce.get_y_root()),
+                                           clickCount, popupTrigger,
+                                           MouseEvent.NOBUTTON);
             postEventToEventQueue(me);
             eventLog.finest("Clearing last window ref");
             lastWindowRef = null;
         }
         if (xce.get_type() == XConstants.EnterNotify) {
             MouseEvent me = new MouseEvent(getEventSource(), MouseEvent.MOUSE_ENTERED,
-                jWhen, modifiers, xce.get_x(), xce.get_y(), xce.get_x_root(), xce.get_y_root(), clickCount,
-                popupTrigger, MouseEvent.NOBUTTON);
+                                           jWhen, modifiers,
+                                           scaleDown(xce.get_x()),
+                                           scaleDown(xce.get_y()),
+                                           scaleDown(xce.get_x_root()),
+                                           scaleDown(xce.get_y_root()),
+                                           clickCount, popupTrigger,
+                                           MouseEvent.NOBUTTON);
             postEventToEventQueue(me);
         }
     }
@@ -1037,13 +1060,13 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
         return xEventType == XConstants.KeyPress ? java.awt.event.KeyEvent.KEY_PRESSED :
                xEventType == XConstants.KeyRelease ? java.awt.event.KeyEvent.KEY_RELEASED : 0;
     }
-    static private long xkeycodeToKeysym(XKeyEvent ev) {
+    private static long xkeycodeToKeysym(XKeyEvent ev) {
         return XKeysym.getKeysym( ev );
     }
     private long xkeycodeToPrimaryKeysym(XKeyEvent ev) {
         return XKeysym.xkeycode2primary_keysym( ev );
     }
-    static private int primaryUnicode2JavaKeycode(int uni) {
+    private static int primaryUnicode2JavaKeycode(int uni) {
         return (uni > 0? sun.awt.ExtendedKeyCodes.getExtendedKeyCodeForChar(uni) : 0);
         //return (uni > 0? uni + 0x01000000 : 0);
     }
@@ -1518,4 +1541,18 @@ class XWindow extends XBaseWindow implements X11ComponentPeer {
         }
     }
 
+    @Override
+    protected int getScale() {
+        return graphicsConfig.getScale();
+    }
+
+    @Override
+    protected int scaleUp(int x) {
+        return graphicsConfig.scaleUp(x);
+    }
+
+    @Override
+    protected int scaleDown(int x) {
+        return graphicsConfig.scaleDown(x);
+    }
 }

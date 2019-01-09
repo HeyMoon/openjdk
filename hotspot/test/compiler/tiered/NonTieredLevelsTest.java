@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,37 +21,40 @@
  * questions.
  */
 
-import java.util.function.IntPredicate;
-
 /**
  * @test NonTieredLevelsTest
- * @library /testlibrary /../../test/lib /compiler/whitebox
- * @modules java.management
- * @build NonTieredLevelsTest
- * @run main ClassFileInstaller sun.hotspot.WhiteBox
- *                              sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main/othervm -Xbootclasspath/a:. -XX:-TieredCompilation
- *                   -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *                   -XX:CompileCommand=compileonly,SimpleTestCase$Helper::*
- *                   NonTieredLevelsTest
  * @summary Verify that only one level can be used
- * @author igor.ignatyev@oracle.com
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ *          java.management
+ * @requires vm.opt.TieredStopAtLevel==null
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *                                sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @run main/othervm -Xbootclasspath/a:. -XX:-TieredCompilation
+ *                   -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:-UseCounterDecay
+ *                   -XX:CompileCommand=compileonly,compiler.whitebox.SimpleTestCaseHelper::*
+ *                   compiler.tiered.NonTieredLevelsTest
  */
+
+package compiler.tiered;
+
+import java.util.function.IntPredicate;
+import compiler.whitebox.CompilerWhiteBoxTest;
+import jdk.test.lib.Platform;
+
 public class NonTieredLevelsTest extends CompLevelsTest {
     private static final int AVAILABLE_COMP_LEVEL;
     private static final IntPredicate IS_AVAILABLE_COMPLEVEL;
     static {
-        String vmName = System.getProperty("java.vm.name");
-        if (vmName.endsWith(" Server VM")) {
+        if (Platform.isServer() && !Platform.isEmulatedClient()) {
             AVAILABLE_COMP_LEVEL = COMP_LEVEL_FULL_OPTIMIZATION;
             IS_AVAILABLE_COMPLEVEL = x -> x == COMP_LEVEL_FULL_OPTIMIZATION;
-        } else if (vmName.endsWith(" Client VM")
-                || vmName.endsWith(" Minimal VM")) {
+        } else if (Platform.isClient() || Platform.isMinimal() || Platform.isEmulatedClient()) {
             AVAILABLE_COMP_LEVEL = COMP_LEVEL_SIMPLE;
-            IS_AVAILABLE_COMPLEVEL = x -> x >= COMP_LEVEL_SIMPLE
-                    && x <= COMP_LEVEL_FULL_PROFILE;
+            IS_AVAILABLE_COMPLEVEL = x -> x == COMP_LEVEL_SIMPLE;
         } else {
-            throw new RuntimeException("Unknown VM: " + vmName);
+            throw new Error("TESTBUG: unknown VM: " + Platform.vmName);
         }
 
     }

@@ -1,13 +1,13 @@
 /*
- * reserved comment block
- * DO NOT REMOVE OR ALTER!
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright 2001-2004 The Apache Software Foundation.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,16 +17,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * $Id: XSLTC.java,v 1.2.4.1 2005/09/05 09:51:38 pvedula Exp $
- */
 
 package com.sun.org.apache.xalan.internal.xsltc.compiler;
 
 import com.sun.org.apache.bcel.internal.classfile.JavaClass;
 import com.sun.org.apache.xalan.internal.XalanConstants;
-import com.sun.org.apache.xalan.internal.utils.FeatureManager;
-import com.sun.org.apache.xalan.internal.utils.FeatureManager.Feature;
 import com.sun.org.apache.xalan.internal.utils.SecuritySupport;
 import com.sun.org.apache.xalan.internal.utils.XMLSecurityManager;
 import com.sun.org.apache.xalan.internal.xsltc.compiler.util.ErrorMsg;
@@ -39,20 +34,23 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
 import java.util.Enumeration;
 import java.util.HashMap;
-import java.util.Hashtable;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.Vector;
+import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 import javax.xml.XMLConstants;
+import javax.xml.catalog.CatalogFeatures;
+import jdk.xml.internal.JdkXmlFeatures;
+import jdk.xml.internal.JdkXmlUtils;
 import org.xml.sax.InputSource;
 import org.xml.sax.XMLReader;
 
@@ -90,18 +88,18 @@ public final class XSLTC {
     // Name index tables
     private int       _nextGType;  // Next available element type
     private Vector    _namesIndex; // Index of all registered QNames
-    private Hashtable _elements;   // Hashtable of all registered elements
-    private Hashtable _attributes; // Hashtable of all registered attributes
+    private Map<String, Integer> _elements;   // Map of all registered elements
+    private Map<String, Integer> _attributes; // Map of all registered attributes
 
     // Namespace index tables
     private int       _nextNSType; // Next available namespace type
     private Vector    _namespaceIndex; // Index of all registered namespaces
-    private Hashtable _namespaces; // Hashtable of all registered namespaces
-    private Hashtable _namespacePrefixes;// Hashtable of all registered namespace prefixes
+    private Map<String, Integer> _namespaces; // Map of all registered namespaces
+    private Map<String, Integer> _namespacePrefixes;// Map of all registered namespace prefixes
 
 
     // All literal text in the stylesheet
-    private Vector m_characterData;
+    private ArrayList<StringBuilder> m_characterData;
 
     // These define the various methods for outputting the translet
     public static final int FILE_OUTPUT        = 0;
@@ -116,12 +114,12 @@ public final class XSLTC {
     private boolean _debug = false;      // -x
     private String  _jarFileName = null; // -j <jar-file-name>
     private String  _className = null;   // -o <class-name>
-    private String  _packageName = null; // -p <package-name>
+    private String  _packageName = "die.verwandlung"; // override with -p <package-name>
     private File    _destDir = null;     // -d <directory-name>
     private int     _outputType = FILE_OUTPUT; // by default
 
-    private Vector  _classes;
-    private Vector  _bcelClasses;
+    private ArrayList<ByteArrayOutputStream>  _classes;
+    private ArrayList<JavaClass>  _bcelClasses;
     private boolean _callsNodeset = false;
     private boolean _multiDocument = false;
     private boolean _hasIdCall = false;
@@ -152,26 +150,36 @@ public final class XSLTC {
 
     private XMLSecurityManager _xmlSecurityManager;
 
-    private final FeatureManager _featureManager;
+    private final JdkXmlFeatures _xmlFeatures;
 
     /**
     *  Extension function class loader variables
     */
 
-    /* Class loader reference that will be used to external extension functions loading */
+    /* Class loader reference that will be used for external extension functions loading */
     private ClassLoader _extensionClassLoader;
 
     /**
-    *  HashSet with the loaded classes
+    *  HashMap with the loaded classes
     */
-    private final Map<String, Class> _externalExtensionFunctions;
+    private final Map<String, Class<?>> _externalExtensionFunctions;
+
+    /**
+     * Catalog features
+     */
+    CatalogFeatures _catalogFeatures;
+
+    /**
+     * CDATA chunk size
+     */
+    int _cdataChunkSize;
 
     /**
      * XSLTC compiler constructor
      */
-    public XSLTC(boolean useServicesMechanism, FeatureManager featureManager) {
+    public XSLTC(boolean useServicesMechanism, JdkXmlFeatures featureManager) {
         _parser = new Parser(this, useServicesMechanism);
-        _featureManager = featureManager;
+        _xmlFeatures = featureManager;
         _extensionClassLoader = null;
         _externalExtensionFunctions = new HashMap<>();
     }
@@ -208,12 +216,14 @@ public final class XSLTC {
      * @param name name of the feature
      * @return true if the feature is enabled, false otherwise
      */
-    public boolean getFeature(Feature name) {
-        return _featureManager.isFeatureEnabled(name);
+    public boolean getFeature(JdkXmlFeatures.XmlFeature name) {
+        return _xmlFeatures.getFeature(name);
     }
 
     /**
      * Return allowed protocols for accessing external stylesheet.
+     * @param name the name of the property
+     * @return the value of the property
      */
     public Object getProperty(String name) {
         if (name.equals(XMLConstants.ACCESS_EXTERNAL_STYLESHEET)) {
@@ -225,12 +235,18 @@ public final class XSLTC {
             return _xmlSecurityManager;
         } else if (name.equals(XalanConstants.JDK_EXTENSION_CLASSLOADER)) {
             return _extensionClassLoader;
+        } else if (JdkXmlFeatures.CATALOG_FEATURES.equals(name)) {
+            return _catalogFeatures;
+        } else if (JdkXmlUtils.CDATA_CHUNK_SIZE.equals(name)) {
+            return _cdataChunkSize;
         }
         return null;
     }
 
     /**
      * Set allowed protocols for accessing external stylesheet.
+     * @param name the name of the property
+     * @param value the value of the property
      */
     public void setProperty(String name, Object value) {
         if (name.equals(XMLConstants.ACCESS_EXTERNAL_STYLESHEET)) {
@@ -245,6 +261,10 @@ public final class XSLTC {
             /* Clear the external extension functions HashMap if extension class
                loader was changed */
             _externalExtensionFunctions.clear();
+        } else if (JdkXmlFeatures.CATALOG_FEATURES.equals(name)) {
+            _catalogFeatures = (CatalogFeatures)value;
+        } else if (JdkXmlUtils.CDATA_CHUNK_SIZE.equals(name)) {
+            _cdataChunkSize = Integer.parseInt((String)value);
         }
     }
 
@@ -275,18 +295,18 @@ public final class XSLTC {
     public void init() {
         reset();
         _reader = null;
-        _classes = new Vector();
-        _bcelClasses = new Vector();
+        _classes = new ArrayList<>();
+        _bcelClasses = new ArrayList<>();
     }
 
-    private void setExternalExtensionFunctions(String name, Class clazz) {
+    private void setExternalExtensionFunctions(String name, Class<?> clazz) {
         if (_isSecureProcessing && clazz != null && !_externalExtensionFunctions.containsKey(name)) {
             _externalExtensionFunctions.put(name, clazz);
         }
     }
 
     /*
-     * Function loads an external external extension functions.
+     * Function loads an external extension function.
      * The filtering of function types (external,internal) takes place in FunctionCall class
      *
      */
@@ -310,7 +330,7 @@ public final class XSLTC {
      * Returns unmodifiable view of HashMap with loaded external extension
      * functions - will be needed for the TransformerImpl
     */
-    public Map<String, Class> getExternalExtensionFunctions() {
+    public Map<String, Class<?>> getExternalExtensionFunctions() {
         return Collections.unmodifiableMap(_externalExtensionFunctions);
     }
 
@@ -319,13 +339,13 @@ public final class XSLTC {
      */
     private void reset() {
         _nextGType      = DTM.NTYPES;
-        _elements       = new Hashtable();
-        _attributes     = new Hashtable();
-        _namespaces     = new Hashtable();
+        _elements       = new HashMap<>();
+        _attributes     = new HashMap<>();
+        _namespaces     = new HashMap<>();
         _namespaces.put("",new Integer(_nextNSType));
         _namesIndex     = new Vector(128);
         _namespaceIndex = new Vector(32);
-        _namespacePrefixes = new Hashtable();
+        _namespacePrefixes = new HashMap<>();
         _stylesheet     = null;
         _parser.init();
         //_variableSerial     = 1;
@@ -554,7 +574,7 @@ public final class XSLTC {
         final int count = _classes.size();
         final byte[][] result = new byte[count][1];
         for (int i = 0; i < count; i++)
-            result[i] = (byte[])_classes.elementAt(i);
+            result[i] = _classes.get(i).toByteArray();
         return result;
     }
 
@@ -601,18 +621,18 @@ public final class XSLTC {
     }
 
     /**
-     * Get a Vector containing all compile error messages
-     * @return A Vector containing all compile error messages
+     * Get a list of all compile error messages
+     * @return A List containing all compile error messages
      */
-    public Vector getErrors() {
+    public ArrayList<ErrorMsg> getErrors() {
         return _parser.getErrors();
     }
 
     /**
-     * Get a Vector containing all compile warning messages
-     * @return A Vector containing all compile error messages
+     * Get a list of all compile warning messages
+     * @return A List containing all compile error messages
      */
-    public Vector getWarnings() {
+    public ArrayList<ErrorMsg> getWarnings() {
         return _parser.getWarnings();
     }
 
@@ -725,7 +745,7 @@ public final class XSLTC {
      * Set an optional package name for the translet and auxiliary classes
      */
     public void setPackageName(String packageName) {
-        _packageName = packageName;
+        _packageName = Objects.requireNonNull(packageName);
         if (_className != null) setClassName(_className);
     }
 
@@ -765,9 +785,9 @@ public final class XSLTC {
      * DOM attribute types at run-time.
      */
     public int registerAttribute(QName name) {
-        Integer code = (Integer)_attributes.get(name.toString());
+        Integer code = _attributes.get(name.toString());
         if (code == null) {
-            code = new Integer(_nextGType++);
+            code = _nextGType++;
             _attributes.put(name.toString(), code);
             final String uri = name.getNamespace();
             final String local = "@"+name.getLocalPart();
@@ -788,9 +808,9 @@ public final class XSLTC {
      */
     public int registerElement(QName name) {
         // Register element (full QName)
-        Integer code = (Integer)_elements.get(name.toString());
+        Integer code = _elements.get(name.toString());
         if (code == null) {
-            _elements.put(name.toString(), code = new Integer(_nextGType++));
+            _elements.put(name.toString(), code = _nextGType++);
             _namesIndex.addElement(name.toString());
         }
         if (name.getLocalPart().equals("*")) {
@@ -806,9 +826,9 @@ public final class XSLTC {
 
     public int registerNamespacePrefix(QName name) {
 
-    Integer code = (Integer)_namespacePrefixes.get(name.toString());
+    Integer code = _namespacePrefixes.get(name.toString());
     if (code == null) {
-        code = new Integer(_nextGType++);
+        code = _nextGType++;
         _namespacePrefixes.put(name.toString(), code);
         final String uri = name.getNamespace();
         if ((uri != null) && (!uri.equals(""))){
@@ -826,9 +846,9 @@ public final class XSLTC {
      * DOM namespace types at run-time.
      */
     public int registerNamespace(String namespaceURI) {
-        Integer code = (Integer)_namespaces.get(namespaceURI);
+        Integer code = _namespaces.get(namespaceURI);
         if (code == null) {
-            code = new Integer(_nextNSType++);
+            code = _nextNSType++;
             _namespaces.put(namespaceURI,code);
             _namespaceIndex.addElement(namespaceURI);
         }
@@ -898,7 +918,7 @@ public final class XSLTC {
                             getOutputFile(clazz.getClassName()))));
                 break;
             case JAR_OUTPUT:
-                _bcelClasses.addElement(clazz);
+                _bcelClasses.add(clazz);
                 break;
             case BYTEARRAY_OUTPUT:
             case BYTEARRAY_AND_FILE_OUTPUT:
@@ -906,13 +926,13 @@ public final class XSLTC {
             case CLASSLOADER_OUTPUT:
                 ByteArrayOutputStream out = new ByteArrayOutputStream(2048);
                 clazz.dump(out);
-                _classes.addElement(out.toByteArray());
+                _classes.add(out);
 
                 if (_outputType == BYTEARRAY_AND_FILE_OUTPUT)
                   clazz.dump(new BufferedOutputStream(
                         new FileOutputStream(getOutputFile(clazz.getClassName()))));
                 else if (_outputType == BYTEARRAY_AND_JAR_OUTPUT)
-                  _bcelClasses.addElement(clazz);
+                  _bcelClasses.add(clazz);
 
                 break;
             }
@@ -936,30 +956,24 @@ public final class XSLTC {
         // create the manifest
         final Manifest manifest = new Manifest();
         final java.util.jar.Attributes atrs = manifest.getMainAttributes();
-        atrs.put(java.util.jar.Attributes.Name.MANIFEST_VERSION,"1.2");
+        atrs.put(java.util.jar.Attributes.Name.MANIFEST_VERSION, "1.2");
 
-        final Map map = manifest.getEntries();
+        final Map<String, Attributes> map = manifest.getEntries();
         // create manifest
-        Enumeration classes = _bcelClasses.elements();
         final String now = (new Date()).toString();
         final java.util.jar.Attributes.Name dateAttr =
             new java.util.jar.Attributes.Name("Date");
-        while (classes.hasMoreElements()) {
-            final JavaClass clazz = (JavaClass)classes.nextElement();
-            final String className = clazz.getClassName().replace('.','/');
-            final java.util.jar.Attributes attr = new java.util.jar.Attributes();
-            attr.put(dateAttr, now);
-            map.put(className+".class", attr);
-        }
 
         final File jarFile = new File(_destDir, _jarFileName);
         final JarOutputStream jos =
             new JarOutputStream(new FileOutputStream(jarFile), manifest);
-        classes = _bcelClasses.elements();
-        while (classes.hasMoreElements()) {
-            final JavaClass clazz = (JavaClass)classes.nextElement();
-            final String className = clazz.getClassName().replace('.','/');
-            jos.putNextEntry(new JarEntry(className+".class"));
+
+        for (JavaClass clazz : _bcelClasses) {
+            final String className = clazz.getClassName().replace('.', '/');
+            final java.util.jar.Attributes attr = new java.util.jar.Attributes();
+            attr.put(dateAttr, now);
+            map.put(className + ".class", attr);
+            jos.putNextEntry(new JarEntry(className + ".class"));
             final ByteArrayOutputStream out = new ByteArrayOutputStream(2048);
             clazz.dump(out); // dump() closes it's output stream
             out.writeTo(jos);
@@ -991,7 +1005,7 @@ public final class XSLTC {
      *               <code>char[]</code>.
      */
     public String getCharacterData(int index) {
-        return ((StringBuffer) m_characterData.elementAt(index)).toString();
+        return (m_characterData.get(index)).toString();
     }
 
     /**
@@ -1010,14 +1024,13 @@ public final class XSLTC {
      * @return int offset at which character data will be stored
      */
     public int addCharacterData(String newData) {
-        StringBuffer currData;
+        StringBuilder currData;
         if (m_characterData == null) {
-            m_characterData = new Vector();
-            currData = new StringBuffer();
-            m_characterData.addElement(currData);
+            m_characterData = new ArrayList<>();
+            currData = new StringBuilder();
+            m_characterData.add(currData);
         } else {
-            currData = (StringBuffer) m_characterData
-                                           .elementAt(m_characterData.size()-1);
+            currData = m_characterData.get(m_characterData.size()-1);
         }
 
         // Character data could take up to three-times as much space when
@@ -1025,8 +1038,8 @@ public final class XSLTC {
         // constant is 65535/3.  If we exceed that,
         // (We really should use some "bin packing".)
         if (newData.length() + currData.length() > 21845) {
-            currData = new StringBuffer();
-            m_characterData.addElement(currData);
+            currData = new StringBuilder();
+            m_characterData.add(currData);
         }
 
         int newDataOffset = currData.length();

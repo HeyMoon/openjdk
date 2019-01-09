@@ -30,9 +30,9 @@ import static jdk.nashorn.internal.runtime.ECMAErrors.typeError;
 import static jdk.nashorn.internal.runtime.UnwarrantedOptimismException.INVALID_PROGRAM_POINT;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import jdk.internal.dynalink.CallSiteDescriptor;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.LinkRequest;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.LinkRequest;
 import jdk.nashorn.internal.objects.annotations.Attribute;
 import jdk.nashorn.internal.objects.annotations.Getter;
 import jdk.nashorn.internal.objects.annotations.ScriptClass;
@@ -192,7 +192,7 @@ public abstract class ArrayBufferView extends ScriptObject {
         /**
          * Factory method for array data
          *
-         * @param nb    underlying nativebuffer
+         * @param nb    underlying native buffer
          * @param start start element
          * @param end   end element
          *

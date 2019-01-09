@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -149,8 +149,6 @@ public class BasicComboBoxUI extends ComboBoxUI {
      * The {@code KeyListener} listens to events.
      */
     protected KeyListener popupKeyListener;
-
-    private MouseWheelListener mouseWheelListener;
 
     // This is used for knowing when to cache the minimum preferred size.
     // If the data in the list changes, the cached value get marked for recalc.
@@ -415,10 +413,6 @@ public class BasicComboBoxUI extends ComboBoxUI {
                 comboBox.getModel().addListDataListener( listDataListener );
             }
         }
-
-        if ((mouseWheelListener = createMouseWheelListener()) != null) {
-            comboBox.addMouseWheelListener(mouseWheelListener);
-        }
     }
 
     /**
@@ -464,9 +458,6 @@ public class BasicComboBoxUI extends ComboBoxUI {
             if ( listDataListener != null ) {
                 comboBox.getModel().removeListDataListener( listDataListener );
             }
-        }
-        if (mouseWheelListener != null) {
-            comboBox.removeMouseWheelListener(mouseWheelListener);
         }
     }
 
@@ -579,10 +570,6 @@ public class BasicComboBoxUI extends ComboBoxUI {
             handler = new Handler();
         }
         return handler;
-    }
-
-    private MouseWheelListener createMouseWheelListener() {
-        return getHandler();
     }
 
     //
@@ -1719,7 +1706,8 @@ public class BasicComboBoxUI extends ComboBoxUI {
             return comboBox.getSelectedIndex();
         }
 
-        public boolean isEnabled(Object c) {
+        @Override
+        public boolean accept(Object c) {
             if (getName() == HIDE) {
                 return (c != null && ((JComboBox)c).isPopupVisible());
             }
@@ -1736,8 +1724,7 @@ public class BasicComboBoxUI extends ComboBoxUI {
     //
     private class Handler implements ActionListener, FocusListener,
                                      KeyListener, LayoutManager,
-                                     ListDataListener, PropertyChangeListener,
-                                     MouseWheelListener {
+                                     ListDataListener, PropertyChangeListener {
         //
         // PropertyChangeListener
         //
@@ -1852,6 +1839,7 @@ public class BasicComboBoxUI extends ComboBoxUI {
         // key.  If it finds a key event that wasn't a navigation key it
         // dispatches it to JComboBox.selectWithKeyChar() so that it can do
         // type-ahead.
+        @SuppressWarnings("deprecation")
         public void keyPressed( KeyEvent e ) {
             if ( isNavigationKey(e.getKeyCode(), e.getModifiers()) ) {
                 lastTime = 0L;
@@ -2024,10 +2012,6 @@ public class BasicComboBoxUI extends ComboBoxUI {
                     }
                 }
             }
-        }
-
-        public void mouseWheelMoved(MouseWheelEvent e) {
-            e.consume();
         }
    }
 

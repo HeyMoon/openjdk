@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,7 +23,7 @@
 
 /**
  * @test
- * @bug 4759491 6303183 7012868 8015666 8023713 8068790 8076641
+ * @bug 4759491 6303183 7012868 8015666 8023713 8068790 8076641 8075526 8130914 8161942
  * @summary Test ZOS and ZIS timestamp in extra field correctly
  */
 
@@ -31,8 +31,13 @@ import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributeView;
+import java.nio.file.attribute.FileOwnerAttributeView;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.PosixFilePermission;
+import java.time.Instant;
 import java.util.Arrays;
+import java.util.Set;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
@@ -40,33 +45,52 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
+
+
 public class TestExtraTime {
 
     public static void main(String[] args) throws Throwable{
 
         File src = new File(System.getProperty("test.src", "."), "TestExtraTime.java");
-        if (src.exists()) {
+        if (!src.exists()) {
+            return;
+        }
+
+        TimeZone tz = TimeZone.getTimeZone("Asia/Shanghai");
+
+        for (byte[] extra : new byte[][] { null, new byte[] {1, 2, 3}}) {
+
+            // ms-dos 1980 epoch problem
+            test0(FileTime.from(10, TimeUnit.MILLISECONDS), null, null, null, extra);
+            // negative epoch time
+            test0(FileTime.from(-100, TimeUnit.DAYS), null, null, null, extra);
+
             long time = src.lastModified();
-            FileTime mtime = FileTime.from(time, TimeUnit.MILLISECONDS);
-            FileTime atime = FileTime.from(time + 300000, TimeUnit.MILLISECONDS);
-            FileTime ctime = FileTime.from(time - 300000, TimeUnit.MILLISECONDS);
-            TimeZone tz = TimeZone.getTimeZone("Asia/Shanghai");
+            test(FileTime.from(time, TimeUnit.MILLISECONDS),
+                 FileTime.from(time + 300000, TimeUnit.MILLISECONDS),
+                 FileTime.from(time - 300000, TimeUnit.MILLISECONDS),
+                 tz, extra);
 
-            for (byte[] extra : new byte[][] { null, new byte[] {1, 2, 3}}) {
-                test(mtime, null, null, null, extra);
-                // ms-dos 1980 epoch problem
-                test(FileTime.from(10, TimeUnit.MILLISECONDS), null, null, null, extra);
-                // non-default tz
-                test(mtime, null, null, tz, extra);
+            // now
+            time = Instant.now().toEpochMilli();
+            test(FileTime.from(time, TimeUnit.MILLISECONDS),
+                 FileTime.from(time + 300000, TimeUnit.MILLISECONDS),
+                 FileTime.from(time - 300000, TimeUnit.MILLISECONDS),
+                 tz, extra);
 
-                test(mtime, atime, null, null, extra);
-                test(mtime, null, ctime, null, extra);
-                test(mtime, atime, ctime, null, extra);
+            // unix 2038
+            time = 0x80000000L;
+            test(FileTime.from(time, TimeUnit.SECONDS),
+                 FileTime.from(time, TimeUnit.SECONDS),
+                 FileTime.from(time, TimeUnit.SECONDS),
+                 tz, extra);
 
-                test(mtime, atime, null, tz, extra);
-                test(mtime, null, ctime, tz, extra);
-                test(mtime, atime, ctime, tz, extra);
-            }
+            // mtime < unix 2038
+            time = 0x7fffffffL;
+            test(FileTime.from(time, TimeUnit.SECONDS),
+                 FileTime.from(time + 30000, TimeUnit.SECONDS),
+                 FileTime.from(time + 30000, TimeUnit.SECONDS),
+                 tz, extra);
         }
 
         testNullHandling();
@@ -75,6 +99,18 @@ public class TestExtraTime {
     }
 
     static void test(FileTime mtime, FileTime atime, FileTime ctime,
+                     TimeZone tz, byte[] extra) throws Throwable {
+        test0(mtime, null, null, null, extra);
+        test0(mtime, null, null, tz, extra);    // non-default tz
+        test0(mtime, atime, null, null, extra);
+        test0(mtime, null, ctime, null, extra);
+        test0(mtime, atime, ctime, null, extra);
+        test0(mtime, atime, null, tz, extra);
+        test0(mtime, null, ctime, tz, extra);
+        test0(mtime, atime, ctime, tz, extra);
+    }
+
+    static void test0(FileTime mtime, FileTime atime, FileTime ctime,
                      TimeZone tz, byte[] extra) throws Throwable {
         System.out.printf("--------------------%nTesting: [%s]/[%s]/[%s]%n",
                           mtime, atime, ctime);
@@ -115,14 +151,37 @@ public class TestExtraTime {
         // ZipFile
         Path zpath = Paths.get(System.getProperty("test.dir", "."),
                                "TestExtraTime.zip");
+        Path zparent = zpath.getParent();
+        if (zparent != null && !Files.isWritable(zparent)) {
+            System.err.format("zpath %s parent %s is not writable%n",
+                zpath, zparent);
+        }
+        if (Files.exists(zpath)) {
+            System.err.format("zpath %s already exists%n", zpath);
+            if (Files.isDirectory(zpath)) {
+                System.err.format("%n%s contents:%n", zpath);
+                Files.list(zpath).forEach(System.err::println);
+            }
+            FileOwnerAttributeView foav = Files.getFileAttributeView(zpath,
+                FileOwnerAttributeView.class);
+            System.err.format("zpath %s owner: %s%n", zpath, foav.getOwner());
+            System.err.format("zpath %s permissions:%n", zpath);
+            Set<PosixFilePermission> perms =
+                Files.getPosixFilePermissions(zpath);
+            perms.stream().forEach(System.err::println);
+        }
+        if (Files.isSymbolicLink(zpath)) {
+            System.err.format("zpath %s is a symbolic link%n", zpath);
+        }
         Files.copy(new ByteArrayInputStream(baos.toByteArray()), zpath);
-        ZipFile zf = new ZipFile(zpath.toFile());
-        ze = zf.getEntry("TestExtraTime.java");
-        // ZipFile read entry from cen, which does not have a/ctime,
-        // for now.
-        check(mtime, null, null, ze, extra);
-        zf.close();
-        Files.delete(zpath);
+        try (ZipFile zf = new ZipFile(zpath.toFile())) {
+            ze = zf.getEntry("TestExtraTime.java");
+            // ZipFile read entry from cen, which does not have a/ctime,
+            // for now.
+            check(mtime, null, null, ze, extra);
+        } finally {
+            Files.delete(zpath);
+        }
     }
 
     static void check(FileTime mtime, FileTime atime, FileTime ctime,

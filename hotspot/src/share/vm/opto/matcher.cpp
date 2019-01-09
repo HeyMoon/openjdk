@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
 
 #include "precompiled.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "opto/ad.hpp"
 #include "opto/addnode.hpp"
 #include "opto/callnode.hpp"
@@ -84,6 +85,7 @@ Matcher::Matcher()
   idealreg2spillmask  [Op_VecX] = NULL;
   idealreg2spillmask  [Op_VecY] = NULL;
   idealreg2spillmask  [Op_VecZ] = NULL;
+  idealreg2spillmask  [Op_RegFlags] = NULL;
 
   idealreg2debugmask  [Op_RegI] = NULL;
   idealreg2debugmask  [Op_RegN] = NULL;
@@ -96,6 +98,7 @@ Matcher::Matcher()
   idealreg2debugmask  [Op_VecX] = NULL;
   idealreg2debugmask  [Op_VecY] = NULL;
   idealreg2debugmask  [Op_VecZ] = NULL;
+  idealreg2debugmask  [Op_RegFlags] = NULL;
 
   idealreg2mhdebugmask[Op_RegI] = NULL;
   idealreg2mhdebugmask[Op_RegN] = NULL;
@@ -108,6 +111,7 @@ Matcher::Matcher()
   idealreg2mhdebugmask[Op_VecX] = NULL;
   idealreg2mhdebugmask[Op_VecY] = NULL;
   idealreg2mhdebugmask[Op_VecZ] = NULL;
+  idealreg2mhdebugmask[Op_RegFlags] = NULL;
 
   debug_only(_mem_node = NULL;)   // Ideal memory node consumed by mach node
 }
@@ -123,7 +127,7 @@ OptoReg::Name Matcher::warp_incoming_stk_arg( VMReg reg ) {
       _in_arg_limit = OptoReg::add(warped, 1); // Bump max stack slot seen
     if (!RegMask::can_represent_arg(warped)) {
       // the compiler cannot represent this method's calling sequence
-      C->record_method_not_compilable_all_tiers("unsupported incoming calling sequence");
+      C->record_method_not_compilable("unsupported incoming calling sequence");
       return OptoReg::Bad;
     }
     return warped;
@@ -326,14 +330,14 @@ void Matcher::match( ) {
   grow_new_node_array(C->unique());
 
   // Reset node counter so MachNodes start with _idx at 0
-  int nodes = C->unique(); // save value
+  int live_nodes = C->live_nodes();
   C->set_unique(0);
   C->reset_dead_node_list();
 
   // Recursively match trees from old space into new space.
   // Correct leaves of new-space Nodes; they point to old-space.
   _visited.Clear();             // Clear visit bits for xform call
-  C->set_cached_top_node(xform( C->top(), nodes ));
+  C->set_cached_top_node(xform( C->top(), live_nodes ));
   if (!C->failing()) {
     Node* xroot =        xform( C->root(), 1 );
     if (xroot == NULL) {
@@ -658,11 +662,14 @@ void Matcher::Fixup_Save_On_Entry( ) {
   uint reth_edge_cnt = TypeFunc::Parms+1;
   RegMask *reth_rms  = init_input_masks( reth_edge_cnt + soe_cnt, _return_addr_mask, c_frame_ptr_mask );
   // Rethrow takes exception oop only, but in the argument 0 slot.
-  reth_rms[TypeFunc::Parms] = mreg2regmask[find_receiver(false)];
+  OptoReg::Name reg = find_receiver(false);
+  if (reg >= 0) {
+    reth_rms[TypeFunc::Parms] = mreg2regmask[reg];
 #ifdef _LP64
-  // Need two slots for ptrs in 64-bit land
-  reth_rms[TypeFunc::Parms].Insert(OptoReg::add(OptoReg::Name(find_receiver(false)),1));
+    // Need two slots for ptrs in 64-bit land
+    reth_rms[TypeFunc::Parms].Insert(OptoReg::add(OptoReg::Name(reg), 1));
 #endif
+  }
 
   // Input RegMask array shared by all TailCalls
   uint tail_call_edge_cnt = TypeFunc::Parms+2;
@@ -936,9 +943,14 @@ static void match_alias_type(Compile* C, Node* n, Node* m) {
     case Op_StrComp:
     case Op_StrEquals:
     case Op_StrIndexOf:
+    case Op_StrIndexOfChar:
     case Op_AryEq:
+    case Op_HasNegatives:
     case Op_MemBarVolatile:
     case Op_MemBarCPUOrder: // %%% these ideals should have narrower adr_type?
+    case Op_StrInflatedCopy:
+    case Op_StrCompressedCopy:
+    case Op_OnSpinWait:
     case Op_EncodeISOArray:
       nidx = Compile::AliasIdxTop;
       nat = NULL;
@@ -957,51 +969,13 @@ static void match_alias_type(Compile* C, Node* n, Node* m) {
 }
 #endif
 
-
-//------------------------------MStack-----------------------------------------
-// State and MStack class used in xform() and find_shared() iterative methods.
-enum Node_State { Pre_Visit,  // node has to be pre-visited
-                      Visit,  // visit node
-                 Post_Visit,  // post-visit node
-             Alt_Post_Visit   // alternative post-visit path
-                };
-
-class MStack: public Node_Stack {
-  public:
-    MStack(int size) : Node_Stack(size) { }
-
-    void push(Node *n, Node_State ns) {
-      Node_Stack::push(n, (uint)ns);
-    }
-    void push(Node *n, Node_State ns, Node *parent, int indx) {
-      ++_inode_top;
-      if ((_inode_top + 1) >= _inode_max) grow();
-      _inode_top->node = parent;
-      _inode_top->indx = (uint)indx;
-      ++_inode_top;
-      _inode_top->node = n;
-      _inode_top->indx = (uint)ns;
-    }
-    Node *parent() {
-      pop();
-      return node();
-    }
-    Node_State state() const {
-      return (Node_State)index();
-    }
-    void set_state(Node_State ns) {
-      set_index((uint)ns);
-    }
-};
-
-
 //------------------------------xform------------------------------------------
 // Given a Node in old-space, Match him (Label/Reduce) to produce a machine
 // Node in new-space.  Given a new-space Node, recursively walk his children.
 Node *Matcher::transform( Node *n ) { ShouldNotCallThis(); return n; }
 Node *Matcher::xform( Node *n, int max_stack ) {
   // Use one stack to keep both: child's node/state and parent's node/index
-  MStack mstack(max_stack * 2 * 2); // C->unique() * 2 * 2
+  MStack mstack(max_stack * 2 * 2); // usually: C->live_nodes() * 2 * 2
   mstack.push(n, Visit, NULL, -1);  // set NULL as parent to indicate root
 
   while (mstack.is_nonempty()) {
@@ -1026,7 +1000,7 @@ Node *Matcher::xform( Node *n, int max_stack ) {
             if (C->failing())  return NULL;
             if (m == NULL) { Matcher::soft_match_failure(); return NULL; }
           } else {                  // Nothing the matcher cares about
-            if( n->is_Proj() && n->in(0)->is_Multi()) {       // Projections?
+            if (n->is_Proj() && n->in(0) != NULL && n->in(0)->is_Multi()) {       // Projections?
               // Convert to machine-dependent projection
               m = n->in(0)->as_Multi()->match( n->as_Proj(), this );
 #ifdef ASSERT
@@ -1149,7 +1123,7 @@ OptoReg::Name Matcher::warp_outgoing_stk_arg( VMReg reg, OptoReg::Name begin_out
     if( warped >= out_arg_limit_per_call )
       out_arg_limit_per_call = OptoReg::add(warped,1);
     if (!RegMask::can_represent_arg(warped)) {
-      C->record_method_not_compilable_all_tiers("unsupported calling sequence");
+      C->record_method_not_compilable("unsupported calling sequence");
       return OptoReg::Bad;
     }
     return warped;
@@ -1197,6 +1171,7 @@ MachNode *Matcher::match_sfpt( SafePointNode *sfpt ) {
       mcall_java->_optimized_virtual = call_java->is_optimized_virtual();
       is_method_handle_invoke = call_java->is_method_handle_invoke();
       mcall_java->_method_handle_invoke = is_method_handle_invoke;
+      mcall_java->_override_symbolic_info = call_java->override_symbolic_info();
       if (is_method_handle_invoke) {
         C->set_has_method_handle_invokes(true);
       }
@@ -1328,7 +1303,7 @@ MachNode *Matcher::match_sfpt( SafePointNode *sfpt ) {
     uint r_cnt = mcall->tf()->range()->cnt();
     MachProjNode *proj = new MachProjNode( mcall, r_cnt+10000, RegMask::Empty, MachProjNode::fat_proj );
     if (!RegMask::can_represent_arg(OptoReg::Name(out_arg_limit_per_call-1))) {
-      C->record_method_not_compilable_all_tiers("unsupported outgoing calling sequence");
+      C->record_method_not_compilable("unsupported outgoing calling sequence");
     } else {
       for (int i = begin_out_arg_area; i < out_arg_limit_per_call; i++)
         proj->_rout.Insert(OptoReg::Name(i));
@@ -1516,7 +1491,7 @@ Node *Matcher::Label_Root( const Node *n, State *svec, Node *control, const Node
   // out of stack space.  See bugs 6272980 & 6227033 for more info.
   LabelRootDepth++;
   if (LabelRootDepth > MaxLabelRootDepth) {
-    C->record_method_not_compilable_all_tiers("Out of stack space, increase MaxLabelRootDepth");
+    C->record_method_not_compilable("Out of stack space, increase MaxLabelRootDepth");
     return NULL;
   }
   uint care = 0;                // Edges matcher cares about
@@ -1565,13 +1540,11 @@ Node *Matcher::Label_Root( const Node *n, State *svec, Node *control, const Node
         // Can NOT include the match of a subtree when its memory state
         // is used by any of the other subtrees
         (input_mem == NodeSentinel) ) {
-#ifndef PRODUCT
       // Print when we exclude matching due to different memory states at input-loads
-      if( PrintOpto && (Verbose && WizardMode) && (input_mem == NodeSentinel)
-        && !((mem!=(Node*)1) && m->is_Load() && m->in(MemNode::Memory) != mem) ) {
+      if (PrintOpto && (Verbose && WizardMode) && (input_mem == NodeSentinel)
+        && !((mem!=(Node*)1) && m->is_Load() && m->in(MemNode::Memory) != mem)) {
         tty->print_cr("invalid input_mem");
       }
-#endif
       // Switch to a register-only opcode; this value must be in a register
       // and cannot be subsumed as part of a larger instruction.
       s->DFA( m->ideal_reg(), m );
@@ -1672,6 +1645,7 @@ MachNode *Matcher::ReduceInst( State *s, int rule, Node *&mem ) {
 
   // Build the object to represent this state & prepare for recursive calls
   MachNode *mach = s->MachNodeGenerator(rule);
+  guarantee(mach != NULL, "Missing MachNode");
   mach->_opnds[0] = s->MachOperGenerator(_reduceOp[rule]);
   assert( mach->_opnds[0] != NULL, "Missing result operand" );
   Node *leaf = s->_leaf;
@@ -2041,16 +2015,28 @@ bool Matcher::is_bmi_pattern(Node *n, Node *m) {
 }
 #endif // X86
 
+bool Matcher::clone_base_plus_offset_address(AddPNode* m, Matcher::MStack& mstack, VectorSet& address_visited) {
+  Node *off = m->in(AddPNode::Offset);
+  if (off->is_Con()) {
+    address_visited.test_set(m->_idx); // Flag as address_visited
+    mstack.push(m->in(AddPNode::Address), Pre_Visit);
+    // Clone X+offset as it also folds into most addressing expressions
+    mstack.push(off, Visit);
+    mstack.push(m->in(AddPNode::Base), Pre_Visit);
+    return true;
+  }
+  return false;
+}
+
 // A method-klass-holder may be passed in the inline_cache_reg
 // and then expanded into the inline_cache_reg and a method_oop register
 //   defined in ad_<arch>.cpp
 
-
 //------------------------------find_shared------------------------------------
 // Set bits if Node is shared or otherwise a root
 void Matcher::find_shared( Node *n ) {
-  // Allocate stack of size C->unique() * 2 to avoid frequent realloc
-  MStack mstack(C->unique() * 2);
+  // Allocate stack of size C->live_nodes() * 2 to avoid frequent realloc
+  MStack mstack(C->live_nodes() * 2);
   // Mark nodes as address_visited if they are inputs to an address expression
   VectorSet address_visited(Thread::current()->resource_area());
   mstack.push(n, Visit);     // Don't need to pre-visit root node
@@ -2129,8 +2115,14 @@ void Matcher::find_shared( Node *n ) {
       case Op_StrComp:
       case Op_StrEquals:
       case Op_StrIndexOf:
+      case Op_StrIndexOfChar:
       case Op_AryEq:
+      case Op_HasNegatives:
+      case Op_StrInflatedCopy:
+      case Op_StrCompressedCopy:
       case Op_EncodeISOArray:
+      case Op_FmaD:
+      case Op_FmaF:
         set_shared(n); // Force result into register (it will be anyways)
         break;
       case Op_ConP: {  // Convert pointers above the centerline to NUL
@@ -2205,65 +2197,19 @@ void Matcher::find_shared( Node *n ) {
 #endif
 
         // Clone addressing expressions as they are "free" in memory access instructions
-        if( mem_op && i == MemNode::Address && mop == Op_AddP ) {
+        if (mem_op && i == MemNode::Address && mop == Op_AddP &&
+            // When there are other uses besides address expressions
+            // put it on stack and mark as shared.
+            !is_visited(m)) {
           // Some inputs for address expression are not put on stack
           // to avoid marking them as shared and forcing them into register
           // if they are used only in address expressions.
           // But they should be marked as shared if there are other uses
           // besides address expressions.
 
-          Node *off = m->in(AddPNode::Offset);
-          if( off->is_Con() &&
-              // When there are other uses besides address expressions
-              // put it on stack and mark as shared.
-              !is_visited(m) ) {
-            address_visited.test_set(m->_idx); // Flag as address_visited
-            Node *adr = m->in(AddPNode::Address);
-
-            // Intel, ARM and friends can handle 2 adds in addressing mode
-            if( clone_shift_expressions && adr->is_AddP() &&
-                // AtomicAdd is not an addressing expression.
-                // Cheap to find it by looking for screwy base.
-                !adr->in(AddPNode::Base)->is_top() &&
-                // Are there other uses besides address expressions?
-                !is_visited(adr) ) {
-              address_visited.set(adr->_idx); // Flag as address_visited
-              Node *shift = adr->in(AddPNode::Offset);
-              // Check for shift by small constant as well
-              if( shift->Opcode() == Op_LShiftX && shift->in(2)->is_Con() &&
-                  shift->in(2)->get_int() <= 3 &&
-                  // Are there other uses besides address expressions?
-                  !is_visited(shift) ) {
-                address_visited.set(shift->_idx); // Flag as address_visited
-                mstack.push(shift->in(2), Visit);
-                Node *conv = shift->in(1);
-#ifdef _LP64
-                // Allow Matcher to match the rule which bypass
-                // ConvI2L operation for an array index on LP64
-                // if the index value is positive.
-                if( conv->Opcode() == Op_ConvI2L &&
-                    conv->as_Type()->type()->is_long()->_lo >= 0 &&
-                    // Are there other uses besides address expressions?
-                    !is_visited(conv) ) {
-                  address_visited.set(conv->_idx); // Flag as address_visited
-                  mstack.push(conv->in(1), Pre_Visit);
-                } else
-#endif
-                mstack.push(conv, Pre_Visit);
-              } else {
-                mstack.push(shift, Pre_Visit);
-              }
-              mstack.push(adr->in(AddPNode::Address), Pre_Visit);
-              mstack.push(adr->in(AddPNode::Base), Pre_Visit);
-            } else {  // Sparc, Alpha, PPC and friends
-              mstack.push(adr, Pre_Visit);
-            }
-
-            // Clone X+offset as it also folds into most addressing expressions
-            mstack.push(off, Visit);
-            mstack.push(m->in(AddPNode::Base), Pre_Visit);
-            continue; // for(int i = ...)
-          } // if( off->is_Con() )
+          if (clone_address_expressions(m->as_AddP(), mstack, address_visited)) {
+            continue;
+          }
         }   // if( mem_op &&
         mstack.push(m, Pre_Visit);
       }     // for(int i = ...)
@@ -2288,6 +2234,20 @@ void Matcher::find_shared( Node *n ) {
       case Op_StorePConditional:
       case Op_StoreIConditional:
       case Op_StoreLConditional:
+      case Op_CompareAndExchangeB:
+      case Op_CompareAndExchangeS:
+      case Op_CompareAndExchangeI:
+      case Op_CompareAndExchangeL:
+      case Op_CompareAndExchangeP:
+      case Op_CompareAndExchangeN:
+      case Op_WeakCompareAndSwapB:
+      case Op_WeakCompareAndSwapS:
+      case Op_WeakCompareAndSwapI:
+      case Op_WeakCompareAndSwapL:
+      case Op_WeakCompareAndSwapP:
+      case Op_WeakCompareAndSwapN:
+      case Op_CompareAndSwapB:
+      case Op_CompareAndSwapS:
       case Op_CompareAndSwapI:
       case Op_CompareAndSwapL:
       case Op_CompareAndSwapP:
@@ -2304,7 +2264,8 @@ void Matcher::find_shared( Node *n ) {
       case Op_CMoveI:
       case Op_CMoveL:
       case Op_CMoveN:
-      case Op_CMoveP: {
+      case Op_CMoveP:
+      case Op_CMoveVD:  {
         // Restructure into a binary tree for Matching.  It's possible that
         // we could move this code up next to the graph reshaping for IfNodes
         // or vice-versa, but I do not want to debug this for Ladybird.
@@ -2323,7 +2284,8 @@ void Matcher::find_shared( Node *n ) {
         n->del_req(3);
         break;
       }
-      case Op_StrEquals: {
+      case Op_StrEquals:
+      case Op_StrIndexOfChar: {
         Node *pair1 = new BinaryNode(n->in(2),n->in(3));
         n->set_req(2,pair1);
         n->set_req(3,n->in(4));
@@ -2340,11 +2302,22 @@ void Matcher::find_shared( Node *n ) {
         n->del_req(4);
         break;
       }
+      case Op_StrCompressedCopy:
+      case Op_StrInflatedCopy:
       case Op_EncodeISOArray: {
         // Restructure into a binary tree for Matching.
         Node* pair = new BinaryNode(n->in(3), n->in(4));
         n->set_req(3, pair);
         n->del_req(4);
+        break;
+      }
+      case Op_FmaD:
+      case Op_FmaF: {
+        // Restructure into a binary tree for Matching.
+        Node* pair = new BinaryNode(n->in(1), n->in(2));
+        n->set_req(2, pair);
+        n->set_req(1, n->in(3));
+        n->del_req(3);
         break;
       }
       default:
@@ -2384,8 +2357,10 @@ void Matcher::collect_null_checks( Node *proj, Node *orig_proj ) {
 
       bool push_it = false;
       if( proj->Opcode() == Op_IfTrue ) {
+#ifndef PRODUCT
         extern int all_null_checks_found;
         all_null_checks_found++;
+#endif
         if( b->_test._test == BoolTest::ne ) {
           push_it = true;
         }
@@ -2499,6 +2474,20 @@ bool Matcher::post_store_load_barrier(const Node* vmb) {
     // that a monitor exit operation contains a serializing instruction.
 
     if (xop == Op_MemBarVolatile ||
+        xop == Op_CompareAndExchangeB ||
+        xop == Op_CompareAndExchangeS ||
+        xop == Op_CompareAndExchangeI ||
+        xop == Op_CompareAndExchangeL ||
+        xop == Op_CompareAndExchangeP ||
+        xop == Op_CompareAndExchangeN ||
+        xop == Op_WeakCompareAndSwapB ||
+        xop == Op_WeakCompareAndSwapS ||
+        xop == Op_WeakCompareAndSwapL ||
+        xop == Op_WeakCompareAndSwapP ||
+        xop == Op_WeakCompareAndSwapN ||
+        xop == Op_WeakCompareAndSwapI ||
+        xop == Op_CompareAndSwapB ||
+        xop == Op_CompareAndSwapS ||
         xop == Op_CompareAndSwapL ||
         xop == Op_CompareAndSwapP ||
         xop == Op_CompareAndSwapN ||

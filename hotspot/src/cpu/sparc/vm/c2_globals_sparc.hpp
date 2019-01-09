@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,11 +37,7 @@ define_pd_global(bool, InlineIntrinsics,             false);
 define_pd_global(bool, PreferInterpreterNativeStubs, false);
 define_pd_global(bool, ProfileTraps,                 true);
 define_pd_global(bool, UseOnStackReplacement,        true);
-#ifdef CC_INTERP
-define_pd_global(bool, ProfileInterpreter,           false);
-#else
 define_pd_global(bool, ProfileInterpreter,           true);
-#endif // CC_INTERP
 define_pd_global(bool, TieredCompilation,            trueInTiered);
 define_pd_global(intx, CompileThreshold,             10000);
 
@@ -56,6 +52,7 @@ define_pd_global(intx, RegisterCostAreaRatio,        12000);
 define_pd_global(bool, UseTLAB,                      true);
 define_pd_global(bool, ResizeTLAB,                   true);
 define_pd_global(intx, LoopUnrollLimit,              60); // Design center runs on 1.3.1
+define_pd_global(intx, LoopPercentProfileLimit,      10);
 define_pd_global(intx, MinJumpTableSize,             5);
 
 // Peephole and CISC spilling both break the graph, and so makes the
@@ -64,6 +61,9 @@ define_pd_global(bool, OptoPeephole,                 false);
 define_pd_global(bool, UseCISCSpill,                 false);
 define_pd_global(bool, OptoBundling,                 false);
 define_pd_global(bool, OptoScheduling,               true);
+define_pd_global(bool, OptoRegScheduling,            false);
+define_pd_global(bool, SuperWordLoopUnrollAnalysis,  false);
+define_pd_global(bool, IdealizeClearArrayNode,       true);
 
 #ifdef _LP64
 // We need to make sure that all generated code is within

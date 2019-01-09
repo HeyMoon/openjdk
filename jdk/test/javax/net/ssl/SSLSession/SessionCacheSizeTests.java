@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -106,30 +106,40 @@ public class SessionCacheSizeTests {
      */
     static int MAX_ACTIVE_CONNECTIONS = 4;
 
-    void doServerSide(int serverPort, int serverConns) throws Exception {
+    static final int FREE_PORT = 0;
 
-        SSLServerSocket sslServerSocket =
-            (SSLServerSocket) sslssf.createServerSocket(serverPort);
-        sslServerSocket.setSoTimeout(45000); // timeout to accept a connection
-        serverPorts[createdPorts++] = sslServerSocket.getLocalPort();
+    void doServerSide(int serverConns) throws Exception {
+        try (SSLServerSocket sslServerSocket =
+                (SSLServerSocket) sslssf.createServerSocket(FREE_PORT)) {
 
-        /*
-         * Signal Client, we're ready for his connect.
-         */
-        if (createdPorts == serverPorts.length) {
-            serverReady = true;
-        }
-        int read = 0;
-        int nConnections = 0;
-        /*
-         * Divide the max connections among the available server ports.
-         * The use of more than one server port ensures creation of more
-         * than one session.
-         */
-        SSLSession sessions [] = new SSLSession [serverConns];
-        SSLSessionContext sessCtx = sslctx.getServerSessionContext();
+            // timeout to accept a connection
+            sslServerSocket.setSoTimeout(45000);
 
-        try {
+            // make sure createdPorts++ is atomic
+            synchronized(serverPorts) {
+                int serverPort = sslServerSocket.getLocalPort();
+                System.out.printf("server #%d started on port %d%n",
+                        createdPorts, serverPort);
+                serverPorts[createdPorts++] = serverPort;
+
+                /*
+                 * Signal Client, we're ready for his connect.
+                 */
+                if (createdPorts == serverPorts.length) {
+                    serverReady = true;
+                }
+            }
+            int read = 0;
+            int nConnections = 0;
+
+            /*
+             * Divide the max connections among the available server ports.
+             * The use of more than one server port ensures creation of more
+             * than one session.
+             */
+            SSLSession sessions [] = new SSLSession [serverConns];
+            SSLSessionContext sessCtx = sslctx.getServerSessionContext();
+
             while (nConnections < serverConns) {
                 try (SSLSocket sslSocket =
                         (SSLSocket)sslServerSocket.accept()) {
@@ -143,8 +153,6 @@ public class SessionCacheSizeTests {
                     nConnections++;
                 }
             }
-        } finally {
-            sslServerSocket.close();
         }
     }
 
@@ -169,11 +177,54 @@ public class SessionCacheSizeTests {
         SSLSessionContext sessCtx = sslctx.getClientSessionContext();
         sessCtx.setSessionTimeout(0); // no limit
 
-        while (nConnections < (MAX_ACTIVE_CONNECTIONS - 1)) {
-            // divide the connections among the available server ports
+        try {
+            while (nConnections < (MAX_ACTIVE_CONNECTIONS - 1)) {
+                // divide the connections among the available server ports
+                int serverPort = serverPorts [nConnections % (serverPorts.length)];
+                System.out.printf("client #%d connects to port %d%n",
+                        nConnections, serverPort);
+                sslSockets[nConnections] = (SSLSocket) sslsf.
+                            createSocket("localhost",
+                            serverPort);
+                InputStream sslIS = sslSockets[nConnections].getInputStream();
+                OutputStream sslOS = sslSockets[nConnections].getOutputStream();
+                sslOS.write(237);
+                sslOS.flush();
+                int read = sslIS.read();
+                SSLSession sess = sslSockets[nConnections].getSession();
+                if (!sessions.contains(sess))
+                    sessions.add(sess);
+                nConnections++;
+            }
+            System.out.println("Current cacheSize is set to: " +
+                                    sessCtx.getSessionCacheSize());
+            System.out.println();
+            System.out.println("Currently cached Sessions......");
+            System.out.println("============================================"
+                                    + "============================");
+            System.out.println("Session                                     "
+                                    + "      Session-last-accessTime");
+            System.out.println("============================================"
+                                    + "============================");
+            checkCachedSessions(sessCtx, nConnections);
+            // Change session cache size
+            sessCtx.setSessionCacheSize(2);
+            System.out.println("Session cache size changed to: "
+                            + sessCtx.getSessionCacheSize());
+            System.out.println();
+            checkCachedSessions(sessCtx, nConnections);
+
+            // Test the effect of increasing the cache size
+            sessCtx.setSessionCacheSize(3);
+            System.out.println("Session cache size changed to: "
+                            + sessCtx.getSessionCacheSize());
+            // create a new session
+            int serverPort = serverPorts [nConnections % (serverPorts.length)];
+            System.out.printf("client #%d connects to port %d%n",
+                    nConnections, serverPort);
             sslSockets[nConnections] = (SSLSocket) sslsf.
-                        createSocket("localhost",
-                        serverPorts [nConnections % (serverPorts.length)]);
+                            createSocket("localhost",
+                            serverPort);
             InputStream sslIS = sslSockets[nConnections].getInputStream();
             OutputStream sslOS = sslSockets[nConnections].getOutputStream();
             sslOS.write(237);
@@ -183,48 +234,15 @@ public class SessionCacheSizeTests {
             if (!sessions.contains(sess))
                 sessions.add(sess);
             nConnections++;
-        }
-        System.out.println("Current cacheSize is set to: " +
-                                 sessCtx.getSessionCacheSize());
-        System.out.println();
-        System.out.println("Currently cached Sessions......");
-        System.out.println("============================================"
-                                + "============================");
-        System.out.println("Session                                     "
-                                + "      Session-last-accessTime");
-        System.out.println("============================================"
-                                + "============================");
-        checkCachedSessions(sessCtx, nConnections);
-        // Change session cache size
-        sessCtx.setSessionCacheSize(2);
-        System.out.println("Session cache size changed to: "
-                        + sessCtx.getSessionCacheSize());
-        System.out.println();
-        checkCachedSessions(sessCtx, nConnections);
 
-        // Test the effect of increasing the cache size
-        sessCtx.setSessionCacheSize(3);
-        System.out.println("Session cache size changed to: "
-                        + sessCtx.getSessionCacheSize());
-        // create a new session
-        sslSockets[nConnections] = (SSLSocket) sslsf.
-                        createSocket("localhost",
-                        serverPorts [nConnections % (serverPorts.length)]);
-        InputStream sslIS = sslSockets[nConnections].getInputStream();
-        OutputStream sslOS = sslSockets[nConnections].getOutputStream();
-        sslOS.write(237);
-        sslOS.flush();
-        int read = sslIS.read();
-        SSLSession sess = sslSockets[nConnections].getSession();
-        if (!sessions.contains(sess))
-            sessions.add(sess);
-        nConnections++;
-
-        // test the number of sessions cached against the cache size
-        checkCachedSessions(sessCtx, nConnections);
-
-        for (int i = 0; i < nConnections; i++) {
-            sslSockets[i].close();
+            // test the number of sessions cached against the cache size
+            checkCachedSessions(sessCtx, nConnections);
+        } finally {
+            for (int i = 0; i < nConnections; i++) {
+                if (sslSockets[i] != null) {
+                    sslSockets[i].close();
+                }
+            }
         }
         System.out.println("Session cache size tests passed");
     }
@@ -270,8 +288,8 @@ public class SessionCacheSizeTests {
      * Using four ports (one per each connection), we are able to create
      * alteast four sessions.
      */
-    volatile int serverPorts[] = new int[]{0, 0, 0, 0};
-    volatile int createdPorts = 0;
+    int serverPorts[] = new int[]{0, 0, 0, 0};  // MAX_ACTIVE_CONNECTIONS: 4
+    int createdPorts = 0;
     static SSLServerSocketFactory sslssf;
     static SSLSocketFactory sslsf;
     static SSLContext sslctx;
@@ -298,7 +316,9 @@ public class SessionCacheSizeTests {
         sslctx = SSLContext.getInstance("TLS");
         KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
         KeyStore ks = KeyStore.getInstance("JKS");
-        ks.load(new FileInputStream(keyFilename), passwd.toCharArray());
+        try (FileInputStream fis = new FileInputStream(keyFilename)) {
+            ks.load(fis, passwd.toCharArray());
+        }
         kmf.init(ks, passwd.toCharArray());
         sslctx.init(kmf.getKeyManagers(), null, null);
         sslssf = (SSLServerSocketFactory) sslctx.getServerSocketFactory();
@@ -339,19 +359,21 @@ public class SessionCacheSizeTests {
                 for (int i = 0; i < serverPorts.length; i++) {
                     // distribute remaining connections among the
                     // available ports
-                    if (i < remainingConns)
-                        startServer(serverPorts[i], (serverConns + 1), true);
-                    else
-                        startServer(serverPorts[i], serverConns, true);
+                    if (i < remainingConns) {
+                        startServer(serverConns + 1, true);
+                    } else {
+                        startServer(serverConns, true);
+                    }
                 }
                 startClient(false);
             } else {
                 startClient(true);
                 for (int i = 0; i < serverPorts.length; i++) {
-                    if (i < remainingConns)
-                        startServer(serverPorts[i], (serverConns + 1), false);
-                    else
-                        startServer(serverPorts[i], serverConns, false);
+                    if (i < remainingConns) {
+                        startServer(serverConns + 1, false);
+                    } else {
+                        startServer(serverConns, false);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -416,13 +438,12 @@ public class SessionCacheSizeTests {
         // Fall-through: no exception to throw!
     }
 
-    void startServer(final int port, final int nConns,
-                        boolean newThread) throws Exception {
+    void startServer(final int nConns, boolean newThread) throws Exception {
         if (newThread) {
             serverThread = new Thread() {
                 public void run() {
                     try {
-                        doServerSide(port, nConns);
+                        doServerSide(nConns);
                     } catch (Exception e) {
                         /*
                          * Our server thread just died.
@@ -439,7 +460,7 @@ public class SessionCacheSizeTests {
             serverThread.start();
         } else {
             try {
-                doServerSide(port, nConns);
+                doServerSide(nConns);
             } catch (Exception e) {
                 serverException = e;
             } finally {

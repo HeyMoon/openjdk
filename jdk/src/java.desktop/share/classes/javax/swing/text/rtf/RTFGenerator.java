@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,12 +42,8 @@ import javax.swing.text.*;
  * <p>Note that this is a lossy conversion since RTF's model of
  * text does not exactly correspond with LightText's.
  *
- * @see LTAttributedText
- * @see LTRTFFilter
- * @see LTTextAcceptor
  * @see java.io.OutputStream
  */
-
 class RTFGenerator extends Object
 {
     /* These dictionaries map Colors, font names, or Style objects
@@ -76,14 +72,14 @@ class RTFGenerator extends Object
 
     /** The default color, used for text without an explicit color
      *  attribute. */
-    static public final Color defaultRTFColor = Color.black;
+    public static final Color defaultRTFColor = Color.black;
 
-    static public final float defaultFontSize = 12f;
+    public static final float defaultFontSize = 12f;
 
-    static public final String defaultFontFamily = "Helvetica";
+    public static final String defaultFontFamily = "Helvetica";
 
     /* constants so we can avoid allocating objects in inner loops */
-    final static private Object MagicToken;
+    private static final Object MagicToken;
 
     /* An array of character-keyword pairs. This could be done
        as a dictionary (and lookup would be quicker), but that
@@ -91,7 +87,7 @@ class RTFGenerator extends Object
        written (slow!). */
     static class CharacterKeywordPair
       { public char character; public String keyword; }
-    static protected CharacterKeywordPair[] textKeywords;
+    protected static CharacterKeywordPair[] textKeywords;
 
     static {
         MagicToken = new Object();
@@ -112,7 +108,7 @@ class RTFGenerator extends Object
     static final char[] hexdigits = { '0', '1', '2', '3', '4', '5', '6', '7',
                                       '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
 
-static public void writeDocument(Document d, OutputStream to)
+public static void writeDocument(Document d, OutputStream to)
     throws IOException
 {
     RTFGenerator gen = new RTFGenerator(to);
@@ -238,7 +234,7 @@ private Integer findStyleNumber(AttributeSet a, String domain)
     return null;
 }
 
-static private Object attrDiff(MutableAttributeSet oldAttrs,
+private static Object attrDiff(MutableAttributeSet oldAttrs,
                                AttributeSet newAttrs,
                                Object key,
                                Object dfl)
@@ -265,7 +261,7 @@ static private Object attrDiff(MutableAttributeSet oldAttrs,
     return null;
 }
 
-static private boolean equalArraysOK(Object a, Object b)
+private static boolean equalArraysOK(Object a, Object b)
 {
     Object[] aa, bb;
     if (a == b)
@@ -491,7 +487,10 @@ protected void checkControlWord(MutableAttributeSet currentAttributes,
                          word.swingName(), MagicToken)) != null) {
         if (parm == MagicToken)
             parm = null;
-        word.writeValue(parm, this, true);
+        if (!word.writeValue(parm, this, true) &&
+                word instanceof RTFAttributes.AssertiveAttribute ) {
+            currentAttributes.removeAttribute(word.swingName());
+        }
     }
 }
 
@@ -987,7 +986,7 @@ static int[] outputConversionForName(String name)
  * corresponding byte value (as an int, since bytes are signed).
  */
     /* Not very efficient. TODO. */
-static protected int convertCharacter(int[] conversion, char ch)
+protected static int convertCharacter(int[] conversion, char ch)
 {
    int index;
 

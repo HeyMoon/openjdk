@@ -33,10 +33,7 @@ import java.awt.GraphicsEnvironment;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.HeadlessException;
-import java.awt.Rectangle;
 import java.awt.Shape;
-
-import java.awt.image.BufferedImage;
 
 import java.awt.font.FontRenderContext;
 
@@ -46,7 +43,6 @@ import java.awt.geom.Rectangle2D;
 
 import java.awt.image.BufferedImage;
 
-import java.awt.peer.FontPeer;
 import java.awt.print.Pageable;
 import java.awt.print.PageFormat;
 import java.awt.print.Paper;
@@ -55,14 +51,12 @@ import java.awt.print.PrinterException;
 import java.awt.print.PrinterIOException;
 import java.awt.print.PrinterJob;
 
-import javax.print.DocFlavor;
 import javax.print.PrintService;
 import javax.print.StreamPrintService;
 import javax.print.attribute.HashPrintRequestAttributeSet;
 import javax.print.attribute.PrintRequestAttributeSet;
 import javax.print.attribute.PrintServiceAttributeSet;
 import javax.print.attribute.standard.PrinterName;
-import javax.print.attribute.standard.Chromaticity;
 import javax.print.attribute.standard.Copies;
 import javax.print.attribute.standard.Destination;
 import javax.print.attribute.standard.DialogTypeSelection;
@@ -72,7 +66,6 @@ import javax.print.attribute.standard.Sides;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
-import java.io.CharConversionException;
 import java.io.File;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -85,17 +78,14 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 
 import java.util.ArrayList;
-import java.util.Enumeration;
 import java.util.Locale;
 import java.util.Properties;
 
 import sun.awt.CharsetString;
 import sun.awt.FontConfiguration;
-import sun.awt.FontDescriptor;
 import sun.awt.PlatformFont;
 import sun.awt.SunToolkit;
 import sun.font.FontAccess;
-import sun.font.FontManagerFactory;
 import sun.font.FontUtilities;
 
 import java.nio.charset.*;
@@ -105,6 +95,9 @@ import java.nio.file.Files;
 
 //REMIND: Remove use of this class when IPPPrintService is moved to share directory.
 import java.lang.reflect.Method;
+import javax.print.attribute.Attribute;
+import javax.print.attribute.standard.JobSheets;
+import javax.print.attribute.standard.Media;
 
 /**
  * A class which initiates and executes a PostScript printer job.
@@ -116,14 +109,14 @@ public class PSPrinterJob extends RasterPrinterJob {
  /* Class Constants */
 
     /**
-     * Passed to the <code>setFillMode</code>
+     * Passed to the {@code setFillMode}
      * method this value forces fills to be
      * done using the even-odd fill rule.
      */
     protected static final int FILL_EVEN_ODD = 1;
 
     /**
-     * Passed to the <code>setFillMode</code>
+     * Passed to the {@code setFillMode}
      * method this value forces fills to be
      * done using the non-zero winding rule.
      */
@@ -294,14 +287,14 @@ public class PSPrinterJob extends RasterPrinterJob {
    /**
     * This string holds the PostScript operator to
     * be used to fill a path. It can be changed
-    * by the <code>setFillMode</code> method.
+    * by the {@code setFillMode} method.
     */
     private String mFillOpStr = WINDING_FILL_STR;
 
    /**
     * This string holds the PostScript operator to
     * be used to clip to a path. It can be changed
-    * by the <code>setFillMode</code> method.
+    * by the {@code setFillMode} method.
     */
     private String mClipOpStr = WINDING_CLIP_STR;
 
@@ -419,8 +412,8 @@ public class PSPrinterJob extends RasterPrinterJob {
    /**
      * Presents the user a dialog for changing properties of the
      * print job interactively.
-     * @returns false if the user cancels the dialog and
-     *          true otherwise.
+     * @return false if the user cancels the dialog and
+     *         true otherwise.
      * @exception HeadlessException if GraphicsEnvironment.isHeadless()
      * returns true.
      * @see java.awt.GraphicsEnvironment#isHeadless
@@ -488,6 +481,23 @@ public class PSPrinterJob extends RasterPrinterJob {
         return doPrint;
     }
 
+    @Override
+    protected void setAttributes(PrintRequestAttributeSet attributes)
+                                 throws PrinterException {
+        super.setAttributes(attributes);
+        if (attributes == null) {
+            return; // now always use attributes, so this shouldn't happen.
+        }
+        Attribute attr = attributes.get(Media.class);
+        if (attr instanceof CustomMediaTray) {
+            CustomMediaTray customTray = (CustomMediaTray)attr;
+            String choice = customTray.getChoiceName();
+            if (choice != null) {
+                mOptions = " InputSlot="+ choice;
+            }
+        }
+    }
+
     /**
      * Invoked by the RasterPrinterJob super class
      * this method is called to mark the start of a
@@ -501,7 +511,7 @@ public class PSPrinterJob extends RasterPrinterJob {
         // Note that we only open a file if it has been nominated by
         // the end-user in a dialog that we ouselves put up.
 
-        OutputStream output;
+        OutputStream output = null;
 
         if (epsPrinter == null) {
             if (getPrintService() instanceof PSStreamPrintService) {
@@ -526,6 +536,7 @@ public class PSPrinterJob extends RasterPrinterJob {
                         spoolFile = new File(mDestination);
                         output =  new FileOutputStream(spoolFile);
                     } catch (IOException ex) {
+                        abortDoc();
                         throw new PrinterIOException(ex);
                     }
                 } else {
@@ -771,6 +782,10 @@ public class PSPrinterJob extends RasterPrinterJob {
         if (mPSStream != null) {
             mPSStream.println(EOF_COMMENT);
             mPSStream.flush();
+            if (mPSStream.checkError()) {
+                abortDoc();
+                throw new PrinterException("Error while writing to file");
+            }
             if (mDestType != RasterPrinterJob.STREAM) {
                 mPSStream.close();
             }
@@ -876,14 +891,14 @@ public class PSPrinterJob extends RasterPrinterJob {
 
    /**
      * Convert the 24 bit BGR image buffer represented by
-     * <code>image</code> to PostScript. The image is drawn at
-     * <code>(destX, destY)</code> in device coordinates.
+     * {@code image} to PostScript. The image is drawn at
+     * {@code (destX, destY)} in device coordinates.
      * The image is scaled into a square of size
-     * specified by <code>destWidth</code> and
-     * <code>destHeight</code>. The portion of the
+     * specified by {@code destWidth} and
+     * {@code destHeight}. The portion of the
      * source image copied into that square is specified
-     * by <code>srcX</code>, <code>srcY</code>,
-     * <code>srcWidth</code>, and srcHeight.
+     * by {@code srcX}, {@code srcY},
+     * {@code srcWidth}, and srcHeight.
      */
     protected void drawImageBGR(byte[] bgrData,
                                    float destX, float destY,
@@ -1026,14 +1041,14 @@ public class PSPrinterJob extends RasterPrinterJob {
 
     /**
      * Examine the metrics captured by the
-     * <code>PeekGraphics</code> instance and
+     * {@code PeekGraphics} instance and
      * if capable of directly converting this
      * print job to the printer's control language
      * or the native OS's graphics primitives, then
-     * return a <code>PSPathGraphics</code> to perform
+     * return a {@code PSPathGraphics} to perform
      * that conversion. If there is not an object
      * capable of the conversion then return
-     * <code>null</code>. Returning <code>null</code>
+     * {@code null}. Returning {@code null}
      * causes the print job to be rasterized.
      */
 
@@ -1349,8 +1364,8 @@ public class PSPrinterJob extends RasterPrinterJob {
      }
     /**
      * Set the current path rule to be either
-     * <code>FILL_EVEN_ODD</code> (using the
-     * even-odd file rule) or <code>FILL_WINDING</code>
+     * {@code FILL_EVEN_ODD} (using the
+     * even-odd file rule) or {@code FILL_WINDING}
      * (using the non-zero winding rule.)
      */
     protected void setFillMode(int fillRule) {
@@ -1375,7 +1390,7 @@ public class PSPrinterJob extends RasterPrinterJob {
 
     /**
      * Set the printer's current color to be that
-     * defined by <code>color</code>
+     * defined by {@code color}
      */
     protected void setColor(Color color) {
         mLastColor = color;
@@ -1418,7 +1433,7 @@ public class PSPrinterJob extends RasterPrinterJob {
 
     /**
      * Generate PostScript to move the current pen
-     * position to <code>(x, y)</code>.
+     * position to {@code (x, y)}.
      */
     protected void moveTo(float x, float y) {
 
@@ -1437,7 +1452,7 @@ public class PSPrinterJob extends RasterPrinterJob {
     }
     /**
      * Generate PostScript to draw a line from the
-     * current pen position to <code>(x, y)</code>.
+     * current pen position to {@code (x, y)}.
      */
     protected void lineTo(float x, float y) {
 
@@ -1568,10 +1583,10 @@ public class PSPrinterJob extends RasterPrinterJob {
 
     private String[] printExecCmd(String printer, String options,
                                   boolean noJobSheet,
-                                  String banner, int copies, String spoolFile) {
+                                  String jobTitle, int copies, String spoolFile) {
         int PRINTER = 0x1;
         int OPTIONS = 0x2;
-        int BANNER  = 0x4;
+        int JOBTITLE  = 0x4;
         int COPIES  = 0x8;
         int NOSHEET = 0x10;
         int pFlags = 0;
@@ -1587,8 +1602,8 @@ public class PSPrinterJob extends RasterPrinterJob {
             pFlags |= OPTIONS;
             ncomps+=1;
         }
-        if (banner != null && !banner.equals("")) {
-            pFlags |= BANNER;
+        if (jobTitle != null && !jobTitle.equals("")) {
+            pFlags |= JOBTITLE;
             ncomps+=1;
         }
         if (copies > 1) {
@@ -1598,26 +1613,32 @@ public class PSPrinterJob extends RasterPrinterJob {
         if (noJobSheet) {
             pFlags |= NOSHEET;
             ncomps+=1;
+        } else if (getPrintService().
+                        isAttributeCategorySupported(JobSheets.class)) {
+            ncomps+=1; // for jobsheet
         }
 
-       String osname = System.getProperty("os.name");
-       if (osname.equals("Linux") || osname.contains("OS X")) {
+        String osname = System.getProperty("os.name");
+        if (osname.equals("Linux") || osname.contains("OS X")) {
             execCmd = new String[ncomps];
             execCmd[n++] = "/usr/bin/lpr";
             if ((pFlags & PRINTER) != 0) {
                 execCmd[n++] = "-P" + printer;
             }
-            if ((pFlags & BANNER) != 0) {
-                execCmd[n++] = "-J"  + banner;
+            if ((pFlags & JOBTITLE) != 0) {
+                execCmd[n++] = "-J"  + jobTitle;
             }
             if ((pFlags & COPIES) != 0) {
                 execCmd[n++] = "-#" + copies;
             }
             if ((pFlags & NOSHEET) != 0) {
                 execCmd[n++] = "-h";
+            } else if (getPrintService().
+                        isAttributeCategorySupported(JobSheets.class)) {
+                execCmd[n++] = "-o job-sheets=standard";
             }
             if ((pFlags & OPTIONS) != 0) {
-                execCmd[n++] = new String(options);
+                execCmd[n++] = "-o" + options;
             }
         } else {
             ncomps+=1; //add 1 arg for lp
@@ -1627,14 +1648,17 @@ public class PSPrinterJob extends RasterPrinterJob {
             if ((pFlags & PRINTER) != 0) {
                 execCmd[n++] = "-d" + printer;
             }
-            if ((pFlags & BANNER) != 0) {
-                execCmd[n++] = "-t"  + banner;
+            if ((pFlags & JOBTITLE) != 0) {
+                execCmd[n++] = "-t"  + jobTitle;
             }
             if ((pFlags & COPIES) != 0) {
                 execCmd[n++] = "-n" + copies;
             }
             if ((pFlags & NOSHEET) != 0) {
                 execCmd[n++] = "-o nobanner";
+            } else if (getPrintService().
+                        isAttributeCategorySupported(JobSheets.class)) {
+                execCmd[n++] = "-o job-sheets=standard";
             }
             if ((pFlags & OPTIONS) != 0) {
                 execCmd[n++] = "-o" + options;
@@ -1861,7 +1885,7 @@ public class PSPrinterJob extends RasterPrinterJob {
     }
 
        /**
-        * Given a Java2D <code>PathIterator</code> instance,
+        * Given a Java2D {@code PathIterator} instance,
         * this method translates that into a PostScript path..
         */
         void convertToPSPath(PathIterator pathIter) {
@@ -1926,13 +1950,21 @@ public class PSPrinterJob extends RasterPrinterJob {
         }
 
     /*
-     * Fill the path defined by <code>pathIter</code>
+     * Fill the path defined by {@code pathIter}
      * with the specified color.
      * The path is provided in current user space.
      */
     protected void deviceFill(PathIterator pathIter, Color color,
                               AffineTransform tx, Shape clip) {
 
+        if (Double.isNaN(tx.getScaleX()) ||
+            Double.isNaN(tx.getScaleY()) ||
+            Double.isNaN(tx.getShearX()) ||
+            Double.isNaN(tx.getShearY()) ||
+            Double.isNaN(tx.getTranslateX()) ||
+            Double.isNaN(tx.getTranslateY())) {
+            return;
+        }
         setTransform(tx);
         setClip(clip);
         setColor(color);

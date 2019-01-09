@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,7 +46,7 @@
 //=============================================================================
 //------------------------------Identity---------------------------------------
 // If right input is a constant 0, return the left input.
-Node *SubNode::Identity( PhaseTransform *phase ) {
+Node* SubNode::Identity(PhaseGVN* phase) {
   assert(in(1) != this, "Must already have called Value");
   assert(in(2) != this, "Must already have called Value");
 
@@ -100,7 +100,7 @@ const Type* SubNode::Value_common(PhaseTransform *phase) const {
   return NULL;
 }
 
-const Type* SubNode::Value(PhaseTransform *phase) const {
+const Type* SubNode::Value(PhaseGVN* phase) const {
   const Type* t = Value_common(phase);
   if (t != NULL) {
     return t;
@@ -252,8 +252,8 @@ Node *SubINode::Ideal(PhaseGVN *phase, bool can_reshape){
 const Type *SubINode::sub( const Type *t1, const Type *t2 ) const {
   const TypeInt *r0 = t1->is_int(); // Handy access
   const TypeInt *r1 = t2->is_int();
-  int32_t lo = r0->_lo - r1->_hi;
-  int32_t hi = r0->_hi - r1->_lo;
+  int32_t lo = java_subtract(r0->_lo, r1->_hi);
+  int32_t hi = java_subtract(r0->_hi, r1->_lo);
 
   // We next check for 32-bit overflow.
   // If that happens, we just assume all integers are possible.
@@ -361,8 +361,8 @@ Node *SubLNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 const Type *SubLNode::sub( const Type *t1, const Type *t2 ) const {
   const TypeLong *r0 = t1->is_long(); // Handy access
   const TypeLong *r1 = t2->is_long();
-  jlong lo = r0->_lo - r1->_hi;
-  jlong hi = r0->_hi - r1->_lo;
+  jlong lo = java_subtract(r0->_lo, r1->_hi);
+  jlong hi = java_subtract(r0->_hi, r1->_lo);
 
   // We next check for 32-bit overflow.
   // If that happens, we just assume all integers are possible.
@@ -378,7 +378,7 @@ const Type *SubLNode::sub( const Type *t1, const Type *t2 ) const {
 //=============================================================================
 //------------------------------Value------------------------------------------
 // A subtract node differences its two inputs.
-const Type *SubFPNode::Value( PhaseTransform *phase ) const {
+const Type* SubFPNode::Value(PhaseGVN* phase) const {
   const Node* in1 = in(1);
   const Node* in2 = in(2);
   // Either input is TOP ==> the result is TOP
@@ -494,9 +494,40 @@ const Type *SubDNode::sub( const Type *t1, const Type *t2 ) const {
 // Unlike SubNodes, compare must still flatten return value to the
 // range -1, 0, 1.
 // And optimizations like those for (X + Y) - X fail if overflow happens.
-Node *CmpNode::Identity( PhaseTransform *phase ) {
+Node* CmpNode::Identity(PhaseGVN* phase) {
   return this;
 }
+
+#ifndef PRODUCT
+//----------------------------related------------------------------------------
+// Related nodes of comparison nodes include all data inputs (until hitting a
+// control boundary) as well as all outputs until and including control nodes
+// as well as their projections. In compact mode, data inputs till depth 1 and
+// all outputs till depth 1 are considered.
+void CmpNode::related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const {
+  if (compact) {
+    this->collect_nodes(in_rel, 1, false, true);
+    this->collect_nodes(out_rel, -1, false, false);
+  } else {
+    this->collect_nodes_in_all_data(in_rel, false);
+    this->collect_nodes_out_all_ctrl_boundary(out_rel);
+    // Now, find all control nodes in out_rel, and include their projections
+    // and projection targets (if any) in the result.
+    GrowableArray<Node*> proj(Compile::current()->unique());
+    for (GrowableArrayIterator<Node*> it = out_rel->begin(); it != out_rel->end(); ++it) {
+      Node* n = *it;
+      if (n->is_CFG() && !n->is_Proj()) {
+        // Assume projections and projection targets are found at levels 1 and 2.
+        n->collect_nodes(&proj, -2, false, false);
+        for (GrowableArrayIterator<Node*> p = proj.begin(); p != proj.end(); ++p) {
+          out_rel->append_if_missing(*p);
+        }
+        proj.clear();
+      }
+    }
+  }
+}
+#endif
 
 //=============================================================================
 //------------------------------cmp--------------------------------------------
@@ -547,8 +578,12 @@ const Type *CmpUNode::sub( const Type *t1, const Type *t2 ) const {
     // All unsigned values are LE -1 and GE 0.
     if (lo0 == 0 && hi0 == 0) {
       return TypeInt::CC_LE;            //   0 <= bot
+    } else if ((jint)lo0 == -1 && (jint)hi0 == -1) {
+      return TypeInt::CC_GE;            // -1 >= bot
     } else if (lo1 == 0 && hi1 == 0) {
       return TypeInt::CC_GE;            // bot >= 0
+    } else if ((jint)lo1 == -1 && (jint)hi1 == -1) {
+      return TypeInt::CC_LE;            // bot <= -1
     }
   } else {
     // We can use ranges of the form [lo..hi] if signs are the same.
@@ -580,7 +615,7 @@ const Type *CmpUNode::sub( const Type *t1, const Type *t2 ) const {
   return TypeInt::CC;                   // else use worst case results
 }
 
-const Type* CmpUNode::Value(PhaseTransform *phase) const {
+const Type* CmpUNode::Value(PhaseGVN* phase) const {
   const Type* t = SubNode::Value_common(phase);
   if (t != NULL) {
     return t;
@@ -701,6 +736,60 @@ const Type *CmpLNode::sub( const Type *t1, const Type *t2 ) const {
   else if( r0->_lo == r1->_hi ) // Range is never low?
     return TypeInt::CC_GE;
   return TypeInt::CC;           // else use worst case results
+}
+
+
+// Simplify a CmpUL (compare 2 unsigned longs) node, based on local information.
+// If both inputs are constants, compare them.
+const Type* CmpULNode::sub(const Type* t1, const Type* t2) const {
+  assert(!t1->isa_ptr(), "obsolete usage of CmpUL");
+
+  // comparing two unsigned longs
+  const TypeLong* r0 = t1->is_long();   // Handy access
+  const TypeLong* r1 = t2->is_long();
+
+  // Current installed version
+  // Compare ranges for non-overlap
+  julong lo0 = r0->_lo;
+  julong hi0 = r0->_hi;
+  julong lo1 = r1->_lo;
+  julong hi1 = r1->_hi;
+
+  // If either one has both negative and positive values,
+  // it therefore contains both 0 and -1, and since [0..-1] is the
+  // full unsigned range, the type must act as an unsigned bottom.
+  bool bot0 = ((jlong)(lo0 ^ hi0) < 0);
+  bool bot1 = ((jlong)(lo1 ^ hi1) < 0);
+
+  if (bot0 || bot1) {
+    // All unsigned values are LE -1 and GE 0.
+    if (lo0 == 0 && hi0 == 0) {
+      return TypeInt::CC_LE;            //   0 <= bot
+    } else if ((jlong)lo0 == -1 && (jlong)hi0 == -1) {
+      return TypeInt::CC_GE;            // -1 >= bot
+    } else if (lo1 == 0 && hi1 == 0) {
+      return TypeInt::CC_GE;            // bot >= 0
+    } else if ((jlong)lo1 == -1 && (jlong)hi1 == -1) {
+      return TypeInt::CC_LE;            // bot <= -1
+    }
+  } else {
+    // We can use ranges of the form [lo..hi] if signs are the same.
+    assert(lo0 <= hi0 && lo1 <= hi1, "unsigned ranges are valid");
+    // results are reversed, '-' > '+' for unsigned compare
+    if (hi0 < lo1) {
+      return TypeInt::CC_LT;            // smaller
+    } else if (lo0 > hi1) {
+      return TypeInt::CC_GT;            // greater
+    } else if (hi0 == lo1 && lo0 == hi1) {
+      return TypeInt::CC_EQ;            // Equal results
+    } else if (lo0 >= hi1) {
+      return TypeInt::CC_GE;
+    } else if (hi0 <= lo1) {
+      return TypeInt::CC_LE;
+    }
+  }
+
+  return TypeInt::CC;                   // else use worst case results
 }
 
 //=============================================================================
@@ -1022,7 +1111,7 @@ Node *CmpNNode::Ideal( PhaseGVN *phase, bool can_reshape ) {
 //------------------------------Value------------------------------------------
 // Simplify an CmpF (compare 2 floats ) node, based on local information.
 // If both inputs are constants, compare them.
-const Type *CmpFNode::Value( PhaseTransform *phase ) const {
+const Type* CmpFNode::Value(PhaseGVN* phase) const {
   const Node* in1 = in(1);
   const Node* in2 = in(2);
   // Either input is TOP ==> the result is TOP
@@ -1052,7 +1141,7 @@ const Type *CmpFNode::Value( PhaseTransform *phase ) const {
 //------------------------------Value------------------------------------------
 // Simplify an CmpD (compare 2 doubles ) node, based on local information.
 // If both inputs are constants, compare them.
-const Type *CmpDNode::Value( PhaseTransform *phase ) const {
+const Type* CmpDNode::Value(PhaseGVN* phase) const {
   const Node* in1 = in(1);
   const Node* in2 = in(2);
   // Either input is TOP ==> the result is TOP
@@ -1303,6 +1392,65 @@ Node *BoolNode::Ideal(PhaseGVN *phase, bool can_reshape) {
     return new BoolNode( ncmp, _test.negate() );
   }
 
+  // Change ((x & m) u<= m) or ((m & x) u<= m) to always true
+  // Same with ((x & m) u< m+1) and ((m & x) u< m+1)
+  if (cop == Op_CmpU &&
+      cmp1->Opcode() == Op_AndI) {
+    Node* bound = NULL;
+    if (_test._test == BoolTest::le) {
+      bound = cmp2;
+    } else if (_test._test == BoolTest::lt &&
+               cmp2->Opcode() == Op_AddI &&
+               cmp2->in(2)->find_int_con(0) == 1) {
+      bound = cmp2->in(1);
+    }
+    if (cmp1->in(2) == bound || cmp1->in(1) == bound) {
+      return ConINode::make(1);
+    }
+  }
+
+  // Change ((x & (m - 1)) u< m) into (m > 0)
+  // This is the off-by-one variant of the above
+  if (cop == Op_CmpU &&
+      _test._test == BoolTest::lt &&
+      cmp1->Opcode() == Op_AndI) {
+    Node* l = cmp1->in(1);
+    Node* r = cmp1->in(2);
+    for (int repeat = 0; repeat < 2; repeat++) {
+      bool match = r->Opcode() == Op_AddI && r->in(2)->find_int_con(0) == -1 &&
+                   r->in(1) == cmp2;
+      if (match) {
+        // arraylength known to be non-negative, so a (arraylength != 0) is sufficient,
+        // but to be compatible with the array range check pattern, use (arraylength u> 0)
+        Node* ncmp = cmp2->Opcode() == Op_LoadRange
+                     ? phase->transform(new CmpUNode(cmp2, phase->intcon(0)))
+                     : phase->transform(new CmpINode(cmp2, phase->intcon(0)));
+        return new BoolNode(ncmp, BoolTest::gt);
+      } else {
+        // commute and try again
+        l = cmp1->in(2);
+        r = cmp1->in(1);
+      }
+    }
+  }
+
+  // Change (arraylength <= 0) or (arraylength == 0)
+  //   into (arraylength u<= 0)
+  // Also change (arraylength != 0) into (arraylength u> 0)
+  // The latter version matches the code pattern generated for
+  // array range checks, which will more likely be optimized later.
+  if (cop == Op_CmpI &&
+      cmp1->Opcode() == Op_LoadRange &&
+      cmp2->find_int_con(-1) == 0) {
+    if (_test._test == BoolTest::le || _test._test == BoolTest::eq) {
+      Node* ncmp = phase->transform(new CmpUNode(cmp1, cmp2));
+      return new BoolNode(ncmp, BoolTest::le);
+    } else if (_test._test == BoolTest::ne) {
+      Node* ncmp = phase->transform(new CmpUNode(cmp1, cmp2));
+      return new BoolNode(ncmp, BoolTest::gt);
+    }
+  }
+
   // Change "bool eq/ne (cmp (Conv2B X) 0)" into "bool eq/ne (cmp X 0)".
   // This is a standard idiom for branching on a boolean value.
   Node *c2b = cmp1;
@@ -1392,21 +1540,35 @@ Node *BoolNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 //------------------------------Value------------------------------------------
 // Simplify a Bool (convert condition codes to boolean (1 or 0)) node,
 // based on local information.   If the input is constant, do it.
-const Type *BoolNode::Value( PhaseTransform *phase ) const {
+const Type* BoolNode::Value(PhaseGVN* phase) const {
   return _test.cc2logical( phase->type( in(1) ) );
 }
 
+#ifndef PRODUCT
 //------------------------------dump_spec--------------------------------------
 // Dump special per-node info
-#ifndef PRODUCT
 void BoolNode::dump_spec(outputStream *st) const {
   st->print("[");
   _test.dump_on(st);
   st->print("]");
 }
+
+//-------------------------------related---------------------------------------
+// A BoolNode's related nodes are all of its data inputs, and all of its
+// outputs until control nodes are hit, which are included. In compact
+// representation, inputs till level 3 and immediate outputs are included.
+void BoolNode::related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const {
+  if (compact) {
+    this->collect_nodes(in_rel, 3, false, true);
+    this->collect_nodes(out_rel, -1, false, false);
+  } else {
+    this->collect_nodes_in_all_data(in_rel, false);
+    this->collect_nodes_out_all_ctrl_boundary(out_rel);
+  }
+}
 #endif
 
-//------------------------------is_counted_loop_exit_test--------------------------------------
+//----------------------is_counted_loop_exit_test------------------------------
 // Returns true if node is used by a counted loop node.
 bool BoolNode::is_counted_loop_exit_test() {
   for( DUIterator_Fast imax, i = fast_outs(imax); i < imax; i++ ) {
@@ -1421,93 +1583,11 @@ bool BoolNode::is_counted_loop_exit_test() {
 //=============================================================================
 //------------------------------Value------------------------------------------
 // Compute sqrt
-const Type *SqrtDNode::Value( PhaseTransform *phase ) const {
+const Type* SqrtDNode::Value(PhaseGVN* phase) const {
   const Type *t1 = phase->type( in(1) );
   if( t1 == Type::TOP ) return Type::TOP;
   if( t1->base() != Type::DoubleCon ) return Type::DOUBLE;
   double d = t1->getd();
   if( d < 0.0 ) return Type::DOUBLE;
   return TypeD::make( sqrt( d ) );
-}
-
-//=============================================================================
-//------------------------------Value------------------------------------------
-// Compute cos
-const Type *CosDNode::Value( PhaseTransform *phase ) const {
-  const Type *t1 = phase->type( in(1) );
-  if( t1 == Type::TOP ) return Type::TOP;
-  if( t1->base() != Type::DoubleCon ) return Type::DOUBLE;
-  double d = t1->getd();
-  return TypeD::make( StubRoutines::intrinsic_cos( d ) );
-}
-
-//=============================================================================
-//------------------------------Value------------------------------------------
-// Compute sin
-const Type *SinDNode::Value( PhaseTransform *phase ) const {
-  const Type *t1 = phase->type( in(1) );
-  if( t1 == Type::TOP ) return Type::TOP;
-  if( t1->base() != Type::DoubleCon ) return Type::DOUBLE;
-  double d = t1->getd();
-  return TypeD::make( StubRoutines::intrinsic_sin( d ) );
-}
-
-//=============================================================================
-//------------------------------Value------------------------------------------
-// Compute tan
-const Type *TanDNode::Value( PhaseTransform *phase ) const {
-  const Type *t1 = phase->type( in(1) );
-  if( t1 == Type::TOP ) return Type::TOP;
-  if( t1->base() != Type::DoubleCon ) return Type::DOUBLE;
-  double d = t1->getd();
-  return TypeD::make( StubRoutines::intrinsic_tan( d ) );
-}
-
-//=============================================================================
-//------------------------------Value------------------------------------------
-// Compute log
-const Type *LogDNode::Value( PhaseTransform *phase ) const {
-  const Type *t1 = phase->type( in(1) );
-  if( t1 == Type::TOP ) return Type::TOP;
-  if( t1->base() != Type::DoubleCon ) return Type::DOUBLE;
-  double d = t1->getd();
-  return TypeD::make( StubRoutines::intrinsic_log( d ) );
-}
-
-//=============================================================================
-//------------------------------Value------------------------------------------
-// Compute log10
-const Type *Log10DNode::Value( PhaseTransform *phase ) const {
-  const Type *t1 = phase->type( in(1) );
-  if( t1 == Type::TOP ) return Type::TOP;
-  if( t1->base() != Type::DoubleCon ) return Type::DOUBLE;
-  double d = t1->getd();
-  return TypeD::make( StubRoutines::intrinsic_log10( d ) );
-}
-
-//=============================================================================
-//------------------------------Value------------------------------------------
-// Compute exp
-const Type *ExpDNode::Value( PhaseTransform *phase ) const {
-  const Type *t1 = phase->type( in(1) );
-  if( t1 == Type::TOP ) return Type::TOP;
-  if( t1->base() != Type::DoubleCon ) return Type::DOUBLE;
-  double d = t1->getd();
-  return TypeD::make( StubRoutines::intrinsic_exp( d ) );
-}
-
-
-//=============================================================================
-//------------------------------Value------------------------------------------
-// Compute pow
-const Type *PowDNode::Value( PhaseTransform *phase ) const {
-  const Type *t1 = phase->type( in(1) );
-  if( t1 == Type::TOP ) return Type::TOP;
-  if( t1->base() != Type::DoubleCon ) return Type::DOUBLE;
-  const Type *t2 = phase->type( in(2) );
-  if( t2 == Type::TOP ) return Type::TOP;
-  if( t2->base() != Type::DoubleCon ) return Type::DOUBLE;
-  double d1 = t1->getd();
-  double d2 = t2->getd();
-  return TypeD::make( StubRoutines::intrinsic_pow( d1, d2 ) );
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,17 +28,18 @@ package sun.security.ssl;
 
 import java.io.*;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.security.*;
 import java.security.cert.*;
 import java.security.interfaces.*;
 import java.security.spec.ECParameterSpec;
 import java.math.BigInteger;
+import java.util.function.BiFunction;
 
 import javax.crypto.SecretKey;
-import javax.crypto.spec.SecretKeySpec;
-
 import javax.net.ssl.*;
 
+import sun.security.action.GetLongAction;
 import sun.security.util.KeyUtil;
 import sun.security.util.LegacyAlgorithmConstraints;
 import sun.security.action.GetPropertyAction;
@@ -56,6 +57,10 @@ import static sun.security.ssl.CipherSuite.KeyExchange.*;
  * @author David Brownell
  */
 final class ServerHandshaker extends Handshaker {
+
+    // The default number of milliseconds the handshaker will wait for
+    // revocation status responses.
+    private static final long DEFAULT_STATUS_RESP_DELAY = 5000;
 
     // is the server going to require the client to authenticate?
     private ClientAuthType      doClientAuth;
@@ -90,7 +95,8 @@ final class ServerHandshaker extends Handshaker {
     // we remember it for the RSA premaster secret version check
     private ProtocolVersion clientRequestedVersion;
 
-    private SupportedEllipticCurvesExtension supportedCurves;
+    // client supported elliptic curves
+    private EllipticCurvesExtension requestedCurves;
 
     // the preferable signature algorithm used by ServerKeyExchange message
     SignatureAndHashAlgorithm preferableSignatureAlgorithm;
@@ -112,9 +118,11 @@ final class ServerHandshaker extends Handshaker {
                     LegacyAlgorithmConstraints.PROPERTY_TLS_LEGACY_ALGS,
                     new SSLAlgorithmDecomposer());
 
+    private long statusRespTimeout;
+
     static {
-        String property = AccessController.doPrivileged(
-                    new GetPropertyAction("jdk.tls.ephemeralDHKeySize"));
+        String property = GetPropertyAction
+                .privilegedGetProperty("jdk.tls.ephemeralDHKeySize");
         if (property == null || property.length() == 0) {
             useLegacyEphemeralDHKeys = false;
             useSmartEphemeralDHKeys = false;
@@ -132,11 +140,17 @@ final class ServerHandshaker extends Handshaker {
             useSmartEphemeralDHKeys = false;
 
             try {
+                // DH parameter generation can be extremely slow, best to
+                // use one of the supported pre-computed DH parameters
+                // (see DHCrypt class).
                 customizedDHKeySize = Integer.parseUnsignedInt(property);
-                if (customizedDHKeySize < 1024 || customizedDHKeySize > 2048) {
+                if (customizedDHKeySize < 1024 || customizedDHKeySize > 8192 ||
+                        (customizedDHKeySize & 0x3f) != 0) {
                     throw new IllegalArgumentException(
-                        "Customized DH key size should be positive integer " +
-                        "between 1024 and 2048 bits, inclusive");
+                        "Unsupported customized DH key size: " +
+                        customizedDHKeySize + ". " +
+                        "The key size must be multiple of 64, " +
+                        "and can only range from 1024 to 8192 (inclusive)");
                 }
             } catch (NumberFormatException nfe) {
                 throw new IllegalArgumentException(
@@ -159,6 +173,11 @@ final class ServerHandshaker extends Handshaker {
                 activeProtocolVersion, isInitialHandshake, secureRenegotiation,
                 clientVerifyData, serverVerifyData);
         doClientAuth = clientAuth;
+        statusRespTimeout = AccessController.doPrivileged(
+                    new GetLongAction("jdk.tls.stapling.responseTimeout",
+                        DEFAULT_STATUS_RESP_DELAY));
+        statusRespTimeout = statusRespTimeout >= 0 ? statusRespTimeout :
+                DEFAULT_STATUS_RESP_DELAY;
     }
 
     /*
@@ -176,6 +195,11 @@ final class ServerHandshaker extends Handshaker {
                 activeProtocolVersion, isInitialHandshake, secureRenegotiation,
                 clientVerifyData, serverVerifyData, isDTLS);
         doClientAuth = clientAuth;
+        statusRespTimeout = AccessController.doPrivileged(
+                    new GetLongAction("jdk.tls.stapling.responseTimeout",
+                        DEFAULT_STATUS_RESP_DELAY));
+        statusRespTimeout = statusRespTimeout >= 0 ? statusRespTimeout :
+                DEFAULT_STATUS_RESP_DELAY;
     }
 
     /*
@@ -297,7 +321,7 @@ final class ServerHandshaker extends Handshaker {
             case HandshakeMessage.ht_certificate_verify:
                 CertificateVerify cvm =
                         new CertificateVerify(input,
-                            localSupportedSignAlgs, protocolVersion);
+                            getLocalSupportedSignAlgs(), protocolVersion);
                 handshakeState.update(cvm, resumingSession);
                 this.clientCertificateVerify(cvm);
 
@@ -505,72 +529,43 @@ final class ServerHandshaker extends Handshaker {
             }
         }
 
-        // cookie exchange
-        if (isDTLS) {
-             HelloCookieManager hcMgr = sslContext.getHelloCookieManager();
-             if ((mesg.cookie == null) || (mesg.cookie.length == 0) ||
-                    (!hcMgr.isValid(mesg))) {
+        // check the ALPN extension
+        ALPNExtension clientHelloALPN = (ALPNExtension)
+            mesg.extensions.get(ExtensionType.EXT_ALPN);
 
-                //
-                // Perform cookie exchange for DTLS handshaking if no cookie
-                // or the cookie is invalid in the ClientHello message.
-                //
-                HelloVerifyRequest m0 = new HelloVerifyRequest(hcMgr, mesg);
+        // Use the application protocol callback when provided.
+        // Otherwise use the local list of application protocols.
+        boolean hasAPCallback =
+            ((engine != null && appProtocolSelectorSSLEngine != null) ||
+                (conn != null && appProtocolSelectorSSLSocket != null));
 
-                if (debug != null && Debug.isOn("handshake")) {
-                    m0.print(System.out);
+        if (!hasAPCallback) {
+            if ((clientHelloALPN != null) && (localApl.length > 0)) {
+
+                // Intersect the requested and the locally supported,
+                // and save for later.
+                String negotiatedValue = null;
+                List<String> protocols = clientHelloALPN.getPeerAPs();
+
+                // Use server preference order
+                for (String ap : localApl) {
+                    if (protocols.contains(ap)) {
+                        negotiatedValue = ap;
+                        break;
+                    }
                 }
 
-                m0.write(output);
-                handshakeState.update(m0, resumingSession);
-                output.flush();
+                if (negotiatedValue == null) {
+                    fatalSE(Alerts.alert_no_application_protocol,
+                        new SSLHandshakeException(
+                            "No matching ALPN values"));
+                }
+                applicationProtocol = negotiatedValue;
 
-                return;
+            } else {
+                applicationProtocol = "";
             }
-        }
-
-        /*
-         * FIRST, construct the ServerHello using the options and priorities
-         * from the ClientHello.  Update the (pending) cipher spec as we do
-         * so, and save the client's version to protect against rollback
-         * attacks.
-         *
-         * There are a bunch of minor tasks here, and one major one: deciding
-         * if the short or the full handshake sequence will be used.
-         */
-        ServerHello m1 = new ServerHello();
-
-        clientRequestedVersion = mesg.protocolVersion;
-
-        // select a proper protocol version.
-        ProtocolVersion selectedVersion =
-               selectProtocolVersion(clientRequestedVersion);
-        if (selectedVersion == null ||
-                selectedVersion.v == ProtocolVersion.SSL20Hello.v) {
-            fatalSE(Alerts.alert_handshake_failure,
-                "Client requested protocol " + clientRequestedVersion +
-                " not enabled or not supported");
-        }
-
-        handshakeHash.protocolDetermined(selectedVersion);
-        setVersion(selectedVersion);
-
-        m1.protocolVersion = protocolVersion;
-
-        //
-        // random ... save client and server values for later use
-        // in computing the master secret (from pre-master secret)
-        // and thence the other crypto keys.
-        //
-        // NOTE:  this use of three inputs to generating _each_ set
-        // of ciphers slows things down, but it does increase the
-        // security since each connection in the session can hold
-        // its own authenticated (and strong) keys.  One could make
-        // creation of a session a rare thing...
-        //
-        clnt_random = mesg.clnt_random;
-        svr_random = new RandomCookie(sslContext.getSecureRandom());
-        m1.svr_random = svr_random;
+        }  // Otherwise, applicationProtocol will be set by the callback.
 
         session = null; // forget about the current session
         //
@@ -679,6 +674,73 @@ final class ServerHandshaker extends Handshaker {
             }
         }   // else client did not try to resume
 
+        // cookie exchange
+        if (isDTLS && !resumingSession) {
+             HelloCookieManager hcMgr = sslContext.getHelloCookieManager();
+             if ((mesg.cookie == null) || (mesg.cookie.length == 0) ||
+                    (!hcMgr.isValid(mesg))) {
+
+                //
+                // Perform cookie exchange for DTLS handshaking if no cookie
+                // or the cookie is invalid in the ClientHello message.
+                //
+                HelloVerifyRequest m0 = new HelloVerifyRequest(hcMgr, mesg);
+
+                if (debug != null && Debug.isOn("handshake")) {
+                    m0.print(System.out);
+                }
+
+                m0.write(output);
+                handshakeState.update(m0, resumingSession);
+                output.flush();
+
+                return;
+            }
+        }
+
+        /*
+         * FIRST, construct the ServerHello using the options and priorities
+         * from the ClientHello.  Update the (pending) cipher spec as we do
+         * so, and save the client's version to protect against rollback
+         * attacks.
+         *
+         * There are a bunch of minor tasks here, and one major one: deciding
+         * if the short or the full handshake sequence will be used.
+         */
+        ServerHello m1 = new ServerHello();
+
+        clientRequestedVersion = mesg.protocolVersion;
+
+        // select a proper protocol version.
+        ProtocolVersion selectedVersion =
+               selectProtocolVersion(clientRequestedVersion);
+        if (selectedVersion == null ||
+                selectedVersion.v == ProtocolVersion.SSL20Hello.v) {
+            fatalSE(Alerts.alert_handshake_failure,
+                "Client requested protocol " + clientRequestedVersion +
+                " not enabled or not supported");
+        }
+
+        handshakeHash.protocolDetermined(selectedVersion);
+        setVersion(selectedVersion);
+
+        m1.protocolVersion = protocolVersion;
+
+        //
+        // random ... save client and server values for later use
+        // in computing the master secret (from pre-master secret)
+        // and thence the other crypto keys.
+        //
+        // NOTE:  this use of three inputs to generating _each_ set
+        // of ciphers slows things down, but it does increase the
+        // security since each connection in the session can hold
+        // its own authenticated (and strong) keys.  One could make
+        // creation of a session a rare thing...
+        //
+        clnt_random = mesg.clnt_random;
+        svr_random = new RandomCookie(sslContext.getSecureRandom());
+        m1.svr_random = svr_random;
+
         //
         // If client hasn't specified a session we can resume, start a
         // new one and choose its cipher suite and compression options.
@@ -689,7 +751,7 @@ final class ServerHandshaker extends Handshaker {
                 throw new SSLException("Client did not resume a session");
             }
 
-            supportedCurves = (SupportedEllipticCurvesExtension)
+            requestedCurves = (EllipticCurvesExtension)
                         mesg.extensions.get(ExtensionType.EXT_ELLIPTIC_CURVES);
 
             // We only need to handle the "signature_algorithm" extension
@@ -709,11 +771,10 @@ final class ServerHandshaker extends Handshaker {
                     Collection<SignatureAndHashAlgorithm>
                         supportedPeerSignAlgs =
                             SignatureAndHashAlgorithm.getSupportedAlgorithms(
-                                                            peerSignAlgs);
+                                algorithmConstraints, peerSignAlgs);
                     if (supportedPeerSignAlgs.isEmpty()) {
                         throw new SSLHandshakeException(
-                            "No supported signature and hash algorithm " +
-                            "in common");
+                            "No signature and hash algorithm in common");
                     }
 
                     setPeerSupportedSignAlgs(supportedPeerSignAlgs);
@@ -825,6 +886,53 @@ final class ServerHandshaker extends Handshaker {
             m1.extensions.add(maxFragLenExt);
         }
 
+        StaplingParameters staplingParams = processStapling(mesg);
+        if (staplingParams != null) {
+            // We now can safely assert status_request[_v2] in our
+            // ServerHello, and know for certain that we can provide
+            // responses back to this client for this connection.
+            if (staplingParams.statusRespExt ==
+                    ExtensionType.EXT_STATUS_REQUEST) {
+                m1.extensions.add(new CertStatusReqExtension());
+            } else if (staplingParams.statusRespExt ==
+                    ExtensionType.EXT_STATUS_REQUEST_V2) {
+                m1.extensions.add(new CertStatusReqListV2Extension());
+            }
+        }
+
+        // Prepare the ALPN response
+        if (clientHelloALPN != null) {
+            List<String> peerAPs = clientHelloALPN.getPeerAPs();
+
+            // check for a callback function
+            if (hasAPCallback) {
+                if (conn != null) {
+                    applicationProtocol =
+                        appProtocolSelectorSSLSocket.apply(conn, peerAPs);
+                } else {
+                    applicationProtocol =
+                        appProtocolSelectorSSLEngine.apply(engine, peerAPs);
+                }
+            }
+
+            // check for no-match and that the selected name was also proposed
+            // by the TLS peer
+            if (applicationProtocol == null ||
+                   (!applicationProtocol.isEmpty() &&
+                        !peerAPs.contains(applicationProtocol))) {
+
+                fatalSE(Alerts.alert_no_application_protocol,
+                    new SSLHandshakeException(
+                        "No matching ALPN values"));
+
+            } else if (!applicationProtocol.isEmpty()) {
+                m1.extensions.add(new ALPNExtension(applicationProtocol));
+            }
+        } else {
+            // Nothing was negotiated, returned at end of the handshake
+            applicationProtocol = "";
+        }
+
         if (debug != null && Debug.isOn("handshake")) {
             m1.print(System.out);
             System.out.println("Cipher suite:  " + session.getSuite());
@@ -884,6 +992,23 @@ final class ServerHandshaker extends Handshaker {
             if (certs != null) {
                 throw new RuntimeException("anonymous keyexchange with certs");
             }
+        }
+
+        /**
+         * The CertificateStatus message ... only if it is needed.
+         * This would only be needed if we've established that this handshake
+         * supports status stapling and there is at least one response to
+         * return to the client.
+         */
+        if (staplingParams != null) {
+            CertificateStatus csMsg = new CertificateStatus(
+                    staplingParams.statReqType, certs,
+                    staplingParams.responseMap);
+            if (debug != null && Debug.isOn("handshake")) {
+                csMsg.print(System.out);
+            }
+            csMsg.write(output);
+            handshakeState.update(csMsg, resumingSession);
         }
 
         /*
@@ -1084,11 +1209,18 @@ final class ServerHandshaker extends Handshaker {
             if (trySetCipherSuite(suite) == false) {
                 continue;
             }
+
+            if (debug != null && Debug.isOn("handshake")) {
+                System.out.println("Standard ciphersuite chosen: " + suite);
+            }
             return;
         }
 
         for (CipherSuite suite : legacySuites) {
             if (trySetCipherSuite(suite)) {
+                if (debug != null && Debug.isOn("handshake")) {
+                    System.out.println("Legacy ciphersuite chosen: " + suite);
+                }
                 return;
             }
         }
@@ -1194,6 +1326,13 @@ final class ServerHandshaker extends Handshaker {
                     supportedSignAlgs =
                         new ArrayList<SignatureAndHashAlgorithm>(1);
                     supportedSignAlgs.add(algorithm);
+
+                    supportedSignAlgs =
+                            SignatureAndHashAlgorithm.getSupportedAlgorithms(
+                                algorithmConstraints, supportedSignAlgs);
+
+                    // May be no default activated signature algorithm, but
+                    // let the following process make the final decision.
                 }
 
                 // Sets the peer supported signature algorithm to use in KM
@@ -1238,6 +1377,11 @@ final class ServerHandshaker extends Handshaker {
                     SignatureAndHashAlgorithm.getPreferableAlgorithm(
                                         supportedSignAlgs, "RSA", privateKey);
                 if (preferableSignatureAlgorithm == null) {
+                    if ((debug != null) && Debug.isOn("handshake")) {
+                        System.out.println(
+                                "No signature and hash algorithm for cipher " +
+                                suite);
+                    }
                     return false;
                 }
             }
@@ -1256,6 +1400,11 @@ final class ServerHandshaker extends Handshaker {
                     SignatureAndHashAlgorithm.getPreferableAlgorithm(
                                         supportedSignAlgs, "RSA", privateKey);
                 if (preferableSignatureAlgorithm == null) {
+                    if ((debug != null) && Debug.isOn("handshake")) {
+                        System.out.println(
+                                "No signature and hash algorithm for cipher " +
+                                suite);
+                    }
                     return false;
                 }
             }
@@ -1271,6 +1420,11 @@ final class ServerHandshaker extends Handshaker {
                     SignatureAndHashAlgorithm.getPreferableAlgorithm(
                                                 supportedSignAlgs, "DSA");
                 if (preferableSignatureAlgorithm == null) {
+                    if ((debug != null) && Debug.isOn("handshake")) {
+                        System.out.println(
+                                "No signature and hash algorithm for cipher " +
+                                suite);
+                    }
                     return false;
                 }
             }
@@ -1289,12 +1443,17 @@ final class ServerHandshaker extends Handshaker {
                     SignatureAndHashAlgorithm.getPreferableAlgorithm(
                                             supportedSignAlgs, "ECDSA");
                 if (preferableSignatureAlgorithm == null) {
+                    if ((debug != null) && Debug.isOn("handshake")) {
+                        System.out.println(
+                                "No signature and hash algorithm for cipher " +
+                                suite);
+                    }
                     return false;
                 }
             }
 
-            // need EC cert signed using EC
-            if (setupPrivateKeyAndChain("EC_EC") == false) {
+            // need EC cert
+            if (setupPrivateKeyAndChain("EC") == false) {
                 return false;
             }
             if (setupEphemeralECDHKeys() == false) {
@@ -1302,15 +1461,15 @@ final class ServerHandshaker extends Handshaker {
             }
             break;
         case K_ECDH_RSA:
-            // need EC cert signed using RSA
-            if (setupPrivateKeyAndChain("EC_RSA") == false) {
+            // need EC cert
+            if (setupPrivateKeyAndChain("EC") == false) {
                 return false;
             }
             setupStaticECDHKeys();
             break;
         case K_ECDH_ECDSA:
-            // need EC cert signed using EC
-            if (setupPrivateKeyAndChain("EC_EC") == false) {
+            // need EC cert
+            if (setupPrivateKeyAndChain("EC") == false) {
                 return false;
             }
             setupStaticECDHKeys();
@@ -1330,7 +1489,8 @@ final class ServerHandshaker extends Handshaker {
                     ClientKeyExchangeService.find(keyExchange.name);
             if (p == null) {
                 // internal error, unknown key exchange
-                throw new RuntimeException("Unrecognized cipherSuite: " + suite);
+                throw new RuntimeException(
+                        "Unrecognized cipherSuite: " + suite);
             }
             // need service creds
             if (serviceCreds == null) {
@@ -1411,14 +1571,10 @@ final class ServerHandshaker extends Handshaker {
          * Applications may also want to customize the ephemeral DH key size
          * to a fixed length for non-exportable cipher suites. This can be
          * approached by setting system property "jdk.tls.ephemeralDHKeySize"
-         * to a valid positive integer between 1024 and 2048 bits, inclusive.
+         * to a valid positive integer between 1024 and 8192 bits, inclusive.
          *
          * Note that the minimum acceptable key size is 1024 bits except
          * exportable cipher suites or legacy mode.
-         *
-         * Note that the maximum acceptable key size is 2048 bits because
-         * DH keys bigger than 2048 are not always supported by underlying
-         * JCE providers.
          *
          * Note that per RFC 2246, the key size limit of DH is 512 bits for
          * exportable cipher suites.  Because of the weakness, exportable
@@ -1434,10 +1590,17 @@ final class ServerHandshaker extends Handshaker {
             } else if (useSmartEphemeralDHKeys) {    // matched mode
                 if (key != null) {
                     int ks = KeyUtil.getKeySize(key);
-                    // Note that SunJCE provider only supports 2048 bits DH
-                    // keys bigger than 1024.  Please DON'T use value other
-                    // than 1024 and 2048 at present.  We may improve the
-                    // underlying providers and key size here in the future.
+
+                    // DH parameter generation can be extremely slow, make
+                    // sure to use one of the supported pre-computed DH
+                    // parameters (see DHCrypt class).
+                    //
+                    // Old deployed applications may not be ready to support
+                    // DH key sizes bigger than 2048 bits.  Please DON'T use
+                    // value other than 1024 and 2048 at present.  May improve
+                    // the underlying providers and key size limit in the
+                    // future when the compatibility and interoperability
+                    // impact is limited.
                     //
                     // keySize = ks <= 1024 ? 1024 : (ks >= 2048 ? 2048 : ks);
                     keySize = ks <= 1024 ? 1024 : 2048;
@@ -1454,26 +1617,15 @@ final class ServerHandshaker extends Handshaker {
     // If we cannot continue because we do not support any of the curves that
     // the client requested, return false. Otherwise (all is well), return true.
     private boolean setupEphemeralECDHKeys() {
-        int index = -1;
-        if (supportedCurves != null) {
-            // if the client sent the supported curves extension, pick the
-            // first one that we support;
-            for (int curveId : supportedCurves.curveIds()) {
-                if (SupportedEllipticCurvesExtension.isSupported(curveId)) {
-                    index = curveId;
-                    break;
-                }
-            }
-            if (index < 0) {
-                // no match found, cannot use this ciphersuite
-                return false;
-            }
-        } else {
-            // pick our preference
-            index = SupportedEllipticCurvesExtension.DEFAULT.curveIds()[0];
+        int index = (requestedCurves != null) ?
+                requestedCurves.getPreferredCurve(algorithmConstraints) :
+                EllipticCurvesExtension.getActiveCurves(algorithmConstraints);
+        if (index < 0) {
+            // no match found, cannot use this ciphersuite
+            return false;
         }
-        String oid = SupportedEllipticCurvesExtension.getCurveOid(index);
-        ecdh = new ECDHCrypt(oid, sslContext.getSecureRandom());
+
+        ecdh = new ECDHCrypt(index, sslContext.getSecureRandom());
         return true;
     }
 
@@ -1522,11 +1674,9 @@ final class ServerHandshaker extends Handshaker {
                 return false;
             }
             ECParameterSpec params = ((ECPublicKey)publicKey).getParams();
-            int index = SupportedEllipticCurvesExtension.getCurveIndex(params);
-            if (SupportedEllipticCurvesExtension.isSupported(index) == false) {
-                return false;
-            }
-            if ((supportedCurves != null) && !supportedCurves.contains(index)) {
+            int id = EllipticCurvesExtension.getCurveIndex(params);
+            if ((id <= 0) || !EllipticCurvesExtension.isSupported(id) ||
+                ((requestedCurves != null) && !requestedCurves.contains(id))) {
                 return false;
             }
         }
@@ -1884,5 +2034,160 @@ final class ServerHandshaker extends Handshaker {
         needClientVerify = true;
 
         session.setPeerCertificates(peerCerts);
+    }
+
+    private StaplingParameters processStapling(ClientHello mesg) {
+        StaplingParameters params = null;
+        ExtensionType ext = null;
+        StatusRequestType type = null;
+        StatusRequest req = null;
+        Map<X509Certificate, byte[]> responses;
+
+        // If this feature has not been enabled, then no more processing
+        // is necessary.  Also we will only staple if we're doing a full
+        // handshake.
+        if (!sslContext.isStaplingEnabled(false) || resumingSession) {
+            return null;
+        }
+
+        // Check if the client has asserted the status_request[_v2] extension(s)
+        CertStatusReqExtension statReqExt = (CertStatusReqExtension)
+                    mesg.extensions.get(ExtensionType.EXT_STATUS_REQUEST);
+        CertStatusReqListV2Extension statReqExtV2 =
+                (CertStatusReqListV2Extension)mesg.extensions.get(
+                        ExtensionType.EXT_STATUS_REQUEST_V2);
+
+        // Determine which type of stapling we are doing and assert the
+        // proper extension in the server hello.
+        // Favor status_request_v2 over status_request and ocsp_multi
+        // over ocsp.
+        // If multiple ocsp or ocsp_multi types exist, select the first
+        // instance of a given type.  Also since we don't support ResponderId
+        // selection yet, only accept a request if the ResponderId field
+        // is empty.
+        if (statReqExtV2 != null) {             // RFC 6961 stapling
+            ext = ExtensionType.EXT_STATUS_REQUEST_V2;
+            List<CertStatusReqItemV2> reqItems =
+                    statReqExtV2.getRequestItems();
+            int ocspIdx = -1;
+            int ocspMultiIdx = -1;
+            for (int pos = 0; (pos < reqItems.size() &&
+                    (ocspIdx == -1 || ocspMultiIdx == -1)); pos++) {
+                CertStatusReqItemV2 item = reqItems.get(pos);
+                StatusRequestType curType = item.getType();
+                if (ocspIdx < 0 && curType == StatusRequestType.OCSP) {
+                    OCSPStatusRequest ocspReq =
+                            (OCSPStatusRequest)item.getRequest();
+                    if (ocspReq.getResponderIds().isEmpty()) {
+                        ocspIdx = pos;
+                    }
+                } else if (ocspMultiIdx < 0 &&
+                        curType == StatusRequestType.OCSP_MULTI) {
+                    // If the type is OCSP, then the request
+                    // is guaranteed to be OCSPStatusRequest
+                    OCSPStatusRequest ocspReq =
+                            (OCSPStatusRequest)item.getRequest();
+                    if (ocspReq.getResponderIds().isEmpty()) {
+                        ocspMultiIdx = pos;
+                    }
+                }
+            }
+            if (ocspMultiIdx >= 0) {
+                type = reqItems.get(ocspMultiIdx).getType();
+                req = reqItems.get(ocspMultiIdx).getRequest();
+            } else if (ocspIdx >= 0) {
+                type = reqItems.get(ocspIdx).getType();
+                req = reqItems.get(ocspIdx).getRequest();
+            } else {
+                if (debug != null && Debug.isOn("handshake")) {
+                    System.out.println("Warning: No suitable request " +
+                            "found in the status_request_v2 extension.");
+                }
+            }
+        }
+
+        // Only attempt to process a status_request extension if:
+        // * The status_request extension is set AND
+        // * either the status_request_v2 extension is not present OR
+        // * none of the underlying OCSPStatusRequest structures is suitable
+        // for stapling.
+        // If either of the latter two bullet items is true the ext, type and
+        // req variables should all be null.  If any are null we will try
+        // processing an asserted status_request.
+        if ((statReqExt != null) &&
+               (ext == null || type == null || req == null)) {
+            ext = ExtensionType.EXT_STATUS_REQUEST;
+            type = statReqExt.getType();
+            if (type == StatusRequestType.OCSP) {
+                // If the type is OCSP, then the request is guaranteed
+                // to be OCSPStatusRequest
+                OCSPStatusRequest ocspReq =
+                        (OCSPStatusRequest)statReqExt.getRequest();
+                if (ocspReq.getResponderIds().isEmpty()) {
+                    req = ocspReq;
+                } else {
+                    if (debug != null && Debug.isOn("handshake")) {
+                        req = null;
+                        System.out.println("Warning: No suitable request " +
+                                "found in the status_request extension.");
+                    }
+                }
+            }
+        }
+
+        // If, after walking through the extensions we were unable to
+        // find a suitable StatusRequest, then stapling is disabled.
+        // The ext, type and req variables must have been set to continue.
+        if (type == null || req == null || ext == null) {
+            return null;
+        }
+
+        // Get the OCSP responses from the StatusResponseManager
+        StatusResponseManager statRespMgr =
+                sslContext.getStatusResponseManager();
+        if (statRespMgr != null) {
+            responses = statRespMgr.get(type, req, certs, statusRespTimeout,
+                    TimeUnit.MILLISECONDS);
+            if (!responses.isEmpty()) {
+                // If this RFC 6066-style stapling (SSL cert only) then the
+                // response cannot be zero length
+                if (type == StatusRequestType.OCSP) {
+                    byte[] respDER = responses.get(certs[0]);
+                    if (respDER == null || respDER.length <= 0) {
+                        return null;
+                    }
+                }
+                params = new StaplingParameters(ext, type, req, responses);
+            }
+        } else {
+            // This should not happen, but if lazy initialization of the
+            // StatusResponseManager doesn't occur we should turn off stapling.
+            if (debug != null && Debug.isOn("handshake")) {
+                System.out.println("Warning: lazy initialization " +
+                        "of the StatusResponseManager failed.  " +
+                        "Stapling has been disabled.");
+            }
+        }
+
+        return params;
+    }
+
+    /**
+     * Inner class used to hold stapling parameters needed by the handshaker
+     * when stapling is active.
+     */
+    private class StaplingParameters {
+        private final ExtensionType statusRespExt;
+        private final StatusRequestType statReqType;
+        private final StatusRequest statReqData;
+        private final Map<X509Certificate, byte[]> responseMap;
+
+        StaplingParameters(ExtensionType ext, StatusRequestType type,
+                StatusRequest req, Map<X509Certificate, byte[]> responses) {
+            statusRespExt = ext;
+            statReqType = type;
+            statReqData = req;
+            responseMap = responses;
+        }
     }
 }

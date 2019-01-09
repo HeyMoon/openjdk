@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -223,6 +223,7 @@ static const char* property_counters_ss[] = {
   "java.vm.name",
   "java.vm.vendor",
   "java.vm.info",
+  "jdk.debug",
   "java.library.path",
   "java.class.path",
   "java.version",
@@ -237,7 +238,6 @@ static const char* property_counters_us[] = {
 
 // unstable interface, unsupported counters
 static const char* property_counters_uu[] = {
-  "sun.boot.class.path",
   "sun.boot.library.path",
   NULL
 };

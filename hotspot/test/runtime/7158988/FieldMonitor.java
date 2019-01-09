@@ -1,5 +1,5 @@
 /*
- * Copyright 2012 SAP AG.  All Rights Reserved.
+ * Copyright (c) 2012 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -63,7 +63,7 @@ public class FieldMonitor {
 
   public static final String CLASS_NAME = "TestPostFieldModification";
   public static final String FIELD_NAME = "value";
-  public static final String ARGUMENTS = "-Xshare:off -XX:+PrintGC";
+  public static final String ARGUMENTS = "-Xshare:off -Xlog:gc";
 
   public static void main(String[] args)
       throws IOException, InterruptedException {

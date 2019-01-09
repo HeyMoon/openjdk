@@ -69,8 +69,10 @@ public class Klist {
      * <li><b>-n</b>  do not reverse-resolve addresses
      * </ul>
      * available options for keytabs:
+     * <ul>
      * <li><b>-t</b> shows keytab entry timestamps
      * <li><b>-K</b> shows keytab entry DES keys
+     * </ul>
      */
     public static void main(String[] args) {
         Klist klist = new Klist();
@@ -132,7 +134,7 @@ public class Klist {
         Character arg;
         for (int i = 0; i < args.length; i++) {
             if ((args[i].length() >= 2) && (args[i].startsWith("-"))) {
-                arg = new Character(args[i].charAt(1));
+                arg = Character.valueOf(args[i].charAt(1));
                 switch (arg.charValue()) {
                 case 'c':
                     action = 'c';

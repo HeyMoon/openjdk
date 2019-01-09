@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,14 +24,14 @@
 
 #include "precompiled.hpp"
 #include "classfile/stringTable.hpp"
-#include "gc/g1/g1Log.hpp"
 #include "gc/g1/g1StringDedup.hpp"
 #include "gc/g1/g1StringDedupQueue.hpp"
 #include "gc/g1/g1StringDedupTable.hpp"
 #include "gc/g1/g1StringDedupThread.hpp"
 #include "gc/g1/suspendibleThreadSet.hpp"
+#include "logging/log.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 
 G1StringDedupThread* G1StringDedupThread::_thread = NULL;
 
@@ -81,11 +81,9 @@ void G1StringDedupThread::deduplicate_shared_strings(G1StringDedupStat& stat) {
   StringTable::shared_oops_do(&sharedStringDedup);
 }
 
-void G1StringDedupThread::run() {
+void G1StringDedupThread::run_service() {
   G1StringDedupStat total_stat;
 
-  initialize_in_thread();
-  wait_for_universe_init();
   deduplicate_shared_strings(total_stat);
 
   // Main loop
@@ -96,7 +94,7 @@ void G1StringDedupThread::run() {
 
     // Wait for the queue to become non-empty
     G1StringDedupQueue::wait();
-    if (_should_terminate) {
+    if (should_terminate()) {
       break;
     }
 
@@ -105,6 +103,7 @@ void G1StringDedupThread::run() {
       SuspendibleThreadSetJoiner sts_join;
 
       stat.mark_exec();
+      print_start(stat);
 
       // Process the queue
       for (;;) {
@@ -123,43 +122,30 @@ void G1StringDedupThread::run() {
         }
       }
 
-      G1StringDedupTable::trim_entry_cache();
-
       stat.mark_done();
 
-      // Print statistics
       total_stat.add(stat);
-      print(gclog_or_tty, stat, total_stat);
+      print_end(stat, total_stat);
     }
-  }
 
-  terminate();
+    G1StringDedupTable::clean_entry_cache();
+  }
 }
 
-void G1StringDedupThread::stop() {
-  {
-    MonitorLockerEx ml(Terminator_lock);
-    _thread->_should_terminate = true;
-  }
-
+void G1StringDedupThread::stop_service() {
   G1StringDedupQueue::cancel_wait();
-
-  {
-    MonitorLockerEx ml(Terminator_lock);
-    while (!_thread->_has_terminated) {
-      ml.wait();
-    }
-  }
 }
 
-void G1StringDedupThread::print(outputStream* st, const G1StringDedupStat& last_stat, const G1StringDedupStat& total_stat) {
-  if (G1Log::fine() || PrintStringDeduplicationStatistics) {
-    G1StringDedupStat::print_summary(st, last_stat, total_stat);
-    if (PrintStringDeduplicationStatistics) {
-      G1StringDedupStat::print_statistics(st, last_stat, false);
-      G1StringDedupStat::print_statistics(st, total_stat, true);
-      G1StringDedupTable::print_statistics(st);
-      G1StringDedupQueue::print_statistics(st);
-    }
+void G1StringDedupThread::print_start(const G1StringDedupStat& last_stat) {
+  G1StringDedupStat::print_start(last_stat);
+}
+
+void G1StringDedupThread::print_end(const G1StringDedupStat& last_stat, const G1StringDedupStat& total_stat) {
+  G1StringDedupStat::print_end(last_stat, total_stat);
+  if (log_is_enabled(Debug, gc, stringdedup)) {
+    G1StringDedupStat::print_statistics(last_stat, false);
+    G1StringDedupStat::print_statistics(total_stat, true);
+    G1StringDedupTable::print_statistics();
+    G1StringDedupQueue::print_statistics();
   }
 }

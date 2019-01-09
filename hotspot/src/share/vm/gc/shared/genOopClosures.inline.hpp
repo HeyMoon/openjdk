@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,6 @@
 #include "gc/shared/cardTableRS.hpp"
 #include "gc/shared/genCollectedHeap.hpp"
 #include "gc/shared/genOopClosures.hpp"
-#include "gc/shared/genRemSet.hpp"
 #include "gc/shared/generation.hpp"
 #include "gc/shared/space.hpp"
 
@@ -43,8 +42,7 @@ inline void OopsInGenClosure::set_generation(Generation* gen) {
   _gen_boundary = _gen->reserved().start();
   // Barrier set for the heap, must be set after heap is initialized
   if (_rs == NULL) {
-    GenRemSet* rs = GenCollectedHeap::heap()->rem_set();
-    _rs = (CardTableRS*)rs;
+    _rs = GenCollectedHeap::heap()->rem_set();
   }
 }
 
@@ -125,6 +123,19 @@ template <class T> inline void FastScanClosure::do_oop_work(T* p) {
 
 inline void FastScanClosure::do_oop_nv(oop* p)       { FastScanClosure::do_oop_work(p); }
 inline void FastScanClosure::do_oop_nv(narrowOop* p) { FastScanClosure::do_oop_work(p); }
+
+template <class T> void FilteringClosure::do_oop_work(T* p) {
+  T heap_oop = oopDesc::load_heap_oop(p);
+  if (!oopDesc::is_null(heap_oop)) {
+    oop obj = oopDesc::decode_heap_oop_not_null(heap_oop);
+    if ((HeapWord*)obj < _boundary) {
+      _cl->do_oop(p);
+    }
+  }
+}
+
+void FilteringClosure::do_oop_nv(oop* p)       { FilteringClosure::do_oop_work(p); }
+void FilteringClosure::do_oop_nv(narrowOop* p) { FilteringClosure::do_oop_work(p); }
 
 // Note similarity to ScanClosure; the difference is that
 // the barrier set is taken care of outside this closure.

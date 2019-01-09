@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,20 +23,22 @@
 /*
  * @test
  * @bug 4290801 4692419 4693631 5101540 5104960 6296410 6336600 6371531
- *    6488442 7036905 8008577 8039317 8074350 8074351
+ *    6488442 7036905 8008577 8039317 8074350 8074351 8150324 8167143
  * @summary Basic tests for Currency class.
+ * @modules java.base/java.util:open
+ *          jdk.localedata
  */
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.util.Calendar;
-import java.util.Date;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.Currency;
-import java.util.GregorianCalendar;
 import java.util.Locale;
-import java.util.TimeZone;
 
 
 public class CurrencyTest {
@@ -136,7 +138,7 @@ public class CurrencyTest {
 
         /*
         * check currency changes
-        * In current implementation, there is no data of old currency and transition date at jdk/src/share/classes/java/util/CurrencyData.properties.
+        * In current implementation, there is no data of old currency and transition date at jdk/make/data/currency/CurrencyData.properties.
         * So, all the switch data arrays are empty. In the future, if data of old currency and transition date are necessary for any country, the
         * arrays here can be updated so that the program can check the currency switch.
         */
@@ -145,15 +147,16 @@ public class CurrencyTest {
         String[] switchOverNew = {};
         String[] switchOverTZ = {};
         int[] switchOverYear = {};
-        int[] switchOverMonth = {};
+        int[] switchOverMonth = {}; // java.time APIs accept month starting from 1 i.e. 01 for January
         int[] switchOverDay = {};
 
         for (int i = 0; i < switchOverCtry.length; i++) {
-            TimeZone.setDefault(TimeZone.getTimeZone(switchOverTZ[i]));
-            Calendar date = new GregorianCalendar(switchOverYear[i], switchOverMonth[i], switchOverDay[i]);
-            long switchOver = date.getTime().getTime();
-            boolean switchedOver = System.currentTimeMillis() >= switchOver;
-            checkCountryCurrency(switchOverCtry[i], switchedOver ? switchOverNew[i] : switchOverOld[i]);
+            ZoneId zoneId = ZoneId.of(switchOverTZ[i]);
+            ZonedDateTime zonedDateAndTime  = ZonedDateTime.of(LocalDate.of(switchOverYear[i], switchOverMonth[i], switchOverDay[i]),
+                                                  LocalTime.MIDNIGHT, zoneId);
+            ZonedDateTime currentZonedDateAndTime =  ZonedDateTime.now(zoneId);
+            checkCountryCurrency(switchOverCtry[i], (currentZonedDateAndTime.isAfter(zonedDateAndTime) ||
+                        currentZonedDateAndTime.isEqual(zonedDateAndTime)) ? switchOverNew[i] : switchOverOld[i]);
         }
 
         // check a country code which doesn't have a currency
@@ -185,7 +188,7 @@ public class CurrencyTest {
     static void testSymbols() {
         testSymbol("USD", Locale.US, "$");
         testSymbol("EUR", Locale.GERMANY, "\u20AC");
-        testSymbol("USD", Locale.PRC, "USD");
+        testSymbol("USD", Locale.PRC, "US$");
     }
 
     static void testSymbol(String currencyCode, Locale locale, String expectedSymbol) {
@@ -259,7 +262,7 @@ public class CurrencyTest {
         testDisplayName("KRW", Locale.KOREAN, "\ub300\ud55c\ubbfc\uad6d \uc6d0");
         testDisplayName("SEK", new Locale("sv"), "svensk krona");
         testDisplayName("CNY", Locale.SIMPLIFIED_CHINESE, "\u4eba\u6c11\u5e01");
-        testDisplayName("TWD", Locale.TRADITIONAL_CHINESE, "\u65b0\u81fa\u5e63");
+        testDisplayName("TWD", Locale.TRADITIONAL_CHINESE, "\u65b0\u53f0\u5e63");
     }
 
     static void testDisplayName(String currencyCode, Locale locale, String expectedName) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,11 +21,12 @@
  * questions.
  */
 
-/**
+/*
  * @test
  * @bug 6239117
  * @summary test connect works correctly if called multiple times/card removed
  * @author Andreas Sterbenz
+ * @modules java.smartcardio/javax.smartcardio
  * @run main/manual TestConnectAgain
  */
 
@@ -40,6 +41,11 @@ public class TestConnectAgain extends Utils {
 
     public static void main(String[] args) throws Exception {
         CardTerminal terminal = getTerminal(args);
+        if (terminal == null) {
+            System.out.println("Skipping the test: " +
+                    "no card terminals available");
+            return;
+        }
 
         Card card = terminal.connect("T=0");
         CardChannel channel = card.getBasicChannel();

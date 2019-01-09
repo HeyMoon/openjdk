@@ -1,5 +1,5 @@
-/*
- * Copyright (c) 1996, 2014, Oracle and/or its affiliates. All rights reserved.
+/**
+ * Copyright (c) 1996, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,7 +28,6 @@ package sun.security.util;
 import java.io.*;
 import java.math.BigInteger;
 import java.util.Date;
-import sun.misc.IOUtils;
 
 /**
  * Represents a single DER-encoded value.  DER encoding rules are a subset
@@ -84,52 +83,52 @@ public class DerValue {
      */
 
     /** Tag value indicating an ASN.1 "BOOLEAN" value. */
-    public final static byte    tag_Boolean = 0x01;
+    public static final byte    tag_Boolean = 0x01;
 
     /** Tag value indicating an ASN.1 "INTEGER" value. */
-    public final static byte    tag_Integer = 0x02;
+    public static final byte    tag_Integer = 0x02;
 
     /** Tag value indicating an ASN.1 "BIT STRING" value. */
-    public final static byte    tag_BitString = 0x03;
+    public static final byte    tag_BitString = 0x03;
 
     /** Tag value indicating an ASN.1 "OCTET STRING" value. */
-    public final static byte    tag_OctetString = 0x04;
+    public static final byte    tag_OctetString = 0x04;
 
     /** Tag value indicating an ASN.1 "NULL" value. */
-    public final static byte    tag_Null = 0x05;
+    public static final byte    tag_Null = 0x05;
 
     /** Tag value indicating an ASN.1 "OBJECT IDENTIFIER" value. */
-    public final static byte    tag_ObjectId = 0x06;
+    public static final byte    tag_ObjectId = 0x06;
 
     /** Tag value including an ASN.1 "ENUMERATED" value */
-    public final static byte    tag_Enumerated = 0x0A;
+    public static final byte    tag_Enumerated = 0x0A;
 
     /** Tag value indicating an ASN.1 "UTF8String" value. */
-    public final static byte    tag_UTF8String = 0x0C;
+    public static final byte    tag_UTF8String = 0x0C;
 
     /** Tag value including a "printable" string */
-    public final static byte    tag_PrintableString = 0x13;
+    public static final byte    tag_PrintableString = 0x13;
 
     /** Tag value including a "teletype" string */
-    public final static byte    tag_T61String = 0x14;
+    public static final byte    tag_T61String = 0x14;
 
     /** Tag value including an ASCII string */
-    public final static byte    tag_IA5String = 0x16;
+    public static final byte    tag_IA5String = 0x16;
 
     /** Tag value indicating an ASN.1 "UTCTime" value. */
-    public final static byte    tag_UtcTime = 0x17;
+    public static final byte    tag_UtcTime = 0x17;
 
     /** Tag value indicating an ASN.1 "GeneralizedTime" value. */
-    public final static byte    tag_GeneralizedTime = 0x18;
+    public static final byte    tag_GeneralizedTime = 0x18;
 
     /** Tag value indicating an ASN.1 "GenerallString" value. */
-    public final static byte    tag_GeneralString = 0x1B;
+    public static final byte    tag_GeneralString = 0x1B;
 
     /** Tag value indicating an ASN.1 "UniversalString" value. */
-    public final static byte    tag_UniversalString = 0x1C;
+    public static final byte    tag_UniversalString = 0x1C;
 
     /** Tag value indicating an ASN.1 "BMPString" value. */
-    public final static byte    tag_BMPString = 0x1E;
+    public static final byte    tag_BMPString = 0x1E;
 
     // CONSTRUCTED seq/set
 
@@ -137,25 +136,25 @@ public class DerValue {
      * Tag value indicating an ASN.1
      * "SEQUENCE" (zero to N elements, order is significant).
      */
-    public final static byte    tag_Sequence = 0x30;
+    public static final byte    tag_Sequence = 0x30;
 
     /**
      * Tag value indicating an ASN.1
      * "SEQUENCE OF" (one to N elements, order is significant).
      */
-    public final static byte    tag_SequenceOf = 0x30;
+    public static final byte    tag_SequenceOf = 0x30;
 
     /**
      * Tag value indicating an ASN.1
      * "SET" (zero to N members, order does not matter).
      */
-    public final static byte    tag_Set = 0x31;
+    public static final byte    tag_Set = 0x31;
 
     /**
      * Tag value indicating an ASN.1
      * "SET OF" (one to N members, order does not matter).
      */
-    public final static byte    tag_SetOf = 0x31;
+    public static final byte    tag_SetOf = 0x31;
 
     /*
      * These values are the high order bits for the other kinds of tags.
@@ -226,6 +225,16 @@ public class DerValue {
         data = init(stringTag, value);
     }
 
+    // Creates a DerValue from a tag and some DER-encoded data w/ additional
+    // arg to control whether DER checks are enforced.
+    DerValue(byte tag, byte[] data, boolean allowBER) {
+        this.tag = tag;
+        buffer = new DerInputBuffer(data.clone(), allowBER);
+        length = data.length;
+        this.data = new DerInputStream(buffer);
+        this.data.mark(Integer.MAX_VALUE);
+    }
+
     /**
      * Creates a DerValue from a tag and some DER-encoded data.
      *
@@ -233,23 +242,19 @@ public class DerValue {
      * @param data the DER-encoded data
      */
     public DerValue(byte tag, byte[] data) {
-        this.tag = tag;
-        buffer = new DerInputBuffer(data.clone());
-        length = data.length;
-        this.data = new DerInputStream(buffer);
-        this.data.mark(Integer.MAX_VALUE);
+        this(tag, data, true);
     }
 
     /*
      * package private
      */
     DerValue(DerInputBuffer in) throws IOException {
+
         // XXX must also parse BER-encoded constructed
         // values such as sequences, sets...
-
         tag = (byte)in.read();
         byte lenByte = (byte)in.read();
-        length = DerInputStream.getLength((lenByte & 0xff), in);
+        length = DerInputStream.getLength(lenByte, in);
         if (length == -1) {  // indefinite length encoding found
             DerInputBuffer inbuf = in.dup();
             int readLen = inbuf.available();
@@ -261,7 +266,7 @@ public class DerValue {
             dis.readFully(indefData, offset, readLen);
             dis.close();
             DerIndefLenConverter derIn = new DerIndefLenConverter();
-            inbuf = new DerInputBuffer(derIn.convert(indefData));
+            inbuf = new DerInputBuffer(derIn.convert(indefData), in.allowBER);
             if (tag != inbuf.read())
                 throw new IOException
                         ("Indefinite length encoding not supported");
@@ -283,6 +288,12 @@ public class DerValue {
         }
     }
 
+    // Get an ASN.1/DER encoded datum from a buffer w/ additional
+    // arg to control whether DER checks are enforced.
+    DerValue(byte[] buf, boolean allowBER) throws IOException {
+        data = init(true, new ByteArrayInputStream(buf), allowBER);
+    }
+
     /**
      * Get an ASN.1/DER encoded datum from a buffer.  The
      * entire buffer must hold exactly one datum, including
@@ -291,7 +302,14 @@ public class DerValue {
      * @param buf buffer holding a single DER-encoded datum.
      */
     public DerValue(byte[] buf) throws IOException {
-        data = init(true, new ByteArrayInputStream(buf));
+        this(buf, true);
+    }
+
+    // Get an ASN.1/DER encoded datum from part of a buffer w/ additional
+    // arg to control whether DER checks are enforced.
+    DerValue(byte[] buf, int offset, int len, boolean allowBER)
+        throws IOException {
+        data = init(true, new ByteArrayInputStream(buf, offset, len), allowBER);
     }
 
     /**
@@ -304,7 +322,13 @@ public class DerValue {
      * @param len how many bytes are in the encoded datum
      */
     public DerValue(byte[] buf, int offset, int len) throws IOException {
-        data = init(true, new ByteArrayInputStream(buf, offset, len));
+        this(buf, offset, len, true);
+    }
+
+    // Get an ASN1/DER encoded datum from an input stream w/ additional
+    // arg to control whether DER checks are enforced.
+    DerValue(InputStream in, boolean allowBER) throws IOException {
+        data = init(false, in, allowBER);
     }
 
     /**
@@ -317,10 +341,11 @@ public class DerValue {
      *  which may be followed by additional data
      */
     public DerValue(InputStream in) throws IOException {
-        data = init(false, in);
+        this(in, true);
     }
 
-    private DerInputStream init(byte stringTag, String value) throws IOException {
+    private DerInputStream init(byte stringTag, String value)
+        throws IOException {
         String enc = null;
 
         tag = stringTag;
@@ -348,7 +373,7 @@ public class DerValue {
 
         byte[] buf = value.getBytes(enc);
         length = buf.length;
-        buffer = new DerInputBuffer(buf);
+        buffer = new DerInputBuffer(buf, true);
         DerInputStream result = new DerInputStream(buffer);
         result.mark(Integer.MAX_VALUE);
         return result;
@@ -357,12 +382,12 @@ public class DerValue {
     /*
      * helper routine
      */
-    private DerInputStream init(boolean fullyBuffered, InputStream in)
-            throws IOException {
+    private DerInputStream init(boolean fullyBuffered, InputStream in,
+        boolean allowBER) throws IOException {
 
         tag = (byte)in.read();
         byte lenByte = (byte)in.read();
-        length = DerInputStream.getLength((lenByte & 0xff), in);
+        length = DerInputStream.getLength(lenByte, in);
         if (length == -1) { // indefinite length encoding found
             int readLen = in.available();
             int offset = 2;     // for tag and length bytes
@@ -385,7 +410,7 @@ public class DerValue {
 
         byte[] bytes = IOUtils.readFully(in, length, true);
 
-        buffer = new DerInputBuffer(bytes);
+        buffer = new DerInputBuffer(bytes, allowBER);
         return new DerInputStream(buffer);
     }
 
@@ -480,7 +505,8 @@ public class DerValue {
         if (buffer.read(bytes) != length)
             throw new IOException("short read on DerValue buffer");
         if (isConstructed()) {
-            DerInputStream in = new DerInputStream(bytes);
+            DerInputStream in = new DerInputStream(bytes, 0, bytes.length,
+                buffer.allowBER);
             bytes = null;
             while (in.available() != 0) {
                 bytes = append(bytes, in.getOctetString());

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,8 +25,9 @@
 
 package java.nio;
 
-import java.util.Spliterator;
 import jdk.internal.HotSpotIntrinsicCandidate;
+
+import java.util.Spliterator;
 
 /**
  * A container for data of a specific primitive type.
@@ -96,10 +97,10 @@ import jdk.internal.HotSpotIntrinsicCandidate;
  * capacity values:
  *
  * <blockquote>
- *     <tt>0</tt> <tt>&lt;=</tt>
- *     <i>mark</i> <tt>&lt;=</tt>
- *     <i>position</i> <tt>&lt;=</tt>
- *     <i>limit</i> <tt>&lt;=</tt>
+ *     {@code 0} {@code <=}
+ *     <i>mark</i> {@code <=}
+ *     <i>position</i> {@code <=}
+ *     <i>limit</i> {@code <=}
  *     <i>capacity</i>
  * </blockquote>
  *
@@ -110,7 +111,7 @@ import jdk.internal.HotSpotIntrinsicCandidate;
  * to zero.
  *
  *
- * <h2> Clearing, flipping, and rewinding </h2>
+ * <h2> Additional operations </h2>
  *
  * <p> In addition to methods for accessing the position, limit, and capacity
  * values and for marking and resetting, this class also defines the following
@@ -129,6 +130,12 @@ import jdk.internal.HotSpotIntrinsicCandidate;
  *   <li><p> {@link #rewind} makes a buffer ready for re-reading the data that
  *   it already contains: It leaves the limit unchanged and sets the position
  *   to zero.  </p></li>
+ *
+ *   <li><p> {@link #slice} creates a subsequence of a buffer: It leaves the
+ *   limit and the position unchanged. </p></li>
+ *
+ *   <li><p> {@link #duplicate} creates a shallow copy of a buffer: It leaves
+ *   the limit and the position unchanged. </p></li>
  *
  * </ul>
  *
@@ -188,7 +195,15 @@ public abstract class Buffer {
     private int limit;
     private int capacity;
 
-    // Used only by direct buffers
+    // Used by heap byte buffers or direct buffers with Unsafe access
+    // For heap byte buffers this field will be the address relative to the
+    // array base address and offset into that array. The address might
+    // not align on a word boundary for slices, nor align at a long word
+    // (8 byte) boundary for byte[] allocations on 32-bit systems.
+    // For direct buffers it is the start address of the memory region. The
+    // address might not align on a word boundary for slices, nor when created
+    // using JNI, see NewDirectByteBuffer(void*, long).
+    // Should ideally be declared final
     // NOTE: hoisted here for speed in JNI GetDirectBufferAddress
     long address;
 
@@ -197,7 +212,7 @@ public abstract class Buffer {
     //
     Buffer(int mark, int pos, int lim, int cap) {       // package-private
         if (cap < 0)
-            throw new IllegalArgumentException("Negative capacity: " + cap);
+            throw createCapacityException(cap);
         this.capacity = cap;
         limit(lim);
         position(pos);
@@ -207,6 +222,34 @@ public abstract class Buffer {
                                                    + mark + " > " + pos + ")");
             this.mark = mark;
         }
+    }
+
+    /**
+     * Returns an {@code IllegalArgumentException} indicating that the source
+     * and target are the same {@code Buffer}.  Intended for use in
+     * {@code put(src)} when the parameter is the {@code Buffer} on which the
+     * method is being invoked.
+     *
+     * @return  IllegalArgumentException
+     *          With a message indicating equal source and target buffers
+     */
+    static IllegalArgumentException createSameBufferException() {
+        return new IllegalArgumentException("The source buffer is this buffer");
+    }
+
+    /**
+     * Verify that the capacity is nonnegative.
+     *
+     * @param  capacity
+     *         The new buffer's capacity, in $type$s
+     *
+     * @throws  IllegalArgumentException
+     *          If the {@code capacity} is a negative integer
+     */
+    static IllegalArgumentException createCapacityException(int capacity) {
+        assert capacity < 0 : "capacity expected to be negative";
+        return new IllegalArgumentException("capacity < 0: ("
+            + capacity + " < 0)");
     }
 
     /**
@@ -238,14 +281,36 @@ public abstract class Buffer {
      * @return  This buffer
      *
      * @throws  IllegalArgumentException
-     *          If the preconditions on <tt>newPosition</tt> do not hold
+     *          If the preconditions on {@code newPosition} do not hold
      */
     public Buffer position(int newPosition) {
-        if ((newPosition > limit) || (newPosition < 0))
-            throw new IllegalArgumentException();
+        if (newPosition > limit | newPosition < 0)
+            throw createPositionException(newPosition);
         position = newPosition;
         if (mark > position) mark = -1;
         return this;
+    }
+
+    /**
+     * Verify that {@code 0 < newPosition <= limit}
+     *
+     * @param newPosition
+     *        The new position value
+     *
+     * @throws IllegalArgumentException
+     *         If the specified position is out of bounds.
+     */
+    private IllegalArgumentException createPositionException(int newPosition) {
+        String msg = null;
+
+        if (newPosition > limit) {
+            msg = "newPosition > limit: (" + newPosition + " > " + limit + ")";
+        } else { // assume negative
+            assert newPosition < 0 : "newPosition expected to be negative";
+            msg = "newPosition < 0: (" + newPosition + " < 0)";
+        }
+
+        return new IllegalArgumentException(msg);
     }
 
     /**
@@ -269,15 +334,37 @@ public abstract class Buffer {
      * @return  This buffer
      *
      * @throws  IllegalArgumentException
-     *          If the preconditions on <tt>newLimit</tt> do not hold
+     *          If the preconditions on {@code newLimit} do not hold
      */
     public Buffer limit(int newLimit) {
-        if ((newLimit > capacity) || (newLimit < 0))
-            throw new IllegalArgumentException();
+        if (newLimit > capacity | newLimit < 0)
+            throw createLimitException(newLimit);
         limit = newLimit;
         if (position > limit) position = limit;
         if (mark > limit) mark = -1;
         return this;
+    }
+
+    /**
+     * Verify that {@code 0 < newLimit <= capacity}
+     *
+     * @param newLimit
+     *        The new limit value
+     *
+     * @throws IllegalArgumentException
+     *         If the specified limit is out of bounds.
+     */
+    private IllegalArgumentException createLimitException(int newLimit) {
+        String msg = null;
+
+        if (newLimit > capacity) {
+            msg = "newLimit > capacity: (" + newLimit + " > " + capacity + ")";
+        } else { // assume negative
+            assert newLimit < 0 : "newLimit expected to be negative";
+            msg = "newLimit < 0: (" + newLimit + " < 0)";
+        }
+
+        return new IllegalArgumentException(msg);
     }
 
     /**
@@ -396,7 +483,7 @@ public abstract class Buffer {
      * Tells whether there are any elements between the current position and
      * the limit.
      *
-     * @return  <tt>true</tt> if, and only if, there is at least one element
+     * @return  {@code true} if, and only if, there is at least one element
      *          remaining in this buffer
      */
     public final boolean hasRemaining() {
@@ -406,7 +493,7 @@ public abstract class Buffer {
     /**
      * Tells whether or not this buffer is read-only.
      *
-     * @return  <tt>true</tt> if, and only if, this buffer is read-only
+     * @return  {@code true} if, and only if, this buffer is read-only
      */
     public abstract boolean isReadOnly();
 
@@ -414,11 +501,11 @@ public abstract class Buffer {
      * Tells whether or not this buffer is backed by an accessible
      * array.
      *
-     * <p> If this method returns <tt>true</tt> then the {@link #array() array}
+     * <p> If this method returns {@code true} then the {@link #array() array}
      * and {@link #arrayOffset() arrayOffset} methods may safely be invoked.
      * </p>
      *
-     * @return  <tt>true</tt> if, and only if, this buffer
+     * @return  {@code true} if, and only if, this buffer
      *          is backed by an array and is not read-only
      *
      * @since 1.6
@@ -457,7 +544,7 @@ public abstract class Buffer {
      * element of the buffer&nbsp;&nbsp;<i>(optional operation)</i>.
      *
      * <p> If this buffer is backed by an array then buffer position <i>p</i>
-     * corresponds to array index <i>p</i>&nbsp;+&nbsp;<tt>arrayOffset()</tt>.
+     * corresponds to array index <i>p</i>&nbsp;+&nbsp;{@code arrayOffset()}.
      *
      * <p> Invoke the {@link #hasArray hasArray} method before invoking this
      * method in order to ensure that this buffer has an accessible backing
@@ -480,11 +567,51 @@ public abstract class Buffer {
      * Tells whether or not this buffer is
      * <a href="ByteBuffer.html#direct"><i>direct</i></a>.
      *
-     * @return  <tt>true</tt> if, and only if, this buffer is direct
+     * @return  {@code true} if, and only if, this buffer is direct
      *
      * @since 1.6
      */
     public abstract boolean isDirect();
+
+    /**
+     * Creates a new buffer whose content is a shared subsequence of
+     * this buffer's content.
+     *
+     * <p> The content of the new buffer will start at this buffer's current
+     * position.  Changes to this buffer's content will be visible in the new
+     * buffer, and vice versa; the two buffers' position, limit, and mark
+     * values will be independent.
+     *
+     * <p> The new buffer's position will be zero, its capacity and its limit
+     * will be the number of elements remaining in this buffer, its mark will be
+     * undefined. The new buffer will be direct if, and only if, this buffer is
+     * direct, and it will be read-only if, and only if, this buffer is
+     * read-only.  </p>
+     *
+     * @return  The new buffer
+     *
+     * @since 9
+     */
+    public abstract Buffer slice();
+
+    /**
+     * Creates a new buffer that shares this buffer's content.
+     *
+     * <p> The content of the new buffer will be that of this buffer.  Changes
+     * to this buffer's content will be visible in the new buffer, and vice
+     * versa; the two buffers' position, limit, and mark values will be
+     * independent.
+     *
+     * <p> The new buffer's capacity, limit, position and mark values will be
+     * identical to those of this buffer. The new buffer will be direct if, and
+     * only if, this buffer is direct, and it will be read-only if, and only if,
+     * this buffer is read-only.  </p>
+     *
+     * @return  The new buffer
+     *
+     * @since 9
+     */
+    public abstract Buffer duplicate();
 
 
     // -- Package-private methods for bounds checking, etc. --

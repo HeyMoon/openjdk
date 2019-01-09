@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,10 @@ import java.io.FileDescriptor;
 import java.io.IOException;
 import java.security.AccessController;
 import sun.net.ResourceManager;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Collections;
+import sun.security.action.GetPropertyAction;
 
 /**
  * Abstract datagram and multicast socket implementation base class.
@@ -48,14 +52,13 @@ abstract class AbstractPlainDatagramSocketImpl extends DatagramSocketImpl
     protected InetAddress connectedAddress = null;
     private int connectedPort = -1;
 
-    private static final String os = AccessController.doPrivileged(
-        new sun.security.action.GetPropertyAction("os.name")
-    );
+    private static final String os =
+            GetPropertyAction.privilegedGetProperty("os.name");
 
     /**
      * flag set if the native connect() call not to be used
      */
-    private final static boolean connectDisabled = os.contains("OS X");
+    private static final boolean connectDisabled = os.contains("OS X");
 
     /**
      * Load net library into runtime.
@@ -68,7 +71,40 @@ abstract class AbstractPlainDatagramSocketImpl extends DatagramSocketImpl
                     return null;
                 }
             });
-        init();
+    }
+
+    private static volatile boolean checkedReusePort;
+    private static volatile boolean isReusePortAvailable;
+
+    /**
+     * Tells whether SO_REUSEPORT is supported.
+     */
+    static boolean isReusePortAvailable() {
+        if (!checkedReusePort) {
+            isReusePortAvailable = isReusePortAvailable0();
+            checkedReusePort = true;
+        }
+        return isReusePortAvailable;
+    }
+
+    /**
+     * Returns a set of SocketOptions supported by this impl and by this impl's
+     * socket (Socket or ServerSocket)
+     *
+     * @return a Set of SocketOptions
+     */
+    @Override
+    protected Set<SocketOption<?>> supportedOptions() {
+        Set<SocketOption<?>> options;
+        if (isReusePortAvailable()) {
+            options = new HashSet<>();
+            options.addAll(super.supportedOptions());
+            options.add(StandardSocketOptions.SO_REUSEPORT);
+            options = Collections.unmodifiableSet(options);
+        } else {
+            options = super.supportedOptions();
+        }
+        return options;
     }
 
     /**
@@ -239,6 +275,7 @@ abstract class AbstractPlainDatagramSocketImpl extends DatagramSocketImpl
         return (fd == null) ? true : false;
     }
 
+    @SuppressWarnings("deprecation")
     protected void finalize() {
         close();
     }
@@ -304,6 +341,14 @@ abstract class AbstractPlainDatagramSocketImpl extends DatagramSocketImpl
              if (o == null || !(o instanceof Boolean))
                  throw new SocketException("bad argument for IP_MULTICAST_LOOP");
              break;
+         case SO_REUSEPORT:
+             if (o == null || !(o instanceof Boolean)) {
+                 throw new SocketException("bad argument for SO_REUSEPORT");
+             }
+             if (!supportedOptions().contains(StandardSocketOptions.SO_REUSEPORT)) {
+                 throw new UnsupportedOperationException("unsupported option");
+             }
+             break;
          default:
              throw new SocketException("invalid option: " + optID);
          }
@@ -344,6 +389,13 @@ abstract class AbstractPlainDatagramSocketImpl extends DatagramSocketImpl
                 result = socketGetOption(optID);
                 break;
 
+            case SO_REUSEPORT:
+                if (!supportedOptions().contains(StandardSocketOptions.SO_REUSEPORT)) {
+                    throw new UnsupportedOperationException("unsupported option");
+                }
+                result = socketGetOption(optID);
+                break;
+
             default:
                 throw new SocketException("invalid option: " + optID);
         }
@@ -364,6 +416,6 @@ abstract class AbstractPlainDatagramSocketImpl extends DatagramSocketImpl
         return connectDisabled;
     }
 
-    native int dataAvailable();
-    private static native void init();
+    abstract int dataAvailable();
+    private static native boolean isReusePortAvailable0();
 }

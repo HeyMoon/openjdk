@@ -3,13 +3,14 @@
  * DO NOT REMOVE OR ALTER!
  */
 /*
- * Copyright 1999-2005 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,9 +18,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * $Id: XSLTErrorResources_de.java /st_wptg_1.8.0.0.0jdk/2 2013/09/16 04:56:10 gmolloy Exp $
- */
+
 package com.sun.org.apache.xalan.internal.res;
 
 import java.util.ListResourceBundle;
@@ -1016,7 +1015,7 @@ public class XSLTErrorResources_de extends ListResourceBundle
      "Systemeigenschaft \"org.xml.sax.parser\" nicht angegeben"},
 
     { ER_PARSER_ARG_CANNOT_BE_NULL,
-     "Parser-Argument darf nicht null sein"},
+     "Parserargument darf nicht null sein"},
 
     { ER_FEATURE,
      "Feature: {0}"},
@@ -1359,10 +1358,10 @@ public class XSLTErrorResources_de extends ListResourceBundle
   { "optionLXCIN", "   [-LXCIN compiledStylesheetFileNameIn]"},
   { "optionLXCOUT", "   [-LXCOUT compiledStylesheetFileNameOutOut]"},
   { "optionPARSER", "   [-PARSER fully qualified class name of parser liaison]"},
-  {  "optionE", "   [-E (Entit\u00E4tsreferenzen nicht einblenden)]"},
-  {  "optionV",  "   [-E (Entit\u00E4tsreferenzen nicht einblenden)]"},
+  {  "optionE", "   [-E (Entityreferenzen nicht einblenden)]"},
+  {  "optionV",  "   [-E (Entityreferenzen nicht einblenden)]"},
   {  "optionQC", "   [-QC (Stille Musterkonfliktwarnungen)]"},
-  {  "optionQ", "   [-Q  (Stiller Modus)]"},
+  {  "optionQ", "   [-Q  (Silent-Modus)]"},
   {  "optionLF", "   [-LF (Nur Zeilenvorsch\u00FCbe bei Ausgabe verwenden {Standard ist CR/LF})]"},
   {  "optionCR", "   [-CR (Nur Zeilenschaltungen bei Ausgabe verwenden {Standard ist CR/LF})]"},
   { "optionESCAPE", "   [-ESCAPE (Escapezeichen {Standard ist <>&\"'\r\n}]"},
@@ -1384,7 +1383,7 @@ public class XSLTErrorResources_de extends ListResourceBundle
   { "noParsermsg4", "Wenn Sie nicht \u00FCber den XML-Parser f\u00FCr Java von IBM verf\u00FCgen, k\u00F6nnen Sie ihn hier herunterladen:"},
   { "noParsermsg5", "IBMs AlphaWorks: http://www.alphaworks.ibm.com/formula/xml"},
   { "optionURIRESOLVER", "   [-URIRESOLVER full class name (URIResolver f\u00FCr die Aufl\u00F6sung von URIs)]"},
-  { "optionENTITYRESOLVER",  "   [-ENTITYRESOLVER full class name (EntityResolver f\u00FCr die Aufl\u00F6sung von Entit\u00E4ten)]"},
+  { "optionENTITYRESOLVER",  "   [-ENTITYRESOLVER full class name (EntityResolver f\u00FCr die Aufl\u00F6sung von Entitys)]"},
   { "optionCONTENTHANDLER",  "   [-CONTENTHANDLER full class name (ContentHandler f\u00FCr die Serialisierung der Ausgabe)]"},
   {  "optionLINENUMBERS",  "   [-L use line numbers for source document]"},
   { "optionSECUREPROCESSING", "   [-SECURE (Feature f\u00FCr die sichere Verarbeitung auf \"true\" setzen.)]"},

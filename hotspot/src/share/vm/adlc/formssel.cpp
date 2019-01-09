@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -607,6 +607,8 @@ bool InstructForm::needs_anti_dependence_check(FormDict &globals) const {
       ( strcmp(_matrule->_rChild->_opType,"StrComp"    )==0 ||
         strcmp(_matrule->_rChild->_opType,"StrEquals"  )==0 ||
         strcmp(_matrule->_rChild->_opType,"StrIndexOf" )==0 ||
+        strcmp(_matrule->_rChild->_opType,"StrIndexOfChar" )==0 ||
+        strcmp(_matrule->_rChild->_opType,"HasNegatives" )==0 ||
         strcmp(_matrule->_rChild->_opType,"AryEq"      )==0 ))
     return true;
 
@@ -648,6 +650,7 @@ bool InstructForm::is_wide_memory_kill(FormDict &globals) const {
   if( strcmp(_matrule->_opType,"MemBarReleaseLock") == 0 ) return true;
   if( strcmp(_matrule->_opType,"MemBarAcquireLock") == 0 ) return true;
   if( strcmp(_matrule->_opType,"MemBarStoreStore") == 0 ) return true;
+  if( strcmp(_matrule->_opType,"MemBarVolatile") == 0 ) return true;
   if( strcmp(_matrule->_opType,"StoreFence") == 0 ) return true;
   if( strcmp(_matrule->_opType,"LoadFence") == 0 ) return true;
 
@@ -720,6 +723,11 @@ int InstructForm::memory_operand(FormDict &globals) const {
         // // unique def, some uses
         // // must return bottom unless all uses match def
         // unique = NULL;
+#ifdef S390
+        // This case is important for move instructions on s390x.
+        // On other platforms (e.g. x86), all uses always match the def.
+        unique = NULL;
+#endif
       }
     } else if( DEF_of_memory > 0 ) {
       // multiple defs, don't care about uses
@@ -769,19 +777,21 @@ int InstructForm::memory_operand(FormDict &globals) const {
 // This instruction captures the machine-independent bottom_type
 // Expected use is for pointer vs oop determination for LoadP
 bool InstructForm::captures_bottom_type(FormDict &globals) const {
-  if( _matrule && _matrule->_rChild &&
-       (!strcmp(_matrule->_rChild->_opType,"CastPP")       ||  // new result type
-        !strcmp(_matrule->_rChild->_opType,"CastX2P")      ||  // new result type
-        !strcmp(_matrule->_rChild->_opType,"DecodeN")      ||
-        !strcmp(_matrule->_rChild->_opType,"EncodeP")      ||
-        !strcmp(_matrule->_rChild->_opType,"DecodeNKlass") ||
-        !strcmp(_matrule->_rChild->_opType,"EncodePKlass") ||
-        !strcmp(_matrule->_rChild->_opType,"LoadN")        ||
-        !strcmp(_matrule->_rChild->_opType,"LoadNKlass")   ||
-        !strcmp(_matrule->_rChild->_opType,"CreateEx")     ||  // type of exception
-        !strcmp(_matrule->_rChild->_opType,"CheckCastPP")  ||
-        !strcmp(_matrule->_rChild->_opType,"GetAndSetP")   ||
-        !strcmp(_matrule->_rChild->_opType,"GetAndSetN")) )  return true;
+  if (_matrule && _matrule->_rChild &&
+      (!strcmp(_matrule->_rChild->_opType,"CastPP")       ||  // new result type
+       !strcmp(_matrule->_rChild->_opType,"CastX2P")      ||  // new result type
+       !strcmp(_matrule->_rChild->_opType,"DecodeN")      ||
+       !strcmp(_matrule->_rChild->_opType,"EncodeP")      ||
+       !strcmp(_matrule->_rChild->_opType,"DecodeNKlass") ||
+       !strcmp(_matrule->_rChild->_opType,"EncodePKlass") ||
+       !strcmp(_matrule->_rChild->_opType,"LoadN")        ||
+       !strcmp(_matrule->_rChild->_opType,"LoadNKlass")   ||
+       !strcmp(_matrule->_rChild->_opType,"CreateEx")     ||  // type of exception
+       !strcmp(_matrule->_rChild->_opType,"CheckCastPP")  ||
+       !strcmp(_matrule->_rChild->_opType,"GetAndSetP")   ||
+       !strcmp(_matrule->_rChild->_opType,"GetAndSetN")   ||
+       !strcmp(_matrule->_rChild->_opType,"CompareAndExchangeP") ||
+       !strcmp(_matrule->_rChild->_opType,"CompareAndExchangeN")))  return true;
   else if ( is_ideal_load() == Form::idealP )                return true;
   else if ( is_ideal_store() != Form::none  )                return true;
 
@@ -887,11 +897,16 @@ uint InstructForm::oper_input_base(FormDict &globals) {
       ( strcmp(_matrule->_rChild->_opType,"AryEq"     )==0 ||
         strcmp(_matrule->_rChild->_opType,"StrComp"   )==0 ||
         strcmp(_matrule->_rChild->_opType,"StrEquals" )==0 ||
+        strcmp(_matrule->_rChild->_opType,"StrInflatedCopy"   )==0 ||
+        strcmp(_matrule->_rChild->_opType,"StrCompressedCopy" )==0 ||
         strcmp(_matrule->_rChild->_opType,"StrIndexOf")==0 ||
+        strcmp(_matrule->_rChild->_opType,"StrIndexOfChar")==0 ||
+        strcmp(_matrule->_rChild->_opType,"HasNegatives")==0 ||
         strcmp(_matrule->_rChild->_opType,"EncodeISOArray")==0)) {
         // String.(compareTo/equals/indexOf) and Arrays.equals
         // and sun.nio.cs.iso8859_1$Encoder.EncodeISOArray
         // take 1 control and 1 memory edges.
+        // Also String.(compressedCopy/inflatedCopy).
     return 2;
   }
 
@@ -1238,6 +1253,7 @@ bool InstructForm::check_branch_variant(ArchDesc &AD, InstructForm *short_branch
       this != short_branch &&   // Don't match myself
       !is_short_branch() &&     // Don't match another short branch variant
       reduce_result() != NULL &&
+      strstr(_ident, "restoreMask") == NULL && // Don't match side effects
       strcmp(reduce_result(), short_branch->reduce_result()) == 0 &&
       _matrule->equivalent(AD.globalNames(), short_branch->_matrule)) {
     // The instructions are equivalent.
@@ -1491,7 +1507,8 @@ void MachNodeForm::output(FILE *fp) {
 // twice, we need to check that the operands are pointer-eequivalent in
 // the DFA during the labeling process.
 Predicate *InstructForm::build_predicate() {
-  char buf[1024], *s=buf;
+  const int buflen = 1024;
+  char buf[buflen], *s=buf;
   Dict names(cmpstr,hashstr,Form::arena);       // Map Names to counts
 
   MatchNode *mnode =
@@ -1500,12 +1517,12 @@ Predicate *InstructForm::build_predicate() {
 
   uint first = 1;
   // Start with the predicate supplied in the .ad file.
-  if( _predicate ) {
-    if( first ) first=0;
-    strcpy(s,"("); s += strlen(s);
-    strcpy(s,_predicate->_pred);
+  if (_predicate) {
+    if (first) first = 0;
+    strcpy(s, "("); s += strlen(s);
+    strncpy(s, _predicate->_pred, buflen - strlen(s) - 1);
     s += strlen(s);
-    strcpy(s,")"); s += strlen(s);
+    strcpy(s, ")"); s += strlen(s);
   }
   for( DictI i(&names); i.test(); ++i ) {
     uintptr_t cnt = (uintptr_t)i._value;
@@ -3482,11 +3499,13 @@ int MatchNode::needs_ideal_memory_edge(FormDict &globals) const {
     "LoadRange", "LoadKlass", "LoadNKlass", "LoadL_unaligned", "LoadD_unaligned",
     "LoadPLocked",
     "StorePConditional", "StoreIConditional", "StoreLConditional",
-    "CompareAndSwapI", "CompareAndSwapL", "CompareAndSwapP", "CompareAndSwapN",
+    "CompareAndSwapB", "CompareAndSwapS", "CompareAndSwapI", "CompareAndSwapL", "CompareAndSwapP", "CompareAndSwapN",
+    "WeakCompareAndSwapB", "WeakCompareAndSwapS", "WeakCompareAndSwapI", "WeakCompareAndSwapL", "WeakCompareAndSwapP", "WeakCompareAndSwapN",
+    "CompareAndExchangeB", "CompareAndExchangeS", "CompareAndExchangeI", "CompareAndExchangeL", "CompareAndExchangeP", "CompareAndExchangeN",
     "StoreCM",
     "ClearArray",
-    "GetAndAddI", "GetAndSetI", "GetAndSetP",
-    "GetAndAddL", "GetAndSetL", "GetAndSetN",
+    "GetAndSetB", "GetAndSetS", "GetAndAddI", "GetAndSetI", "GetAndSetP",
+    "GetAndAddB", "GetAndAddS", "GetAndAddL", "GetAndSetL", "GetAndSetN",
   };
   int cnt = sizeof(needs_ideal_memory_list)/sizeof(char*);
   if( strcmp(_opType,"PrefetchAllocation")==0 )
@@ -3637,14 +3656,14 @@ int MatchNode::cisc_spill_match(FormDict& globals, RegisterForm* registers, Matc
     // Check left operands
     if( (_lChild == NULL) && (mRule2->_lChild == NULL) ) {
       left_spillable = Maybe_cisc_spillable;
-    } else {
+    } else  if (_lChild != NULL) {
       left_spillable = _lChild->cisc_spill_match(globals, registers, mRule2->_lChild, operand, reg_type);
     }
 
     // Check right operands
     if( (_rChild == NULL) && (mRule2->_rChild == NULL) ) {
       right_spillable =  Maybe_cisc_spillable;
-    } else {
+    } else if (_rChild != NULL) {
       right_spillable = _rChild->cisc_spill_match(globals, registers, mRule2->_rChild, operand, reg_type);
     }
 
@@ -4002,18 +4021,13 @@ int MatchRule::is_expensive() const {
   if( _rChild ) {
     const char  *opType = _rChild->_opType;
     if( strcmp(opType,"AtanD")==0 ||
-        strcmp(opType,"CosD")==0 ||
         strcmp(opType,"DivD")==0 ||
         strcmp(opType,"DivF")==0 ||
         strcmp(opType,"DivI")==0 ||
-        strcmp(opType,"ExpD")==0 ||
-        strcmp(opType,"LogD")==0 ||
         strcmp(opType,"Log10D")==0 ||
         strcmp(opType,"ModD")==0 ||
         strcmp(opType,"ModF")==0 ||
         strcmp(opType,"ModI")==0 ||
-        strcmp(opType,"PowD")==0 ||
-        strcmp(opType,"SinD")==0 ||
         strcmp(opType,"SqrtD")==0 ||
         strcmp(opType,"TanD")==0 ||
         strcmp(opType,"ConvD2F")==0 ||
@@ -4032,6 +4046,8 @@ int MatchRule::is_expensive() const {
         strcmp(opType,"EncodeP")==0 ||
         strcmp(opType,"EncodePKlass")==0 ||
         strcmp(opType,"DecodeNKlass")==0 ||
+        strcmp(opType,"FmaD") == 0 ||
+        strcmp(opType,"FmaF") == 0 ||
         strcmp(opType,"RoundDouble")==0 ||
         strcmp(opType,"RoundFloat")==0 ||
         strcmp(opType,"ReverseBytesI")==0 ||
@@ -4142,7 +4158,11 @@ bool MatchRule::is_vector() const {
     "AddVB","AddVS","AddVI","AddVL","AddVF","AddVD",
     "SubVB","SubVS","SubVI","SubVL","SubVF","SubVD",
     "MulVS","MulVI","MulVL","MulVF","MulVD",
+    "CMoveVD",
     "DivVF","DivVD",
+    "AbsVF","AbsVD",
+    "NegVF","NegVD",
+    "SqrtVD",
     "AndV" ,"XorV" ,"OrV",
     "AddReductionVI", "AddReductionVL",
     "AddReductionVF", "AddReductionVD",

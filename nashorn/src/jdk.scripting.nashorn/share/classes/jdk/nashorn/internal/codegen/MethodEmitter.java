@@ -32,6 +32,7 @@ import static jdk.internal.org.objectweb.asm.Opcodes.GETFIELD;
 import static jdk.internal.org.objectweb.asm.Opcodes.GETSTATIC;
 import static jdk.internal.org.objectweb.asm.Opcodes.GOTO;
 import static jdk.internal.org.objectweb.asm.Opcodes.H_INVOKESTATIC;
+import static jdk.internal.org.objectweb.asm.Opcodes.H_INVOKEINTERFACE;
 import static jdk.internal.org.objectweb.asm.Opcodes.IFEQ;
 import static jdk.internal.org.objectweb.asm.Opcodes.IFGE;
 import static jdk.internal.org.objectweb.asm.Opcodes.IFGT;
@@ -69,6 +70,7 @@ import static jdk.nashorn.internal.codegen.CompilerConstants.methodDescriptor;
 import static jdk.nashorn.internal.codegen.CompilerConstants.staticField;
 import static jdk.nashorn.internal.codegen.CompilerConstants.virtualCallNoLookup;
 import static jdk.nashorn.internal.codegen.ObjectClassGenerator.PRIMITIVE_FIELD_TYPE;
+import static jdk.nashorn.internal.runtime.linker.NameCodec.EMPTY_NAME;
 import static jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor.CALLSITE_OPTIMISTIC;
 import static jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor.CALLSITE_PROGRAM_POINT_SHIFT;
 
@@ -79,7 +81,6 @@ import java.util.EnumSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
-import jdk.internal.dynalink.support.NameCodec;
 import jdk.internal.org.objectweb.asm.Handle;
 import jdk.internal.org.objectweb.asm.MethodVisitor;
 import jdk.nashorn.internal.codegen.ClassEmitter.Flag;
@@ -107,6 +108,8 @@ import jdk.nashorn.internal.runtime.ScriptObject;
 import jdk.nashorn.internal.runtime.ScriptRuntime;
 import jdk.nashorn.internal.runtime.UnwarrantedOptimismException;
 import jdk.nashorn.internal.runtime.linker.Bootstrap;
+import jdk.nashorn.internal.runtime.linker.NameCodec;
+import jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor;
 import jdk.nashorn.internal.runtime.logging.DebugLogger;
 import jdk.nashorn.internal.runtime.options.Options;
 
@@ -168,10 +171,10 @@ public class MethodEmitter {
     }
 
     /** Bootstrap for normal indy:s */
-    private static final Handle LINKERBOOTSTRAP  = new Handle(H_INVOKESTATIC, Bootstrap.BOOTSTRAP.className(), Bootstrap.BOOTSTRAP.name(), Bootstrap.BOOTSTRAP.descriptor());
+    private static final Handle LINKERBOOTSTRAP  = new Handle(H_INVOKESTATIC, Bootstrap.BOOTSTRAP.className(), Bootstrap.BOOTSTRAP.name(), Bootstrap.BOOTSTRAP.descriptor(), false);
 
     /** Bootstrap for array populators */
-    private static final Handle POPULATE_ARRAY_BOOTSTRAP = new Handle(H_INVOKESTATIC, RewriteException.BOOTSTRAP.className(), RewriteException.BOOTSTRAP.name(), RewriteException.BOOTSTRAP.descriptor());
+    private static final Handle POPULATE_ARRAY_BOOTSTRAP = new Handle(H_INVOKESTATIC, RewriteException.BOOTSTRAP.className(), RewriteException.BOOTSTRAP.name(), RewriteException.BOOTSTRAP.descriptor(), false);
 
     /**
      * Constructor - internal use from ClassEmitter only
@@ -257,8 +260,7 @@ public class MethodEmitter {
      */
     private Type popType(final Type expected) {
         final Type type = popType();
-        assert type.isObject() && expected.isObject() ||
-            type.isEquivalentTo(expected) : type + " is not compatible with " + expected;
+        assert type.isEquivalentTo(expected) : type + " is not compatible with " + expected;
         return type;
     }
 
@@ -543,7 +545,6 @@ public class MethodEmitter {
         } else {
             assert false : type + " cannot be packed!";
         }
-        //all others are nops, objects aren't packed
     }
 
     /**
@@ -737,7 +738,7 @@ public class MethodEmitter {
      * @param recovery start label for catch
      */
     void _try(final Label entry, final Label exit, final Label recovery) {
-        _try(entry, exit, recovery, (String)null, false);
+        _try(entry, exit, recovery, null, false);
     }
 
     void markLabelAsOptimisticCatchHandler(final Label label, final int liveLocalCount) {
@@ -1006,8 +1007,9 @@ public class MethodEmitter {
      * @return the method emitter
      */
     MethodEmitter loadHandle(final String className, final String methodName, final String descName, final EnumSet<Flag> flags) {
+        final int flag = Flag.getValue(flags);
         debug("load handle ");
-        pushType(Type.OBJECT.ldc(method, new Handle(Flag.getValue(flags), className, methodName, descName)));
+        pushType(Type.OBJECT.ldc(method, new Handle(flag, className, methodName, descName, flag == H_INVOKEINTERFACE)));
         return this;
     }
 
@@ -1158,7 +1160,7 @@ public class MethodEmitter {
     /**
      * Pop a value from the stack and store it in a variable denoted by the given symbol. The variable should be either
      * a local variable, or a function parameter (and not a scoped variable). For local variables, this method will also
-     * do the bookeeping of the local variable table as well as mark values in all alternative slots for the symbol as
+     * do the bookkeeping of the local variable table as well as mark values in all alternative slots for the symbol as
      * dead. In this regard it differs from {@link #storeHidden(Type, int)}.
      *
      * @param symbol the symbol to store into.
@@ -2132,10 +2134,25 @@ public class MethodEmitter {
      * @return the method emitter
      */
     MethodEmitter dynamicNew(final int argCount, final int flags) {
+        return dynamicNew(argCount, flags, null);
+    }
+
+    /**
+     * Generate a dynamic new
+     *
+     * @param argCount  number of arguments
+     * @param flags     callsite flags
+     * @param msg        additional message to be used when reporting error
+     *
+     * @return the method emitter
+     */
+    MethodEmitter dynamicNew(final int argCount, final int flags, final String msg) {
         assert !isOptimistic(flags);
         debug("dynamic_new", "argcount=", argCount);
         final String signature = getDynamicSignature(Type.OBJECT, argCount);
-        method.visitInvokeDynamicInsn("dyn:new", signature, LINKERBOOTSTRAP, flags);
+        method.visitInvokeDynamicInsn(
+                msg != null && msg.length() < LARGE_STRING_THRESHOLD? NameCodec.encode(msg) : EMPTY_NAME,
+                signature, LINKERBOOTSTRAP, flags | NashornCallSiteDescriptor.NEW);
         pushType(Type.OBJECT); //TODO fix result type
         return this;
     }
@@ -2150,10 +2167,26 @@ public class MethodEmitter {
      * @return the method emitter
      */
     MethodEmitter dynamicCall(final Type returnType, final int argCount, final int flags) {
+        return dynamicCall(returnType, argCount, flags, null);
+    }
+
+    /**
+     * Generate a dynamic call
+     *
+     * @param returnType return type
+     * @param argCount   number of arguments
+     * @param flags      callsite flags
+     * @param msg        additional message to be used when reporting error
+     *
+     * @return the method emitter
+     */
+    MethodEmitter dynamicCall(final Type returnType, final int argCount, final int flags, final String msg) {
         debug("dynamic_call", "args=", argCount, "returnType=", returnType);
         final String signature = getDynamicSignature(returnType, argCount); // +1 because the function itself is the 1st parameter for dynamic calls (what you call - call target)
         debug("   signature", signature);
-        method.visitInvokeDynamicInsn("dyn:call", signature, LINKERBOOTSTRAP, flags);
+        method.visitInvokeDynamicInsn(
+                msg != null && msg.length() < LARGE_STRING_THRESHOLD? NameCodec.encode(msg) : EMPTY_NAME,
+                signature, LINKERBOOTSTRAP, flags | NashornCallSiteDescriptor.CALL);
         pushType(returnType);
 
         return this;
@@ -2190,8 +2223,8 @@ public class MethodEmitter {
         }
 
         popType(Type.SCOPE);
-        method.visitInvokeDynamicInsn(dynGetOperation(isMethod, isIndex) + ':' + NameCodec.encode(name),
-                Type.getMethodDescriptor(type, Type.OBJECT), LINKERBOOTSTRAP, flags);
+        method.visitInvokeDynamicInsn(NameCodec.encode(name),
+                Type.getMethodDescriptor(type, Type.OBJECT), LINKERBOOTSTRAP, flags | dynGetOperation(isMethod, isIndex));
 
         pushType(type);
         convert(valueType); //most probably a nop
@@ -2223,8 +2256,8 @@ public class MethodEmitter {
         popType(type);
         popType(Type.SCOPE);
 
-        method.visitInvokeDynamicInsn(dynSetOperation(isIndex) + ':' + NameCodec.encode(name),
-                methodDescriptor(void.class, Object.class, type.getTypeClass()), LINKERBOOTSTRAP, flags);
+        method.visitInvokeDynamicInsn(NameCodec.encode(name),
+                methodDescriptor(void.class, Object.class, type.getTypeClass()), LINKERBOOTSTRAP, flags | dynSetOperation(isIndex));
     }
 
      /**
@@ -2257,7 +2290,7 @@ public class MethodEmitter {
 
         final String signature = Type.getMethodDescriptor(resultType, Type.OBJECT /*e.g STRING->OBJECT*/, index);
 
-        method.visitInvokeDynamicInsn(dynGetOperation(isMethod, true), signature, LINKERBOOTSTRAP, flags);
+        method.visitInvokeDynamicInsn(EMPTY_NAME, signature, LINKERBOOTSTRAP, flags | dynGetOperation(isMethod, true));
         pushType(resultType);
 
         if (result.isBoolean()) {
@@ -2301,7 +2334,9 @@ public class MethodEmitter {
         final Type receiver = popType(Type.OBJECT);
         assert receiver.isObject();
 
-        method.visitInvokeDynamicInsn("dyn:setElem|setProp", methodDescriptor(void.class, receiver.getTypeClass(), index.getTypeClass(), value.getTypeClass()), LINKERBOOTSTRAP, flags);
+        method.visitInvokeDynamicInsn(EMPTY_NAME,
+                methodDescriptor(void.class, receiver.getTypeClass(), index.getTypeClass(), value.getTypeClass()),
+                LINKERBOOTSTRAP, flags | NashornCallSiteDescriptor.SET_ELEMENT);
     }
 
     /**
@@ -2471,16 +2506,16 @@ public class MethodEmitter {
         }
     }
 
-    private static String dynGetOperation(final boolean isMethod, final boolean isIndex) {
+    private static int dynGetOperation(final boolean isMethod, final boolean isIndex) {
         if (isMethod) {
-            return isIndex ? "dyn:getMethod|getElem|getProp" : "dyn:getMethod|getProp|getElem";
+            return isIndex ? NashornCallSiteDescriptor.GET_METHOD_ELEMENT : NashornCallSiteDescriptor.GET_METHOD_PROPERTY;
         } else {
-            return isIndex ? "dyn:getElem|getProp|getMethod" : "dyn:getProp|getElem|getMethod";
+            return isIndex ? NashornCallSiteDescriptor.GET_ELEMENT : NashornCallSiteDescriptor.GET_PROPERTY;
         }
     }
 
-    private static String dynSetOperation(final boolean isIndex) {
-        return isIndex ? "dyn:setElem|setProp" : "dyn:setProp|setElem";
+    private static int dynSetOperation(final boolean isIndex) {
+        return isIndex ? NashornCallSiteDescriptor.SET_ELEMENT : NashornCallSiteDescriptor.SET_PROPERTY;
     }
 
     private Type emitLocalVariableConversion(final LocalVariableConversion conversion, final boolean onlySymbolLiveValue) {

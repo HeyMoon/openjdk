@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,12 +23,13 @@
  */
 
 #include "precompiled.hpp"
+#include "asm/codeBuffer.hpp"
 #include "asm/macroAssembler.hpp"
 #include "asm/macroAssembler.inline.hpp"
-#include "asm/codeBuffer.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/icache.hpp"
 #include "runtime/os.hpp"
+#include "runtime/thread.hpp"
 
 
 // Implementation of AbstractAssembler
@@ -43,8 +44,7 @@ AbstractAssembler::AbstractAssembler(CodeBuffer* code) {
   CodeSection* cs = code->insts();
   cs->clear_mark();   // new assembler kills old mark
   if (cs->start() == NULL)  {
-    vm_exit_out_of_memory(0, OOM_MMAP_ERROR, err_msg("CodeCache: no room for %s",
-                                     code->name()));
+    vm_exit_out_of_memory(0, OOM_MMAP_ERROR, "CodeCache: no room for %s", code->name());
   }
   _code_section = cs;
   _oop_recorder= code->oop_recorder();
@@ -133,7 +133,7 @@ void AbstractAssembler::generate_stack_overflow_check(int frame_size_in_bytes) {
     // is greater than a page.
 
     const int page_size = os::vm_page_size();
-    int bang_end = StackShadowPages * page_size;
+    int bang_end = (int)JavaThread::stack_shadow_zone_size();
 
     // This is how far the previous frame's stack banging extended.
     const int bang_end_safe = bang_end;
@@ -153,6 +153,8 @@ void AbstractAssembler::generate_stack_overflow_check(int frame_size_in_bytes) {
 
 void Label::add_patch_at(CodeBuffer* cb, int branch_loc) {
   assert(_loc == -1, "Label is unbound");
+  // Don't add patch locations during scratch emit.
+  if (cb->insts()->scratch_emit()) { return; }
   if (_patch_index < PatchCacheSize) {
     _patches[_patch_index] = branch_loc;
   } else {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@
 #include "gc/shared/collectedHeap.inline.hpp"
 #include "gc/shared/gcLocker.hpp"
 #include "jvmtifiles/jvmti.h"
+#include "memory/resourceArea.hpp"
 #include "memory/universe.inline.hpp"
 #include "oops/arrayKlass.hpp"
 #include "oops/arrayOop.hpp"
@@ -42,12 +43,8 @@ int ArrayKlass::static_size(int header_size) {
   // If this assert fails, see comments in base_create_array_klass.
   header_size = InstanceKlass::header_size();
   int vtable_len = Universe::base_vtable_size();
-#ifdef _LP64
-  int size = header_size + align_object_offset(vtable_len);
-#else
   int size = header_size + vtable_len;
-#endif
-  return align_object_size(size);
+  return align_metadata_size(size);
 }
 
 
@@ -71,7 +68,9 @@ Klass* ArrayKlass::find_field(Symbol* name, Symbol* sig, fieldDescriptor* fd) co
   return super()->find_field(name, sig, fd);
 }
 
-Method* ArrayKlass::uncached_lookup_method(Symbol* name, Symbol* signature, OverpassLookupMode overpass_mode) const {
+Method* ArrayKlass::uncached_lookup_method(const Symbol* name,
+                                           const Symbol* signature,
+                                           OverpassLookupMode overpass_mode) const {
   // There are no methods in an array klass but the super class (Object) has some
   assert(super(), "super klass must be present");
   // Always ignore overpass methods in superclasses, although technically the
@@ -80,29 +79,35 @@ Method* ArrayKlass::uncached_lookup_method(Symbol* name, Symbol* signature, Over
   return super()->uncached_lookup_method(name, signature, Klass::skip_overpass);
 }
 
-ArrayKlass::ArrayKlass(Symbol* name) {
-  set_name(name);
-
-  set_super(Universe::is_bootstrapping() ? (Klass*)NULL : SystemDictionary::Object_klass());
-  set_layout_helper(Klass::_lh_neutral_value);
-  set_dimension(1);
-  set_higher_dimension(NULL);
-  set_lower_dimension(NULL);
-  // Arrays don't add any new methods, so their vtable is the same size as
-  // the vtable of klass Object.
-  int vtable_size = Universe::base_vtable_size();
-  set_vtable_length(vtable_size);
-  set_is_cloneable(); // All arrays are considered to be cloneable (See JLS 20.1.5)
+ArrayKlass::ArrayKlass(Symbol* name) :
+  _dimension(1),
+  _higher_dimension(NULL),
+  _lower_dimension(NULL) {
+    // Arrays don't add any new methods, so their vtable is the same size as
+    // the vtable of klass Object.
+    set_vtable_length(Universe::base_vtable_size());
+    set_name(name);
+    set_super(Universe::is_bootstrapping() ? (Klass*)NULL : SystemDictionary::Object_klass());
+    set_layout_helper(Klass::_lh_neutral_value);
+    set_is_cloneable(); // All arrays are considered to be cloneable (See JLS 20.1.5)
+    TRACE_INIT_ID(this);
 }
 
 
 // Initialization of vtables and mirror object is done separatly from base_create_array_klass,
 // since a GC can happen. At this point all instance variables of the ArrayKlass must be setup.
-void ArrayKlass::complete_create_array_klass(ArrayKlass* k, KlassHandle super_klass, TRAPS) {
+void ArrayKlass::complete_create_array_klass(ArrayKlass* k, KlassHandle super_klass, ModuleEntry* module_entry, TRAPS) {
   ResourceMark rm(THREAD);
   k->initialize_supers(super_klass(), CHECK);
   k->vtable()->initialize_vtable(false, CHECK);
-  java_lang_Class::create_mirror(k, Handle(THREAD, k->class_loader()), Handle(NULL), CHECK);
+
+  // During bootstrapping, before java.base is defined, the module_entry may not be present yet.
+  // These classes will be put on a fixup list and their module fields will be patched once
+  // java.base is defined.
+  assert((module_entry != NULL) || ((module_entry == NULL) && !ModuleEntryTable::javabase_defined()),
+         "module entry not available post " JAVA_BASE_NAME " definition");
+  oop module = (module_entry != NULL) ? JNIHandles::resolve(module_entry->module()) : (oop)NULL;
+  java_lang_Class::create_mirror(k, Handle(THREAD, k->class_loader()), Handle(THREAD, module), Handle(NULL), CHECK);
 }
 
 GrowableArray<Klass*>* ArrayKlass::compute_secondary_supers(int num_extra_slots) {
@@ -119,19 +124,6 @@ bool ArrayKlass::compute_is_subtype_of(Klass* k) {
          || k == SystemDictionary::Cloneable_klass()
          || k == SystemDictionary::Serializable_klass();
 }
-
-
-inline intptr_t* ArrayKlass::start_of_vtable() const {
-  // all vtables start at the same place, that's why we use InstanceKlass::header_size here
-  return ((intptr_t*)this) + InstanceKlass::header_size();
-}
-
-
-klassVtable* ArrayKlass::vtable() const {
-  KlassHandle kh(Thread::current(), this);
-  return new klassVtable(kh, start_of_vtable(), vtable_length() / vtableEntry::size());
-}
-
 
 objArrayOop ArrayKlass::allocate_arrayArray(int n, int length, TRAPS) {
   if (length < 0) {

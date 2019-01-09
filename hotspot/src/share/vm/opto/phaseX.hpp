@@ -148,9 +148,19 @@ protected:
   Unique_Node_List _useful;   // Nodes reachable from root
                               // list is allocated from current resource area
 public:
-  PhaseRemoveUseless( PhaseGVN *gvn, Unique_Node_List *worklist );
+  PhaseRemoveUseless(PhaseGVN *gvn, Unique_Node_List *worklist, PhaseNumber phase_num = Remove_Useless);
 
   Unique_Node_List *get_useful() { return &_useful; }
+};
+
+//------------------------------PhaseRenumber----------------------------------
+// Phase that first performs a PhaseRemoveUseless, then it renumbers compiler
+// structures accordingly.
+class PhaseRenumberLive : public PhaseRemoveUseless {
+public:
+  PhaseRenumberLive(PhaseGVN* gvn,
+                    Unique_Node_List* worklist, Unique_Node_List* new_worklist,
+                    PhaseNumber phase_num = Remove_Useless_And_Renumber_Live);
 };
 
 
@@ -162,7 +172,7 @@ public:
 class PhaseTransform : public Phase {
 protected:
   Arena*     _arena;
-  Node_Array _nodes;           // Map old node indices to new nodes.
+  Node_List  _nodes;           // Map old node indices to new nodes.
   Type_Array _types;           // Map old node indices to Types.
 
   // ConNode caches:
@@ -187,7 +197,13 @@ public:
 
   Arena*      arena()   { return _arena; }
   Type_Array& types()   { return _types; }
+  void replace_types(Type_Array new_types) {
+    _types = new_types;
+  }
   // _nodes is used in varying ways by subclasses, which define local accessors
+  uint nodes_size() {
+    return _nodes.size();
+  }
 
 public:
   // Get a previously recorded type for the node n.
@@ -314,6 +330,9 @@ public:
   // Delayed node rehash if this is an IGVN phase
   virtual void igvn_rehash_node_delayed(Node* n) {}
 
+  // true if CFG node d dominates CFG node n
+  virtual bool is_dominator(Node *d, Node *n) { fatal("unimplemented for this pass"); return false; };
+
 #ifndef PRODUCT
   void dump_old2new_map() const;
   void dump_new( uint new_lidx ) const;
@@ -381,6 +400,9 @@ public:
 //------------------------------PhaseGVN---------------------------------------
 // Phase for performing local, pessimistic GVN-style optimizations.
 class PhaseGVN : public PhaseValues {
+protected:
+  bool is_dominator_helper(Node *d, Node *n, bool linear_only);
+
 public:
   PhaseGVN( Arena *arena, uint est_max_size ) : PhaseValues( arena, est_max_size ) {}
   PhaseGVN( PhaseGVN *gvn ) : PhaseValues( gvn ) {}
@@ -399,6 +421,8 @@ public:
     _types = gvn->_types;
   }
 
+  bool is_dominator(Node *d, Node *n) { return is_dominator_helper(d, n, true); }
+
   // Check for a simple dead loop when a data node references itself.
   DEBUG_ONLY(void dead_loop_check(Node *n);)
 };
@@ -407,7 +431,7 @@ public:
 // Phase for iteratively performing local, pessimistic GVN-style optimizations.
 // and ideal transformations on the graph.
 class PhaseIterGVN : public PhaseGVN {
- private:
+private:
   bool _delay_transform;  // When true simply register the node when calling transform
                           // instead of actually optimizing it
 
@@ -521,12 +545,15 @@ public:
   Node* clone_loop_predicates(Node* old_entry, Node* new_entry, bool clone_limit_check);
   // Create a new if below new_entry for the predicate to be cloned
   ProjNode* create_new_if_for_predicate(ProjNode* cont_proj, Node* new_entry,
-                                        Deoptimization::DeoptReason reason);
+                                        Deoptimization::DeoptReason reason,
+                                        int opcode);
 
   void remove_speculative_types();
   void check_no_speculative_types() {
     _table.check_no_speculative_types();
   }
+
+  bool is_dominator(Node *d, Node *n) { return is_dominator_helper(d, n, false); }
 
 #ifndef PRODUCT
 protected:

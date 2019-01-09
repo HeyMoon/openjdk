@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,21 +30,25 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 
 import javax.tools.JavaFileManager;
 import javax.tools.FileObject;
+import javax.tools.JavaFileManager.Location;
 import javax.tools.JavaFileObject;
 
 import com.sun.tools.javac.code.*;
 import com.sun.tools.javac.code.Attribute.RetentionPolicy;
+import com.sun.tools.javac.code.Directive.*;
 import com.sun.tools.javac.code.Symbol.*;
 import com.sun.tools.javac.code.Type.*;
 import com.sun.tools.javac.code.Types.UniqueType;
-import com.sun.tools.javac.file.BaseFileObject;
+import com.sun.tools.javac.file.PathFileObject;
 import com.sun.tools.javac.jvm.Pool.DynamicMethod;
 import com.sun.tools.javac.jvm.Pool.Method;
 import com.sun.tools.javac.jvm.Pool.MethodHandle;
 import com.sun.tools.javac.jvm.Pool.Variable;
+import com.sun.tools.javac.main.Option;
 import com.sun.tools.javac.util.*;
 
 import static com.sun.tools.javac.code.Flags.*;
@@ -52,6 +56,7 @@ import static com.sun.tools.javac.code.Kinds.Kind.*;
 import static com.sun.tools.javac.code.Scope.LookupKind.NON_RECURSIVE;
 import static com.sun.tools.javac.code.TypeTag.*;
 import static com.sun.tools.javac.main.Option.*;
+
 import static javax.tools.StandardLocation.CLASS_OUTPUT;
 
 /** This class provides operations to map an internal symbol table graph
@@ -71,18 +76,6 @@ public class ClassWriter extends ClassFile {
      */
     private boolean verbose;
 
-    /** Switch: scramble private field names.
-     */
-    private boolean scramble;
-
-    /** Switch: scramble all field names.
-     */
-    private boolean scrambleAll;
-
-    /** Switch: retrofit mode.
-     */
-    private boolean retrofit;
-
     /** Switch: emit source file attribute.
      */
     private boolean emitSourceFile;
@@ -93,7 +86,7 @@ public class ClassWriter extends ClassFile {
 
     /** Switch: describe the generated stackmap.
      */
-    boolean debugstackmap;
+    private boolean debugstackmap;
 
     /**
      * Target class version.
@@ -107,6 +100,12 @@ public class ClassWriter extends ClassFile {
 
     /** Type utilities. */
     private Types types;
+
+    /**
+     * If true, class files will be written in module-specific subdirectories
+     * of the CLASS_OUTPUT location.
+     */
+    public boolean multiModuleMode;
 
     /** The initial sizes of the data and constant pool buffers.
      *  Sizes are increased when buffers get full.
@@ -138,7 +137,7 @@ public class ClassWriter extends ClassFile {
     /** The bootstrap methods to be written in the corresponding class attribute
      *  (one for each invokedynamic)
      */
-    Map<DynamicMethod, MethodHandle> bootstrapMethods;
+    Map<DynamicMethod.BootstrapMethodsKey, DynamicMethod.BootstrapMethodsValue> bootstrapMethods;
 
     /** The log to use for verbose output.
      */
@@ -183,24 +182,19 @@ public class ClassWriter extends ClassFile {
         signatureGen = new CWSignatureGenerator(types);
 
         verbose        = options.isSet(VERBOSE);
-        scramble       = options.isSet("-scramble");
-        scrambleAll    = options.isSet("-scrambleAll");
-        retrofit       = options.isSet("-retrofit");
         genCrt         = options.isSet(XJCOV);
-        debugstackmap  = options.isSet("debugstackmap");
+        debugstackmap = options.isSet("debug.stackmap");
 
         emitSourceFile = options.isUnset(G_CUSTOM) ||
                             options.isSet(G_CUSTOM, "source");
 
-        String dumpModFlags = options.get("dumpmodifiers");
-        dumpClassModifiers =
-            (dumpModFlags != null && dumpModFlags.indexOf('c') != -1);
-        dumpFieldModifiers =
-            (dumpModFlags != null && dumpModFlags.indexOf('f') != -1);
-        dumpInnerClassModifiers =
-            (dumpModFlags != null && dumpModFlags.indexOf('i') != -1);
-        dumpMethodModifiers =
-            (dumpModFlags != null && dumpModFlags.indexOf('m') != -1);
+        String modifierFlags = options.get("debug.dumpmodifiers");
+        if (modifierFlags != null) {
+            dumpClassModifiers = modifierFlags.indexOf('c') != -1;
+            dumpFieldModifiers = modifierFlags.indexOf('f') != -1;
+            dumpInnerClassModifiers = modifierFlags.indexOf('i') != -1;
+            dumpMethodModifiers = modifierFlags.indexOf('m') != -1;
+        }
     }
 
 /******************************************************************
@@ -216,10 +210,10 @@ public class ClassWriter extends ClassFile {
      *  For example, to dump everything:
      *    javac -XDdumpmodifiers=cifm MyProg.java
      */
-    private final boolean dumpClassModifiers; // -XDdumpmodifiers=c
-    private final boolean dumpFieldModifiers; // -XDdumpmodifiers=f
-    private final boolean dumpInnerClassModifiers; // -XDdumpmodifiers=i
-    private final boolean dumpMethodModifiers; // -XDdumpmodifiers=m
+    private boolean dumpClassModifiers; // -XDdumpmodifiers=c
+    private boolean dumpFieldModifiers; // -XDdumpmodifiers=f
+    private boolean dumpInnerClassModifiers; // -XDdumpmodifiers=i
+    private boolean dumpMethodModifiers; // -XDdumpmodifiers=m
 
 
     /** Return flags as a string, separated by " ".
@@ -401,8 +395,16 @@ public class ClassWriter extends ClassFile {
                     //invokedynamic
                     DynamicMethodSymbol dynSym = (DynamicMethodSymbol)m;
                     MethodHandle handle = new MethodHandle(dynSym.bsmKind, dynSym.bsm, types);
-                    DynamicMethod dynMeth = new DynamicMethod(dynSym, types);
-                    bootstrapMethods.put(dynMeth, handle);
+                    DynamicMethod.BootstrapMethodsKey key = new DynamicMethod.BootstrapMethodsKey(dynSym, types);
+
+                    // Figure out the index for existing BSM; create a new BSM if no key
+                    DynamicMethod.BootstrapMethodsValue val = bootstrapMethods.get(key);
+                    if (val == null) {
+                        int index = bootstrapMethods.size();
+                        val = new DynamicMethod.BootstrapMethodsValue(handle, index);
+                        bootstrapMethods.put(key, val);
+                    }
+
                     //init cp entries
                     pool.put(names.BootstrapMethods);
                     pool.put(handle);
@@ -410,7 +412,7 @@ public class ClassWriter extends ClassFile {
                         pool.put(staticArg);
                     }
                     poolbuf.appendByte(CONSTANT_InvokeDynamic);
-                    poolbuf.appendChar(bootstrapMethods.size() - 1);
+                    poolbuf.appendChar(val.index);
                     poolbuf.appendChar(pool.put(nameType(dynSym)));
                 }
             } else if (value instanceof VarSymbol) {
@@ -472,6 +474,14 @@ public class ClassWriter extends ClassFile {
                 poolbuf.appendByte(CONSTANT_MethodHandle);
                 poolbuf.appendByte(ref.refKind);
                 poolbuf.appendChar(pool.put(ref.refSym));
+            } else if (value instanceof ModuleSymbol) {
+                ModuleSymbol m = (ModuleSymbol)value;
+                poolbuf.appendByte(CONSTANT_Module);
+                poolbuf.appendChar(pool.put(m.name));
+            } else if (value instanceof PackageSymbol) {
+                PackageSymbol m = (PackageSymbol)value;
+                poolbuf.appendByte(CONSTANT_Package);
+                poolbuf.appendChar(pool.put(names.fromUtf(externalize(m.fullname))));
             } else {
                 Assert.error("writePool " + value);
             }
@@ -482,26 +492,11 @@ public class ClassWriter extends ClassFile {
         putChar(poolbuf, poolCountIdx, pool.pp);
     }
 
-    /** Given a field, return its name.
-     */
-    Name fieldName(Symbol sym) {
-        if (scramble && (sym.flags() & PRIVATE) != 0 ||
-            scrambleAll && (sym.flags() & (PROTECTED | PUBLIC)) == 0)
-            return names.fromString("_$" + sym.name.getIndex());
-        else
-            return sym.name;
-    }
-
     /** Given a symbol, return its name-and-type.
      */
     NameAndType nameType(Symbol sym) {
-        return new NameAndType(fieldName(sym),
-                               retrofit
-                               ? sym.erasure(types)
-                               : sym.externalType(types), types);
-        // if we retrofit, then the NameAndType has been read in as is
-        // and no change is necessary. If we compile normally, the
-        // NameAndType is generated from a symbol reference, and the
+        return new NameAndType(sym.name, sym.externalType(types), types);
+        // the NameAndType is generated from a symbol reference, and the
         // adjustment of adding an additional this$n parameter needs to be made.
     }
 
@@ -839,7 +834,7 @@ public class ClassWriter extends ClassFile {
         }
         public void visitClass(Attribute.Class clazz) {
             databuf.appendByte('c');
-            databuf.appendChar(pool.put(typeSig(clazz.classType)));
+            databuf.appendChar(pool.put(typeSig(types.erasure(clazz.classType))));
         }
         public void visitCompound(Attribute.Compound compound) {
             databuf.appendByte('@');
@@ -956,6 +951,88 @@ public class ClassWriter extends ClassFile {
     }
 
 /**********************************************************************
+ * Writing module attributes
+ **********************************************************************/
+
+    /** Write the Module attribute if needed.
+     *  Returns the number of attributes written (0 or 1).
+     */
+    int writeModuleAttribute(ClassSymbol c) {
+        ModuleSymbol m = (ModuleSymbol) c.owner;
+
+        int alenIdx = writeAttr(names.Module);
+
+        databuf.appendChar(pool.put(m));
+        databuf.appendChar(ModuleFlags.value(m.flags)); // module_flags
+        databuf.appendChar(m.version != null ? pool.put(m.version) : 0);
+
+        ListBuffer<RequiresDirective> requires = new ListBuffer<>();
+        for (RequiresDirective r: m.requires) {
+            if (!r.flags.contains(RequiresFlag.EXTRA))
+                requires.add(r);
+        }
+        databuf.appendChar(requires.size());
+        for (RequiresDirective r: requires) {
+            databuf.appendChar(pool.put(r.module));
+            databuf.appendChar(RequiresFlag.value(r.flags));
+            databuf.appendChar(r.module.version != null ? pool.put(r.module.version) : 0);
+        }
+
+        List<ExportsDirective> exports = m.exports;
+        databuf.appendChar(exports.size());
+        for (ExportsDirective e: exports) {
+            databuf.appendChar(pool.put(e.packge));
+            databuf.appendChar(ExportsFlag.value(e.flags));
+            if (e.modules == null) {
+                databuf.appendChar(0);
+            } else {
+                databuf.appendChar(e.modules.size());
+                for (ModuleSymbol msym: e.modules) {
+                    databuf.appendChar(pool.put(msym));
+                }
+            }
+        }
+
+        List<OpensDirective> opens = m.opens;
+        databuf.appendChar(opens.size());
+        for (OpensDirective o: opens) {
+            databuf.appendChar(pool.put(o.packge));
+            databuf.appendChar(OpensFlag.value(o.flags));
+            if (o.modules == null) {
+                databuf.appendChar(0);
+            } else {
+                databuf.appendChar(o.modules.size());
+                for (ModuleSymbol msym: o.modules) {
+                    databuf.appendChar(pool.put(msym));
+                }
+            }
+        }
+
+        List<UsesDirective> uses = m.uses;
+        databuf.appendChar(uses.size());
+        for (UsesDirective s: uses) {
+            databuf.appendChar(pool.put(s.service));
+        }
+
+        // temporary fix to merge repeated provides clause for same service;
+        // eventually this should be disallowed when analyzing the module,
+        // so that each service type only appears once.
+        Map<ClassSymbol, Set<ClassSymbol>> mergedProvides = new LinkedHashMap<>();
+        for (ProvidesDirective p : m.provides) {
+            mergedProvides.computeIfAbsent(p.service, s -> new LinkedHashSet<>()).addAll(p.impls);
+        }
+        databuf.appendChar(mergedProvides.size());
+        mergedProvides.forEach((srvc, impls) -> {
+            databuf.appendChar(pool.put(srvc));
+            databuf.appendChar(impls.size());
+            impls.forEach(impl -> databuf.appendChar(pool.put(impl)));
+        });
+
+        endAttr(alenIdx);
+        return 1;
+    }
+
+/**********************************************************************
  * Writing Objects
  **********************************************************************/
 
@@ -1002,7 +1079,6 @@ public class ClassWriter extends ClassFile {
             inner.markAbstractIfNeeded(types);
             char flags = (char) adjustFlags(inner.flags_field);
             if ((flags & INTERFACE) != 0) flags |= ABSTRACT; // Interfaces are always ABSTRACT
-            if (inner.name.isEmpty()) flags &= ~FINAL; // Anonymous class: unset FINAL flag
             flags &= ~STRICTFP; //inner classes should not have the strictfp flag set.
             if (dumpInnerClassModifiers) {
                 PrintWriter pw = log.getWriter(Log.WriterKind.ERROR);
@@ -1024,15 +1100,14 @@ public class ClassWriter extends ClassFile {
     void writeBootstrapMethods() {
         int alenIdx = writeAttr(names.BootstrapMethods);
         databuf.appendChar(bootstrapMethods.size());
-        for (Map.Entry<DynamicMethod, MethodHandle> entry : bootstrapMethods.entrySet()) {
-            DynamicMethod dmeth = entry.getKey();
-            DynamicMethodSymbol dsym = (DynamicMethodSymbol)dmeth.baseSymbol();
+        for (Map.Entry<DynamicMethod.BootstrapMethodsKey, DynamicMethod.BootstrapMethodsValue> entry : bootstrapMethods.entrySet()) {
+            DynamicMethod.BootstrapMethodsKey bsmKey = entry.getKey();
             //write BSM handle
-            databuf.appendChar(pool.get(entry.getValue()));
+            databuf.appendChar(pool.get(entry.getValue().mh));
+            Object[] uniqueArgs = bsmKey.getUniqueArgs();
             //write static args length
-            databuf.appendChar(dsym.staticArgs.length);
+            databuf.appendChar(uniqueArgs.length);
             //write static args array
-            Object[] uniqueArgs = dmeth.uniqueStaticArgs;
             for (Object o : uniqueArgs) {
                 databuf.appendChar(pool.get(o));
             }
@@ -1047,10 +1122,10 @@ public class ClassWriter extends ClassFile {
         databuf.appendChar(flags);
         if (dumpFieldModifiers) {
             PrintWriter pw = log.getWriter(Log.WriterKind.ERROR);
-            pw.println("FIELD  " + fieldName(v));
+            pw.println("FIELD  " + v.name);
             pw.println("---" + flagNames(v.flags()));
         }
-        databuf.appendChar(pool.put(fieldName(v)));
+        databuf.appendChar(pool.put(v.name));
         databuf.appendChar(pool.put(typeSig(v.erasure(types))));
         int acountIdx = beginAttrs();
         int acount = 0;
@@ -1071,10 +1146,10 @@ public class ClassWriter extends ClassFile {
         databuf.appendChar(flags);
         if (dumpMethodModifiers) {
             PrintWriter pw = log.getWriter(Log.WriterKind.ERROR);
-            pw.println("METHOD  " + fieldName(m));
+            pw.println("METHOD  " + m.name);
             pw.println("---" + flagNames(m.flags()));
         }
-        databuf.appendChar(pool.put(fieldName(m)));
+        databuf.appendChar(pool.put(m.name));
         databuf.appendChar(pool.put(typeSig(m.externalType(types))));
         int acountIdx = beginAttrs();
         int acount = 0;
@@ -1100,10 +1175,13 @@ public class ClassWriter extends ClassFile {
             endAttr(alenIdx);
             acount++;
         }
-        if (options.isSet(PARAMETERS))
-            acount += writeMethodParametersAttr(m);
+        if (options.isSet(PARAMETERS)) {
+            if (!m.isLambdaMethod()) // Per JDK-8138729, do not emit parameters table for lambda bodies.
+                acount += writeMethodParametersAttr(m);
+        }
         acount += writeMemberAttrs(m);
-        acount += writeParameterAttrs(m);
+        if (!m.isLambdaMethod())
+            acount += writeParameterAttrs(m);
         endAttrs(acountIdx, acount);
     }
 
@@ -1583,9 +1661,17 @@ public class ClassWriter extends ClassFile {
     public JavaFileObject writeClass(ClassSymbol c)
         throws IOException, PoolOverflow, StringOverflow
     {
+        String name = (c.owner.kind == MDL ? c.name : c.flatname).toString();
+        Location outLocn;
+        if (multiModuleMode) {
+            ModuleSymbol msym = c.owner.kind == MDL ? (ModuleSymbol) c.owner : c.packge().modle;
+            outLocn = fileManager.getLocationForModule(CLASS_OUTPUT, msym.name.toString());
+        } else {
+            outLocn = CLASS_OUTPUT;
+        }
         JavaFileObject outFile
-            = fileManager.getJavaFileForOutput(CLASS_OUTPUT,
-                                               c.flatname.toString(),
+            = fileManager.getJavaFileForOutput(outLocn,
+                                               name,
                                                JavaFileObject.Kind.CLASS,
                                                c.sourcefile);
         OutputStream out = outFile.openOutputStream();
@@ -1623,11 +1709,16 @@ public class ClassWriter extends ClassFile {
         List<Type> interfaces = types.interfaces(c.type);
         List<Type> typarams = c.type.getTypeArguments();
 
-        int flags = adjustFlags(c.flags() & ~DEFAULT);
-        if ((flags & PROTECTED) != 0) flags |= PUBLIC;
-        flags = flags & ClassFlags & ~STRICTFP;
-        if ((flags & INTERFACE) == 0) flags |= ACC_SUPER;
-        if (c.isInner() && c.name.isEmpty()) flags &= ~FINAL;
+        int flags;
+        if (c.owner.kind == MDL) {
+            flags = ACC_MODULE;
+        } else {
+            flags = adjustFlags(c.flags() & ~DEFAULT);
+            if ((flags & PROTECTED) != 0) flags |= PUBLIC;
+            flags = flags & ClassFlags & ~STRICTFP;
+            if ((flags & INTERFACE) == 0) flags |= ACC_SUPER;
+        }
+
         if (dumpClassModifiers) {
             PrintWriter pw = log.getWriter(Log.WriterKind.ERROR);
             pw.println();
@@ -1636,7 +1727,12 @@ public class ClassWriter extends ClassFile {
         }
         databuf.appendChar(flags);
 
-        databuf.appendChar(pool.put(c));
+        if (c.owner.kind == MDL) {
+            PackageSymbol unnamed = ((ModuleSymbol) c.owner).unnamedPackage;
+            databuf.appendChar(pool.put(new ClassSymbol(0, names.module_info, unnamed)));
+        } else {
+            databuf.appendChar(pool.put(c));
+        }
         databuf.appendChar(supertype.hasTag(CLASS) ? pool.put(supertype.tsym) : 0);
         databuf.appendChar(interfaces.length());
         for (List<Type> l = interfaces; l.nonEmpty(); l = l.tail)
@@ -1689,7 +1785,7 @@ public class ClassWriter extends ClassFile {
             // the last possible moment because the sourcefile may be used
             // elsewhere in error diagnostics. Fixes 4241573.
             //databuf.appendChar(c.pool.put(c.sourcefile));
-            String simpleName = BaseFileObject.getSimpleName(c.sourcefile);
+            String simpleName = PathFileObject.getSimpleName(c.sourcefile);
             databuf.appendChar(c.pool.put(names.fromString(simpleName)));
             endAttr(alenIdx);
             acount++;
@@ -1712,11 +1808,22 @@ public class ClassWriter extends ClassFile {
         acount += writeJavaAnnotations(c.getRawAttributes());
         acount += writeTypeAnnotations(c.getRawTypeAttributes(), false);
         acount += writeEnclosingMethodAttribute(c);
+        if (c.owner.kind == MDL) {
+            acount += writeModuleAttribute(c);
+            acount += writeFlagAttrs(c.owner.flags() & ~DEPRECATED);
+        }
         acount += writeExtraClassAttributes(c);
 
         poolbuf.appendInt(JAVA_MAGIC);
-        poolbuf.appendChar(target.minorVersion);
-        poolbuf.appendChar(target.majorVersion);
+
+        if (c.owner.kind == MDL) {
+            // temporarily overide to force use of v53 for module-info.class
+            poolbuf.appendChar(0);
+            poolbuf.appendChar(53);
+        } else {
+            poolbuf.appendChar(target.minorVersion);
+            poolbuf.appendChar(target.majorVersion);
+        }
 
         writePool(c.pool);
 

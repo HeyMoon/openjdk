@@ -26,6 +26,7 @@
 package com.sun.security.auth;
 
 import java.security.Principal;
+import static sun.security.util.ResourcesMgr.getAuthResourceString;
 
 /**
  * This class implements the {@code Principal} interface
@@ -40,27 +41,17 @@ import java.security.Principal;
  * @deprecated As of JDK&nbsp;1.4, replaced by
  *             {@link UnixNumericUserPrincipal}.
  *             This class is entirely deprecated.
+ * This class is subject to removal in a future version of Java SE.
  *
  * @see java.security.Principal
  * @see javax.security.auth.Subject
  */
-@jdk.Exported(false)
-@Deprecated
+@Deprecated(since="1.4", forRemoval=true)
 public class SolarisNumericUserPrincipal implements
                                         Principal,
                                         java.io.Serializable {
 
     private static final long serialVersionUID = -3178578484679887104L;
-
-    private static final java.util.ResourceBundle rb =
-          java.security.AccessController.doPrivileged
-          (new java.security.PrivilegedAction<java.util.ResourceBundle>() {
-              public java.util.ResourceBundle run() {
-                  return (java.util.ResourceBundle.getBundle
-                                ("sun.security.util.AuthResources"));
-              }
-           });
-
 
     /**
      * @serial
@@ -79,7 +70,7 @@ public class SolarisNumericUserPrincipal implements
      */
     public SolarisNumericUserPrincipal(String name) {
         if (name == null)
-            throw new NullPointerException(rb.getString("provided.null.name"));
+            throw new NullPointerException(getAuthResourceString("provided.null.name"));
 
         this.name = name;
     }
@@ -125,7 +116,7 @@ public class SolarisNumericUserPrincipal implements
      *          {@code SolarisNumericUserPrincipal}.
      */
     public String toString() {
-        return(rb.getString("SolarisNumericUserPrincipal.") + name);
+        return(getAuthResourceString("SolarisNumericUserPrincipal.") + name);
     }
 
     /**

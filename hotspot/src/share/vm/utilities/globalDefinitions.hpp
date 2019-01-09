@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,6 +42,12 @@
 # include "utilities/globalDefinitions_xlc.hpp"
 #endif
 
+#ifndef NOINLINE
+#define NOINLINE
+#endif
+#ifndef ALWAYSINLINE
+#define ALWAYSINLINE inline
+#endif
 #ifndef PRAGMA_DIAG_PUSH
 #define PRAGMA_DIAG_PUSH
 #endif
@@ -60,16 +66,12 @@
 #ifndef PRAGMA_FORMAT_NONLITERAL_IGNORED_EXTERNAL
 #define PRAGMA_FORMAT_NONLITERAL_IGNORED_EXTERNAL
 #endif
-#ifndef PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
-#define PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
-#endif
 #ifndef ATTRIBUTE_PRINTF
 #define ATTRIBUTE_PRINTF(fmt, vargs)
 #endif
 #ifndef ATTRIBUTE_SCANF
 #define ATTRIBUTE_SCANF(fmt, vargs)
 #endif
-
 
 #include "utilities/macros.hpp"
 
@@ -160,7 +162,6 @@ class HeapWord {
 // Analogous opaque struct for metadata allocated from
 // metaspaces.
 class MetaWord {
-  friend class VMStructs;
  private:
   char* i;
 };
@@ -192,13 +193,20 @@ inline size_t heap_word_size(size_t byte_size) {
   return (byte_size + (HeapWordSize-1)) >> LogHeapWordSize;
 }
 
+//-------------------------------------------
+// Constant for jlong (standardized by C++11)
+
+// Build a 64bit integer constant
+#define CONST64(x)  (x ## LL)
+#define UCONST64(x) (x ## ULL)
+
+const jlong min_jlong = CONST64(0x8000000000000000);
+const jlong max_jlong = CONST64(0x7fffffffffffffff);
+
 const size_t K                  = 1024;
 const size_t M                  = K*K;
 const size_t G                  = M*K;
 const size_t HWperKB            = K / sizeof(HeapWord);
-
-const jint min_jint = (jint)1 << (sizeof(jint)*BitsPerByte-1); // 0x80000000 == smallest jint
-const jint max_jint = (juint)min_jint - 1;                     // 0x7FFFFFFF == largest jint
 
 // Constants for converting from a base unit to milli-base units.  For
 // example from seconds to milliseconds and microseconds
@@ -239,6 +247,36 @@ inline T byte_size_in_proper_unit(T s) {
   } else {
     return s;
   }
+}
+
+inline const char* exact_unit_for_byte_size(size_t s) {
+#ifdef _LP64
+  if (s >= G && (s % G) == 0) {
+    return "G";
+  }
+#endif
+  if (s >= M && (s % M) == 0) {
+    return "M";
+  }
+  if (s >= K && (s % K) == 0) {
+    return "K";
+  }
+  return "B";
+}
+
+inline size_t byte_size_in_exact_unit(size_t s) {
+#ifdef _LP64
+  if (s >= G && (s % G) == 0) {
+    return s / G;
+  }
+#endif
+  if (s >= M && (s % M) == 0) {
+    return s / M;
+  }
+  if (s >= K && (s % K) == 0) {
+    return s / K;
+  }
+  return s;
 }
 
 //----------------------------------------------------------------------------------------------------
@@ -299,11 +337,12 @@ inline address_word  castable_address(void* x)                { return address_w
 // and then additions like
 //       ... top() + size ...
 // are safe because we know that top() is at least size below end().
-inline size_t pointer_delta(const void* left,
-                            const void* right,
+inline size_t pointer_delta(const volatile void* left,
+                            const volatile void* right,
                             size_t element_size) {
   return (((uintptr_t) left) - ((uintptr_t) right)) / element_size;
 }
+
 // A version specialized for HeapWord*'s.
 inline size_t pointer_delta(const HeapWord* left, const HeapWord* right) {
   return pointer_delta(left, right, sizeof(HeapWord));
@@ -317,7 +356,7 @@ inline size_t pointer_delta(const MetaWord* left, const MetaWord* right) {
 // ANSI C++ does not allow casting from one pointer type to a function pointer
 // directly without at best a warning. This macro accomplishes it silently
 // In every case that is present at this point the value be cast is a pointer
-// to a C linkage function. In somecase the type used for the cast reflects
+// to a C linkage function. In some case the type used for the cast reflects
 // that linkage and a picky compiler would not complain. In other cases because
 // there is no convenient place to place a typedef with extern C linkage (i.e
 // a platform dependent header file) it doesn't. At this point no compiler seems
@@ -326,7 +365,7 @@ inline size_t pointer_delta(const MetaWord* left, const MetaWord* right) {
 // so far from the middle of the road that it is likely to be problematic in
 // many C++ compilers.
 //
-#define CAST_TO_FN_PTR(func_type, value) ((func_type)(castable_address(value)))
+#define CAST_TO_FN_PTR(func_type, value) (reinterpret_cast<func_type>(value))
 #define CAST_FROM_FN_PTR(new_type, func_ptr) ((new_type)((address_word)(func_ptr)))
 
 // Unsigned byte types for os and stream.hpp
@@ -348,6 +387,14 @@ typedef jbyte  s1;
 typedef jshort s2;
 typedef jint   s4;
 typedef jlong  s8;
+
+const jbyte min_jbyte = -(1 << 7);       // smallest jbyte
+const jbyte max_jbyte = (1 << 7) - 1;    // largest jbyte
+const jshort min_jshort = -(1 << 15);    // smallest jshort
+const jshort max_jshort = (1 << 15) - 1; // largest jshort
+
+const jint min_jint = (jint)1 << (sizeof(jint)*BitsPerByte-1); // 0x80000000 == smallest jint
+const jint max_jint = (juint)min_jint - 1;                     // 0x7FFFFFFF == largest jint
 
 //----------------------------------------------------------------------------------------------------
 // JVM spec restrictions
@@ -407,45 +454,12 @@ const  uint64_t KlassEncodingMetaspaceMax = (uint64_t(max_juint) + 1) << LogKlas
 
 // Machine dependent stuff
 
-// States of Restricted Transactional Memory usage.
-enum RTMState {
-  NoRTM      = 0x2, // Don't use RTM
-  UseRTM     = 0x1, // Use RTM
-  ProfileRTM = 0x0  // Use RTM with abort ratio calculation
-};
-
 // The maximum size of the code cache.  Can be overridden by targets.
 #define CODE_CACHE_SIZE_LIMIT (2*G)
 // Allow targets to reduce the default size of the code cache.
 #define CODE_CACHE_DEFAULT_LIMIT CODE_CACHE_SIZE_LIMIT
 
-#ifdef TARGET_ARCH_x86
-# include "globalDefinitions_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "globalDefinitions_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "globalDefinitions_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "globalDefinitions_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "globalDefinitions_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "globalDefinitions_aarch64.hpp"
-#endif
-
-#ifndef INCLUDE_RTM_OPT
-#define INCLUDE_RTM_OPT 0
-#endif
-#if INCLUDE_RTM_OPT
-#define RTM_OPT_ONLY(code) code
-#else
-#define RTM_OPT_ONLY(code)
-#endif
+#include CPU_HEADER(globalDefinitions)
 
 // To assure the IRIW property on processors that are not multiple copy
 // atomic, sync instructions must be issued between volatile reads to
@@ -489,7 +503,7 @@ inline intptr_t align_size_down(intptr_t size, intptr_t alignment) {
 
 #define is_size_aligned_(size, alignment) ((size) == (align_size_up_(size, alignment)))
 
-inline void* align_ptr_up(void* ptr, size_t alignment) {
+inline void* align_ptr_up(const void* ptr, size_t alignment) {
   return (void*)align_size_up((intptr_t)ptr, (intptr_t)alignment);
 }
 
@@ -497,10 +511,19 @@ inline void* align_ptr_down(void* ptr, size_t alignment) {
   return (void*)align_size_down((intptr_t)ptr, (intptr_t)alignment);
 }
 
-// Align objects by rounding up their size, in HeapWord units.
+inline volatile void* align_ptr_down(volatile void* ptr, size_t alignment) {
+  return (volatile void*)align_size_down((intptr_t)ptr, (intptr_t)alignment);
+}
 
-#define align_object_size_(size) align_size_up_(size, MinObjAlignment)
+// Align metaspace objects by rounding up to natural word boundary
 
+inline intptr_t align_metadata_size(intptr_t size) {
+  return align_size_up(size, 1);
+}
+
+// Align objects in the Java Heap by rounding up their size, in HeapWord units.
+// Since the size is given in words this is somewhat of a nop, but
+// distinguishes it from align_object_size.
 inline intptr_t align_object_size(intptr_t size) {
   return align_size_up(size, MinObjAlignment);
 }
@@ -513,10 +536,6 @@ inline bool is_object_aligned(intptr_t addr) {
 
 inline intptr_t align_object_offset(intptr_t offset) {
   return align_size_up(offset, HeapWordsPerLong);
-}
-
-inline void* align_pointer_up(const void* addr, size_t size) {
-  return (void*) align_size_up_((uintptr_t)addr, size);
 }
 
 // Align down with a lower bound. If the aligning results in 0, return 'alignment'.
@@ -566,6 +585,13 @@ inline address clamp_address_in_page(address addr, address page_address, intptr_
 // doesn't exist in early versions of Solaris 8.
 inline double fabsd(double value) {
   return fabs(value);
+}
+
+// Returns numerator/denominator as percentage value from 0 to 100. If denominator
+// is zero, return 0.0.
+template<typename T>
+inline double percent_of(T numerator, T denominator) {
+  return denominator != 0 ? (double)numerator / denominator * 100.0 : 0.0;
 }
 
 //----------------------------------------------------------------------------------------------------
@@ -674,7 +700,7 @@ extern const char* type2name_tab[T_CONFLICT+1];     // Map a BasicType to a jcha
 inline const char* type2name(BasicType t) { return (uint)t < T_CONFLICT+1 ? type2name_tab[t] : NULL; }
 extern BasicType name2type(const char* name);
 
-// Auxilary math routines
+// Auxiliary math routines
 // least common multiple
 extern size_t lcm(size_t a, size_t b);
 
@@ -797,7 +823,7 @@ class JavaValue {
 
 // TosState describes the top-of-stack state before and after the execution of
 // a bytecode or method. The top-of-stack value may be cached in one or more CPU
-// registers. The TosState corresponds to the 'machine represention' of this cached
+// registers. The TosState corresponds to the 'machine representation' of this cached
 // value. There's 4 states corresponding to the JAVA types int, long, float & double
 // as well as a 5th state in case the top-of-stack value is actually on the top
 // of stack (in memory) and thus not cached. The atos state corresponds to the itos
@@ -806,14 +832,15 @@ class JavaValue {
 
 enum TosState {         // describes the tos cache contents
   btos = 0,             // byte, bool tos cached
-  ctos = 1,             // char tos cached
-  stos = 2,             // short tos cached
-  itos = 3,             // int tos cached
-  ltos = 4,             // long tos cached
-  ftos = 5,             // float tos cached
-  dtos = 6,             // double tos cached
-  atos = 7,             // object cached
-  vtos = 8,             // tos not cached
+  ztos = 1,             // byte, bool tos cached
+  ctos = 2,             // char tos cached
+  stos = 3,             // short tos cached
+  itos = 4,             // int tos cached
+  ltos = 5,             // long tos cached
+  ftos = 6,             // float tos cached
+  dtos = 7,             // double tos cached
+  atos = 8,             // object cached
+  vtos = 9,             // tos not cached
   number_of_states,
   ilgl                  // illegal state: should not occur
 };
@@ -822,7 +849,7 @@ enum TosState {         // describes the tos cache contents
 inline TosState as_TosState(BasicType type) {
   switch (type) {
     case T_BYTE   : return btos;
-    case T_BOOLEAN: return btos; // FIXME: Add ztos
+    case T_BOOLEAN: return ztos;
     case T_CHAR   : return ctos;
     case T_SHORT  : return stos;
     case T_INT    : return itos;
@@ -838,8 +865,8 @@ inline TosState as_TosState(BasicType type) {
 
 inline BasicType as_BasicType(TosState state) {
   switch (state) {
-    //case ztos: return T_BOOLEAN;//FIXME
     case btos : return T_BYTE;
+    case ztos : return T_BOOLEAN;
     case ctos : return T_CHAR;
     case stos : return T_SHORT;
     case itos : return T_INT;
@@ -872,7 +899,7 @@ TosState as_TosState(BasicType type);
 // a transition from one state to another. These extra states makes it possible for the safepoint code to
 // handle certain thread_states without having to suspend the thread - making the safepoint code faster.
 //
-// Given a state, the xxx_trans state can always be found by adding 1.
+// Given a state, the xxxx_trans state can always be found by adding 1.
 //
 enum JavaThreadState {
   _thread_uninitialized     =  0, // should never happen (missing initialization)
@@ -890,62 +917,12 @@ enum JavaThreadState {
 };
 
 
-// Handy constants for deciding which compiler mode to use.
-enum MethodCompilation {
-  InvocationEntryBci = -1     // i.e., not a on-stack replacement compilation
-};
-
-// Enumeration to distinguish tiers of compilation
-enum CompLevel {
-  CompLevel_any               = -1,
-  CompLevel_all               = -1,
-  CompLevel_none              = 0,         // Interpreter
-  CompLevel_simple            = 1,         // C1
-  CompLevel_limited_profile   = 2,         // C1, invocation & backedge counters
-  CompLevel_full_profile      = 3,         // C1, invocation & backedge counters + mdo
-  CompLevel_full_optimization = 4,         // C2 or Shark
-
-#if defined(COMPILER2) || defined(SHARK)
-  CompLevel_highest_tier      = CompLevel_full_optimization,  // pure C2 and tiered
-#elif defined(COMPILER1)
-  CompLevel_highest_tier      = CompLevel_simple,             // pure C1
-#else
-  CompLevel_highest_tier      = CompLevel_none,
-#endif
-
-#if defined(TIERED)
-  CompLevel_initial_compile   = CompLevel_full_profile        // tiered
-#elif defined(COMPILER1)
-  CompLevel_initial_compile   = CompLevel_simple              // pure C1
-#elif defined(COMPILER2) || defined(SHARK)
-  CompLevel_initial_compile   = CompLevel_full_optimization   // pure C2
-#else
-  CompLevel_initial_compile   = CompLevel_none
-#endif
-};
-
-inline bool is_c1_compile(int comp_level) {
-  return comp_level > CompLevel_none && comp_level < CompLevel_full_optimization;
-}
-
-inline bool is_c2_compile(int comp_level) {
-  return comp_level == CompLevel_full_optimization;
-}
-
-inline bool is_highest_tier_compile(int comp_level) {
-  return comp_level == CompLevel_highest_tier;
-}
-
-inline bool is_compile(int comp_level) {
-  return is_c1_compile(comp_level) || is_c2_compile(comp_level);
-}
 
 //----------------------------------------------------------------------------------------------------
 // 'Forward' declarations of frequently used classes
 // (in order to reduce interface dependencies & reduce
 // number of unnecessary compilations after changes)
 
-class symbolTable;
 class ClassFileStream;
 
 class Event;
@@ -959,7 +936,9 @@ class VM_Operation;
 class VMOperationQueue;
 
 class CodeBlob;
-class  nmethod;
+class  CompiledMethod;
+class   nmethod;
+class RuntimeBlob;
 class  OSRAdapter;
 class  I2CAdapter;
 class  C2IAdapter;
@@ -1053,6 +1032,7 @@ const int      badHandleValue   = 0xBC;                     // value used to zap
 const int      badResourceValue = 0xAB;                     // value used to zap resource area
 const int      freeBlockPad     = 0xBA;                     // value used to pad freed blocks.
 const int      uninitBlockPad   = 0xF1;                     // value used to zap newly malloc'd blocks.
+const juint    uninitMetaWordVal= 0xf7f7f7f7;               // value used to zap newly allocated metachunk
 const intptr_t badJNIHandleVal  = (intptr_t) UCONST64(0xFEFEFEFEFEFEFEFE); // value used to zap jni handle area
 const juint    badHeapWordVal   = 0xBAADBABE;               // value used to zap heap after GC
 const juint    badMetaWordVal   = 0xBAADFADE;               // value used to zap metadata heap after GC
@@ -1080,9 +1060,9 @@ const intptr_t OneBit     =  1; // only right_most bit set in a word
 
 // get a word with the n.th or the right-most or left-most n bits set
 // (note: #define used only so that they can be used in enum constant definitions)
-#define nth_bit(n)        (n >= BitsPerWord ? 0 : OneBit << (n))
+#define nth_bit(n)        (((n) >= BitsPerWord) ? 0 : (OneBit << (n)))
 #define right_n_bits(n)   (nth_bit(n) - 1)
-#define left_n_bits(n)    (right_n_bits(n) << (n >= BitsPerWord ? 0 : (BitsPerWord - n)))
+#define left_n_bits(n)    (right_n_bits(n) << (((n) >= BitsPerWord) ? 0 : (BitsPerWord - (n))))
 
 // bit-operations using a mask m
 inline void   set_bits    (intptr_t& x, intptr_t m) { x |= m; }
@@ -1115,8 +1095,11 @@ inline intptr_t bitfield(intptr_t x, int start_bit_no, int field_length) {
 #undef min
 #endif
 
-#define max(a,b) Do_not_use_max_use_MAX2_instead
-#define min(a,b) Do_not_use_min_use_MIN2_instead
+// The following defines serve the purpose of preventing use of accidentally
+// included min max macros from compiling, while continuing to allow innocent
+// min and max identifiers in the code to compile as intended.
+#define max max
+#define min min
 
 // It is necessary to use templates here. Having normal overloaded
 // functions does not work because it is necessary to provide both 32-
@@ -1413,15 +1396,33 @@ template<class T> static void swap(T& a, T& b) {
 #define UINTX_FORMAT_W(width) "%" #width PRIuPTR
 
 
-// Enable zap-a-lot if in debug version.
-
-# ifdef ASSERT
-# ifdef COMPILER2
-#   define ENABLE_ZAP_DEAD_LOCALS
-#endif /* COMPILER2 */
-# endif /* ASSERT */
-
 #define ARRAY_SIZE(array) (sizeof(array)/sizeof((array)[0]))
+
+//----------------------------------------------------------------------------------------------------
+// Sum and product which can never overflow: they wrap, just like the
+// Java operations.  Note that we don't intend these to be used for
+// general-purpose arithmetic: their purpose is to emulate Java
+// operations.
+
+// The goal of this code to avoid undefined or implementation-defined
+// behavior.  The use of an lvalue to reference cast is explicitly
+// permitted by Lvalues and rvalues [basic.lval].  [Section 3.10 Para
+// 15 in C++03]
+#define JAVA_INTEGER_OP(OP, NAME, TYPE, UNSIGNED_TYPE)  \
+inline TYPE NAME (TYPE in1, TYPE in2) {                 \
+  UNSIGNED_TYPE ures = static_cast<UNSIGNED_TYPE>(in1); \
+  ures OP ## = static_cast<UNSIGNED_TYPE>(in2);         \
+  return reinterpret_cast<TYPE&>(ures);                 \
+}
+
+JAVA_INTEGER_OP(+, java_add, jint, juint)
+JAVA_INTEGER_OP(-, java_subtract, jint, juint)
+JAVA_INTEGER_OP(*, java_multiply, jint, juint)
+JAVA_INTEGER_OP(+, java_add, jlong, julong)
+JAVA_INTEGER_OP(-, java_subtract, jlong, julong)
+JAVA_INTEGER_OP(*, java_multiply, jlong, julong)
+
+#undef JAVA_INTEGER_OP
 
 // Dereference vptr
 // All C++ compilers that we know of have the vtbl pointer in the first
@@ -1430,15 +1431,5 @@ template<class T> static void swap(T& a, T& b) {
 static inline void* dereference_vptr(const void* addr) {
   return *(void**)addr;
 }
-
-#ifndef PRODUCT
-
-// For unit testing only
-class GlobalDefinitions {
-public:
-  static void test_globals();
-};
-
-#endif // PRODUCT
 
 #endif // SHARE_VM_UTILITIES_GLOBALDEFINITIONS_HPP

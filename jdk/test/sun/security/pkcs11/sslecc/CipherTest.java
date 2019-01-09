@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,7 +28,6 @@ import java.util.concurrent.*;
 
 import java.security.*;
 import java.security.cert.*;
-import java.security.cert.Certificate;
 
 import javax.net.ssl.*;
 
@@ -47,7 +46,8 @@ public class CipherTest {
     // use any available port for the server socket
     static volatile int serverPort = 0;
 
-    final int THREADS;
+    static final int THREADS = Integer.getInteger("numThreads", 4);
+    static final String TEST_SRC = System.getProperty("test.src", ".");
 
     // assume that if we do not read anything for 20 seconds, something
     // has gone wrong
@@ -60,6 +60,8 @@ public class CipherTest {
 
     private static PeerFactory peerFactory;
 
+    static final CountDownLatch clientCondition = new CountDownLatch(1);
+
     static abstract class Server implements Runnable {
 
         final CipherTest cipherTest;
@@ -68,6 +70,7 @@ public class CipherTest {
             this.cipherTest = cipherTest;
         }
 
+        @Override
         public abstract void run();
 
         void handleRequest(InputStream in, OutputStream out) throws IOException {
@@ -117,6 +120,7 @@ public class CipherTest {
             return TLSCipherStatus.isEnabled(cipherSuite, protocol);
         }
 
+        @Override
         public String toString() {
             String s = cipherSuite + " in " + protocol + " mode";
             if (clientAuth != null) {
@@ -260,7 +264,6 @@ public class CipherTest {
     private boolean failed;
 
     private CipherTest(PeerFactory peerFactory) throws IOException {
-        THREADS = Integer.parseInt(System.getProperty("numThreads", "4"));
         factory = (SSLSocketFactory)SSLSocketFactory.getDefault();
         SSLSocket socket = (SSLSocket)factory.createSocket();
         String[] cipherSuites = socket.getSupportedCipherSuites();
@@ -311,6 +314,10 @@ public class CipherTest {
             }
             threads[i].start();
         }
+
+        // The client threads are ready.
+        clientCondition.countDown();
+
         try {
             for (int i = 0; i < THREADS; i++) {
                 threads[i].join();
@@ -350,6 +357,7 @@ public class CipherTest {
             this.cipherTest = cipherTest;
         }
 
+        @Override
         public final void run() {
             while (true) {
                 TestParameters params = cipherTest.getTest();
@@ -364,6 +372,10 @@ public class CipherTest {
                 try {
                     runTest(params);
                     System.out.println("Passed " + params);
+                } catch (SocketTimeoutException ste) {
+                    System.out.println("The client connects to the server timeout, "
+                            + "so ignore the test.");
+                    break;
                 } catch (Exception e) {
                     cipherTest.setFailed();
                     System.out.println("** Failed " + params + "**");
@@ -405,10 +417,11 @@ public class CipherTest {
 
     private static KeyStore readKeyStore(String name) throws Exception {
         File file = new File(PATH, name);
-        InputStream in = new FileInputStream(file);
-        KeyStore ks = KeyStore.getInstance("JKS");
-        ks.load(in, passwd);
-        in.close();
+        KeyStore ks;
+        try (InputStream in = new FileInputStream(file)) {
+            ks = KeyStore.getInstance("JKS");
+            ks.load(in, passwd);
+        }
         return ks;
     }
 
@@ -421,7 +434,7 @@ public class CipherTest {
         } else {
             relPath = pathToStores;
         }
-        PATH = new File(System.getProperty("test.src", "."), relPath);
+        PATH = new File(TEST_SRC, relPath);
         CipherTest.peerFactory = peerFactory;
         System.out.print(
             "Initializing test '" + peerFactory.getName() + "'...");
@@ -494,16 +507,19 @@ class AlwaysTrustManager implements X509TrustManager {
 
     }
 
+    @Override
     public void checkClientTrusted(X509Certificate[] chain, String authType)
             throws CertificateException {
         // empty
     }
 
+    @Override
     public void checkServerTrusted(X509Certificate[] chain, String authType)
             throws CertificateException {
         // empty
     }
 
+    @Override
     public X509Certificate[] getAcceptedIssuers() {
         return new X509Certificate[0];
     }
@@ -522,6 +538,7 @@ class MyX509KeyManager extends X509ExtendedKeyManager {
         this.authType = "ECDSA".equals(authType) ? "EC" : authType;
     }
 
+    @Override
     public String[] getClientAliases(String keyType, Principal[] issuers) {
         if (authType == null) {
             return null;
@@ -529,6 +546,7 @@ class MyX509KeyManager extends X509ExtendedKeyManager {
         return keyManager.getClientAliases(authType, issuers);
     }
 
+    @Override
     public String chooseClientAlias(String[] keyType, Principal[] issuers,
             Socket socket) {
         if (authType == null) {
@@ -538,6 +556,7 @@ class MyX509KeyManager extends X509ExtendedKeyManager {
             issuers, socket);
     }
 
+    @Override
     public String chooseEngineClientAlias(String[] keyType,
             Principal[] issuers, SSLEngine engine) {
         if (authType == null) {
@@ -547,24 +566,29 @@ class MyX509KeyManager extends X509ExtendedKeyManager {
             issuers, engine);
     }
 
+    @Override
     public String[] getServerAliases(String keyType, Principal[] issuers) {
         throw new UnsupportedOperationException("Servers not supported");
     }
 
+    @Override
     public String chooseServerAlias(String keyType, Principal[] issuers,
             Socket socket) {
         throw new UnsupportedOperationException("Servers not supported");
     }
 
+    @Override
     public String chooseEngineServerAlias(String keyType, Principal[] issuers,
             SSLEngine engine) {
         throw new UnsupportedOperationException("Servers not supported");
     }
 
+    @Override
     public X509Certificate[] getCertificateChain(String alias) {
         return keyManager.getCertificateChain(alias);
     }
 
+    @Override
     public PrivateKey getPrivateKey(String alias) {
         return keyManager.getPrivateKey(alias);
     }
@@ -577,6 +601,7 @@ class DaemonThreadFactory implements ThreadFactory {
 
     private final static ThreadFactory DEFAULT = Executors.defaultThreadFactory();
 
+    @Override
     public Thread newThread(Runnable r) {
         Thread t = DEFAULT.newThread(r);
         t.setDaemon(true);

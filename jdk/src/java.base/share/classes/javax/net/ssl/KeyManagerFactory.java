@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@ package javax.net.ssl;
 
 import java.security.Security;
 import java.security.*;
+import java.util.Objects;
 
 import sun.security.jca.GetInstance;
 
@@ -61,7 +62,7 @@ public class KeyManagerFactory {
      *          {@code ssl.KeyManagerFactory.algorithm} security property, or an
      *          implementation-specific default if no such property exists.
      */
-    public final static String getDefaultAlgorithm() {
+    public static final String getDefaultAlgorithm() {
         String type;
         type = AccessController.doPrivileged(new PrivilegedAction<>() {
             @Override
@@ -116,23 +117,33 @@ public class KeyManagerFactory {
      * <p> Note that the list of registered providers may be retrieved via
      * the {@link Security#getProviders() Security.getProviders()} method.
      *
+     * @implNote
+     * The JDK Reference Implementation additionally uses the
+     * {@code jdk.security.provider.preferred}
+     * {@link Security#getProperty(String) Security} property to determine
+     * the preferred provider order for the specified algorithm. This
+     * may be different than the order of providers returned by
+     * {@link Security#getProviders() Security.getProviders()}.
+     *
      * @param algorithm the standard name of the requested algorithm.
      *          See the <a href=
-     *  "{@docRoot}/../technotes/guides/security/jsse/JSSERefGuide.html">
-     *          Java Secure Socket Extension Reference Guide </a>
+     *          "{@docRoot}/../specs/security/standard-names.html">
+     *          Java Security Standard Algorithm Names</a> document
      *          for information about standard algorithm names.
      *
-     * @return the new <code>KeyManagerFactory</code> object.
+     * @return the new {@code KeyManagerFactory} object
      *
-     * @exception NoSuchAlgorithmException if no Provider supports a
-     *          KeyManagerFactorySpi implementation for the
-     *          specified algorithm.
-     * @exception NullPointerException if <code>algorithm</code> is null.
+     * @throws NoSuchAlgorithmException if no {@code Provider} supports a
+     *         {@code KeyManagerFactorySpi} implementation for the
+     *         specified algorithm
+     *
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final KeyManagerFactory getInstance(String algorithm)
             throws NoSuchAlgorithmException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         GetInstance.Instance instance = GetInstance.getInstance
                 ("KeyManagerFactory", KeyManagerFactorySpi.class,
                 algorithm);
@@ -154,29 +165,32 @@ public class KeyManagerFactory {
 
      * @param algorithm the standard name of the requested algorithm.
      *          See the <a href=
-     *  "{@docRoot}/../technotes/guides/security/jsse/JSSERefGuide.html">
-     *          Java Secure Socket Extension Reference Guide </a>
+     *          "{@docRoot}/../specs/security/standard-names.html">
+     *          Java Security Standard Algorithm Names</a> document
      *          for information about standard algorithm names.
      *
      * @param provider the name of the provider.
      *
-     * @return the new <code>KeyManagerFactory</code> object.
+     * @return the new {@code KeyManagerFactory} object
      *
-     * @throws NoSuchAlgorithmException if a KeyManagerFactorySpi
-     *          implementation for the specified algorithm is not
-     *          available from the specified provider.
+     * @throws IllegalArgumentException if the provider name is {@code null}
+     *         or empty
+     *
+     * @throws NoSuchAlgorithmException if a {@code KeyManagerFactorySpi}
+     *         implementation for the specified algorithm is not
+     *         available from the specified provider
      *
      * @throws NoSuchProviderException if the specified provider is not
-     *          registered in the security provider list.
+     *         registered in the security provider list
      *
-     * @throws IllegalArgumentException if the provider name is null or empty.
-     * @throws NullPointerException if <code>algorithm</code> is null.
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final KeyManagerFactory getInstance(String algorithm,
             String provider) throws NoSuchAlgorithmException,
             NoSuchProviderException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         GetInstance.Instance instance = GetInstance.getInstance
                 ("KeyManagerFactory", KeyManagerFactorySpi.class,
                 algorithm, provider);
@@ -195,25 +209,27 @@ public class KeyManagerFactory {
      *
      * @param algorithm the standard name of the requested algorithm.
      *          See the <a href=
-     *  "{@docRoot}/../technotes/guides/security/jsse/JSSERefGuide.html">
-     *          Java Secure Socket Extension Reference Guide </a>
+     *          "{@docRoot}/../specs/security/standard-names.html">
+     *          Java Security Standard Algorithm Names</a> document
      *          for information about standard algorithm names.
      *
      * @param provider an instance of the provider.
      *
-     * @return the new <code>KeyManagerFactory</code> object.
+     * @return the new {@code KeyManagerFactory} object
      *
-     * @throws NoSuchAlgorithmException if a KeyManagerFactorySpi
-     *          implementation for the specified algorithm is not available
-     *          from the specified Provider object.
+     * @throws IllegalArgumentException if provider is {@code null}
      *
-     * @throws IllegalArgumentException if provider is null.
-     * @throws NullPointerException if <code>algorithm</code> is null.
+     * @throws NoSuchAlgorithmException if a {@code @KeyManagerFactorySpi}
+     *         implementation for the specified algorithm is not available
+     *         from the specified Provider object
+     *
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final KeyManagerFactory getInstance(String algorithm,
             Provider provider) throws NoSuchAlgorithmException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         GetInstance.Instance instance = GetInstance.getInstance
                 ("KeyManagerFactory", KeyManagerFactorySpi.class,
                 algorithm, provider);

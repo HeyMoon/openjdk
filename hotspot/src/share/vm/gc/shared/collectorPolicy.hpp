@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,7 @@
 #define SHARE_VM_GC_SHARED_COLLECTORPOLICY_HPP
 
 #include "gc/shared/barrierSet.hpp"
-#include "gc/shared/genRemSet.hpp"
+#include "gc/shared/cardTableRS.hpp"
 #include "gc/shared/generationSpec.hpp"
 #include "memory/allocation.hpp"
 #include "utilities/macros.hpp"
@@ -58,8 +58,6 @@ class MarkSweepPolicy;
 
 class CollectorPolicy : public CHeapObj<mtGC> {
  protected:
-  GCPolicyCounters* _gc_policy_counters;
-
   virtual void initialize_alignments() = 0;
   virtual void initialize_flags();
   virtual void initialize_size_info();
@@ -73,10 +71,6 @@ class CollectorPolicy : public CHeapObj<mtGC> {
 
   size_t _space_alignment;
   size_t _heap_alignment;
-
-  // Needed to keep information if MaxHeapSize was set on the command line
-  // when the flag value is aligned etc by ergonomics.
-  bool _max_heap_size_cmdline;
 
   // The sizing of the heap is controlled by a sizing policy.
   AdaptiveSizePolicy* _size_policy;
@@ -111,13 +105,6 @@ class CollectorPolicy : public CHeapObj<mtGC> {
   size_t max_heap_byte_size()     { return _max_heap_byte_size; }
   size_t min_heap_byte_size()     { return _min_heap_byte_size; }
 
-  enum Name {
-    CollectorPolicyKind,
-    GenCollectorPolicyKind,
-    ConcurrentMarkSweepPolicyKind,
-    G1CollectorPolicyKind
-  };
-
   AdaptiveSizePolicy* size_policy() { return _size_policy; }
   bool should_clear_all_soft_refs() { return _should_clear_all_soft_refs; }
   void set_should_clear_all_soft_refs(bool v) { _should_clear_all_soft_refs = v; }
@@ -136,59 +123,22 @@ class CollectorPolicy : public CHeapObj<mtGC> {
   virtual MarkSweepPolicy*              as_mark_sweep_policy()            { return NULL; }
 #if INCLUDE_ALL_GCS
   virtual ConcurrentMarkSweepPolicy*    as_concurrent_mark_sweep_policy() { return NULL; }
-  virtual G1CollectorPolicy*            as_g1_policy()                    { return NULL; }
 #endif // INCLUDE_ALL_GCS
   // Note that these are not virtual.
   bool is_generation_policy()            { return as_generation_policy() != NULL; }
   bool is_mark_sweep_policy()            { return as_mark_sweep_policy() != NULL; }
 #if INCLUDE_ALL_GCS
   bool is_concurrent_mark_sweep_policy() { return as_concurrent_mark_sweep_policy() != NULL; }
-  bool is_g1_policy()                    { return as_g1_policy() != NULL; }
 #else  // INCLUDE_ALL_GCS
   bool is_concurrent_mark_sweep_policy() { return false; }
-  bool is_g1_policy()                    { return false; }
 #endif // INCLUDE_ALL_GCS
 
 
-  virtual BarrierSet::Name barrier_set_name() = 0;
+  virtual CardTableRS* create_rem_set(MemRegion reserved);
 
-  virtual GenRemSet* create_rem_set(MemRegion reserved);
-
-  // This method controls how a collector satisfies a request
-  // for a block of memory.  "gc_time_limit_was_exceeded" will
-  // be set to true if the adaptive size policy determine that
-  // an excessive amount of time is being spent doing collections
-  // and caused a NULL to be returned.  If a NULL is not returned,
-  // "gc_time_limit_was_exceeded" has an undefined meaning.
-  virtual HeapWord* mem_allocate_work(size_t size,
-                                      bool is_tlab,
-                                      bool* gc_overhead_limit_was_exceeded) = 0;
-
-  // This method controls how a collector handles one or more
-  // of its generations being fully allocated.
-  virtual HeapWord *satisfy_failed_allocation(size_t size, bool is_tlab) = 0;
-  // This method controls how a collector handles a metadata allocation
-  // failure.
-  virtual MetaWord* satisfy_failed_metadata_allocation(ClassLoaderData* loader_data,
-                                                       size_t size,
-                                                       Metaspace::MetadataType mdtype);
-
-  // Performance Counter support
-  GCPolicyCounters* counters()     { return _gc_policy_counters; }
-
-  // Create the jstat counters for the GC policy.  By default, policy's
-  // don't have associated counters, and we complain if this is invoked.
-  virtual void initialize_gc_policy_counters() {
-    ShouldNotReachHere();
-  }
-
-  virtual CollectorPolicy::Name kind() {
-    return CollectorPolicy::CollectorPolicyKind;
-  }
-
-  // Do any updates required to global flags that are due to heap initialization
-  // changes
-  virtual void post_heap_initialize() = 0;
+  MetaWord* satisfy_failed_metadata_allocation(ClassLoaderData* loader_data,
+                                               size_t size,
+                                               Metaspace::MetadataType mdtype);
 };
 
 class ClearedAllSoftRefs : public StackObj {
@@ -224,6 +174,8 @@ class GenCollectorPolicy : public CollectorPolicy {
 
   GenerationSpec* _young_gen_spec;
   GenerationSpec* _old_gen_spec;
+
+  GCPolicyCounters* _gc_policy_counters;
 
   // Return true if an allocation should be attempted in the older generation
   // if it fails in the younger generation.  Return false, otherwise.
@@ -271,6 +223,12 @@ class GenCollectorPolicy : public CollectorPolicy {
     return _old_gen_spec;
   }
 
+  // Performance Counter support
+  GCPolicyCounters* counters()     { return _gc_policy_counters; }
+
+  // Create the jstat counters for the GC policy.
+  virtual void initialize_gc_policy_counters() = 0;
+
   virtual GenCollectorPolicy* as_generation_policy() { return this; }
 
   virtual void initialize_generations() { };
@@ -282,6 +240,8 @@ class GenCollectorPolicy : public CollectorPolicy {
 
   size_t young_gen_size_lower_bound();
 
+  size_t old_gen_size_lower_bound();
+
   HeapWord* mem_allocate_work(size_t size,
                               bool is_tlab,
                               bool* gc_overhead_limit_was_exceeded);
@@ -292,16 +252,6 @@ class GenCollectorPolicy : public CollectorPolicy {
   virtual void initialize_size_policy(size_t init_eden_size,
                                       size_t init_promo_size,
                                       size_t init_survivor_size);
-
-  virtual void post_heap_initialize() {
-    assert(_max_young_size == MaxNewSize, "Should be taken care of by initialize_size_info");
-  }
-
-  BarrierSet::Name barrier_set_name()  { return BarrierSet::CardTableModRef; }
-
-  virtual CollectorPolicy::Name kind() {
-    return CollectorPolicy::GenCollectorPolicyKind;
-  }
 };
 
 class MarkSweepPolicy : public GenCollectorPolicy {

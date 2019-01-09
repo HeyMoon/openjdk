@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,8 +43,6 @@
 #ifdef COMPILER2
 #include "opto/runtime.hpp"
 #endif
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 int vframeArrayElement:: bci(void) const { return (_bci == SynchronizationEntryBCI ? 0 : _bci); }
 
@@ -173,6 +171,8 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
                                          int exec_mode) {
   JavaThread* thread = (JavaThread*) Thread::current();
 
+  bool realloc_failure_exception = thread->frames_to_pop_failed_realloc() > 0;
+
   // Look at bci and decide on bcp and continuation pc
   address bcp;
   // C++ interpreter doesn't need a pc since it will figure out what to do when it
@@ -206,10 +206,12 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
   //
   // For Compiler1, deoptimization can occur while throwing a NullPointerException at monitorenter,
   // in which case bcp should point to the monitorenter since it is within the exception's range.
+  //
+  // For realloc failure exception we just pop frames, skip the guarantee.
 
   assert(*bcp != Bytecodes::_monitorenter || is_top_frame, "a _monitorenter must be a top frame");
-  assert(thread->deopt_nmethod() != NULL, "nmethod should be known");
-  guarantee(!(thread->deopt_nmethod()->is_compiled_by_c2() &&
+  assert(thread->deopt_compiled_method() != NULL, "compiled method should be known");
+  guarantee(realloc_failure_exception || !(thread->deopt_compiled_method()->is_compiled_by_c2() &&
               *bcp == Bytecodes::_monitorenter             &&
               exec_mode == Deoptimization::Unpack_exception),
             "shouldn't get exception during monitorenter");
@@ -239,12 +241,17 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
         // Deoptimization::fetch_unroll_info_helper
         popframe_preserved_args_size_in_words = in_words(thread->popframe_preserved_args_size_in_words());
       }
-    } else if (JvmtiExport::can_force_early_return() && state != NULL && state->is_earlyret_pending()) {
+    } else if (!realloc_failure_exception && JvmtiExport::can_force_early_return() && state != NULL && state->is_earlyret_pending()) {
       // Force early return from top frame after deoptimization
 #ifndef CC_INTERP
       pc = Interpreter::remove_activation_early_entry(state->earlyret_tos());
 #endif
     } else {
+      if (realloc_failure_exception && JvmtiExport::can_force_early_return() && state != NULL && state->is_earlyret_pending()) {
+        state->clr_earlyret_pending();
+        state->set_earlyret_oop(NULL);
+        state->clr_earlyret_value();
+      }
       // Possibly override the previous pc computation of the top (youngest) frame
       switch (exec_mode) {
       case Deoptimization::Unpack_deopt:
@@ -294,7 +301,7 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
 
   _frame.patch_pc(thread, pc);
 
-  assert (!method()->is_synchronized() || locks > 0 || _removed_monitors, "synchronized methods must have monitors");
+  assert (!method()->is_synchronized() || locks > 0 || _removed_monitors || raw_bci() == SynchronizationEntryBCI, "synchronized methods must have monitors");
 
   BasicObjectLock* top = iframe()->interpreter_frame_monitor_begin();
   for (int index = 0; index < locks; index++) {
@@ -317,6 +324,10 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
     }
   }
 
+  if (PrintDeoptimizationDetails) {
+    tty->print_cr("Expressions size: %d", expressions()->size());
+  }
+
   // Unpack expression stack
   // If this is an intermediate frame (i.e. not top frame) then this
   // only unpacks the part of the expression stack not used by callee
@@ -329,9 +340,26 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
     switch(value->type()) {
       case T_INT:
         *addr = value->get_int();
+#ifndef PRODUCT
+        if (PrintDeoptimizationDetails) {
+          tty->print_cr("Reconstructed expression %d (INT): %d", i, (int)(*addr));
+        }
+#endif
         break;
       case T_OBJECT:
         *addr = value->get_int(T_OBJECT);
+#ifndef PRODUCT
+        if (PrintDeoptimizationDetails) {
+          tty->print("Reconstructed expression %d (OBJECT): ", i);
+          oop o = (oop)(address)(*addr);
+          if (o == NULL) {
+            tty->print_cr("NULL");
+          } else {
+            ResourceMark rm;
+            tty->print_raw_cr(o->klass()->name()->as_C_string());
+          }
+        }
+#endif
         break;
       case T_CONFLICT:
         // A dead stack slot.  Initialize to null in case it is an oop.
@@ -350,9 +378,26 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
     switch(value->type()) {
       case T_INT:
         *addr = value->get_int();
+#ifndef PRODUCT
+        if (PrintDeoptimizationDetails) {
+          tty->print_cr("Reconstructed local %d (INT): %d", i, (int)(*addr));
+        }
+#endif
         break;
       case T_OBJECT:
         *addr = value->get_int(T_OBJECT);
+#ifndef PRODUCT
+        if (PrintDeoptimizationDetails) {
+          tty->print("Reconstructed local %d (OBJECT): ", i);
+          oop o = (oop)(address)(*addr);
+          if (o == NULL) {
+            tty->print_cr("NULL");
+          } else {
+            ResourceMark rm;
+            tty->print_raw_cr(o->klass()->name()->as_C_string());
+          }
+        }
+#endif
         break;
       case T_CONFLICT:
         // A dead location. If it is an oop then we need a NULL to prevent GC from following it
@@ -394,7 +439,7 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
   }
 
 #ifndef PRODUCT
-  if (TraceDeoptimization && Verbose) {
+  if (PrintDeoptimizationDetails) {
     ttyLocker ttyl;
     tty->print_cr("[%d Interpreted Frame]", ++unpack_counter);
     iframe()->print_on(tty);
@@ -415,7 +460,7 @@ void vframeArrayElement::unpack_on_stack(int caller_actual_parameters,
     int bci = method()->bci_from(bcp);
     tty->print(" - %s", Bytecodes::name(code));
     tty->print(" @ bci %d ", bci);
-    tty->print_cr("sp = " PTR_FORMAT, iframe()->sp());
+    tty->print_cr("sp = " PTR_FORMAT, p2i(iframe()->sp()));
   }
 #endif // PRODUCT
 
@@ -605,7 +650,7 @@ address vframeArray::register_location(int i) const {
 
 // Note: we cannot have print_on as const, as we allocate inside the method
 void vframeArray::print_on_2(outputStream* st)  {
-  st->print_cr(" - sp: " INTPTR_FORMAT, sp());
+  st->print_cr(" - sp: " INTPTR_FORMAT, p2i(sp()));
   st->print(" - thread: ");
   Thread::current()->print();
   st->print_cr(" - frame size: %d", frame_size());
@@ -615,7 +660,7 @@ void vframeArray::print_on_2(outputStream* st)  {
 }
 
 void vframeArrayElement::print(outputStream* st) {
-  st->print_cr(" - interpreter_frame -> sp: " INTPTR_FORMAT, iframe()->sp());
+  st->print_cr(" - interpreter_frame -> sp: " INTPTR_FORMAT, p2i(iframe()->sp()));
 }
 
 void vframeArray::print_value_on(outputStream* st) const {

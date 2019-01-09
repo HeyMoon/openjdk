@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,10 +25,8 @@
 #include "precompiled.hpp"
 #include "gc/g1/collectionSetChooser.hpp"
 #include "gc/g1/g1CollectedHeap.inline.hpp"
-#include "gc/g1/g1CollectorPolicy.hpp"
-#include "gc/g1/g1ErgoVerbose.hpp"
 #include "gc/shared/space.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 
 // Even though we don't use the GC efficiency in our heuristics as
 // much as we used to, we still order according to GC efficiency. This
@@ -83,7 +81,7 @@ CollectionSetChooser::CollectionSetChooser() :
   _regions((ResourceObj::set_allocation_type((address) &_regions,
                                              ResourceObj::C_HEAP),
                   100), true /* C_Heap */),
-    _curr_index(0), _length(0), _first_par_unreserved_idx(0),
+    _front(0), _end(0), _first_par_unreserved_idx(0),
     _region_live_threshold_bytes(0), _remaining_reclaimable_bytes(0) {
   _region_live_threshold_bytes =
     HeapRegion::GrainBytes * (size_t) G1MixedGCLiveThresholdPercent / 100;
@@ -91,36 +89,34 @@ CollectionSetChooser::CollectionSetChooser() :
 
 #ifndef PRODUCT
 void CollectionSetChooser::verify() {
-  guarantee(_length <= regions_length(),
-         err_msg("_length: %u regions length: %u", _length, regions_length()));
-  guarantee(_curr_index <= _length,
-            err_msg("_curr_index: %u _length: %u", _curr_index, _length));
+  guarantee(_end <= regions_length(), "_end: %u regions length: %u", _end, regions_length());
+  guarantee(_front <= _end, "_front: %u _end: %u", _front, _end);
   uint index = 0;
   size_t sum_of_reclaimable_bytes = 0;
-  while (index < _curr_index) {
+  while (index < _front) {
     guarantee(regions_at(index) == NULL,
-              "all entries before _curr_index should be NULL");
+              "all entries before _front should be NULL");
     index += 1;
   }
   HeapRegion *prev = NULL;
-  while (index < _length) {
+  while (index < _end) {
     HeapRegion *curr = regions_at(index++);
     guarantee(curr != NULL, "Regions in _regions array cannot be NULL");
     guarantee(!curr->is_young(), "should not be young!");
     guarantee(!curr->is_pinned(),
-              err_msg("Pinned region should not be in collection set (index %u)", curr->hrm_index()));
+              "Pinned region should not be in collection set (index %u)", curr->hrm_index());
     if (prev != NULL) {
       guarantee(order_regions(prev, curr) != 1,
-                err_msg("GC eff prev: %1.4f GC eff curr: %1.4f",
-                        prev->gc_efficiency(), curr->gc_efficiency()));
+                "GC eff prev: %1.4f GC eff curr: %1.4f",
+                prev->gc_efficiency(), curr->gc_efficiency());
     }
     sum_of_reclaimable_bytes += curr->reclaimable_bytes();
     prev = curr;
   }
   guarantee(sum_of_reclaimable_bytes == _remaining_reclaimable_bytes,
-            err_msg("reclaimable bytes inconsistent, "
-                    "remaining: " SIZE_FORMAT " sum: " SIZE_FORMAT,
-                    _remaining_reclaimable_bytes, sum_of_reclaimable_bytes));
+            "reclaimable bytes inconsistent, "
+            "remaining: " SIZE_FORMAT " sum: " SIZE_FORMAT,
+            _remaining_reclaimable_bytes, sum_of_reclaimable_bytes);
 }
 #endif // !PRODUCT
 
@@ -132,15 +128,15 @@ void CollectionSetChooser::sort_regions() {
     regions_trunc_to(_first_par_unreserved_idx);
   }
   _regions.sort(order_regions);
-  assert(_length <= regions_length(), "Requirement");
+  assert(_end <= regions_length(), "Requirement");
 #ifdef ASSERT
-  for (uint i = 0; i < _length; i++) {
+  for (uint i = 0; i < _end; i++) {
     assert(regions_at(i) != NULL, "Should be true by sorting!");
   }
 #endif // ASSERT
-  if (G1PrintRegionLivenessInfo) {
-    G1PrintRegionLivenessInfoClosure cl(gclog_or_tty, "Post-Sorting");
-    for (uint i = 0; i < _length; ++i) {
+  if (log_is_enabled(Trace, gc, liveness)) {
+    G1PrintRegionLivenessInfoClosure cl("Post-Sorting");
+    for (uint i = 0; i < _end; ++i) {
       HeapRegion* r = regions_at(i);
       cl.doHeapRegion(r);
     }
@@ -148,15 +144,22 @@ void CollectionSetChooser::sort_regions() {
   verify();
 }
 
-
 void CollectionSetChooser::add_region(HeapRegion* hr) {
   assert(!hr->is_pinned(),
-         err_msg("Pinned region shouldn't be added to the collection set (index %u)", hr->hrm_index()));
+         "Pinned region shouldn't be added to the collection set (index %u)", hr->hrm_index());
   assert(!hr->is_young(), "should not be young!");
   _regions.append(hr);
-  _length++;
+  _end++;
   _remaining_reclaimable_bytes += hr->reclaimable_bytes();
   hr->calc_gc_efficiency();
+}
+
+void CollectionSetChooser::push(HeapRegion* hr) {
+  assert(hr != NULL, "Can't put back a NULL region");
+  assert(_front >= 1, "Too many regions have been put back");
+  _front--;
+  regions_at_put(_front, hr);
+  _remaining_reclaimable_bytes += hr->reclaimable_bytes();
 }
 
 void CollectionSetChooser::prepare_for_par_region_addition(uint n_threads,
@@ -193,7 +196,7 @@ void CollectionSetChooser::update_totals(uint region_num,
     // We could have just used atomics instead of taking the
     // lock. However, we currently don't have an atomic add for size_t.
     MutexLockerEx x(ParGCRareEvent_lock, Mutex::_no_safepoint_check_flag);
-    _length += region_num;
+    _end += region_num;
     _remaining_reclaimable_bytes += reclaimable_bytes;
   } else {
     assert(reclaimable_bytes == 0, "invariant");
@@ -202,7 +205,70 @@ void CollectionSetChooser::update_totals(uint region_num,
 
 void CollectionSetChooser::clear() {
   _regions.clear();
-  _curr_index = 0;
-  _length = 0;
+  _front = 0;
+  _end = 0;
   _remaining_reclaimable_bytes = 0;
+}
+
+class ParKnownGarbageHRClosure: public HeapRegionClosure {
+  G1CollectedHeap* _g1h;
+  CSetChooserParUpdater _cset_updater;
+
+public:
+  ParKnownGarbageHRClosure(CollectionSetChooser* hrSorted,
+                           uint chunk_size) :
+    _g1h(G1CollectedHeap::heap()),
+    _cset_updater(hrSorted, true /* parallel */, chunk_size) { }
+
+  bool doHeapRegion(HeapRegion* r) {
+    // Do we have any marking information for this region?
+    if (r->is_marked()) {
+      // We will skip any region that's currently used as an old GC
+      // alloc region (we should not consider those for collection
+      // before we fill them up).
+      if (_cset_updater.should_add(r) && !_g1h->is_old_gc_alloc_region(r)) {
+        _cset_updater.add_region(r);
+      }
+    }
+    return false;
+  }
 };
+
+class ParKnownGarbageTask: public AbstractGangTask {
+  CollectionSetChooser* _hrSorted;
+  uint _chunk_size;
+  G1CollectedHeap* _g1;
+  HeapRegionClaimer _hrclaimer;
+
+public:
+  ParKnownGarbageTask(CollectionSetChooser* hrSorted, uint chunk_size, uint n_workers) :
+      AbstractGangTask("ParKnownGarbageTask"),
+      _hrSorted(hrSorted), _chunk_size(chunk_size),
+      _g1(G1CollectedHeap::heap()), _hrclaimer(n_workers) {}
+
+  void work(uint worker_id) {
+    ParKnownGarbageHRClosure parKnownGarbageCl(_hrSorted, _chunk_size);
+    _g1->heap_region_par_iterate(&parKnownGarbageCl, worker_id, &_hrclaimer);
+  }
+};
+
+uint CollectionSetChooser::calculate_parallel_work_chunk_size(uint n_workers, uint n_regions) const {
+  assert(n_workers > 0, "Active gc workers should be greater than 0");
+  const uint overpartition_factor = 4;
+  const uint min_chunk_size = MAX2(n_regions / n_workers, 1U);
+  return MAX2(n_regions / (n_workers * overpartition_factor), min_chunk_size);
+}
+
+void CollectionSetChooser::rebuild(WorkGang* workers, uint n_regions) {
+  clear();
+
+  uint n_workers = workers->active_workers();
+
+  uint chunk_size = calculate_parallel_work_chunk_size(n_workers, n_regions);
+  prepare_for_par_region_addition(n_workers, n_regions, chunk_size);
+
+  ParKnownGarbageTask par_known_garbage_task(this, chunk_size, n_workers);
+  workers->run_task(&par_known_garbage_task);
+
+  sort_regions();
+}

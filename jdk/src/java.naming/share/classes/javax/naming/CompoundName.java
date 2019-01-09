@@ -82,7 +82,7 @@ import java.util.Properties;
  *      attribute-value-assertions when specifying multiple attribute/value
  *      pairs. (e.g. ","  in age=65,gender=male).
  *  <dt>jndi.syntax.separator.typeval
- *  <dd>If present, specifies the string that separators attribute
+ *  <dd>If present, specifies the string that separates attribute
  *              from value (e.g. "=" in "age=65")
  *</dl>
  * These properties are interpreted according to the following rules:
@@ -137,9 +137,9 @@ import java.util.Properties;
  * of the original compound name.
  *
  *<h1>Multithreaded Access</h1>
- * A <tt>CompoundName</tt> instance is not synchronized against concurrent
+ * A {@code CompoundName} instance is not synchronized against concurrent
  * multithreaded access. Multiple threads trying to access and modify a
- * <tt>CompoundName</tt> should lock the object.
+ * {@code CompoundName} should lock the object.
  *
  * @author Rosanna Lee
  * @author Scott Seligman
@@ -149,11 +149,10 @@ import java.util.Properties;
 public class CompoundName implements Name {
 
     /**
-      * Implementation of this compound name.
-      * This field is initialized by the constructors and cannot be null.
-      * It should be treated as a read-only variable by subclasses.
-      */
-    protected transient NameImpl impl;
+     * Implementation of this compound name. This field is initialized by the
+     * constructors and cannot be null.
+     */
+    private transient NameImpl impl;
     /**
       * Syntax properties for this compound name.
       * This field is initialized by the constructors and cannot be null.
@@ -194,7 +193,7 @@ public class CompoundName implements Name {
       *                 this compound name.  See class description for
       *                 contents of properties.
       * @exception      InvalidNameException If 'n' violates the syntax specified
-      *                 by <code>syntax</code>.
+      *                 by {@code syntax}.
       */
     public CompoundName(String n, Properties syntax) throws InvalidNameException {
         if (syntax == null) {
@@ -549,9 +548,9 @@ public class CompoundName implements Name {
 
     /**
      * Overridden to avoid implementation dependency.
-     * @serialData The syntax <tt>Properties</tt>, followed by
-     * the number of components (an <tt>int</tt>), and the individual
-     * components (each a <tt>String</tt>).
+     * @serialData The syntax {@code Properties}, followed by
+     * the number of components (an {@code int}), and the individual
+     * components (each a {@code String}).
      */
     private void writeObject(java.io.ObjectOutputStream s)
             throws java.io.IOException {

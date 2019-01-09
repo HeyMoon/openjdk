@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,9 +42,9 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.Callable;
-import jdk.internal.dynalink.CallSiteDescriptor;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.LinkRequest;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.LinkRequest;
 import jdk.nashorn.api.scripting.JSObject;
 import jdk.nashorn.internal.objects.annotations.Attribute;
 import jdk.nashorn.internal.objects.annotations.Constructor;
@@ -61,7 +61,6 @@ import jdk.nashorn.internal.runtime.JSType;
 import jdk.nashorn.internal.runtime.OptimisticBuiltins;
 import jdk.nashorn.internal.runtime.PropertyDescriptor;
 import jdk.nashorn.internal.runtime.PropertyMap;
-import jdk.nashorn.internal.runtime.ScriptFunction;
 import jdk.nashorn.internal.runtime.ScriptObject;
 import jdk.nashorn.internal.runtime.ScriptRuntime;
 import jdk.nashorn.internal.runtime.Undefined;
@@ -70,7 +69,6 @@ import jdk.nashorn.internal.runtime.arrays.ArrayIndex;
 import jdk.nashorn.internal.runtime.arrays.ArrayLikeIterator;
 import jdk.nashorn.internal.runtime.arrays.ContinuousArrayData;
 import jdk.nashorn.internal.runtime.arrays.IntElements;
-import jdk.nashorn.internal.runtime.arrays.IntOrLongElements;
 import jdk.nashorn.internal.runtime.arrays.IteratorAction;
 import jdk.nashorn.internal.runtime.arrays.NumericElements;
 import jdk.nashorn.internal.runtime.linker.Bootstrap;
@@ -100,20 +98,38 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
     }
 
     NativeArray(final long length) {
-        // TODO assert valid index in long before casting
-        this(ArrayData.allocate((int)length));
+        this(ArrayData.allocate(length));
     }
 
     NativeArray(final int[] array) {
         this(ArrayData.allocate(array));
     }
 
-    NativeArray(final long[] array) {
+    NativeArray(final double[] array) {
         this(ArrayData.allocate(array));
     }
 
-    NativeArray(final double[] array) {
-        this(ArrayData.allocate(array));
+    NativeArray(final long[] array) {
+        this(ArrayData.allocate(array.length));
+
+        ArrayData arrayData = this.getArray();
+        Class<?> widest = int.class;
+
+        for (int index = 0; index < array.length; index++) {
+            final long value = array[index];
+
+            if (widest == int.class && JSType.isRepresentableAsInt(value)) {
+                arrayData = arrayData.set(index, (int) value, false);
+            } else if (widest != Object.class && JSType.isRepresentableAsDouble(value)) {
+                arrayData = arrayData.set(index, (double) value, false);
+                widest = double.class;
+            } else {
+                arrayData = arrayData.set(index, (Object) value, false);
+                widest = Object.class;
+            }
+        }
+
+        this.setArray(arrayData);
     }
 
     NativeArray(final Object[] array) {
@@ -142,15 +158,6 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
         super(global.getArrayPrototype(), $nasgenmap$);
         setArray(arrayData);
         setIsArray();
-    }
-
-    @Override
-    protected GuardedInvocation findGetMethod(final CallSiteDescriptor desc, final LinkRequest request, final String operator) {
-        final GuardedInvocation inv = getArray().findFastGetMethod(getArray().getClass(), desc, request, operator);
-        if (inv != null) {
-            return inv;
-        }
-        return super.findGetMethod(desc, request, operator);
     }
 
     @Override
@@ -187,8 +194,8 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             new Callable<MethodHandle>() {
                 @Override
                 public MethodHandle call() {
-                    return Bootstrap.createDynamicInvoker("dyn:call", rtype, Object.class, Object.class, Object.class,
-                        long.class, Object.class);
+                    return Bootstrap.createDynamicCallInvoker(rtype, Object.class, Object.class, Object.class,
+                        double.class, Object.class);
                 }
             });
     }
@@ -218,8 +225,8 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
                 new Callable<MethodHandle>() {
                     @Override
                     public MethodHandle call() {
-                        return Bootstrap.createDynamicInvoker("dyn:call", Object.class, Object.class,
-                             Undefined.class, Object.class, Object.class, long.class, Object.class);
+                        return Bootstrap.createDynamicCallInvoker(Object.class, Object.class,
+                             Undefined.class, Object.class, Object.class, double.class, Object.class);
                     }
                 });
     }
@@ -229,8 +236,8 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
                 new Callable<MethodHandle>() {
                     @Override
                     public MethodHandle call() {
-                        return Bootstrap.createDynamicInvoker("dyn:call", double.class,
-                            ScriptFunction.class, Object.class, Object.class, Object.class);
+                        return Bootstrap.createDynamicCallInvoker(double.class,
+                            Object.class, Object.class, Object.class, Object.class);
                     }
                 });
     }
@@ -255,8 +262,9 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
 
     @Override
     public Object getLength() {
-        final long length = JSType.toUint32(getArray().length());
-        if (length < Integer.MAX_VALUE) {
+        final long length = getArray().length();
+        assert length >= 0L;
+        if (length <= Integer.MAX_VALUE) {
             return (int)length;
         }
         return length;
@@ -274,8 +282,8 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
         // Step 3c and 3d - get new length and convert to long
         final long newLen = NativeArray.validLength(newLenDesc.getValue());
 
-        // Step 3e
-        newLenDesc.setValue(newLen);
+        // Step 3e - note that we need to convert to int or double as long is not considered a JS number type anymore
+        newLenDesc.setValue(JSType.toNarrowestNumber(newLen));
 
         // Step 3f
         // increasing array length - just need to set new length value (and attributes if any) and return
@@ -337,7 +345,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
      * ECMA 15.4.5.1 [[DefineOwnProperty]] ( P, Desc, Throw )
      */
     @Override
-    public boolean defineOwnProperty(final String key, final Object propertyDesc, final boolean reject) {
+    public boolean defineOwnProperty(final Object key, final Object propertyDesc, final boolean reject) {
         final PropertyDescriptor desc = toPropertyDescriptor(Global.instance(), propertyDesc);
 
         // never be undefined as "length" is always defined and can't be deleted for arrays
@@ -378,7 +386,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             // Step 4d
             if (!succeeded) {
                 if (reject) {
-                    throw typeError("cant.redefine.property", key, ScriptRuntime.safeToString(this));
+                    throw typeError("cant.redefine.property", key.toString(), ScriptRuntime.safeToString(this));
                 }
                 return false;
             }
@@ -454,7 +462,13 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
     @Getter(attributes = Attribute.NOT_ENUMERABLE | Attribute.NOT_CONFIGURABLE)
     public static Object length(final Object self) {
         if (isArray(self)) {
-            return JSType.toUint32(((ScriptObject) self).getArray().length());
+            final long length = ((ScriptObject) self).getArray().length();
+            assert length >= 0L;
+            // Cast to the narrowest supported numeric type to help optimistic type calculator
+            if (length <= Integer.MAX_VALUE) {
+                return (int) length;
+            }
+            return (double) length;
         }
 
         return 0;
@@ -733,7 +747,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
      * @param arg argument
      * @return resulting NativeArray
      */
-    @SpecializedFunction(linkLogic=ConcatLinkLogic.class)
+    @SpecializedFunction(linkLogic=ConcatLinkLogic.class, convertsNumericArgs = false)
     public static NativeArray concat(final Object self, final int arg) {
         final ContinuousArrayData newData = getContinuousArrayDataCCE(self, Integer.class).copy(); //get at least an integer data copy of this data
         newData.fastPush(arg); //add an integer to its end
@@ -747,21 +761,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
      * @param arg argument
      * @return resulting NativeArray
      */
-    @SpecializedFunction(linkLogic=ConcatLinkLogic.class)
-    public static NativeArray concat(final Object self, final long arg) {
-        final ContinuousArrayData newData = getContinuousArrayDataCCE(self, Long.class).copy(); //get at least a long array data copy of this data
-        newData.fastPush(arg); //add a long at the end
-        return new NativeArray(newData);
-    }
-
-    /**
-     * ECMA 15.4.4.4 Array.prototype.concat ( [ item1 [ , item2 [ , ... ] ] ] )
-     *
-     * @param self self reference
-     * @param arg argument
-     * @return resulting NativeArray
-     */
-    @SpecializedFunction(linkLogic=ConcatLinkLogic.class)
+    @SpecializedFunction(linkLogic=ConcatLinkLogic.class, convertsNumericArgs = false)
     public static NativeArray concat(final Object self, final double arg) {
         final ContinuousArrayData newData = getContinuousArrayDataCCE(self, Double.class).copy(); //get at least a number array data copy of this data
         newData.fastPush(arg); //add a double at the end
@@ -822,13 +822,12 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
     private static void concatToList(final ArrayList<Object> list, final Object obj) {
         final boolean isScriptArray  = isArray(obj);
         final boolean isScriptObject = isScriptArray || obj instanceof ScriptObject;
-        if (isScriptArray || obj instanceof Iterable || (obj != null && obj.getClass().isArray())) {
+        if (isScriptArray || obj instanceof Iterable || obj instanceof JSObject || (obj != null && obj.getClass().isArray())) {
             final Iterator<Object> iter = arrayLikeIterator(obj, true);
             if (iter.hasNext()) {
                 for (int i = 0; iter.hasNext(); ++i) {
                     final Object value = iter.next();
-                    final boolean lacksIndex = obj != null && !((ScriptObject)obj).has(i);
-                    if (value == ScriptRuntime.UNDEFINED && isScriptObject && lacksIndex) {
+                    if (value == ScriptRuntime.UNDEFINED && isScriptObject && !((ScriptObject)obj).has(i)) {
                         // TODO: eventually rewrite arrayLikeIterator to use a three-state enum for handling
                         // UNDEFINED instead of an "includeUndefined" boolean with states SKIP, INCLUDE,
                         // RETURN_EMPTY. Until then, this is how we'll make sure that empty elements don't make it
@@ -890,21 +889,6 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
     public static int popInt(final Object self) {
         //must be non empty IntArrayData
         return getContinuousNonEmptyArrayDataCCE(self, IntElements.class).fastPopInt();
-    }
-
-    /**
-     * Specialization of pop for ContinuousArrayData
-     *
-     * Primitive specialization, {@link LinkLogic}
-     *
-     * @param self self reference
-     * @return element popped
-     * @throws ClassCastException if array is empty, facilitating Undefined return value
-     */
-    @SpecializedFunction(name="pop", linkLogic=PopLinkLogic.class)
-    public static long popLong(final Object self) {
-        //must be non empty Int or LongArrayData
-        return getContinuousNonEmptyArrayDataCCE(self, IntOrLongElements.class).fastPopLong();
     }
 
     /**
@@ -980,8 +964,8 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
      * @param arg a primitive to push
      * @return array length after push
      */
-    @SpecializedFunction(linkLogic=PushLinkLogic.class)
-    public static long push(final Object self, final int arg) {
+    @SpecializedFunction(linkLogic=PushLinkLogic.class, convertsNumericArgs = false)
+    public static double push(final Object self, final int arg) {
         return getContinuousArrayDataCCE(self, Integer.class).fastPush(arg);
     }
 
@@ -994,22 +978,8 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
      * @param arg a primitive to push
      * @return array length after push
      */
-    @SpecializedFunction(linkLogic=PushLinkLogic.class)
-    public static long push(final Object self, final long arg) {
-        return getContinuousArrayDataCCE(self, Long.class).fastPush(arg);
-    }
-
-    /**
-     * ECMA 15.4.4.7 Array.prototype.push (args...)
-     *
-     * Primitive specialization, {@link LinkLogic}
-     *
-     * @param self self reference
-     * @param arg a primitive to push
-     * @return array length after push
-     */
-    @SpecializedFunction(linkLogic=PushLinkLogic.class)
-    public static long push(final Object self, final double arg) {
+    @SpecializedFunction(linkLogic=PushLinkLogic.class, convertsNumericArgs = false)
+    public static double push(final Object self, final double arg) {
         return getContinuousArrayDataCCE(self, Double.class).fastPush(arg);
     }
 
@@ -1023,7 +993,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
      * @return array length after push
      */
     @SpecializedFunction(name="push", linkLogic=PushLinkLogic.class)
-    public static long pushObject(final Object self, final Object arg) {
+    public static double pushObject(final Object self, final Object arg) {
         return getContinuousArrayDataCCE(self, Object.class).fastPush(arg);
     }
 
@@ -1042,7 +1012,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             if (bulkable(sobj) && sobj.getArray().length() + args.length <= JSType.MAX_UINT) {
                 final ArrayData newData = sobj.getArray().push(true, args);
                 sobj.setArray(newData);
-                return newData.length();
+                return JSType.toNarrowestNumber(newData.length());
             }
 
             long len = JSType.toUint32(sobj.getLength());
@@ -1051,7 +1021,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             }
             sobj.set("length", len, CALLSITE_STRICT);
 
-            return len;
+            return JSType.toNarrowestNumber(len);
         } catch (final ClassCastException | NullPointerException e) {
             throw typeError(Context.getGlobal(), e, "not.an.object", ScriptRuntime.safeToString(self));
         }
@@ -1065,7 +1035,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
      * @return array after pushes
      */
     @SpecializedFunction
-    public static long push(final Object self, final Object arg) {
+    public static double push(final Object self, final Object arg) {
         try {
             final ScriptObject sobj = (ScriptObject)self;
             final ArrayData arrayData = sobj.getArray();
@@ -1210,23 +1180,23 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
         return copy;
     }
 
-    private static ScriptFunction compareFunction(final Object comparefn) {
+    private static Object compareFunction(final Object comparefn) {
         if (comparefn == ScriptRuntime.UNDEFINED) {
             return null;
         }
 
-        if (! (comparefn instanceof ScriptFunction)) {
+        if (!Bootstrap.isCallable(comparefn)) {
             throw typeError("not.a.function", ScriptRuntime.safeToString(comparefn));
         }
 
-        return (ScriptFunction)comparefn;
+        return comparefn;
     }
 
     private static Object[] sort(final Object[] array, final Object comparefn) {
-        final ScriptFunction cmp = compareFunction(comparefn);
+        final Object cmp = compareFunction(comparefn);
 
         final List<Object> list = Arrays.asList(array);
-        final Object cmpThis = cmp == null || cmp.isStrict() ? ScriptRuntime.UNDEFINED : Global.instance();
+        final Object cmpThis = cmp == null || Bootstrap.isStrictCallable(cmp) ? ScriptRuntime.UNDEFINED : Global.instance();
 
         try {
             Collections.sort(list, new Comparator<Object>() {
@@ -1264,7 +1234,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             // behaviour of sort is implementation-defined.
         }
 
-        return list.toArray(new Object[array.length]);
+        return list.toArray(new Object[0]);
     }
 
     /**
@@ -1329,30 +1299,31 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             return ScriptRuntime.UNDEFINED;
         }
 
-        final Object start = args.length > 0 ? args[0] : ScriptRuntime.UNDEFINED;
-        final Object deleteCount = args.length > 1 ? args[1] : ScriptRuntime.UNDEFINED;
-
-        Object[] items;
-
-        if (args.length > 2) {
-            items = new Object[args.length - 2];
-            System.arraycopy(args, 2, items, 0, items.length);
-        } else {
-            items = ScriptRuntime.EMPTY_ARRAY;
-        }
-
-        final ScriptObject sobj                = (ScriptObject)obj;
-        final long         len                 = JSType.toUint32(sobj.getLength());
-        final long         relativeStart       = JSType.toLong(start);
+        final ScriptObject sobj          = (ScriptObject)obj;
+        final long         len           = JSType.toUint32(sobj.getLength());
+        final long         relativeStart = JSType.toLong(args.length > 0 ? args[0] : ScriptRuntime.UNDEFINED);
 
         final long actualStart = relativeStart < 0 ? Math.max(len + relativeStart, 0) : Math.min(relativeStart, len);
-        final long actualDeleteCount = Math.min(Math.max(JSType.toLong(deleteCount), 0), len - actualStart);
+        final long actualDeleteCount;
+        Object[] items = ScriptRuntime.EMPTY_ARRAY;
+
+        if (args.length == 0) {
+            actualDeleteCount = 0;
+        } else if (args.length == 1) {
+            actualDeleteCount = len - actualStart;
+        } else {
+            actualDeleteCount = Math.min(Math.max(JSType.toLong(args[1]), 0), len - actualStart);
+            if (args.length > 2) {
+                items = new Object[args.length - 2];
+                System.arraycopy(args, 2, items, 0, items.length);
+            }
+        }
 
         NativeArray returnValue;
 
         if (actualStart <= Integer.MAX_VALUE && actualDeleteCount <= Integer.MAX_VALUE && bulkable(sobj)) {
             try {
-                returnValue =  new NativeArray(sobj.getArray().fastSplice((int)actualStart, (int)actualDeleteCount, items.length));
+                returnValue = new NativeArray(sobj.getArray().fastSplice((int)actualStart, (int)actualDeleteCount, items.length));
 
                 // Since this is a dense bulkable array we can use faster defineOwnProperty to copy new elements
                 int k = (int) actualStart;
@@ -1470,7 +1441,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
         final long newLength = len + items.length;
         sobj.set("length", newLength, CALLSITE_STRICT);
 
-        return newLength;
+        return JSType.toNarrowestNumber(newLength);
     }
 
     /**
@@ -1482,7 +1453,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
      * @return index of element, or -1 if not found
      */
     @Function(attributes = Attribute.NOT_ENUMERABLE, arity = 1)
-    public static long indexOf(final Object self, final Object searchElement, final Object fromIndex) {
+    public static double indexOf(final Object self, final Object searchElement, final Object fromIndex) {
         try {
             final ScriptObject sobj = (ScriptObject)Global.toObject(self);
             final long         len  = JSType.toUint32(sobj.getLength());
@@ -1518,7 +1489,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
      * @return index of element, or -1 if not found
      */
     @Function(attributes = Attribute.NOT_ENUMERABLE, arity = 1)
-    public static long lastIndexOf(final Object self, final Object... args) {
+    public static double lastIndexOf(final Object self, final Object... args) {
         try {
             final ScriptObject sobj = (ScriptObject)Global.toObject(self);
             final long         len  = JSType.toUint32(sobj.getLength());
@@ -1562,7 +1533,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             private final MethodHandle everyInvoker = getEVERY_CALLBACK_INVOKER();
 
             @Override
-            protected boolean forEach(final Object val, final long i) throws Throwable {
+            protected boolean forEach(final Object val, final double i) throws Throwable {
                 return result = (boolean)everyInvoker.invokeExact(callbackfn, thisArg, val, i, self);
             }
         }.apply();
@@ -1582,7 +1553,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             private final MethodHandle someInvoker = getSOME_CALLBACK_INVOKER();
 
             @Override
-            protected boolean forEach(final Object val, final long i) throws Throwable {
+            protected boolean forEach(final Object val, final double i) throws Throwable {
                 return !(result = (boolean)someInvoker.invokeExact(callbackfn, thisArg, val, i, self));
             }
         }.apply();
@@ -1602,7 +1573,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             private final MethodHandle forEachInvoker = getFOREACH_CALLBACK_INVOKER();
 
             @Override
-            protected boolean forEach(final Object val, final long i) throws Throwable {
+            protected boolean forEach(final Object val, final double i) throws Throwable {
                 forEachInvoker.invokeExact(callbackfn, thisArg, val, i, self);
                 return true;
             }
@@ -1623,7 +1594,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             private final MethodHandle mapInvoker = getMAP_CALLBACK_INVOKER();
 
             @Override
-            protected boolean forEach(final Object val, final long i) throws Throwable {
+            protected boolean forEach(final Object val, final double i) throws Throwable {
                 final Object r = mapInvoker.invokeExact(callbackfn, thisArg, val, i, self);
                 result.defineOwnProperty(ArrayIndex.getArrayIndex(index), r);
                 return true;
@@ -1653,7 +1624,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             private final MethodHandle filterInvoker = getFILTER_CALLBACK_INVOKER();
 
             @Override
-            protected boolean forEach(final Object val, final long i) throws Throwable {
+            protected boolean forEach(final Object val, final double i) throws Throwable {
                 if ((boolean)filterInvoker.invokeExact(callbackfn, thisArg, val, i, self)) {
                     result.defineOwnProperty(ArrayIndex.getArrayIndex(to++), val);
                 }
@@ -1685,7 +1656,7 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             private final MethodHandle reduceInvoker = getREDUCE_CALLBACK_INVOKER();
 
             @Override
-            protected boolean forEach(final Object val, final long i) throws Throwable {
+            protected boolean forEach(final Object val, final double i) throws Throwable {
                 // TODO: why can't I declare the second arg as Undefined.class?
                 result = reduceInvoker.invokeExact(callbackfn, ScriptRuntime.UNDEFINED, result, val, i, self);
                 return true;
@@ -1715,6 +1686,50 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
     @Function(attributes = Attribute.NOT_ENUMERABLE, arity = 1)
     public static Object reduceRight(final Object self, final Object... args) {
         return reduceInner(reverseArrayLikeIterator(self), self, args);
+    }
+
+    /**
+     * ECMA6 22.1.3.4 Array.prototype.entries ( )
+     *
+     * @param self the self reference
+     * @return an iterator over the array's entries
+     */
+    @Function(attributes = Attribute.NOT_ENUMERABLE)
+    public static Object entries(final Object self) {
+        return ArrayIterator.newArrayKeyValueIterator(self);
+    }
+
+    /**
+     * ECMA6 22.1.3.13 Array.prototype.keys ( )
+     *
+     * @param self the self reference
+     * @return an iterator over the array's keys
+     */
+    @Function(attributes = Attribute.NOT_ENUMERABLE)
+    public static Object keys(final Object self) {
+        return ArrayIterator.newArrayKeyIterator(self);
+    }
+
+    /**
+     * ECMA6 22.1.3.29 Array.prototype.values ( )
+     *
+     * @param self the self reference
+     * @return an iterator over the array's values
+     */
+    @Function(attributes = Attribute.NOT_ENUMERABLE)
+    public static Object values(final Object self) {
+        return ArrayIterator.newArrayValueIterator(self);
+    }
+
+    /**
+     * 22.1.3.30 Array.prototype [ @@iterator ] ( )
+     *
+     * @param self the self reference
+     * @return an iterator over the array's values
+     */
+    @Function(attributes = Attribute.NOT_ENUMERABLE, name = "@@iterator")
+    public static Object getIterator(final Object self) {
+        return ArrayIterator.newArrayValueIterator(self);
     }
 
     /**
@@ -1812,15 +1827,14 @@ public final class NativeArray extends ScriptObject implements OptimisticBuiltin
             }
 
             final Object arg = args[2];
-            //args[2] continuousarray or non arraydata, let past non array datas
+            // The generic version uses its own logic and ArrayLikeIterator to decide if an object should
+            // be iterated over or added as single element. To avoid duplication of code and err on the safe side
+            // we only use the specialized version if arg is either a continuous array or a JS primitive.
             if (arg instanceof NativeArray) {
-                final ContinuousArrayData argData = getContinuousArrayData(arg);
-                if (argData == null) {
-                    return false;
-                }
+                return (getContinuousArrayData(arg) != null);
             }
 
-            return true;
+            return JSType.isPrimitive(arg);
         }
     }
 

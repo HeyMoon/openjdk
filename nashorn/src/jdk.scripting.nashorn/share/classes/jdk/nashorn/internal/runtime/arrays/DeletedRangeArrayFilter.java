@@ -101,10 +101,12 @@ final class DeletedRangeArrayFilter extends ArrayFilter {
     }
 
     @Override
-    public void shiftLeft(final int by) {
+    public ArrayData shiftLeft(final int by) {
         super.shiftLeft(by);
         lo = Math.max(0, lo - by);
         hi = Math.max(-1, hi - by);
+
+        return isEmpty() ? getUnderlying() : this;
     }
 
     @Override
@@ -146,24 +148,6 @@ final class DeletedRangeArrayFilter extends ArrayFilter {
 
     @Override
     public ArrayData set(final int index, final int value, final boolean strict) {
-        final long longIndex = ArrayIndex.toLongIndex(index);
-        if (longIndex < lo || longIndex > hi) {
-            return super.set(index, value, strict);
-        } else if (longIndex > lo && longIndex < hi) {
-            return getDeletedArrayFilter().set(index, value, strict);
-        }
-        if (longIndex == lo) {
-            lo++;
-        } else {
-            assert longIndex == hi;
-            hi--;
-        }
-
-        return isEmpty() ? getUnderlying().set(index, value, strict) : super.set(index, value, strict);
-    }
-
-    @Override
-    public ArrayData set(final int index, final long value, final boolean strict) {
         final long longIndex = ArrayIndex.toLongIndex(index);
         if (longIndex < lo || longIndex > hi) {
             return super.set(index, value, strict);

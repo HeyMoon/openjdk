@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,7 +23,7 @@
 
 /*
  * @test 1.5, 03/06/24
- * @bug 4850376
+ * @bug 4850376 8130850 8130181
  * @summary Provide generic storage KeyStore storage facilities
  */
 
@@ -31,8 +31,6 @@ import java.security.*;
 import java.security.cert.*;
 import java.util.*;
 import java.io.*;
-
-import sun.security.provider.*;
 
 public class EntryMethods
     extends Provider
@@ -50,10 +48,24 @@ public class EntryMethods
         }
     }
 
+    public static class MyLoadStoreParameter
+        implements KeyStore.LoadStoreParameter {
+
+        private KeyStore.ProtectionParameter protection;
+
+        MyLoadStoreParameter(KeyStore.ProtectionParameter protection) {
+            this.protection = protection;
+        }
+
+        public KeyStore.ProtectionParameter getProtectionParameter() {
+            return protection;
+        }
+    }
+
     public static class FooEntry implements KeyStore.Entry { }
 
     public EntryMethods() throws Exception {
-        super("EntryMethods", 0.0, "EntryMethods");
+        super("EntryMethods", "0.0", "EntryMethods");
 
         pre15fis = new FileInputStream
             (System.getProperty("test.src") + "/EntryMethods.pre15.keystore");
@@ -103,7 +115,15 @@ public class EntryMethods
             throw new SecurityException("[Pre1.5] test " + tNum + " failed");
         } catch (UnsupportedOperationException uoe) {
             System.out.println("[Pre1.5] test " + tNum++ + " passed");
+        } catch (NoSuchAlgorithmException nsae) {
+            System.out.println("[Pre1.5] test " + tNum++ + " passed");
         }
+
+
+        // TEST load custom param
+        ks.load(new MyLoadStoreParameter(
+            new KeyStore.PasswordProtection(password)));
+        System.out.println("[Pre1.5] test " + tNum++ + " passed");
 
 
         // TEST store random param

@@ -1,12 +1,10 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,8 +25,7 @@
  * @test
  * @bug 8047183
  * @summary JDK build fails with sjavac enabled
- *
- * @modules jdk.compiler
+ * @modules jdk.compiler/com.sun.tools.sjavac
  * @build Wrapper
  * @run main Wrapper IgnoreSymbolFile
  */
@@ -57,12 +54,18 @@ public class IgnoreSymbolFile {
 
         new File("classes").mkdirs();
 
-        String server = "--server:portfile=testserver,background=false";
-        int rc1 = compile(server, "-d", "classes", "-Werror", "src");
+        int rc1 = compile("-d", "classes",
+                          "--state-dir=classes",
+                          "-Werror",
+                          "src");
         if (rc1 == 0)
             error("compilation succeeded unexpectedly");
 
-        int rc2 = compile(server, "-d", "classes", "-Werror", "-XDignore.symbol.file=true", "src");
+        int rc2 = compile("-d", "classes",
+                          "--state-dir=classes",
+                          "-Werror",
+                          "-XDignore.symbol.file=true",
+                          "src");
         if (rc2 != 0)
             error("compilation failed unexpectedly: rc=" + rc2);
 

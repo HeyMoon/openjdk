@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,20 +26,21 @@
 #include "gc/shared/collectedHeap.hpp"
 #include "gc/shared/gcLocker.inline.hpp"
 #include "memory/resourceArea.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "logging/log.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/thread.inline.hpp"
 
-volatile jint GC_locker::_jni_lock_count = 0;
-volatile bool GC_locker::_needs_gc       = false;
-volatile bool GC_locker::_doing_gc       = false;
+volatile jint GCLocker::_jni_lock_count = 0;
+volatile bool GCLocker::_needs_gc       = false;
+volatile bool GCLocker::_doing_gc       = false;
 
 #ifdef ASSERT
-volatile jint GC_locker::_debug_jni_lock_count = 0;
+volatile jint GCLocker::_debug_jni_lock_count = 0;
 #endif
 
 
 #ifdef ASSERT
-void GC_locker::verify_critical_count() {
+void GCLocker::verify_critical_count() {
   if (SafepointSynchronize::is_at_safepoint()) {
     assert(!needs_gc() || _debug_jni_lock_count == _jni_lock_count, "must agree");
     int count = 0;
@@ -50,10 +51,10 @@ void GC_locker::verify_critical_count() {
       }
     }
     if (_jni_lock_count != count) {
-      tty->print_cr("critical counts don't match: %d != %d", _jni_lock_count, count);
+      log_error(gc, verify)("critical counts don't match: %d != %d", _jni_lock_count, count);
       for (JavaThread* thr = Threads::first(); thr; thr = thr->next()) {
         if (thr->in_critical()) {
-          tty->print_cr(INTPTR_FORMAT " in_critical %d", p2i(thr), thr->in_critical());
+          log_error(gc, verify)(INTPTR_FORMAT " in_critical %d", p2i(thr), thr->in_critical());
         }
       }
     }
@@ -62,42 +63,41 @@ void GC_locker::verify_critical_count() {
 }
 
 // In debug mode track the locking state at all times
-void GC_locker::increment_debug_jni_lock_count() {
+void GCLocker::increment_debug_jni_lock_count() {
   assert(_debug_jni_lock_count >= 0, "bad value");
   Atomic::inc(&_debug_jni_lock_count);
 }
 
-void GC_locker::decrement_debug_jni_lock_count() {
+void GCLocker::decrement_debug_jni_lock_count() {
   assert(_debug_jni_lock_count > 0, "bad value");
   Atomic::dec(&_debug_jni_lock_count);
 }
 #endif
 
-bool GC_locker::check_active_before_gc() {
+void GCLocker::log_debug_jni(const char* msg) {
+  Log(gc, jni) log;
+  if (log.is_debug()) {
+    ResourceMark rm; // JavaThread::name() allocates to convert to UTF8
+    log.debug("%s Thread \"%s\" %d locked.", msg, Thread::current()->name(), _jni_lock_count);
+  }
+}
+
+bool GCLocker::check_active_before_gc() {
   assert(SafepointSynchronize::is_at_safepoint(), "only read at safepoint");
   if (is_active() && !_needs_gc) {
     verify_critical_count();
     _needs_gc = true;
-    if (PrintJNIGCStalls && PrintGCDetails) {
-      ResourceMark rm; // JavaThread::name() allocates to convert to UTF8
-      gclog_or_tty->print_cr("%.3f: Setting _needs_gc. Thread \"%s\" %d locked.",
-                             gclog_or_tty->time_stamp().seconds(), Thread::current()->name(), _jni_lock_count);
-    }
-
+    log_debug_jni("Setting _needs_gc.");
   }
   return is_active();
 }
 
-void GC_locker::stall_until_clear() {
+void GCLocker::stall_until_clear() {
   assert(!JavaThread::current()->in_critical(), "Would deadlock");
   MutexLocker   ml(JNICritical_lock);
 
   if (needs_gc()) {
-    if (PrintJNIGCStalls && PrintGCDetails) {
-      ResourceMark rm; // JavaThread::name() allocates to convert to UTF8
-      gclog_or_tty->print_cr("%.3f: Allocation failed. Thread \"%s\" is stalled by JNI critical section, %d locked.",
-                             gclog_or_tty->time_stamp().seconds(), Thread::current()->name(), _jni_lock_count);
-    }
+    log_debug_jni("Allocation failed. Thread stalled by JNI critical section.");
   }
 
   // Wait for _needs_gc  to be cleared
@@ -106,7 +106,7 @@ void GC_locker::stall_until_clear() {
   }
 }
 
-void GC_locker::jni_lock(JavaThread* thread) {
+void GCLocker::jni_lock(JavaThread* thread) {
   assert(!thread->in_critical(), "shouldn't currently be in a critical region");
   MutexLocker mu(JNICritical_lock);
   // Block entering threads if we know at least one thread is in a
@@ -122,7 +122,7 @@ void GC_locker::jni_lock(JavaThread* thread) {
   increment_debug_jni_lock_count();
 }
 
-void GC_locker::jni_unlock(JavaThread* thread) {
+void GCLocker::jni_unlock(JavaThread* thread) {
   assert(thread->in_last_critical(), "should be exiting critical region");
   MutexLocker mu(JNICritical_lock);
   _jni_lock_count--;
@@ -134,11 +134,7 @@ void GC_locker::jni_unlock(JavaThread* thread) {
     {
       // Must give up the lock while at a safepoint
       MutexUnlocker munlock(JNICritical_lock);
-      if (PrintJNIGCStalls && PrintGCDetails) {
-        ResourceMark rm; // JavaThread::name() allocates to convert to UTF8
-        gclog_or_tty->print_cr("%.3f: Thread \"%s\" is performing GC after exiting critical section, %d locked",
-            gclog_or_tty->time_stamp().seconds(), Thread::current()->name(), _jni_lock_count);
-      }
+      log_debug_jni("Performing GC after exiting critical section.");
       Universe::heap()->collect(GCCause::_gc_locker);
     }
     _doing_gc = false;
@@ -147,49 +143,49 @@ void GC_locker::jni_unlock(JavaThread* thread) {
   }
 }
 
-// Implementation of No_GC_Verifier
+// Implementation of NoGCVerifier
 
 #ifdef ASSERT
 
-No_GC_Verifier::No_GC_Verifier(bool verifygc) {
+NoGCVerifier::NoGCVerifier(bool verifygc) {
   _verifygc = verifygc;
   if (_verifygc) {
     CollectedHeap* h = Universe::heap();
-    assert(!h->is_gc_active(), "GC active during No_GC_Verifier");
+    assert(!h->is_gc_active(), "GC active during NoGCVerifier");
     _old_invocations = h->total_collections();
   }
 }
 
 
-No_GC_Verifier::~No_GC_Verifier() {
+NoGCVerifier::~NoGCVerifier() {
   if (_verifygc) {
     CollectedHeap* h = Universe::heap();
-    assert(!h->is_gc_active(), "GC active during No_GC_Verifier");
+    assert(!h->is_gc_active(), "GC active during NoGCVerifier");
     if (_old_invocations != h->total_collections()) {
-      fatal("collection in a No_GC_Verifier secured function");
+      fatal("collection in a NoGCVerifier secured function");
     }
   }
 }
 
-Pause_No_GC_Verifier::Pause_No_GC_Verifier(No_GC_Verifier * ngcv) {
+PauseNoGCVerifier::PauseNoGCVerifier(NoGCVerifier * ngcv) {
   _ngcv = ngcv;
   if (_ngcv->_verifygc) {
     // if we were verifying, then make sure that nothing is
     // wrong before we "pause" verification
     CollectedHeap* h = Universe::heap();
-    assert(!h->is_gc_active(), "GC active during No_GC_Verifier");
+    assert(!h->is_gc_active(), "GC active during NoGCVerifier");
     if (_ngcv->_old_invocations != h->total_collections()) {
-      fatal("collection in a No_GC_Verifier secured function");
+      fatal("collection in a NoGCVerifier secured function");
     }
   }
 }
 
 
-Pause_No_GC_Verifier::~Pause_No_GC_Verifier() {
+PauseNoGCVerifier::~PauseNoGCVerifier() {
   if (_ngcv->_verifygc) {
     // if we were verifying before, then reenable verification
     CollectedHeap* h = Universe::heap();
-    assert(!h->is_gc_active(), "GC active during No_GC_Verifier");
+    assert(!h->is_gc_active(), "GC active during NoGCVerifier");
     _ngcv->_old_invocations = h->total_collections();
   }
 }
@@ -205,16 +201,16 @@ Pause_No_GC_Verifier::~Pause_No_GC_Verifier() {
 //   6) reaching a safepoint
 //   7) running too long
 // Nor may any method it calls.
-JRT_Leaf_Verifier::JRT_Leaf_Verifier()
-  : No_Safepoint_Verifier(true, JRT_Leaf_Verifier::should_verify_GC())
+JRTLeafVerifier::JRTLeafVerifier()
+  : NoSafepointVerifier(true, JRTLeafVerifier::should_verify_GC())
 {
 }
 
-JRT_Leaf_Verifier::~JRT_Leaf_Verifier()
+JRTLeafVerifier::~JRTLeafVerifier()
 {
 }
 
-bool JRT_Leaf_Verifier::should_verify_GC() {
+bool JRTLeafVerifier::should_verify_GC() {
   switch (JavaThread::current()->thread_state()) {
   case _thread_in_Java:
     // is in a leaf routine, there must be no safepoint.

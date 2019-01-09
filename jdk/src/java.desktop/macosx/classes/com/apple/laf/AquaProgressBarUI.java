@@ -46,7 +46,7 @@ import com.apple.laf.AquaUtils.RecyclableSingleton;
 public class AquaProgressBarUI extends ProgressBarUI implements ChangeListener, PropertyChangeListener, AncestorListener, Sizeable {
     private static final boolean ADJUSTTIMER = true;
 
-    protected static final RecyclableSingleton<SizeDescriptor> sizeDescriptor = new RecyclableSingleton<SizeDescriptor>() {
+    private static final RecyclableSingleton<SizeDescriptor> sizeDescriptor = new RecyclableSingleton<SizeDescriptor>() {
         @Override
         protected SizeDescriptor getInstance() {
             return new SizeDescriptor(new SizeVariant(146, 20)) {
@@ -124,7 +124,9 @@ public class AquaProgressBarUI extends ProgressBarUI implements ChangeListener, 
             if (!progressBar.isIndeterminate()) return;
             stopAnimationTimer();
             // start the animation thread
-            startAnimationTimer();
+            if (progressBar.isDisplayable()) {
+              startAnimationTimer();
+            }
         }
 
         if ("JProgressBar.style".equals(prop)) {
@@ -141,7 +143,9 @@ public class AquaProgressBarUI extends ProgressBarUI implements ChangeListener, 
 
     public void ancestorAdded(final AncestorEvent e) {
         if (!progressBar.isIndeterminate()) return;
-        startAnimationTimer();
+        if (progressBar.isDisplayable()) {
+          startAnimationTimer();
+        }
     }
 
     public void ancestorMoved(final AncestorEvent e) { }
@@ -180,10 +184,19 @@ public class AquaProgressBarUI extends ProgressBarUI implements ChangeListener, 
         final int width = progressBar.getWidth() - (i.right + i.left);
         final int height = progressBar.getHeight() - (i.bottom + i.top);
 
+        Graphics2D g2 = (Graphics2D) g;
+        final AffineTransform savedAT = g2.getTransform();
+        if (!progressBar.getComponentOrientation().isLeftToRight()) {
+            //Scale operation: Flips component about pivot
+            //Translate operation: Moves component back into original position
+            g2.scale(-1, 1);
+            g2.translate(-progressBar.getWidth(), 0);
+        }
         painter.paint(g, progressBar, i.left, i.top, width, height);
 
+        g2.setTransform(savedAT);
         if (progressBar.isStringPainted() && !progressBar.isIndeterminate()) {
-            paintString(g, i.left, i.top, width, height);
+                paintString(g, i.left, i.top, width, height);
         }
     }
 

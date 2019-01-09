@@ -29,7 +29,9 @@
 #include "gc/parallel/parallelScavengeHeap.hpp"
 #include "gc/parallel/psPromotionManager.inline.hpp"
 #include "gc/parallel/psScavenge.hpp"
+#include "logging/log.hpp"
 #include "memory/iterator.hpp"
+#include "memory/resourceArea.hpp"
 #include "utilities/globalDefinitions.hpp"
 
 inline void PSScavenge::save_to_space_top_before_gc() {
@@ -137,16 +139,6 @@ class PSScavengeKlassClosure: public KlassClosure {
   void do_klass(Klass* klass) {
     // If the klass has not been dirtied we know that there's
     // no references into  the young gen and we can skip it.
-
-#ifndef PRODUCT
-    if (TraceScavenge) {
-      ResourceMark rm;
-      gclog_or_tty->print_cr("PSScavengeKlassClosure::do_klass " PTR_FORMAT ", %s, dirty: %s",
-                             p2i(klass),
-                             klass->external_name(),
-                             klass->has_modified_oops() ? "true" : "false");
-    }
-#endif
 
     if (klass->has_modified_oops()) {
       // Clean the klass since we're going to scavenge all the metadata.

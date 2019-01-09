@@ -39,6 +39,7 @@ class GlobalTLABStats;
 //            used to make it available for such multiplexing.
 class ThreadLocalAllocBuffer: public CHeapObj<mtThread> {
   friend class VMStructs;
+  friend class JVMCIVMStructs;
 private:
   HeapWord* _start;                              // address of TLAB
   HeapWord* _top;                                // address after last allocation
@@ -48,8 +49,9 @@ private:
   size_t    _refill_waste_limit;                 // hold onto tlab if free() is larger than this
   size_t    _allocated_before_last_gc;           // total bytes allocated up until the last gc
 
-  static size_t   _max_size;                     // maximum size of any TLAB
-  static unsigned _target_refills;               // expected number of refills between GCs
+  static size_t   _max_size;                          // maximum size of any TLAB
+  static int      _reserve_for_allocation_prefetch;   // Reserve at the end of the TLAB
+  static unsigned _target_refills;                    // expected number of refills between GCs
 
   unsigned  _number_of_refills;
   unsigned  _fast_refill_waste;
@@ -106,8 +108,9 @@ public:
     // do nothing.  tlabs must be inited by initialize() calls
   }
 
-  static const size_t min_size()                 { return align_object_size(MinTLABSize / HeapWordSize) + alignment_reserve(); }
-  static const size_t max_size()                 { assert(_max_size != 0, "max_size not set up"); return _max_size; }
+  static size_t min_size()                       { return align_object_size(MinTLABSize / HeapWordSize) + alignment_reserve(); }
+  static size_t max_size()                       { assert(_max_size != 0, "max_size not set up"); return _max_size; }
+  static size_t max_size_in_bytes()              { return max_size() * BytesPerWord; }
   static void set_max_size(size_t max_size)      { _max_size = max_size; }
 
   HeapWord* start() const                        { return _start; }
@@ -128,7 +131,7 @@ public:
   // Reserve space at the end of TLAB
   static size_t end_reserve() {
     int reserve_size = typeArrayOopDesc::header_size(T_INT);
-    return MAX2(reserve_size, VM_Version::reserve_for_allocation_prefetch());
+    return MAX2(reserve_size, _reserve_for_allocation_prefetch);
   }
   static size_t alignment_reserve()              { return align_object_size(end_reserve()); }
   static size_t alignment_reserve_in_bytes()     { return alignment_reserve() * HeapWordSize; }
@@ -144,8 +147,8 @@ public:
   // Initialization at startup
   static void startup_initialization();
 
-  // Make an in-use tlab parsable, optionally also retiring it.
-  void make_parsable(bool retire);
+  // Make an in-use tlab parsable, optionally retiring and/or zapping it.
+  void make_parsable(bool retire, bool zap = true);
 
   // Retire in-use tlab before allocation of a new tlab
   void clear_before_allocation();

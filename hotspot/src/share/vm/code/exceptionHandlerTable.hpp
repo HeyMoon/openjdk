@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -89,16 +89,16 @@ class ExceptionHandlerTable VALUE_OBJ_CLASS_SPEC {
   int                _size;     // the number of allocated entries
   ReallocMark        _nesting;  // assertion check for reallocations
 
+ public:
   // add the entry & grow the table if needed
   void add_entry(HandlerTableEntry entry);
   HandlerTableEntry* subtable_for(int catch_pco) const;
 
- public:
   // (compile-time) construction within compiler
   ExceptionHandlerTable(int initial_size = 8);
 
   // (run-time) construction from nmethod
-  ExceptionHandlerTable(const nmethod* nm);
+  ExceptionHandlerTable(const CompiledMethod* nm);
 
   // (compile-time) add entries
   void add_subtable(
@@ -115,7 +115,8 @@ class ExceptionHandlerTable VALUE_OBJ_CLASS_SPEC {
 
   // nmethod support
   int  size_in_bytes() const { return round_to(_length * sizeof(HandlerTableEntry), oopSize); }
-  void copy_to(nmethod* nm);
+  void copy_to(CompiledMethod* nm);
+  void copy_bytes_to(address addr);
 
   // lookup
   HandlerTableEntry* entry_for(int catch_pco, int handler_bci, int scope_depth) const;

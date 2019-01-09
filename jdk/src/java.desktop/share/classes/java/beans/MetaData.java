@@ -60,7 +60,7 @@ import sun.swing.PrintColorUIResource;
 import static sun.reflect.misc.ReflectUtil.isPackageAccessible;
 
 /*
- * Like the <code>Intropector</code>, the <code>MetaData</code> class
+ * Like the {@code Intropector}, the {@code MetaData} class
  * contains <em>meta</em> objects that describe the way
  * classes should express their state in terms of their
  * own public APIs.
@@ -85,7 +85,7 @@ static final class NullPersistenceDelegate extends PersistenceDelegate {
 }
 
 /**
- * The persistence delegate for <CODE>enum</CODE> classes.
+ * The persistence delegate for {@code enum} classes.
  *
  * @author Sergey A. Malenkov
  */
@@ -262,10 +262,10 @@ static final class java_lang_reflect_Method_PersistenceDelegate extends Persiste
 // Dates
 
 /**
- * The persistence delegate for <CODE>java.util.Date</CODE> classes.
+ * The persistence delegate for {@code java.util.Date} classes.
  * Do not extend DefaultPersistenceDelegate to improve performance and
- * to avoid problems with <CODE>java.sql.Date</CODE>,
- * <CODE>java.sql.Time</CODE> and <CODE>java.sql.Timestamp</CODE>.
+ * to avoid problems with {@code java.sql.Date},
+ * {@code java.sql.Time} and {@code java.sql.Timestamp}.
  *
  * @author Sergey A. Malenkov
  */
@@ -287,7 +287,7 @@ static class java_util_Date_PersistenceDelegate extends PersistenceDelegate {
 }
 
 /**
- * The persistence delegate for <CODE>java.sql.Timestamp</CODE> classes.
+ * The persistence delegate for {@code java.sql.Timestamp} classes.
  * It supports nanoseconds.
  *
  * @author Sergey A. Malenkov
@@ -297,7 +297,7 @@ static final class java_sql_Timestamp_PersistenceDelegate extends java_util_Date
 
     private static Method getNanosMethod() {
         try {
-            Class<?> c = Class.forName("java.sql.Timestamp", true, null);
+            Class<?> c = Class.forName("java.sql.Timestamp", true, ClassLoader.getPlatformClassLoader());
             return c.getMethod("getNanos");
         } catch (ClassNotFoundException e) {
             return null;
@@ -356,7 +356,7 @@ delegates to be registered with concrete classes.
  *
  * @author Sergey A. Malenkov
  */
-private static abstract class java_util_Collections extends PersistenceDelegate {
+private abstract static class java_util_Collections extends PersistenceDelegate {
     protected boolean mutatesTo(Object oldInstance, Object newInstance) {
         if (!super.mutatesTo(oldInstance, newInstance)) {
             return false;
@@ -509,102 +509,6 @@ private static abstract class java_util_Collections extends PersistenceDelegate 
             SortedMap<?,?> map = new TreeMap<>((SortedMap<?,?>) oldInstance);
             return new Expression(oldInstance, Collections.class, "synchronizedSortedMap", new Object[]{map});
         }
-    }
-
-    static final class CheckedCollection_PersistenceDelegate extends java_util_Collections {
-        protected Expression instantiate(Object oldInstance, Encoder out) {
-            Object type = MetaData.getPrivateFieldValue(oldInstance, "java.util.Collections$CheckedCollection.type");
-            List<?> list = new ArrayList<>((Collection<?>) oldInstance);
-            return new Expression(oldInstance, Collections.class, "checkedCollection", new Object[]{list, type});
-        }
-    }
-
-    static final class CheckedList_PersistenceDelegate extends java_util_Collections {
-        protected Expression instantiate(Object oldInstance, Encoder out) {
-            Object type = MetaData.getPrivateFieldValue(oldInstance, "java.util.Collections$CheckedCollection.type");
-            List<?> list = new LinkedList<>((Collection<?>) oldInstance);
-            return new Expression(oldInstance, Collections.class, "checkedList", new Object[]{list, type});
-        }
-    }
-
-    static final class CheckedRandomAccessList_PersistenceDelegate extends java_util_Collections {
-        protected Expression instantiate(Object oldInstance, Encoder out) {
-            Object type = MetaData.getPrivateFieldValue(oldInstance, "java.util.Collections$CheckedCollection.type");
-            List<?> list = new ArrayList<>((Collection<?>) oldInstance);
-            return new Expression(oldInstance, Collections.class, "checkedList", new Object[]{list, type});
-        }
-    }
-
-    static final class CheckedSet_PersistenceDelegate extends java_util_Collections {
-        protected Expression instantiate(Object oldInstance, Encoder out) {
-            Object type = MetaData.getPrivateFieldValue(oldInstance, "java.util.Collections$CheckedCollection.type");
-            Set<?> set = new HashSet<>((Set<?>) oldInstance);
-            return new Expression(oldInstance, Collections.class, "checkedSet", new Object[]{set, type});
-        }
-    }
-
-    static final class CheckedSortedSet_PersistenceDelegate extends java_util_Collections {
-        protected Expression instantiate(Object oldInstance, Encoder out) {
-            Object type = MetaData.getPrivateFieldValue(oldInstance, "java.util.Collections$CheckedCollection.type");
-            SortedSet<?> set = new TreeSet<>((SortedSet<?>) oldInstance);
-            return new Expression(oldInstance, Collections.class, "checkedSortedSet", new Object[]{set, type});
-        }
-    }
-
-    static final class CheckedMap_PersistenceDelegate extends java_util_Collections {
-        protected Expression instantiate(Object oldInstance, Encoder out) {
-            Object keyType   = MetaData.getPrivateFieldValue(oldInstance, "java.util.Collections$CheckedMap.keyType");
-            Object valueType = MetaData.getPrivateFieldValue(oldInstance, "java.util.Collections$CheckedMap.valueType");
-            Map<?,?> map = new HashMap<>((Map<?,?>) oldInstance);
-            return new Expression(oldInstance, Collections.class, "checkedMap", new Object[]{map, keyType, valueType});
-        }
-    }
-
-    static final class CheckedSortedMap_PersistenceDelegate extends java_util_Collections {
-        protected Expression instantiate(Object oldInstance, Encoder out) {
-            Object keyType   = MetaData.getPrivateFieldValue(oldInstance, "java.util.Collections$CheckedMap.keyType");
-            Object valueType = MetaData.getPrivateFieldValue(oldInstance, "java.util.Collections$CheckedMap.valueType");
-            SortedMap<?,?> map = new TreeMap<>((SortedMap<?,?>) oldInstance);
-            return new Expression(oldInstance, Collections.class, "checkedSortedMap", new Object[]{map, keyType, valueType});
-        }
-    }
-}
-
-/**
- * The persistence delegate for <CODE>java.util.EnumMap</CODE> classes.
- *
- * @author Sergey A. Malenkov
- */
-static final class java_util_EnumMap_PersistenceDelegate extends PersistenceDelegate {
-    protected boolean mutatesTo(Object oldInstance, Object newInstance) {
-        return super.mutatesTo(oldInstance, newInstance) && (getType(oldInstance) == getType(newInstance));
-    }
-
-    protected Expression instantiate(Object oldInstance, Encoder out) {
-        return new Expression(oldInstance, EnumMap.class, "new", new Object[] {getType(oldInstance)});
-    }
-
-    private static Object getType(Object instance) {
-        return MetaData.getPrivateFieldValue(instance, "java.util.EnumMap.keyType");
-    }
-}
-
-/**
- * The persistence delegate for <CODE>java.util.EnumSet</CODE> classes.
- *
- * @author Sergey A. Malenkov
- */
-static final class java_util_EnumSet_PersistenceDelegate extends PersistenceDelegate {
-    protected boolean mutatesTo(Object oldInstance, Object newInstance) {
-        return super.mutatesTo(oldInstance, newInstance) && (getType(oldInstance) == getType(newInstance));
-    }
-
-    protected Expression instantiate(Object oldInstance, Encoder out) {
-        return new Expression(oldInstance, EnumSet.class, "noneOf", new Object[] {getType(oldInstance)});
-    }
-
-    private static Object getType(Object instance) {
-        return MetaData.getPrivateFieldValue(instance, "java.util.EnumSet.elementType");
     }
 }
 
@@ -1313,13 +1217,10 @@ static final class sun_swing_PrintColorUIResource_PersistenceDelegate extends Pe
 
         internalPersistenceDelegates.put("java.sql.Date", new java_util_Date_PersistenceDelegate());
         internalPersistenceDelegates.put("java.sql.Time", new java_util_Date_PersistenceDelegate());
-
-        internalPersistenceDelegates.put("java.util.JumboEnumSet", new java_util_EnumSet_PersistenceDelegate());
-        internalPersistenceDelegates.put("java.util.RegularEnumSet", new java_util_EnumSet_PersistenceDelegate());
     }
 
-    @SuppressWarnings("rawtypes")
-    public synchronized static PersistenceDelegate getPersistenceDelegate(Class type) {
+    @SuppressWarnings({"rawtypes", "deprecation"})
+    public static synchronized PersistenceDelegate getPersistenceDelegate(Class type) {
         if (type == null) {
             return nullPersistenceDelegate;
         }
@@ -1360,7 +1261,7 @@ static final class sun_swing_PrintColorUIResource_PersistenceDelegate extends Pe
             internalPersistenceDelegates.put(typeName, defaultPersistenceDelegate);
             try {
                 String name =  type.getName();
-                Class c = Class.forName("java.beans.MetaData$" + name.replace('.', '_')
+                Class<?> c = Class.forName("java.beans.MetaData$" + name.replace('.', '_')
                                         + "_PersistenceDelegate");
                 pd = (PersistenceDelegate)c.newInstance();
                 internalPersistenceDelegates.put(typeName, pd);

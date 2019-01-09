@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,17 +48,24 @@ import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
+import org.testng.Assert.ThrowingRunnable;
 import org.testng.annotations.Test;
 import org.testng.annotations.DataProvider;
+
+import static java.util.Objects.requireNonNull;
+
 import static org.testng.Assert.fail;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertSame;
+import static org.testng.Assert.assertThrows;
 
 public class Defaults {
 
@@ -156,14 +163,8 @@ public class Defaults {
 
     @Test(dataProvider = "Map<IntegerEnum,String> rw=true keys=nonNull values=nonNull")
     public static void testReplaceAllNoNullReplacement(String description, Map<IntegerEnum, String> map) {
-        assertThrows(
-            () -> { map.replaceAll(null); },
-            NullPointerException.class,
-            description);
-        assertThrows(
-            () -> { map.replaceAll((k,v) -> null); },
-            NullPointerException.class,
-            description + " should not allow replacement with null value");
+        assertThrowsNPE(() -> map.replaceAll(null));
+        assertThrowsNPE(() -> map.replaceAll((k,v) -> null)); //should not allow replacement with null value
     }
 
     @Test(dataProvider = "Map<IntegerEnum,String> rw=true keys=withNull values=withNull")
@@ -206,7 +207,7 @@ public class Defaults {
     public void testReplaceKVNoNulls(String description, Map<IntegerEnum, String> map) {
         assertTrue(map.containsKey(FIRST_KEY), "expected key missing");
         assertSame(map.get(FIRST_KEY), FIRST_VALUE, "found wrong value");
-        assertThrows( () -> {map.replace(FIRST_KEY, null);}, NullPointerException.class, description + ": should throw NPE");
+        assertThrowsNPE(() -> map.replace(FIRST_KEY, null));
         assertSame(map.replace(FIRST_KEY, EXTRA_VALUE), FIRST_VALUE, description + ": replaced wrong value");
         assertSame(map.get(FIRST_KEY), EXTRA_VALUE, "found wrong value");
     }
@@ -245,8 +246,13 @@ public class Defaults {
     public void testReplaceKVVNoNulls(String description, Map<IntegerEnum, String> map) {
         assertTrue(map.containsKey(FIRST_KEY), "expected key missing");
         assertSame(map.get(FIRST_KEY), FIRST_VALUE, "found wrong value");
-        assertThrows( () -> {map.replace(FIRST_KEY, FIRST_VALUE, null);}, NullPointerException.class, description + ": should throw NPE");
-        assertThrows( () -> {if (!map.replace(FIRST_KEY, null, EXTRA_VALUE)) throw new NullPointerException("default returns false rather than throwing");}, NullPointerException.class,  description + ": should throw NPE");
+        assertThrowsNPE(() -> map.replace(FIRST_KEY, FIRST_VALUE, null));
+        assertThrowsNPE(
+                () -> {
+                    if (!map.replace(FIRST_KEY, null, EXTRA_VALUE)) {
+                        throw new NullPointerException("default returns false rather than throwing");
+                    }
+                });
         assertTrue(map.replace(FIRST_KEY, FIRST_VALUE, EXTRA_VALUE), description + ": replaced wrong value");
         assertSame(map.get(FIRST_KEY), EXTRA_VALUE, "found wrong value");
     }
@@ -316,9 +322,7 @@ public class Defaults {
 
     @Test(dataProvider = "Map<IntegerEnum,String> rw=true keys=all values=all")
     public void testComputeIfAbsentNullFunction(String description, Map<IntegerEnum, String> map) {
-        assertThrows( () -> { map.computeIfAbsent(KEYS[1], null);},
-                NullPointerException.class,
-                "Should throw NPE");
+        assertThrowsNPE(() -> map.computeIfAbsent(KEYS[1], null));
     }
 
     @Test(dataProvider = "Map<IntegerEnum,String> rw=true keys=withNull values=withNull")
@@ -363,9 +367,7 @@ public class Defaults {
 
     @Test(dataProvider = "Map<IntegerEnum,String> rw=true keys=all values=all")
     public void testComputeIfPresentNullFunction(String description, Map<IntegerEnum, String> map) {
-        assertThrows( () -> { map.computeIfPresent(KEYS[1], null);},
-                NullPointerException.class,
-                "Should throw NPE");
+        assertThrowsNPE(() -> map.computeIfPresent(KEYS[1], null));
     }
 
      @Test(dataProvider = "Map<IntegerEnum,String> rw=true keys=withNull values=withNull")
@@ -456,15 +458,13 @@ public class Defaults {
 
     @Test(dataProvider = "Map<IntegerEnum,String> rw=true keys=all values=all")
     public void testComputeNullFunction(String description, Map<IntegerEnum, String> map) {
-        assertThrows( () -> { map.compute(KEYS[1], null);},
-                NullPointerException.class,
-                "Should throw NPE");
+        assertThrowsNPE(() -> map.compute(KEYS[1], null));
     }
 
     @Test(dataProvider = "MergeCases")
     private void testMerge(String description, Map<IntegerEnum, String> map, Merging.Value oldValue, Merging.Value newValue, Merging.Merger merger, Merging.Value put, Merging.Value result) {
             // add and check initial conditions.
-            switch(oldValue) {
+            switch (oldValue) {
                 case ABSENT :
                     map.remove(EXTRA_KEY);
                     assertFalse(map.containsKey(EXTRA_KEY), "key not absent");
@@ -490,7 +490,7 @@ public class Defaults {
 
             // check result
 
-            switch(result) {
+            switch (result) {
                 case NULL :
                     assertNull(returned, "wrong value");
                     break;
@@ -505,7 +505,7 @@ public class Defaults {
             }
 
             // check map
-            switch(put) {
+            switch (put) {
                 case ABSENT :
                     assertFalse(map.containsKey(EXTRA_KEY), "key not absent");
                     break;
@@ -528,9 +528,192 @@ public class Defaults {
 
     @Test(dataProvider = "Map<IntegerEnum,String> rw=true keys=all values=all")
     public void testMergeNullMerger(String description, Map<IntegerEnum, String> map) {
-        assertThrows( () -> { map.merge(KEYS[1], VALUES[1], null);},
-                NullPointerException.class,
-                "Should throw NPE");
+        assertThrowsNPE(() -> map.merge(KEYS[1], VALUES[1], null));
+    }
+
+    /** A function that flipflops between running two other functions. */
+    static <T,U,V> BiFunction<T,U,V> twoStep(AtomicBoolean b,
+                                             BiFunction<T,U,V> first,
+                                             BiFunction<T,U,V> second) {
+        return (t, u) -> {
+            boolean bb = b.get();
+            try {
+                return (b.get() ? first : second).apply(t, u);
+            } finally {
+                b.set(!bb);
+            }};
+    }
+
+    /**
+     * Simulates races by modifying the map within the mapping function.
+     */
+    @Test
+    public void testConcurrentMap_computeIfAbsent_racy() {
+        final ConcurrentMap<Long,Long> map = new ImplementsConcurrentMap<>();
+        final Long two = 2L;
+        Function<Long,Long> f, g;
+
+        // race not detected if function returns null
+        f = (k) -> { map.put(two, 42L); return null; };
+        assertNull(map.computeIfAbsent(two, f));
+        assertEquals(42L, (long)map.get(two));
+
+        map.clear();
+        f = (k) -> { map.put(two, 42L); return 86L; };
+        assertEquals(42L, (long)map.computeIfAbsent(two, f));
+        assertEquals(42L, (long)map.get(two));
+
+        // mapping function ignored if value already exists
+        map.put(two, 99L);
+        assertEquals(99L, (long)map.computeIfAbsent(two, f));
+        assertEquals(99L, (long)map.get(two));
+    }
+
+    /**
+     * Simulates races by modifying the map within the remapping function.
+     */
+    @Test
+    public void testConcurrentMap_computeIfPresent_racy() {
+        final AtomicBoolean b = new AtomicBoolean(true);
+        final ConcurrentMap<Long,Long> map = new ImplementsConcurrentMap<>();
+        final Long two = 2L;
+        BiFunction<Long,Long,Long> f, g;
+
+        for (Long val : new Long[] { null, 86L }) {
+            map.clear();
+
+            // Function not invoked if no mapping exists
+            f = (k, v) -> { map.put(two, 42L); return val; };
+            assertNull(map.computeIfPresent(two, f));
+            assertNull(map.get(two));
+
+            map.put(two, 42L);
+            f = (k, v) -> { map.put(two, 86L); return val; };
+            g = (k, v) -> {
+                assertSame(two, k);
+                assertEquals(86L, (long)v);
+                return null;
+            };
+            assertNull(map.computeIfPresent(two, twoStep(b, f, g)));
+            assertFalse(map.containsKey(two));
+            assertTrue(b.get());
+
+            map.put(two, 42L);
+            f = (k, v) -> { map.put(two, 86L); return val; };
+            g = (k, v) -> {
+                assertSame(two, k);
+                assertEquals(86L, (long)v);
+                return 99L;
+            };
+            assertEquals(99L, (long)map.computeIfPresent(two, twoStep(b, f, g)));
+            assertTrue(map.containsKey(two));
+            assertTrue(b.get());
+        }
+    }
+
+    @Test
+    public void testConcurrentMap_compute_simple() {
+        final ConcurrentMap<Long,Long> map = new ImplementsConcurrentMap<>();
+        BiFunction<Long,Long,Long> fun = (k, v) -> ((v == null) ? 0L : k + v);
+        assertEquals(Long.valueOf(0L), map.compute(3L, fun));
+        assertEquals(Long.valueOf(3L), map.compute(3L, fun));
+        assertEquals(Long.valueOf(6L), map.compute(3L, fun));
+        assertNull(map.compute(3L, (k, v) -> null));
+        assertTrue(map.isEmpty());
+
+        assertEquals(Long.valueOf(0L), map.compute(new Long(3L), fun));
+        assertEquals(Long.valueOf(3L), map.compute(new Long(3L), fun));
+        assertEquals(Long.valueOf(6L), map.compute(new Long(3L), fun));
+        assertNull(map.compute(3L, (k, v) -> null));
+        assertTrue(map.isEmpty());
+    }
+
+    /**
+     * Simulates races by modifying the map within the remapping function.
+     */
+    @Test
+    public void testConcurrentMap_compute_racy() {
+        final AtomicBoolean b = new AtomicBoolean(true);
+        final ConcurrentMap<Long,Long> map = new ImplementsConcurrentMap<>();
+        final Long two = 2L;
+        BiFunction<Long,Long,Long> f, g;
+
+        // null -> null is a no-op; race not detected
+        f = (k, v) -> { map.put(two, 42L); return null; };
+        assertNull(map.compute(two, f));
+        assertEquals(42L, (long)map.get(two));
+
+        for (Long val : new Long[] { null, 86L }) {
+            map.clear();
+
+            f = (k, v) -> { map.put(two, 42L); return 86L; };
+            g = (k, v) -> {
+                assertSame(two, k);
+                assertEquals(42L, (long)v);
+                return k + v;
+            };
+            assertEquals(44L, (long)map.compute(two, twoStep(b, f, g)));
+            assertEquals(44L, (long)map.get(two));
+            assertTrue(b.get());
+
+            f = (k, v) -> { map.remove(two); return val; };
+            g = (k, v) -> {
+                assertSame(two, k);
+                assertNull(v);
+                return 44L;
+            };
+            assertEquals(44L, (long)map.compute(two, twoStep(b, f, g)));
+            assertEquals(44L, (long)map.get(two));
+            assertTrue(map.containsKey(two));
+            assertTrue(b.get());
+
+            f = (k, v) -> { map.remove(two); return val; };
+            g = (k, v) -> {
+                assertSame(two, k);
+                assertNull(v);
+                return null;
+            };
+            assertNull(map.compute(two, twoStep(b, f, g)));
+            assertNull(map.get(two));
+            assertFalse(map.containsKey(two));
+            assertTrue(b.get());
+        }
+    }
+
+    /**
+     * Simulates races by modifying the map within the remapping function.
+     */
+    @Test
+    public void testConcurrentMap_merge_racy() {
+        final AtomicBoolean b = new AtomicBoolean(true);
+        final ConcurrentMap<Long,Long> map = new ImplementsConcurrentMap<>();
+        final Long two = 2L;
+        BiFunction<Long,Long,Long> f, g;
+
+        for (Long val : new Long[] { null, 86L }) {
+            map.clear();
+
+            f = (v, w) -> { throw new AssertionError(); };
+            assertEquals(99L, (long)map.merge(two, 99L, f));
+            assertEquals(99L, (long)map.get(two));
+
+            f = (v, w) -> { map.put(two, 42L); return val; };
+            g = (v, w) -> {
+                assertEquals(42L, (long)v);
+                assertEquals(3L, (long)w);
+                return v + w;
+            };
+            assertEquals(45L, (long)map.merge(two, 3L, twoStep(b, f, g)));
+            assertEquals(45L, (long)map.get(two));
+            assertTrue(b.get());
+
+            f = (v, w) -> { map.remove(two); return val; };
+            g = (k, v) -> { throw new AssertionError(); };
+            assertEquals(55L, (long)map.merge(two, 55L, twoStep(b, f, g)));
+            assertEquals(55L, (long)map.get(two));
+            assertTrue(map.containsKey(two));
+            assertFalse(b.get()); b.set(true);
+        }
     }
 
     public enum IntegerEnum {
@@ -610,7 +793,6 @@ public class Defaults {
         return all;
     }
 
-
     private static Collection<Object[]> makeRWMapsNoNulls() {
         Collection<Object[]> all = new ArrayList<>();
 
@@ -656,8 +838,8 @@ public class Defaults {
 
         return all;
     }
+
     /**
-     *
      * @param nullKeys include null keys
      * @param nullValues include null values
      * @return
@@ -674,7 +856,6 @@ public class Defaults {
     }
 
     /**
-     *
      * @param nulls include null values
      * @return
      */
@@ -702,7 +883,6 @@ public class Defaults {
     }
 
     /**
-     *
      * @param nulls include nulls
      * @return
      */
@@ -712,8 +892,7 @@ public class Defaults {
         });
     }
 
-     /**
-     *
+    /**
      * @param supplier a supplier of mutable map instances.
      *
      * @param nullKeys   include null keys
@@ -774,56 +953,23 @@ public class Defaults {
     static Collection<Object[]> makeMergeTestCases() {
         Collection<Object[]> cases = new ArrayList<>();
 
-        for( Object[] mapParams : makeAllRWMaps() ) {
+        for (Object[] mapParams : makeAllRWMaps() ) {
             cases.add(new Object[] { mapParams[0], mapParams[1], Merging.Value.ABSENT, Merging.Value.NEWVALUE, Merging.Merger.UNUSED, Merging.Value.NEWVALUE, Merging.Value.NEWVALUE });
         }
 
-        for( Object[] mapParams : makeAllRWMaps() ) {
+        for (Object[] mapParams : makeAllRWMaps() ) {
             cases.add(new Object[] { mapParams[0], mapParams[1], Merging.Value.OLDVALUE, Merging.Value.NEWVALUE, Merging.Merger.NULL, Merging.Value.ABSENT, Merging.Value.NULL });
         }
 
-        for( Object[] mapParams : makeAllRWMaps() ) {
+        for (Object[] mapParams : makeAllRWMaps() ) {
             cases.add(new Object[] { mapParams[0], mapParams[1], Merging.Value.OLDVALUE, Merging.Value.NEWVALUE, Merging.Merger.RESULT, Merging.Value.RESULT, Merging.Value.RESULT });
         }
 
         return cases;
     }
 
-    public interface Thrower<T extends Throwable> {
-
-        public void run() throws T;
-    }
-
-    public static <T extends Throwable> void assertThrows(Thrower<T> thrower, Class<T> throwable) {
-        assertThrows(thrower, throwable, null);
-    }
-
-    public static <T extends Throwable> void assertThrows(Thrower<T> thrower, Class<T> throwable, String message) {
-        Throwable thrown;
-        try {
-            thrower.run();
-            thrown = null;
-        } catch (Throwable caught) {
-            thrown = caught;
-        }
-
-        assertInstance(thrown, throwable,
-            ((null != message) ? message : "") +
-            " Failed to throw " + throwable.getCanonicalName());
-    }
-
-    public static <T extends Throwable> void assertThrows(Class<T> throwable, String message, Thrower<T>... throwers) {
-        for(Thrower<T> thrower : throwers) {
-            assertThrows(thrower, throwable, message);
-        }
-    }
-
-    public static void assertInstance(Object actual, Class<?> expected) {
-        assertInstance(expected.isInstance(actual), null);
-    }
-
-    public static void assertInstance(Object actual, Class<?> expected, String message) {
-        assertTrue(expected.isInstance(actual), message);
+    public static void assertThrowsNPE(ThrowingRunnable r) {
+        assertThrows(NullPointerException.class, r);
     }
 
     /**
@@ -834,7 +980,7 @@ public class Defaults {
      * @param <K> Type of keys
      * @param <V> Type of values
      */
-    public static class ExtendsAbstractMap<M extends Map<K,V>, K, V> extends AbstractMap<K, V> {
+    public static class ExtendsAbstractMap<M extends Map<K,V>, K, V> extends AbstractMap<K,V> {
 
         protected final M map;
 
@@ -842,13 +988,13 @@ public class Defaults {
 
         protected ExtendsAbstractMap(M map) { this.map = map; }
 
-        public Set<Map.Entry<K, V>> entrySet() {
-            return new AbstractSet<Map.Entry<K, V>>() {
-                public int size() {
+        @Override public Set<Map.Entry<K,V>> entrySet() {
+            return new AbstractSet<Map.Entry<K,V>>() {
+                @Override public int size() {
                     return map.size();
                 }
 
-                public Iterator<Map.Entry<K,V>> iterator() {
+                @Override public Iterator<Map.Entry<K,V>> iterator() {
                     final Iterator<Map.Entry<K,V>> source = map.entrySet().iterator();
                     return new Iterator<Map.Entry<K,V>>() {
                        public boolean hasNext() { return source.hasNext(); }
@@ -857,36 +1003,48 @@ public class Defaults {
                     };
                 }
 
-                public boolean add(Map.Entry<K,V> e) {
+                @Override public boolean add(Map.Entry<K,V> e) {
                     return map.entrySet().add(e);
                 }
             };
         }
 
-        public V put(K key, V value) {
+        @Override public V put(K key, V value) {
             return map.put(key, value);
         }
     }
 
     /**
      * A simple mutable concurrent map implementation that provides only default
-     * implementations of all methods. ie. none of the ConcurrentMap interface
+     * implementations of all methods, i.e. none of the ConcurrentMap interface
      * default methods have overridden implementations.
      *
      * @param <K> Type of keys
      * @param <V> Type of values
      */
-    public static class ImplementsConcurrentMap<K, V> extends ExtendsAbstractMap<ConcurrentMap<K,V>, K, V> implements ConcurrentMap<K,V> {
+    public static class ImplementsConcurrentMap<K,V> extends ExtendsAbstractMap<ConcurrentMap<K,V>, K, V> implements ConcurrentMap<K,V> {
         public ImplementsConcurrentMap() { super(new ConcurrentHashMap<K,V>()); }
 
-        // ConcurrentMap reabstracts these methods
+        // ConcurrentMap reabstracts these methods.
+        //
+        // Unlike ConcurrentHashMap, we have zero tolerance for null values.
 
-        public V replace(K k, V v) { return map.replace(k, v); };
+        @Override public V replace(K k, V v) {
+            return map.replace(requireNonNull(k), requireNonNull(v));
+        }
 
-        public boolean replace(K k, V v, V vv) { return map.replace(k, v, vv); };
+        @Override public boolean replace(K k, V v, V vv) {
+            return map.replace(requireNonNull(k),
+                               requireNonNull(v),
+                               requireNonNull(vv));
+        }
 
-        public boolean remove(Object k, Object v) { return map.remove(k, v); }
+        @Override public boolean remove(Object k, Object v) {
+            return map.remove(requireNonNull(k), requireNonNull(v));
+        }
 
-        public V putIfAbsent(K k, V v) { return map.putIfAbsent(k, v); }
+        @Override public V putIfAbsent(K k, V v) {
+            return map.putIfAbsent(requireNonNull(k), requireNonNull(v));
+        }
     }
 }

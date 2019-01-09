@@ -46,6 +46,7 @@ import com.sun.tools.javac.util.StringUtils;
  * @author Jamie Ho (rewrite)
  * @author Bhavesh Patel (Modified)
  */
+@Deprecated
 public class MethodWriterImpl extends AbstractExecutableMemberWriter
         implements MethodWriter, MemberSummaryWriter {
 
@@ -128,6 +129,7 @@ public class MethodWriterImpl extends AbstractExecutableMemberWriter
     public Content getSignature(MethodDoc method) {
         Content pre = new HtmlTree(HtmlTag.PRE);
         writer.addAnnotationInfo(method, pre);
+        int annotationLength = pre.charCount();
         addModifiers(method, pre);
         addTypeParameters(method, pre);
         addReturnType(method, pre);
@@ -137,7 +139,7 @@ public class MethodWriterImpl extends AbstractExecutableMemberWriter
         } else {
             addName(method.name(), pre);
         }
-        int indent = pre.charCount();
+        int indent = pre.charCount() - annotationLength;
         addParameters(method, pre, indent);
         addExceptions(method, pre, indent);
         return pre;

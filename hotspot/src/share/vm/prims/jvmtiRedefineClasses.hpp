@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,6 @@
 #include "memory/resourceArea.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "oops/objArrayOop.hpp"
-#include "prims/jvmtiRedefineClassesTrace.hpp"
 #include "runtime/vm_operations.hpp"
 
 // Introduction:
@@ -420,23 +419,23 @@ class VM_RedefineClasses: public VM_Operation {
   void increment_class_counter(InstanceKlass *ik, TRAPS);
 
   // Support for constant pool merging (these routines are in alpha order):
-  void append_entry(constantPoolHandle scratch_cp, int scratch_i,
+  void append_entry(const constantPoolHandle& scratch_cp, int scratch_i,
     constantPoolHandle *merge_cp_p, int *merge_cp_length_p, TRAPS);
-  void append_operand(constantPoolHandle scratch_cp, int scratch_bootstrap_spec_index,
+  void append_operand(const constantPoolHandle& scratch_cp, int scratch_bootstrap_spec_index,
     constantPoolHandle *merge_cp_p, int *merge_cp_length_p, TRAPS);
-  void finalize_operands_merge(constantPoolHandle merge_cp, TRAPS);
-  int find_or_append_indirect_entry(constantPoolHandle scratch_cp, int scratch_i,
+  void finalize_operands_merge(const constantPoolHandle& merge_cp, TRAPS);
+  int find_or_append_indirect_entry(const constantPoolHandle& scratch_cp, int scratch_i,
     constantPoolHandle *merge_cp_p, int *merge_cp_length_p, TRAPS);
-  int find_or_append_operand(constantPoolHandle scratch_cp, int scratch_bootstrap_spec_index,
+  int find_or_append_operand(const constantPoolHandle& scratch_cp, int scratch_bootstrap_spec_index,
     constantPoolHandle *merge_cp_p, int *merge_cp_length_p, TRAPS);
   int find_new_index(int old_index);
   int find_new_operand_index(int old_bootstrap_spec_index);
-  bool is_unresolved_class_mismatch(constantPoolHandle cp1, int index1,
-    constantPoolHandle cp2, int index2);
-  void map_index(constantPoolHandle scratch_cp, int old_index, int new_index);
+  bool is_unresolved_class_mismatch(const constantPoolHandle& cp1, int index1,
+    const constantPoolHandle& cp2, int index2);
+  void map_index(const constantPoolHandle& scratch_cp, int old_index, int new_index);
   void map_operand_index(int old_bootstrap_spec_index, int new_bootstrap_spec_index);
-  bool merge_constant_pools(constantPoolHandle old_cp,
-    constantPoolHandle scratch_cp, constantPoolHandle *merge_cp_p,
+  bool merge_constant_pools(const constantPoolHandle& old_cp,
+    const constantPoolHandle& scratch_cp, constantPoolHandle *merge_cp_p,
     int *merge_cp_length_p, TRAPS);
   jvmtiError merge_cp_and_rewrite(instanceKlassHandle the_class,
     instanceKlassHandle scratch_class, TRAPS);
@@ -480,7 +479,7 @@ class VM_RedefineClasses: public VM_Operation {
     instanceKlassHandle scratch_class, TRAPS);
   bool rewrite_cp_refs_in_methods_type_annotations(
     instanceKlassHandle scratch_class, TRAPS);
-  void rewrite_cp_refs_in_stack_map_table(methodHandle method, TRAPS);
+  void rewrite_cp_refs_in_stack_map_table(const methodHandle& method, TRAPS);
   void rewrite_cp_refs_in_verification_type_info(
          address& stackmap_addr_ref, address stackmap_end, u2 frame_i,
          u1 frame_size, TRAPS);
@@ -489,6 +488,10 @@ class VM_RedefineClasses: public VM_Operation {
          constantPoolHandle scratch_cp, int scratch_cp_length, TRAPS);
 
   void flush_dependent_code(instanceKlassHandle k_h, TRAPS);
+
+  // lock classes to redefine since constant pool merging isn't thread safe.
+  void lock_classes();
+  void unlock_classes();
 
   static void dump_methods();
 

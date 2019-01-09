@@ -25,15 +25,14 @@
  * @test
  * @bug 8011867
  * @summary Accept unknown PKCS #9 attributes
- * @modules java.base/sun.misc
- *          java.base/sun.security.pkcs
+ * @modules java.base/sun.security.pkcs
  *          java.base/sun.security.util
  */
 
 import java.io.*;
 import java.util.Arrays;
 
-import sun.misc.HexDumpEncoder;
+import sun.security.util.HexDumpEncoder;
 import sun.security.pkcs.PKCS9Attribute;
 import sun.security.util.DerValue;
 import sun.security.util.ObjectIdentifier;

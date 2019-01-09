@@ -676,7 +676,8 @@ public class BasicTableUI extends TableUI
             }
         }
 
-        public boolean isEnabled(Object sender) {
+        @Override
+        public boolean accept(Object sender) {
             String key = getName();
 
             if (sender instanceof JTable &&
@@ -867,6 +868,7 @@ public class BasicTableUI extends TableUI
 
         public void keyReleased(KeyEvent e) { }
 
+        @SuppressWarnings("deprecation")
         public void keyTyped(KeyEvent e) {
             KeyStroke keyStroke = KeyStroke.getKeyStroke(e.getKeyChar(),
                     e.getModifiers());
@@ -1811,10 +1813,12 @@ public class BasicTableUI extends TableUI
         }
 
         boolean ltr = table.getComponentOrientation().isLeftToRight();
-
-        Point upperLeft = clip.getLocation();
-        Point lowerRight = new Point(clip.x + clip.width - 1,
-                                     clip.y + clip.height - 1);
+        Point upperLeft, lowerRight;
+        // compute the visible part of table which needs to be painted
+        Rectangle visibleBounds = clip.intersection(bounds);
+        upperLeft = visibleBounds.getLocation();
+        lowerRight = new Point(visibleBounds.x + visibleBounds.width - 1,
+                               visibleBounds.y + visibleBounds.height - 1);
 
         int rMin = table.rowAtPoint(upperLeft);
         int rMax = table.rowAtPoint(lowerRight);
@@ -1831,6 +1835,18 @@ public class BasicTableUI extends TableUI
             rMax = table.getRowCount()-1;
         }
 
+        // For FIT_WIDTH, all columns should be printed irrespective of
+        // how many columns are visible. So, we used clip which is already set to
+        // total col width instead of visible region
+        // Since JTable.PrintMode is not accessible
+        // from here, we aet "Table.printMode" in TablePrintable#print and
+        // access from here.
+        Object printMode = table.getClientProperty("Table.printMode");
+        if ((printMode == JTable.PrintMode.FIT_WIDTH)) {
+            upperLeft = clip.getLocation();
+            lowerRight = new Point(clip.x + clip.width - 1,
+                                   clip.y + clip.height - 1);
+        }
         int cMin = table.columnAtPoint(ltr ? upperLeft : lowerRight);
         int cMax = table.columnAtPoint(ltr ? lowerRight : upperLeft);
         // This should never happen.
@@ -1841,6 +1857,23 @@ public class BasicTableUI extends TableUI
         // Replace this with the index of the last column.
         if (cMax == -1) {
             cMax = table.getColumnCount()-1;
+        }
+
+        Container comp = SwingUtilities.getUnwrappedParent(table);
+        if (comp != null) {
+            comp = comp.getParent();
+        }
+
+        if (comp != null && !(comp instanceof JViewport) && !(comp instanceof JScrollPane)) {
+            // We did rMax-1 to paint the same number of rows that are drawn on console
+            // otherwise 1 extra row is printed per page than that are displayed
+            // when there is no scrollPane and we do printing of table
+            // but not when rmax is already pointing to index of last row
+            // and if there is any selected rows
+            if (rMax != (table.getRowCount() - 1) &&
+                    (table.getSelectedRow() == -1)) {
+                rMax = rMax - 1;
+            }
         }
 
         // Paint the grid.
@@ -1998,7 +2031,7 @@ public class BasicTableUI extends TableUI
             int y = damagedArea.y;
             for (int row = rMin; row <= rMax; row++) {
                 y += table.getRowHeight(row);
-                g.drawLine(damagedArea.x, y - 1, tableWidth - 1, y - 1);
+                SwingUtilities2.drawHLine(g, damagedArea.x, tableWidth - 1, y - 1);
             }
         }
         if (table.getShowVerticalLines()) {
@@ -2010,14 +2043,14 @@ public class BasicTableUI extends TableUI
                 for (int column = cMin; column <= cMax; column++) {
                     int w = cm.getColumn(column).getWidth();
                     x += w;
-                    g.drawLine(x - 1, 0, x - 1, tableHeight - 1);
+                    SwingUtilities2.drawVLine(g, x - 1, 0, tableHeight - 1);
                 }
             } else {
                 x = damagedArea.x;
                 for (int column = cMax; column >= cMin; column--) {
                     int w = cm.getColumn(column).getWidth();
                     x += w;
-                    g.drawLine(x - 1, 0, x - 1, tableHeight - 1);
+                    SwingUtilities2.drawVLine(g, x - 1, 0, tableHeight - 1);
                 }
             }
         }

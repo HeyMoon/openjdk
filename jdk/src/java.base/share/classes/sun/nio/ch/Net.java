@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,14 +27,12 @@ package sun.nio.ch;
 
 import java.io.*;
 import java.net.*;
-import jdk.net.*;
 import java.nio.channels.*;
 import java.util.*;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
-import java.security.PrivilegedExceptionAction;
-import sun.net.ExtendedOptionsImpl;
-
+import sun.net.ext.ExtendedSocketOptions;
+import sun.security.action.GetPropertyAction;
 
 public class Net {
 
@@ -55,8 +53,10 @@ public class Net {
 
     // -- Miscellaneous utilities --
 
-    private static volatile boolean checkedIPv6 = false;
+    private static volatile boolean checkedIPv6;
     private static volatile boolean isIPv6Available;
+    private static volatile boolean checkedReusePort;
+    private static volatile boolean isReusePortAvailable;
 
     /**
      * Tells whether dual-IPv4/IPv6 sockets should be used.
@@ -67,6 +67,17 @@ public class Net {
             checkedIPv6 = true;
         }
         return isIPv6Available;
+    }
+
+    /**
+     * Tells whether SO_REUSEPORT is supported.
+     */
+    static boolean isReusePortAvailable() {
+        if (!checkedReusePort) {
+            isReusePortAvailable = isReusePortAvailable0();
+            checkedReusePort = true;
+        }
+        return isReusePortAvailable;
     }
 
     /**
@@ -268,6 +279,9 @@ public class Net {
 
     // -- Socket options
 
+    static final ExtendedSocketOptions extendedOptions =
+            ExtendedSocketOptions.getInstance();
+
     static void setSocketOption(FileDescriptor fd, ProtocolFamily family,
                                 SocketOption<?> name, Object value)
         throws IOException
@@ -278,12 +292,8 @@ public class Net {
         // only simple values supported by this method
         Class<?> type = name.type();
 
-        if (type == SocketFlow.class) {
-            SecurityManager sm = System.getSecurityManager();
-            if (sm != null) {
-                sm.checkPermission(new NetworkPermission("setOption.SO_FLOW_SLA"));
-            }
-            ExtendedOptionsImpl.setFlowOption(fd, (SocketFlow)value);
+        if (extendedOptions.isOptionSupported(name)) {
+            extendedOptions.setOption(fd, name, value);
             return;
         }
 
@@ -340,14 +350,8 @@ public class Net {
     {
         Class<?> type = name.type();
 
-        if (type == SocketFlow.class) {
-            SecurityManager sm = System.getSecurityManager();
-            if (sm != null) {
-                sm.checkPermission(new NetworkPermission("getOption.SO_FLOW_SLA"));
-            }
-            SocketFlow flow = SocketFlow.create();
-            ExtendedOptionsImpl.getFlowOption(fd, flow);
-            return flow;
+        if (extendedOptions.isOptionSupported(name)) {
+            return extendedOptions.getOption(fd, name);
         }
 
         // only simple values supported by this method
@@ -370,13 +374,8 @@ public class Net {
     }
 
     public static boolean isFastTcpLoopbackRequested() {
-        String loopbackProp = java.security.AccessController.doPrivileged(
-            new PrivilegedAction<String>() {
-                @Override
-                public String run() {
-                    return System.getProperty("jdk.net.useFastTcpLoopback");
-                }
-            });
+        String loopbackProp = GetPropertyAction
+                .privilegedGetProperty("jdk.net.useFastTcpLoopback");
         boolean enable;
         if ("".equals(loopbackProp)) {
             enable = true;
@@ -390,9 +389,10 @@ public class Net {
 
     private static native boolean isIPv6Available0();
 
+    private static native boolean isReusePortAvailable0();
+
     /*
-     * Returns 1 for Windows versions that support exclusive binding by default, 0
-     * for those that do not, and -1 for Solaris/Linux/Mac OS
+     * Returns 1 for Windows and -1 for Solaris/Linux/Mac OS
      */
     private static native int isExclusiveBindAvailable();
 
@@ -461,9 +461,9 @@ public class Net {
         throws IOException;
 
 
-    public final static int SHUT_RD = 0;
-    public final static int SHUT_WR = 1;
-    public final static int SHUT_RDWR = 2;
+    public static final int SHUT_RD = 0;
+    public static final int SHUT_WR = 1;
+    public static final int SHUT_RDWR = 2;
 
     static native void shutdown(FileDescriptor fd, int how) throws IOException;
 
@@ -633,17 +633,10 @@ public class Net {
     static {
         int availLevel = isExclusiveBindAvailable();
         if (availLevel >= 0) {
-            String exclBindProp =
-                java.security.AccessController.doPrivileged(
-                    new PrivilegedAction<String>() {
-                        @Override
-                        public String run() {
-                            return System.getProperty(
-                                    "sun.net.useExclusiveBind");
-                        }
-                    });
+            String exclBindProp = GetPropertyAction
+                    .privilegedGetProperty("sun.net.useExclusiveBind");
             if (exclBindProp != null) {
-                exclusiveBind = exclBindProp.length() == 0 ?
+                exclusiveBind = exclBindProp.isEmpty() ?
                         true : Boolean.parseBoolean(exclBindProp);
             } else if (availLevel == 1) {
                 exclusiveBind = true;

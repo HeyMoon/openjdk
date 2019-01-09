@@ -25,54 +25,108 @@
 
 package jdk.nashorn.internal.runtime.linker;
 
+import static jdk.dynalink.StandardNamespace.ELEMENT;
+import static jdk.dynalink.StandardNamespace.METHOD;
+import static jdk.dynalink.StandardNamespace.PROPERTY;
+import static jdk.dynalink.StandardOperation.GET;
+import static jdk.dynalink.StandardOperation.SET;
+
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodHandles.Lookup;
 import java.lang.invoke.MethodType;
+import java.lang.ref.Reference;
+import java.lang.ref.WeakReference;
+import java.security.AccessControlContext;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
+import java.util.Collections;
+import java.util.Map;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import jdk.internal.dynalink.CallSiteDescriptor;
-import jdk.internal.dynalink.support.AbstractCallSiteDescriptor;
-import jdk.internal.dynalink.support.CallSiteDescriptorFactory;
+import java.util.stream.Stream;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.NamedOperation;
+import jdk.dynalink.NamespaceOperation;
+import jdk.dynalink.Operation;
+import jdk.dynalink.SecureLookupSupplier;
+import jdk.dynalink.StandardNamespace;
+import jdk.dynalink.StandardOperation;
 import jdk.nashorn.internal.ir.debug.NashornTextifier;
+import jdk.nashorn.internal.runtime.AccessControlContextFactory;
+import jdk.nashorn.internal.runtime.ScriptRuntime;
 
 /**
- * Nashorn-specific implementation of Dynalink's {@link CallSiteDescriptor}. The reason we have our own subclass is that
- * we can have a more compact representation, as we know that we're always only using {@code "dyn:*"} operations; also
- * we're storing flags in an additional primitive field.
+ * Nashorn-specific implementation of Dynalink's {@link CallSiteDescriptor}.
+ * The reason we have our own subclass is that we're storing flags in an
+ * additional primitive field. The class also exposes some useful utilities in
+ * form of static methods.
  */
-public final class NashornCallSiteDescriptor extends AbstractCallSiteDescriptor {
+public final class NashornCallSiteDescriptor extends CallSiteDescriptor {
+    // Lowest three bits describe the operation
+    /** Property getter operation {@code obj.prop} */
+    public static final int GET_PROPERTY        = 0;
+    /** Element getter operation {@code obj[index]} */
+    public static final int GET_ELEMENT         = 1;
+    /** Property getter operation, subsequently invoked {@code obj.prop()} */
+    public static final int GET_METHOD_PROPERTY = 2;
+    /** Element getter operation, subsequently invoked {@code obj[index]()} */
+    public static final int GET_METHOD_ELEMENT  = 3;
+    /** Property setter operation {@code obj.prop = value} */
+    public static final int SET_PROPERTY        = 4;
+    /** Element setter operation {@code obj[index] = value} */
+    public static final int SET_ELEMENT         = 5;
+    /** Call operation {@code fn(args...)} */
+    public static final int CALL                = 6;
+    /** New operation {@code new Constructor(args...)} */
+    public static final int NEW                 = 7;
+
+    private static final int OPERATION_MASK = 7;
+
+    // Correspond to the operation indices above.
+    private static final Operation[] OPERATIONS = new Operation[] {
+        GET.withNamespaces(PROPERTY, ELEMENT, METHOD),
+        GET.withNamespaces(ELEMENT, PROPERTY, METHOD),
+        GET.withNamespaces(METHOD, PROPERTY, ELEMENT),
+        GET.withNamespaces(METHOD, ELEMENT, PROPERTY),
+        SET.withNamespaces(PROPERTY, ELEMENT),
+        SET.withNamespaces(ELEMENT, PROPERTY),
+        StandardOperation.CALL,
+        StandardOperation.NEW
+    };
+
     /** Flags that the call site references a scope variable (it's an identifier reference or a var declaration, not a
      * property access expression. */
-    public static final int CALLSITE_SCOPE         = 1 << 0;
+    public static final int CALLSITE_SCOPE         = 1 << 3;
     /** Flags that the call site is in code that uses ECMAScript strict mode. */
-    public static final int CALLSITE_STRICT        = 1 << 1;
+    public static final int CALLSITE_STRICT        = 1 << 4;
     /** Flags that a property getter or setter call site references a scope variable that is located at a known distance
      * in the scope chain. Such getters and setters can often be linked more optimally using these assumptions. */
-    public static final int CALLSITE_FAST_SCOPE    = 1 << 2;
+    public static final int CALLSITE_FAST_SCOPE    = 1 << 5;
     /** Flags that a callsite type is optimistic, i.e. we might get back a wider return value than encoded in the
      * descriptor, and in that case we have to throw an UnwarrantedOptimismException */
-    public static final int CALLSITE_OPTIMISTIC    = 1 << 3;
+    public static final int CALLSITE_OPTIMISTIC    = 1 << 6;
     /** Is this really an apply that we try to call as a call? */
-    public static final int CALLSITE_APPLY_TO_CALL = 1 << 4;
+    public static final int CALLSITE_APPLY_TO_CALL = 1 << 7;
     /** Does this a callsite for a variable declaration? */
-    public static final int CALLSITE_DECLARE       = 1 << 5;
+    public static final int CALLSITE_DECLARE       = 1 << 8;
 
     /** Flags that the call site is profiled; Contexts that have {@code "profile.callsites"} boolean property set emit
      * code where call sites have this flag set. */
-    public static final int CALLSITE_PROFILE         = 1 << 6;
+    public static final int CALLSITE_PROFILE         = 1 << 9;
     /** Flags that the call site is traced; Contexts that have {@code "trace.callsites"} property set emit code where
      * call sites have this flag set. */
-    public static final int CALLSITE_TRACE           = 1 << 7;
+    public static final int CALLSITE_TRACE           = 1 << 10;
     /** Flags that the call site linkage miss (and thus, relinking) is traced; Contexts that have the keyword
      * {@code "miss"} in their {@code "trace.callsites"} property emit code where call sites have this flag set. */
-    public static final int CALLSITE_TRACE_MISSES    = 1 << 8;
+    public static final int CALLSITE_TRACE_MISSES    = 1 << 11;
     /** Flags that entry/exit to/from the method linked at call site are traced; Contexts that have the keyword
      * {@code "enterexit"} in their {@code "trace.callsites"} property emit code where call sites have this flag set. */
-    public static final int CALLSITE_TRACE_ENTEREXIT = 1 << 9;
+    public static final int CALLSITE_TRACE_ENTEREXIT = 1 << 12;
     /** Flags that values passed as arguments to and returned from the method linked at call site are traced; Contexts
      * that have the keyword {@code "values"} in their {@code "trace.callsites"} property emit code where call sites
      * have this flag set. */
-    public static final int CALLSITE_TRACE_VALUES    = 1 << 10;
+    public static final int CALLSITE_TRACE_VALUES    = 1 << 13;
 
     //we could have more tracing flags here, for example CALLSITE_TRACE_SCOPE, but bits are a bit precious
     //right now given the program points
@@ -84,10 +138,20 @@ public final class NashornCallSiteDescriptor extends AbstractCallSiteDescriptor 
      * TODO: rethink if we need the various profile/trace flags or the linker can use the Context instead to query its
      * trace/profile settings.
      */
-    public static final int CALLSITE_PROGRAM_POINT_SHIFT = 11;
+    public static final int CALLSITE_PROGRAM_POINT_SHIFT = 14;
 
     /**
-     * Maximum program point value. 21 bits should be enough for anyone
+     * Maximum program point value. We have 18 bits left over after flags, and
+     * it should be plenty. Program points are local to a single function. Every
+     * function maps to a single JVM bytecode method that can have at most 65535
+     * bytes. (Large functions are synthetically split into smaller functions.)
+     * A single invokedynamic is 5 bytes; even if a method consists of only
+     * invokedynamic instructions that leaves us with at most 65535/5 = 13107
+     * program points for the largest single method; those can be expressed on
+     * 14 bits. It is true that numbering of program points is independent of
+     * bytecode representation, but if a function would need more than ~14 bits
+     * for the program points, then it is reasonable to presume splitter
+     * would've split it into several smaller functions already.
      */
     public static final int MAX_PROGRAM_POINT_VALUE = (1 << 32 - CALLSITE_PROGRAM_POINT_SHIFT) - 1;
 
@@ -104,147 +168,227 @@ public final class NashornCallSiteDescriptor extends AbstractCallSiteDescriptor 
         }
     };
 
-    private final MethodHandles.Lookup lookup;
-    private final String operator;
-    private final String operand;
-    private final MethodType methodType;
+    private static final AccessControlContext GET_LOOKUP_PERMISSION_CONTEXT =
+            AccessControlContextFactory.createAccessControlContext(SecureLookupSupplier.GET_LOOKUP_PERMISSION_NAME);
+
+    @SuppressWarnings("unchecked")
+    private static final Map<String, Reference<NamedOperation>>[] NAMED_OPERATIONS =
+            Stream.generate(() -> Collections.synchronizedMap(new WeakHashMap<>()))
+            .limit(OPERATIONS.length).toArray(Map[]::new);
+
     private final int flags;
 
     /**
      * Function used by {@link NashornTextifier} to represent call site flags in
      * human readable form
      * @param flags call site flags
-     * @return human readable form of this callsite descriptor
+     * @param sb the string builder
      */
-    public static String toString(final int flags) {
-        final StringBuilder sb = new StringBuilder();
+    public static void appendFlags(final int flags, final StringBuilder sb) {
+        final int pp = flags >> CALLSITE_PROGRAM_POINT_SHIFT;
+        if (pp != 0) {
+            sb.append(" pp=").append(pp);
+        }
         if ((flags & CALLSITE_SCOPE) != 0) {
             if ((flags & CALLSITE_FAST_SCOPE) != 0) {
-                sb.append("fastscope ");
+                sb.append(" fastscope");
             } else {
-                assert (flags & CALLSITE_FAST_SCOPE) == 0 : "can't be fastscope without scope";
-                sb.append("scope ");
+                sb.append(" scope");
             }
             if ((flags & CALLSITE_DECLARE) != 0) {
-                sb.append("declare ");
+                sb.append(" declare");
             }
+        } else {
+            assert (flags & CALLSITE_FAST_SCOPE) == 0 : "can't be fastscope without scope";
         }
         if ((flags & CALLSITE_APPLY_TO_CALL) != 0) {
-            sb.append("apply2call ");
+            sb.append(" apply2call");
         }
         if ((flags & CALLSITE_STRICT) != 0) {
-            sb.append("strict ");
+            sb.append(" strict");
         }
-        return sb.length() == 0 ? "" : " " + sb.toString().trim();
+    }
+
+    /**
+     * Given call site flags, returns the operation name encoded in them.
+     * @param flags flags
+     * @return the operation name
+     */
+    public static String getOperationName(final int flags) {
+        switch(flags & OPERATION_MASK) {
+        case 0: return "GET_PROPERTY";
+        case 1: return "GET_ELEMENT";
+        case 2: return "GET_METHOD_PROPERTY";
+        case 3: return "GET_METHOD_ELEMENT";
+        case 4: return "SET_PROPERTY";
+        case 5: return "SET_ELEMENT";
+        case 6: return "CALL";
+        case 7: return "NEW";
+        default: throw new AssertionError();
+        }
     }
 
     /**
      * Retrieves a Nashorn call site descriptor with the specified values. Since call site descriptors are immutable
      * this method is at liberty to retrieve canonicalized instances (although it is not guaranteed it will do so).
      * @param lookup the lookup describing the script
-     * @param name the name at the call site, e.g. {@code "dyn:getProp|getElem|getMethod:color"}.
+     * @param name the name at the call site. Can not be null, but it can be empty.
      * @param methodType the method type at the call site
      * @param flags Nashorn-specific call site flags
      * @return a call site descriptor with the specified values.
      */
     public static NashornCallSiteDescriptor get(final MethodHandles.Lookup lookup, final String name,
             final MethodType methodType, final int flags) {
-        final String[] tokenizedName = CallSiteDescriptorFactory.tokenizeName(name);
-        assert tokenizedName.length == 2 || tokenizedName.length == 3;
-        assert "dyn".equals(tokenizedName[0]);
-        assert tokenizedName[1] != null;
-        // TODO: see if we can move mangling/unmangling into Dynalink
-        return get(lookup, tokenizedName[1], tokenizedName.length == 3 ? tokenizedName[2].intern() : null,
-                methodType, flags);
+        final int opIndex = flags & OPERATION_MASK;
+        final Operation baseOp = OPERATIONS[opIndex];
+        final String decodedName = NameCodec.decode(name);
+        final Operation op = decodedName.isEmpty() ? baseOp : getNamedOperation(decodedName, opIndex, baseOp);
+        return get(lookup, op, methodType, flags);
     }
 
-    private static NashornCallSiteDescriptor get(final MethodHandles.Lookup lookup, final String operator, final String operand, final MethodType methodType, final int flags) {
-        final NashornCallSiteDescriptor csd = new NashornCallSiteDescriptor(lookup, operator, operand, methodType, flags);
+    private static NamedOperation getNamedOperation(final String name, final int opIndex, final Operation baseOp) {
+        final Map<String, Reference<NamedOperation>> namedOps = NAMED_OPERATIONS[opIndex];
+        final Reference<NamedOperation> ref = namedOps.get(name);
+        if (ref != null) {
+            final NamedOperation existing = ref.get();
+            if (existing != null) {
+                return existing;
+            }
+        }
+        final NamedOperation newOp = baseOp.named(name);
+        namedOps.put(name, new WeakReference<>(newOp));
+        return newOp;
+    }
+
+    private static NashornCallSiteDescriptor get(final MethodHandles.Lookup lookup, final Operation operation, final MethodType methodType, final int flags) {
+        final NashornCallSiteDescriptor csd = new NashornCallSiteDescriptor(lookup, operation, methodType, flags);
         // Many of these call site descriptors are identical (e.g. every getter for a property color will be
-        // "dyn:getProp:color(Object)Object", so it makes sense canonicalizing them.
-        final ConcurrentMap<NashornCallSiteDescriptor, NashornCallSiteDescriptor> classCanonicals = canonicals.get(lookup.lookupClass());
-        final NashornCallSiteDescriptor canonical = classCanonicals.putIfAbsent(csd, csd);
+        // "GET_PROPERTY:color(Object)Object", so it makes sense canonicalizing them. Make an exception for
+        // optimistic call site descriptors, as they also carry a program point making them unique.
+        if (csd.isOptimistic()) {
+            return csd;
+        }
+        final NashornCallSiteDescriptor canonical = canonicals.get(lookup.lookupClass()).putIfAbsent(csd, csd);
         return canonical != null ? canonical : csd;
     }
 
-    private NashornCallSiteDescriptor(final MethodHandles.Lookup lookup, final String operator, final String operand,
-            final MethodType methodType, final int flags) {
-        this.lookup = lookup;
-        this.operator = operator;
-        this.operand = operand;
-        this.methodType = methodType;
+    private NashornCallSiteDescriptor(final MethodHandles.Lookup lookup, final Operation operation, final MethodType methodType, final int flags) {
+        super(lookup, operation, methodType);
         this.flags = flags;
     }
 
-    @Override
-    public int getNameTokenCount() {
-        return operand == null ? 2 : 3;
-    }
-
-    @Override
-    public String getNameToken(final int i) {
-        switch(i) {
-        case 0: return "dyn";
-        case 1: return operator;
-        case 2:
-            if(operand != null) {
-                return operand;
-            }
-            break;
-        default:
-            break;
+    static Lookup getLookupInternal(final CallSiteDescriptor csd) {
+        if (csd instanceof NashornCallSiteDescriptor) {
+            return ((NashornCallSiteDescriptor)csd).getLookupPrivileged();
         }
-        throw new IndexOutOfBoundsException(String.valueOf(i));
+        return AccessController.doPrivileged((PrivilegedAction<Lookup>)()->csd.getLookup(), GET_LOOKUP_PERMISSION_CONTEXT);
     }
 
     @Override
-    public Lookup getLookup() {
-        return lookup;
+    public boolean equals(final Object obj) {
+        return super.equals(obj) && flags == ((NashornCallSiteDescriptor)obj).flags;
     }
 
     @Override
-    public boolean equals(final CallSiteDescriptor csd) {
-        return super.equals(csd) && flags == getFlags(csd);
-    }
-
-    @Override
-    public MethodType getMethodType() {
-        return methodType;
+    public int hashCode() {
+        return super.hashCode() ^ flags;
     }
 
     /**
-     * Returns the operator (e.g. {@code "getProp"}) in this call site descriptor's name. Equivalent to
-     * {@code getNameToken(CallSiteDescriptor.OPERATOR)}. The returned operator can be composite.
-     * @return the operator in this call site descriptor's name.
+     * Returns the named operand in the passed descriptor's operation.
+     * Equivalent to
+     * {@code ((NamedOperation)desc.getOperation()).getName().toString()} for
+     * descriptors with a named operand. For descriptors without named operands
+     * returns null.
+     * @param desc the call site descriptors
+     * @return the named operand in this descriptor's operation.
      */
-    public String getOperator() {
-        return operator;
+    public static String getOperand(final CallSiteDescriptor desc) {
+        final Operation operation = desc.getOperation();
+        return operation instanceof NamedOperation ? ((NamedOperation)operation).getName().toString() : null;
+    }
+
+    private static StandardNamespace findFirstStandardNamespace(final CallSiteDescriptor desc) {
+        return StandardNamespace.findFirst(desc.getOperation());
     }
 
     /**
-     * Returns the first operator in this call site descriptor's name. E.g. if this call site descriptor has a composite
-     * operation {@code "getProp|getMethod|getElem"}, it will return {@code "getProp"}. Nashorn - being a ECMAScript
-     * engine - does not distinguish between property, element, and method namespace; ECMAScript objects just have one
-     * single property namespace for all these, therefore it is largely irrelevant what the composite operation is
-     * structured like; if the first operation can't be satisfied, neither can the others. The first operation is
-     * however sometimes used to slightly alter the semantics; for example, a distinction between {@code "getProp"} and
-     * {@code "getMethod"} being the first operation can translate into whether {@code "__noSuchProperty__"} or
-     * {@code "__noSuchMethod__"} will be executed in case the property is not found.
-     * @return the first operator in this call site descriptor's name.
+     * Returns true if the operation of the call descriptor is operating on the method namespace first.
+     * @param desc the call descriptor in question.
+     * @return true if the operation of the call descriptor is operating on the method namespace first.
      */
-    public String getFirstOperator() {
-        final int delim = operator.indexOf(CallSiteDescriptor.OPERATOR_DELIMITER);
-        return delim == -1 ? operator : operator.substring(0, delim);
+    public static boolean isMethodFirstOperation(final CallSiteDescriptor desc) {
+        return findFirstStandardNamespace(desc) == StandardNamespace.METHOD;
     }
 
     /**
-     * Returns the named operand in this descriptor's name. Equivalent to
-     * {@code getNameToken(CallSiteDescriptor.NAME_OPERAND)}. E.g. for operation {@code "dyn:getProp:color"}, returns
-     * {@code "color"}. For call sites without named operands (e.g. {@code "dyn:new"}) returns null.
-     * @return the named operand in this descriptor's name.
+     * Returns true if there's a namespace operation in the call descriptor and it is operating on at least
+     * one {@link StandardNamespace}. This method is only needed for exported linkers, since internal linkers
+     * always operate on Nashorn-generated call sites, and they always operate on standard namespaces only.
+     * @param desc the call descriptor in question.
+     * @return true if the operation of the call descriptor is operating on at least one standard namespace.
      */
-    public String getOperand() {
-        return operand;
+    public static boolean hasStandardNamespace(final CallSiteDescriptor desc) {
+        return findFirstStandardNamespace(desc) != null;
+    }
+
+    /**
+     * Returns the base operation in this call site descriptor after unwrapping it from both a named operation
+     * and a namespace operation.
+     * @param desc the call site descriptor.
+     * @return the base operation in this call site descriptor.
+     */
+    public static Operation getBaseOperation(final CallSiteDescriptor desc) {
+        return NamespaceOperation.getBaseOperation(NamedOperation.getBaseOperation(desc.getOperation()));
+    }
+
+    /**
+     * Returns the standard operation that is the base operation in this call site descriptor.
+     * @param desc the call site descriptor.
+     * @return the standard operation that is the base operation in this call site descriptor.
+     * @throws ClassCastException if the base operation is not a standard operation. This method is only
+     * safe to use when the base operation is known to be a standard operation (e.g. all Nashorn call sites
+     * are such, so it's safe to use from internal linkers).
+     */
+    public static StandardOperation getStandardOperation(final CallSiteDescriptor desc) {
+        return (StandardOperation)getBaseOperation(desc);
+    }
+
+    /**
+     * Returns true if the passed call site descriptor contains the specified standard operation on the
+     * specified standard namespace.
+     * @param desc the call site descriptor.
+     * @param operation the operation whose presence is tested.
+     * @param namespace the namespace on which the operation operates.
+     * @return Returns true if the call site descriptor contains the specified standard operation on the
+     * specified standard namespace.
+     */
+    public static boolean contains(final CallSiteDescriptor desc, final StandardOperation operation, final StandardNamespace namespace) {
+        return NamespaceOperation.contains(NamedOperation.getBaseOperation(desc.getOperation()), operation, namespace);
+    }
+
+    /**
+     * Returns the error message to be used when CALL or NEW is used on a non-function.
+     *
+     * @param obj object on which CALL or NEW is used
+     * @return error message
+     */
+    private String getFunctionErrorMessage(final Object obj) {
+        final String funcDesc = getOperand(this);
+        return funcDesc != null? funcDesc : ScriptRuntime.safeToString(obj);
+    }
+
+    /**
+     * Returns the error message to be used when CALL or NEW is used on a non-function.
+     *
+     * @param desc call site descriptor
+     * @param obj object on which CALL or NEW is used
+     * @return error message
+     */
+    public static String getFunctionErrorMessage(final CallSiteDescriptor desc, final Object obj) {
+        return desc instanceof NashornCallSiteDescriptor ?
+                ((NashornCallSiteDescriptor)desc).getFunctionErrorMessage(obj) :
+                ScriptRuntime.safeToString(obj);
     }
 
     /**
@@ -395,8 +539,12 @@ public final class NashornCallSiteDescriptor extends AbstractCallSiteDescriptor 
     }
 
     @Override
-    public CallSiteDescriptor changeMethodType(final MethodType newMethodType) {
-        return get(getLookup(), operator, operand, newMethodType, flags);
+    public CallSiteDescriptor changeMethodTypeInternal(final MethodType newMethodType) {
+        return get(getLookupPrivileged(), getOperation(), newMethodType, flags);
     }
 
+    @Override
+    protected CallSiteDescriptor changeOperationInternal(final Operation newOperation) {
+        return get(getLookupPrivileged(), newOperation, getMethodType(), flags);
+    }
 }

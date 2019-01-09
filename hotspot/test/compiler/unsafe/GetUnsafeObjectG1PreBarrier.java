@@ -25,13 +25,17 @@
  * @test
  * @bug 8016474
  * @summary The bug only happens with C1 and G1 using a different ObjectAlignmentInBytes than KlassAlignmentInBytes (which is 8)
- * @modules java.base/sun.misc
- * @run main/othervm -Xbatch -XX:+IgnoreUnrecognizedVMOptions -XX:ObjectAlignmentInBytes=32 GetUnsafeObjectG1PreBarrier
+ *
+ * @modules java.base/jdk.internal.misc:+open
+ * @run main/othervm -Xbatch -XX:+IgnoreUnrecognizedVMOptions -XX:ObjectAlignmentInBytes=32
+ *                   compiler.unsafe.GetUnsafeObjectG1PreBarrier
  */
 
-import java.lang.reflect.Field;
+package compiler.unsafe;
 
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
+
+import java.lang.reflect.Field;
 
 public class GetUnsafeObjectG1PreBarrier {
     private static final Unsafe unsafe;

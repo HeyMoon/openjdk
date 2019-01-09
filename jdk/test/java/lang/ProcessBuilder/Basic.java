@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,8 +28,9 @@
  *      6464154 6523983 6206031 4960438 6631352 6631966 6850957 6850958
  *      4947220 7018606 7034570 4244896 5049299 8003488 8054494 8058464
  *      8067796
+ * @key intermittent
  * @summary Basic tests for Process and Environment Variable code
- * @modules java.base/sun.misc
+ * @modules java.base/java.lang:open
  * @run main/othervm/timeout=300 Basic
  * @run main/othervm/timeout=300 -Djdk.lang.Process.launchMechanism=fork Basic
  * @author Martin Buchholz
@@ -310,7 +311,7 @@ public class Basic {
             if (action.equals("sleep")) {
                 Thread.sleep(10 * 60 * 1000L);
             } else if (action.equals("pid")) {
-                System.out.println(ProcessHandle.current().getPid());
+                System.out.println(ProcessHandle.current().pid());
             } else if (action.equals("testIO")) {
                 String expected = "standard input";
                 char[] buf = new char[expected.length()+1];
@@ -653,7 +654,7 @@ public class Basic {
     }
 
     static class EnglishUnix {
-        private final static Boolean is =
+        private static final Boolean is =
             (! Windows.is() && isEnglish("LANG") && isEnglish("LC_ALL"));
 
         private static boolean isEnglish(String envvar) {
@@ -738,7 +739,7 @@ public class Basic {
      * Remove it from the list of env variables
      */
     private static String removeAixExpectedVars(String vars) {
-        return vars.replace("AIXTHREAD_GUARDPAGES=0,","");
+        return vars.replace("AIXTHREAD_GUARDPAGES=0,", "");
     }
 
     private static String sortByLinesWindowsly(String text) {
@@ -785,8 +786,8 @@ public class Basic {
                 equal(entry.getKey(), key);
                 equal(entry.getValue(), value);
             }
-            check(! kIter.hasNext() &&
-                  ! vIter.hasNext());
+            check(!kIter.hasNext() &&
+                    !vIter.hasNext());
 
         } catch (Throwable t) { unexpected(t); }
     }
@@ -815,9 +816,9 @@ public class Basic {
 
     static void checkRedirects(ProcessBuilder pb,
                                Redirect in, Redirect out, Redirect err) {
-        equal(pb.redirectInput(),  in);
+        equal(pb.redirectInput(), in);
         equal(pb.redirectOutput(), out);
-        equal(pb.redirectError(),  err);
+        equal(pb.redirectError(), err);
     }
 
     static void redirectIO(ProcessBuilder pb,
@@ -862,6 +863,7 @@ public class Basic {
         Redirect[] redirects =
             { PIPE,
               INHERIT,
+              DISCARD,
               Redirect.from(ifile),
               Redirect.to(ifile),
               Redirect.appendTo(ifile),
@@ -883,6 +885,10 @@ public class Basic {
         equal(INHERIT.type(), Redirect.Type.INHERIT);
         equal(INHERIT.toString(), "INHERIT");
         equal(INHERIT.file(), null);
+
+        equal(DISCARD.type(), Redirect.Type.WRITE);
+        equal(DISCARD.toString(), "WRITE");
+        equal(DISCARD.file(), new File((Windows.is() ? "NUL" : "/dev/null")));
 
         equal(Redirect.from(ifile).type(), Redirect.Type.READ);
         equal(Redirect.from(ifile).toString(),
@@ -926,6 +932,12 @@ public class Basic {
         checkRedirects(pb, INHERIT, INHERIT, INHERIT);
 
         //----------------------------------------------------------------
+        // Check DISCARD for stdout,stderr
+        //----------------------------------------------------------------
+        redirectIO(pb, INHERIT, DISCARD, DISCARD);
+        checkRedirects(pb, INHERIT, DISCARD, DISCARD);
+
+        //----------------------------------------------------------------
         // Check setters and getters agree
         //----------------------------------------------------------------
         pb.redirectInput(ifile);
@@ -943,7 +955,8 @@ public class Basic {
         THROWS(IllegalArgumentException.class,
                () -> pb.redirectInput(Redirect.to(ofile)),
                () -> pb.redirectOutput(Redirect.from(ifile)),
-               () -> pb.redirectError(Redirect.from(ifile)));
+               () -> pb.redirectError(Redirect.from(ifile)),
+               () -> pb.redirectInput(DISCARD));
 
         THROWS(NullPointerException.class,
                 () -> pb.redirectInput((File)null),
@@ -980,7 +993,7 @@ public class Basic {
             ProcessResults r = run(pb);
             equal(r.exitValue(), 0);
             equal(fileContents(ofile),
-                  "standard error" + "standard output");
+                    "standard error" + "standard output");
             equal(fileContents(efile), "");
             equal(r.out(), "");
             equal(r.err(), "");
@@ -1048,6 +1061,79 @@ public class Basic {
             ifile.delete();
             ofile.delete();
             efile.delete();
+        }
+
+        //----------------------------------------------------------------
+        // DISCARDing output
+        //----------------------------------------------------------------
+        {
+            setFileContents(ifile, "standard input");
+            pb.redirectOutput(DISCARD);
+            pb.redirectError(DISCARD);
+            ProcessResults r = run(pb);
+            equal(r.exitValue(), 0);
+            equal(r.out(), "");
+            equal(r.err(), "");
+        }
+
+        //----------------------------------------------------------------
+        // DISCARDing output and redirecting error
+        //----------------------------------------------------------------
+        {
+            setFileContents(ifile, "standard input");
+            setFileContents(ofile, "ofile-contents");
+            setFileContents(efile, "efile-contents");
+            pb.redirectOutput(DISCARD);
+            pb.redirectError(efile);
+            ProcessResults r = run(pb);
+            equal(r.exitValue(), 0);
+            equal(fileContents(ofile), "ofile-contents");
+            equal(fileContents(efile), "standard error");
+            equal(r.out(), "");
+            equal(r.err(), "");
+            ofile.delete();
+            efile.delete();
+        }
+
+        //----------------------------------------------------------------
+        // DISCARDing error and redirecting output
+        //----------------------------------------------------------------
+        {
+            setFileContents(ifile, "standard input");
+            setFileContents(ofile, "ofile-contents");
+            setFileContents(efile, "efile-contents");
+            pb.redirectOutput(ofile);
+            pb.redirectError(DISCARD);
+            ProcessResults r = run(pb);
+            equal(r.exitValue(), 0);
+            equal(fileContents(ofile), "standard output");
+            equal(fileContents(efile), "efile-contents");
+            equal(r.out(), "");
+            equal(r.err(), "");
+            ofile.delete();
+            efile.delete();
+        }
+
+        //----------------------------------------------------------------
+        // DISCARDing output and merging error into output
+        //----------------------------------------------------------------
+        {
+            setFileContents(ifile, "standard input");
+            setFileContents(ofile, "ofile-contents");
+            setFileContents(efile, "efile-contents");
+            pb.redirectOutput(DISCARD);
+            pb.redirectErrorStream(true);
+            pb.redirectError(efile);
+            ProcessResults r = run(pb);
+            equal(r.exitValue(), 0);
+            equal(fileContents(ofile), "ofile-contents");   // untouched
+            equal(fileContents(efile), "");                 // empty
+            equal(r.out(), "");
+            equal(r.err(), "");
+            ifile.delete();
+            ofile.delete();
+            efile.delete();
+            pb.redirectErrorStream(false);                  // reset for next test
         }
 
         //----------------------------------------------------------------
@@ -1149,7 +1235,7 @@ public class Basic {
             Process p = pb.start();
             String s = commandOutput(p);
             long actualPid = Long.valueOf(s.trim());
-            long expectedPid = p.getPid();
+            long expectedPid = p.pid();
             equal(actualPid, expectedPid);
         } catch (Throwable t) {
             unexpected(t);
@@ -1159,11 +1245,11 @@ public class Basic {
         // Test the default implementation of Process.getPid
         DelegatingProcess p = new DelegatingProcess(null);
         THROWS(UnsupportedOperationException.class,
-                () -> p.getPid(),
+                () -> p.pid(),
                 () -> p.toHandle(),
                 () -> p.supportsNormalTermination(),
                 () -> p.children(),
-                () -> p.allChildren());
+                () -> p.descendants());
 
     }
 
@@ -2142,6 +2228,33 @@ public class Basic {
                     reader.join();
                 }
             }
+
+            //----------------------------------------------------------------
+            // Check the Process toString() method
+            //----------------------------------------------------------------
+            {
+                List<String> childArgs = new ArrayList<String>(javaChildArgs);
+                childArgs.add("testIO");
+                ProcessBuilder pb = new ProcessBuilder(childArgs);
+                pb.redirectInput(Redirect.PIPE);
+                pb.redirectOutput(DISCARD);
+                pb.redirectError(DISCARD);
+                final Process p = pb.start();
+                // Child process waits until it gets input
+                String s = p.toString();
+                check(s.contains("not exited"));
+                check(s.contains("pid=" + p.pid() + ","));
+
+                new PrintStream(p.getOutputStream()).print("standard input");
+                p.getOutputStream().close();
+
+                // Check the toString after it exits
+                int exitValue = p.waitFor();
+                s = p.toString();
+                check(s.contains("pid=" + p.pid() + ","));
+                check(s.contains("exitValue=" + exitValue) &&
+                        !s.contains("not exited"));
+            }
         } catch (Throwable t) { unexpected(t); }
 
         //----------------------------------------------------------------
@@ -2293,16 +2406,6 @@ public class Basic {
                 fail("Test failed: waitFor didn't take long enough (" + (end - start) + "ns)");
 
             p.destroy();
-
-            start = System.nanoTime();
-            p.waitFor(8, TimeUnit.SECONDS);
-            end = System.nanoTime();
-
-            int exitValue = p.exitValue();
-
-            if ((end - start) > TimeUnit.SECONDS.toNanos(7))
-                fail("Test failed: waitFor took too long on a dead process. (" + (end - start) + "ns)"
-                + ", exitValue: " + exitValue);
         } catch (Throwable t) { unexpected(t); }
 
         //----------------------------------------------------------------

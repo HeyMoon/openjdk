@@ -24,22 +24,13 @@
 
 #include "precompiled.hpp"
 #include "gc/shared/cardTableModRefBS.inline.hpp"
-#include "gc/shared/cardTableRS.hpp"
 #include "gc/shared/collectedHeap.hpp"
 #include "gc/shared/genCollectedHeap.hpp"
-#include "gc/shared/space.hpp"
 #include "gc/shared/space.inline.hpp"
-#include "memory/allocation.inline.hpp"
-#include "memory/universe.hpp"
 #include "memory/virtualspace.hpp"
-#include "runtime/java.hpp"
-#include "runtime/mutexLocker.hpp"
+#include "logging/log.hpp"
 #include "services/memTracker.hpp"
 #include "utilities/macros.hpp"
-#ifdef COMPILER1
-#include "c1/c1_LIR.hpp"
-#include "c1/c1_LIRGenerator.hpp"
-#endif
 
 // This kind of "BarrierSet" allows a "CollectedHeap" to detect and
 // enumerate ref fields that have been modified (since the last
@@ -68,12 +59,7 @@ CardTableModRefBS::CardTableModRefBS(
   _committed(NULL),
   _cur_covered_regions(0),
   _byte_map(NULL),
-  byte_map_base(NULL),
-  // LNC functionality
-  _lowest_non_clean(NULL),
-  _lowest_non_clean_chunk_size(NULL),
-  _lowest_non_clean_base_chunk_index(NULL),
-  _last_LNC_resizing_collection(NULL)
+  byte_map_base(NULL)
 {
   assert((uintptr_t(_whole_heap.start())  & (card_size - 1))  == 0, "heap must start at card boundary");
   assert((uintptr_t(_whole_heap.end()) & (card_size - 1))  == 0, "heap must end at card boundary");
@@ -107,7 +93,7 @@ void CardTableModRefBS::initialize() {
 
   MemTracker::record_virtual_memory_type((address)heap_rs.base(), mtGC);
 
-  os::trace_page_sizes("card table", _guard_index + 1, _guard_index + 1,
+  os::trace_page_sizes("Card Table", _guard_index + 1, _guard_index + 1,
                        _page_size, heap_rs.base(), heap_rs.size());
   if (!heap_rs.is_reserved()) {
     vm_exit_during_initialization("Could not reserve enough space for the "
@@ -130,36 +116,10 @@ void CardTableModRefBS::initialize() {
                             !ExecMem, "card table last card");
   *guard_card = last_card;
 
-  _lowest_non_clean =
-    NEW_C_HEAP_ARRAY(CardArr, _max_covered_regions, mtGC);
-  _lowest_non_clean_chunk_size =
-    NEW_C_HEAP_ARRAY(size_t, _max_covered_regions, mtGC);
-  _lowest_non_clean_base_chunk_index =
-    NEW_C_HEAP_ARRAY(uintptr_t, _max_covered_regions, mtGC);
-  _last_LNC_resizing_collection =
-    NEW_C_HEAP_ARRAY(int, _max_covered_regions, mtGC);
-  if (_lowest_non_clean == NULL
-      || _lowest_non_clean_chunk_size == NULL
-      || _lowest_non_clean_base_chunk_index == NULL
-      || _last_LNC_resizing_collection == NULL)
-    vm_exit_during_initialization("couldn't allocate an LNC array.");
-  for (int i = 0; i < _max_covered_regions; i++) {
-    _lowest_non_clean[i] = NULL;
-    _lowest_non_clean_chunk_size[i] = 0;
-    _last_LNC_resizing_collection[i] = -1;
-  }
-
-  if (TraceCardTableModRefBS) {
-    gclog_or_tty->print_cr("CardTableModRefBS::CardTableModRefBS: ");
-    gclog_or_tty->print_cr("  "
-                  "  &_byte_map[0]: " INTPTR_FORMAT
-                  "  &_byte_map[_last_valid_index]: " INTPTR_FORMAT,
-                  p2i(&_byte_map[0]),
-                  p2i(&_byte_map[_last_valid_index]));
-    gclog_or_tty->print_cr("  "
-                  "  byte_map_base: " INTPTR_FORMAT,
-                  p2i(byte_map_base));
-  }
+  log_trace(gc, barrier)("CardTableModRefBS::CardTableModRefBS: ");
+  log_trace(gc, barrier)("    &_byte_map[0]: " INTPTR_FORMAT "  &_byte_map[_last_valid_index]: " INTPTR_FORMAT,
+                  p2i(&_byte_map[0]), p2i(&_byte_map[_last_valid_index]));
+  log_trace(gc, barrier)("    byte_map_base: " INTPTR_FORMAT, p2i(byte_map_base));
 }
 
 CardTableModRefBS::~CardTableModRefBS() {
@@ -170,22 +130,6 @@ CardTableModRefBS::~CardTableModRefBS() {
   if (_committed) {
     delete[] _committed;
     _committed = NULL;
-  }
-  if (_lowest_non_clean) {
-    FREE_C_HEAP_ARRAY(CardArr, _lowest_non_clean);
-    _lowest_non_clean = NULL;
-  }
-  if (_lowest_non_clean_chunk_size) {
-    FREE_C_HEAP_ARRAY(size_t, _lowest_non_clean_chunk_size);
-    _lowest_non_clean_chunk_size = NULL;
-  }
-  if (_lowest_non_clean_base_chunk_index) {
-    FREE_C_HEAP_ARRAY(uintptr_t, _lowest_non_clean_base_chunk_index);
-    _lowest_non_clean_base_chunk_index = NULL;
-  }
-  if (_last_LNC_resizing_collection) {
-    FREE_C_HEAP_ARRAY(int, _last_LNC_resizing_collection);
-    _last_LNC_resizing_collection = NULL;
   }
 }
 
@@ -400,29 +344,17 @@ void CardTableModRefBS::resize_covered_region(MemRegion new_region) {
   }
   // In any case, the covered size changes.
   _covered[ind].set_word_size(new_region.word_size());
-  if (TraceCardTableModRefBS) {
-    gclog_or_tty->print_cr("CardTableModRefBS::resize_covered_region: ");
-    gclog_or_tty->print_cr("  "
-                  "  _covered[%d].start(): " INTPTR_FORMAT
-                  "  _covered[%d].last(): " INTPTR_FORMAT,
-                  ind, p2i(_covered[ind].start()),
-                  ind, p2i(_covered[ind].last()));
-    gclog_or_tty->print_cr("  "
-                  "  _committed[%d].start(): " INTPTR_FORMAT
-                  "  _committed[%d].last(): " INTPTR_FORMAT,
-                  ind, p2i(_committed[ind].start()),
-                  ind, p2i(_committed[ind].last()));
-    gclog_or_tty->print_cr("  "
-                  "  byte_for(start): " INTPTR_FORMAT
-                  "  byte_for(last): " INTPTR_FORMAT,
-                  p2i(byte_for(_covered[ind].start())),
-                  p2i(byte_for(_covered[ind].last())));
-    gclog_or_tty->print_cr("  "
-                  "  addr_for(start): " INTPTR_FORMAT
-                  "  addr_for(last): " INTPTR_FORMAT,
-                  p2i(addr_for((jbyte*) _committed[ind].start())),
-                  p2i(addr_for((jbyte*) _committed[ind].last())));
-  }
+
+  log_trace(gc, barrier)("CardTableModRefBS::resize_covered_region: ");
+  log_trace(gc, barrier)("    _covered[%d].start(): " INTPTR_FORMAT " _covered[%d].last(): " INTPTR_FORMAT,
+                         ind, p2i(_covered[ind].start()), ind, p2i(_covered[ind].last()));
+  log_trace(gc, barrier)("    _committed[%d].start(): " INTPTR_FORMAT "  _committed[%d].last(): " INTPTR_FORMAT,
+                         ind, p2i(_committed[ind].start()), ind, p2i(_committed[ind].last()));
+  log_trace(gc, barrier)("    byte_for(start): " INTPTR_FORMAT "  byte_for(last): " INTPTR_FORMAT,
+                         p2i(byte_for(_covered[ind].start())),  p2i(byte_for(_covered[ind].last())));
+  log_trace(gc, barrier)("    addr_for(start): " INTPTR_FORMAT "  addr_for(last): " INTPTR_FORMAT,
+                         p2i(addr_for((jbyte*) _committed[ind].start())),  p2i(addr_for((jbyte*) _committed[ind].last())));
+
   // Touch the last card of the covered region to show that it
   // is committed (or SEGV).
   debug_only((void) (*byte_for(_covered[ind].last()));)
@@ -437,32 +369,6 @@ void CardTableModRefBS::write_ref_field_work(void* field, oop newVal, bool relea
 }
 
 
-void CardTableModRefBS::non_clean_card_iterate_possibly_parallel(Space* sp,
-                                                                 MemRegion mr,
-                                                                 OopsInGenClosure* cl,
-                                                                 CardTableRS* ct,
-                                                                 uint n_threads) {
-  if (!mr.is_empty()) {
-    if (n_threads > 0) {
-#if INCLUDE_ALL_GCS
-      non_clean_card_iterate_parallel_work(sp, mr, cl, ct, n_threads);
-#else  // INCLUDE_ALL_GCS
-      fatal("Parallel gc not supported here.");
-#endif // INCLUDE_ALL_GCS
-    } else {
-      // clear_cl finds contiguous dirty ranges of cards to process and clear.
-
-      // This is the single-threaded version used by DefNew.
-      const bool parallel = false;
-
-      DirtyCardToOopClosure* dcto_cl = sp->new_dcto_cl(cl, precision(), cl->gen_boundary(), parallel);
-      ClearNoncleanCardWrapper clear_cl(dcto_cl, ct, parallel);
-
-      clear_cl.do_MemRegion(mr);
-    }
-  }
-}
-
 void CardTableModRefBS::dirty_MemRegion(MemRegion mr) {
   assert((HeapWord*)align_size_down((uintptr_t)mr.start(), HeapWordSize) == mr.start(), "Unaligned start");
   assert((HeapWord*)align_size_up  ((uintptr_t)mr.end(),   HeapWordSize) == mr.end(),   "Unaligned end"  );
@@ -474,7 +380,7 @@ void CardTableModRefBS::dirty_MemRegion(MemRegion mr) {
   }
 }
 
-void CardTableModRefBS::invalidate(MemRegion mr, bool whole_heap) {
+void CardTableModRefBS::invalidate(MemRegion mr) {
   assert((HeapWord*)align_size_down((uintptr_t)mr.start(), HeapWordSize) == mr.start(), "Unaligned start");
   assert((HeapWord*)align_size_up  ((uintptr_t)mr.end(),   HeapWordSize) == mr.end(),   "Unaligned end"  );
   for (int i = 0; i < _cur_covered_regions; i++) {
@@ -594,16 +500,14 @@ void CardTableModRefBS::verify_region(MemRegion mr,
     bool failed = (val_equals) ? (curr_val != val) : (curr_val == val);
     if (failed) {
       if (!failures) {
-        tty->cr();
-        tty->print_cr("== CT verification failed: [" INTPTR_FORMAT "," INTPTR_FORMAT "]", p2i(start), p2i(end));
-        tty->print_cr("==   %sexpecting value: %d",
-                      (val_equals) ? "" : "not ", val);
+        log_error(gc, verify)("== CT verification failed: [" INTPTR_FORMAT "," INTPTR_FORMAT "]", p2i(start), p2i(end));
+        log_error(gc, verify)("==   %sexpecting value: %d", (val_equals) ? "" : "not ", val);
         failures = true;
       }
-      tty->print_cr("==   card " PTR_FORMAT " [" PTR_FORMAT "," PTR_FORMAT "], "
-                    "val: %d", p2i(curr), p2i(addr_for(curr)),
-                    p2i((HeapWord*) (((size_t) addr_for(curr)) + card_size)),
-                    (int) curr_val);
+      log_error(gc, verify)("==   card " PTR_FORMAT " [" PTR_FORMAT "," PTR_FORMAT "], val: %d",
+                            p2i(curr), p2i(addr_for(curr)),
+                            p2i((HeapWord*) (((size_t) addr_for(curr)) + card_size)),
+                            (int) curr_val);
     }
   }
   guarantee(!failures, "there should not have been any failures");
@@ -623,15 +527,3 @@ void CardTableModRefBS::print_on(outputStream* st) const {
                p2i(_byte_map), p2i(_byte_map + _byte_map_size), p2i(byte_map_base));
 }
 
-bool CardTableModRefBSForCTRS::card_will_be_scanned(jbyte cv) {
-  return
-    CardTableModRefBS::card_will_be_scanned(cv) ||
-    _rs->is_prev_nonclean_card_val(cv);
-};
-
-bool CardTableModRefBSForCTRS::card_may_have_been_dirty(jbyte cv) {
-  return
-    cv != clean_card &&
-    (CardTableModRefBS::card_may_have_been_dirty(cv) ||
-     CardTableRS::youngergen_may_have_been_dirty(cv));
-};

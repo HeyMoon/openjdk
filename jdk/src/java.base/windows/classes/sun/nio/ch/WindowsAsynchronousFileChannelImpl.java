@@ -31,8 +31,8 @@ import java.nio.ByteBuffer;
 import java.nio.BufferOverflowException;
 import java.io.IOException;
 import java.io.FileDescriptor;
-import sun.misc.SharedSecrets;
-import sun.misc.JavaIOFileDescriptorAccess;
+import jdk.internal.misc.SharedSecrets;
+import jdk.internal.misc.JavaIOFileDescriptorAccess;
 
 /**
  * Windows implementation of AsynchronousFileChannel using overlapped I/O.
@@ -318,20 +318,7 @@ public class WindowsAsynchronousFileChannelImpl
         result.setContext(lockTask);
 
         // initiate I/O
-        if (Iocp.supportsThreadAgnosticIo()) {
-            lockTask.run();
-        } else {
-            boolean executed = false;
-            try {
-                Invoker.invokeOnThreadInThreadPool(this, lockTask);
-                executed = true;
-            } finally {
-                if (!executed) {
-                    // rollback
-                    removeFromFileLockTable(fli);
-                }
-            }
-        }
+        lockTask.run();
         return result;
     }
 
@@ -556,11 +543,7 @@ public class WindowsAsynchronousFileChannelImpl
         result.setContext(readTask);
 
         // initiate I/O
-        if (Iocp.supportsThreadAgnosticIo()) {
-            readTask.run();
-        } else {
-            Invoker.invokeOnThreadInThreadPool(this, readTask);
-        }
+        readTask.run();
         return result;
     }
 
@@ -730,11 +713,7 @@ public class WindowsAsynchronousFileChannelImpl
         result.setContext(writeTask);
 
         // initiate I/O
-        if (Iocp.supportsThreadAgnosticIo()) {
-            writeTask.run();
-        } else {
-            Invoker.invokeOnThreadInThreadPool(this, writeTask);
-        }
+        writeTask.run();
         return result;
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,13 +23,12 @@
  */
 
 #include "precompiled.hpp"
-#include "code/codeCacheExtensions.hpp"
+#include "logging/log.hpp"
+#include "memory/resourceArea.hpp"
 #include "memory/virtualspace.hpp"
 #include "oops/markOop.hpp"
 #include "oops/oop.inline.hpp"
 #include "services/memTracker.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 // ReservedSpace
 
@@ -80,10 +79,7 @@ static bool failed_to_reserve_as_requested(char* base, char* requested_address,
     // Different reserve address may be acceptable in other cases
     // but for compressed oops heap should be at requested address.
     assert(UseCompressedOops, "currently requested address used only for compressed oops");
-    if (PrintCompressedOopsMode) {
-      tty->cr();
-      tty->print_cr("Reserved memory not at requested address: " PTR_FORMAT " vs " PTR_FORMAT, base, requested_address);
-    }
+    log_debug(gc, heap, coops)("Reserved memory not at requested address: " PTR_FORMAT " vs " PTR_FORMAT, p2i(base), p2i(requested_address));
     // OS ignored requested address. Try different address.
     if (special) {
       if (!os::release_memory_special(base, size)) {
@@ -137,18 +133,15 @@ void ReservedSpace::initialize(size_t size, size_t alignment, bool large,
       }
       // Check alignment constraints.
       assert((uintptr_t) base % alignment == 0,
-             err_msg("Large pages returned a non-aligned address, base: "
-                 PTR_FORMAT " alignment: " PTR_FORMAT,
-                 base, (void*)(uintptr_t)alignment));
+             "Large pages returned a non-aligned address, base: "
+             PTR_FORMAT " alignment: " SIZE_FORMAT_HEX,
+             p2i(base), alignment);
       _special = true;
     } else {
       // failed; try to reserve regular memory below
       if (UseLargePages && (!FLAG_IS_DEFAULT(UseLargePages) ||
                             !FLAG_IS_DEFAULT(LargePageSizeInBytes))) {
-        if (PrintCompressedOopsMode) {
-          tty->cr();
-          tty->print_cr("Reserve regular memory without large pages.");
-        }
+        log_debug(gc, heap, coops)("Reserve regular memory without large pages");
       }
     }
   }
@@ -282,17 +275,16 @@ void ReservedHeapSpace::establish_noaccess_prefix() {
   if (base() && base() + _size > (char *)OopEncodingHeapMax) {
     if (true
         WIN64_ONLY(&& !UseLargePages)
-        AIX_ONLY(&& os::vm_page_size() != SIZE_64K)) {
+        AIX_ONLY(&& os::vm_page_size() != 64*K)) {
       // Protect memory at the base of the allocated region.
       // If special, the page was committed (only matters on windows)
       if (!os::protect_memory(_base, _noaccess_prefix, os::MEM_PROT_NONE, _special)) {
         fatal("cannot protect protection page");
       }
-      if (PrintCompressedOopsMode) {
-        tty->cr();
-        tty->print_cr("Protected page at the reserved heap base: "
-                      PTR_FORMAT " / " INTX_FORMAT " bytes", _base, _noaccess_prefix);
-      }
+      log_debug(gc, heap, coops)("Protected page at the reserved heap base: "
+                                 PTR_FORMAT " / " INTX_FORMAT " bytes",
+                                 p2i(_base),
+                                 _noaccess_prefix);
       assert(Universe::narrow_oop_use_implicit_null_checks() == true, "not initialized?");
     } else {
       Universe::set_narrow_oop_use_implicit_null_checks(false);
@@ -323,10 +315,10 @@ void ReservedHeapSpace::try_reserve_heap(size_t size,
   bool special = large && !os::can_commit_large_page_memory();
   char* base = NULL;
 
-  if (PrintCompressedOopsMode && Verbose) {
-    tty->print("Trying to allocate at address " PTR_FORMAT " heap of size " PTR_FORMAT ".\n",
-               requested_address, (address)size);
-  }
+  log_trace(gc, heap, coops)("Trying to allocate at address " PTR_FORMAT
+                             " heap of size " SIZE_FORMAT_HEX,
+                             p2i(requested_address),
+                             size);
 
   if (special) {
     base = os::reserve_memory_special(size, alignment, requested_address, false);
@@ -334,9 +326,9 @@ void ReservedHeapSpace::try_reserve_heap(size_t size,
     if (base != NULL) {
       // Check alignment constraints.
       assert((uintptr_t) base % alignment == 0,
-             err_msg("Large pages returned a non-aligned address, base: "
-                     PTR_FORMAT " alignment: " PTR_FORMAT,
-                     base, (void*)(uintptr_t)alignment));
+             "Large pages returned a non-aligned address, base: "
+             PTR_FORMAT " alignment: " SIZE_FORMAT_HEX,
+             p2i(base), alignment);
       _special = true;
     }
   }
@@ -345,10 +337,7 @@ void ReservedHeapSpace::try_reserve_heap(size_t size,
     // Failed; try to reserve regular memory below
     if (UseLargePages && (!FLAG_IS_DEFAULT(UseLargePages) ||
                           !FLAG_IS_DEFAULT(LargePageSizeInBytes))) {
-      if (PrintCompressedOopsMode) {
-        tty->cr();
-        tty->print_cr("Reserve regular memory without large pages.");
-      }
+      log_debug(gc, heap, coops)("Reserve regular memory without large pages");
     }
 
     // Optimistically assume that the OSes returns an aligned base pointer.
@@ -504,7 +493,7 @@ void ReservedHeapSpace::initialize_compressed_heap(const size_t size, size_t ali
 
       // Calc address range within we try to attach (range of possible start addresses).
       char* const highest_start = (char *)align_ptr_down((char *)UnscaledOopHeapMax - size, attach_point_alignment);
-      char* const lowest_start  = (char *)align_ptr_up  (        aligned_heap_base_min_address             , attach_point_alignment);
+      char* const lowest_start  = (char *)align_ptr_up(aligned_heap_base_min_address, attach_point_alignment);
       try_reserve_range(highest_start, lowest_start, attach_point_alignment,
                         aligned_heap_base_min_address, (char *)UnscaledOopHeapMax, size, alignment, large);
     }
@@ -560,9 +549,7 @@ void ReservedHeapSpace::initialize_compressed_heap(const size_t size, size_t ali
 
     // Last, desperate try without any placement.
     if (_base == NULL) {
-      if (PrintCompressedOopsMode && Verbose) {
-        tty->print("Trying to allocate at address NULL heap of size " PTR_FORMAT ".\n", (address)size + noaccess_prefix);
-      }
+      log_trace(gc, heap, coops)("Trying to allocate at address NULL heap of size " SIZE_FORMAT_HEX, size + noaccess_prefix);
       initialize(size + noaccess_prefix, alignment, large, NULL, false);
     }
   }
@@ -604,7 +591,7 @@ ReservedHeapSpace::ReservedHeapSpace(size_t size, size_t alignment, bool large) 
 ReservedCodeSpace::ReservedCodeSpace(size_t r_size,
                                      size_t rs_align,
                                      bool large) :
-  ReservedSpace(r_size, rs_align, large, /*executable*/ CodeCacheExtensions::support_dynamic_code()) {
+  ReservedSpace(r_size, rs_align, large, /*executable*/ true) {
   MemTracker::record_virtual_memory_type((address)base(), mtCode);
 }
 
@@ -688,7 +675,7 @@ VirtualSpace::~VirtualSpace() {
 
 
 void VirtualSpace::release() {
-  // This does not release memory it never reserved.
+  // This does not release memory it reserved.
   // Caller must release via rs.release();
   _low_boundary           = NULL;
   _high_boundary          = NULL;
@@ -763,6 +750,29 @@ bool VirtualSpace::contains(const void* p) const {
   return low() <= (const char*) p && (const char*) p < high();
 }
 
+static void pretouch_expanded_memory(void* start, void* end) {
+  assert(is_ptr_aligned(start, os::vm_page_size()), "Unexpected alignment");
+  assert(is_ptr_aligned(end,   os::vm_page_size()), "Unexpected alignment");
+
+  os::pretouch_memory(start, end);
+}
+
+static bool commit_expanded(char* start, size_t size, size_t alignment, bool pre_touch, bool executable) {
+  if (os::commit_memory(start, size, alignment, executable)) {
+    if (pre_touch || AlwaysPreTouch) {
+      pretouch_expanded_memory(start, start + size);
+    }
+    return true;
+  }
+
+  debug_only(warning(
+      "INFO: os::commit_memory(" PTR_FORMAT ", " PTR_FORMAT
+      " size=" SIZE_FORMAT ", executable=%d) failed",
+      p2i(start), p2i(start + size), size, executable);)
+
+  return false;
+}
+
 /*
    First we need to determine if a particular virtual space is using large
    pages.  This is done at the initialize function and only virtual spaces
@@ -776,7 +786,9 @@ bool VirtualSpace::contains(const void* p) const {
    allocated with default pages.
 */
 bool VirtualSpace::expand_by(size_t bytes, bool pre_touch) {
-  if (uncommitted_size() < bytes) return false;
+  if (uncommitted_size() < bytes) {
+    return false;
+  }
 
   if (special()) {
     // don't commit memory if the entire space is pinned in memory
@@ -786,30 +798,23 @@ bool VirtualSpace::expand_by(size_t bytes, bool pre_touch) {
 
   char* previous_high = high();
   char* unaligned_new_high = high() + bytes;
-  assert(unaligned_new_high <= high_boundary(),
-         "cannot expand by more than upper boundary");
+  assert(unaligned_new_high <= high_boundary(), "cannot expand by more than upper boundary");
 
   // Calculate where the new high for each of the regions should be.  If
   // the low_boundary() and high_boundary() are LargePageSizeInBytes aligned
   // then the unaligned lower and upper new highs would be the
   // lower_high() and upper_high() respectively.
-  char* unaligned_lower_new_high =
-    MIN2(unaligned_new_high, lower_high_boundary());
-  char* unaligned_middle_new_high =
-    MIN2(unaligned_new_high, middle_high_boundary());
-  char* unaligned_upper_new_high =
-    MIN2(unaligned_new_high, upper_high_boundary());
+  char* unaligned_lower_new_high =  MIN2(unaligned_new_high, lower_high_boundary());
+  char* unaligned_middle_new_high = MIN2(unaligned_new_high, middle_high_boundary());
+  char* unaligned_upper_new_high =  MIN2(unaligned_new_high, upper_high_boundary());
 
   // Align the new highs based on the regions alignment.  lower and upper
   // alignment will always be default page size.  middle alignment will be
   // LargePageSizeInBytes if the actual size of the virtual space is in
   // fact larger than LargePageSizeInBytes.
-  char* aligned_lower_new_high =
-    (char*) round_to((intptr_t) unaligned_lower_new_high, lower_alignment());
-  char* aligned_middle_new_high =
-    (char*) round_to((intptr_t) unaligned_middle_new_high, middle_alignment());
-  char* aligned_upper_new_high =
-    (char*) round_to((intptr_t) unaligned_upper_new_high, upper_alignment());
+  char* aligned_lower_new_high =  (char*) round_to((intptr_t) unaligned_lower_new_high, lower_alignment());
+  char* aligned_middle_new_high = (char*) round_to((intptr_t) unaligned_middle_new_high, middle_alignment());
+  char* aligned_upper_new_high =  (char*) round_to((intptr_t) unaligned_upper_new_high, upper_alignment());
 
   // Determine which regions need to grow in this expand_by call.
   // If you are growing in the lower region, high() must be in that
@@ -820,75 +825,48 @@ bool VirtualSpace::expand_by(size_t bytes, bool pre_touch) {
   // is an intra or inter region growth.
   size_t lower_needs = 0;
   if (aligned_lower_new_high > lower_high()) {
-    lower_needs =
-      pointer_delta(aligned_lower_new_high, lower_high(), sizeof(char));
+    lower_needs = pointer_delta(aligned_lower_new_high, lower_high(), sizeof(char));
   }
   size_t middle_needs = 0;
   if (aligned_middle_new_high > middle_high()) {
-    middle_needs =
-      pointer_delta(aligned_middle_new_high, middle_high(), sizeof(char));
+    middle_needs = pointer_delta(aligned_middle_new_high, middle_high(), sizeof(char));
   }
   size_t upper_needs = 0;
   if (aligned_upper_new_high > upper_high()) {
-    upper_needs =
-      pointer_delta(aligned_upper_new_high, upper_high(), sizeof(char));
+    upper_needs = pointer_delta(aligned_upper_new_high, upper_high(), sizeof(char));
   }
 
   // Check contiguity.
-  assert(low_boundary() <= lower_high() &&
-         lower_high() <= lower_high_boundary(),
+  assert(low_boundary() <= lower_high() && lower_high() <= lower_high_boundary(),
          "high address must be contained within the region");
-  assert(lower_high_boundary() <= middle_high() &&
-         middle_high() <= middle_high_boundary(),
+  assert(lower_high_boundary() <= middle_high() && middle_high() <= middle_high_boundary(),
          "high address must be contained within the region");
-  assert(middle_high_boundary() <= upper_high() &&
-         upper_high() <= upper_high_boundary(),
+  assert(middle_high_boundary() <= upper_high() && upper_high() <= upper_high_boundary(),
          "high address must be contained within the region");
 
   // Commit regions
   if (lower_needs > 0) {
-    assert(low_boundary() <= lower_high() &&
-           lower_high() + lower_needs <= lower_high_boundary(),
-           "must not expand beyond region");
-    if (!os::commit_memory(lower_high(), lower_needs, _executable)) {
-      debug_only(warning("INFO: os::commit_memory(" PTR_FORMAT
-                         ", lower_needs=" SIZE_FORMAT ", %d) failed",
-                         lower_high(), lower_needs, _executable);)
+    assert(lower_high() + lower_needs <= lower_high_boundary(), "must not expand beyond region");
+    if (!commit_expanded(lower_high(), lower_needs, _lower_alignment, pre_touch, _executable)) {
       return false;
-    } else {
-      _lower_high += lower_needs;
     }
+    _lower_high += lower_needs;
   }
+
   if (middle_needs > 0) {
-    assert(lower_high_boundary() <= middle_high() &&
-           middle_high() + middle_needs <= middle_high_boundary(),
-           "must not expand beyond region");
-    if (!os::commit_memory(middle_high(), middle_needs, middle_alignment(),
-                           _executable)) {
-      debug_only(warning("INFO: os::commit_memory(" PTR_FORMAT
-                         ", middle_needs=" SIZE_FORMAT ", " SIZE_FORMAT
-                         ", %d) failed", middle_high(), middle_needs,
-                         middle_alignment(), _executable);)
+    assert(middle_high() + middle_needs <= middle_high_boundary(), "must not expand beyond region");
+    if (!commit_expanded(middle_high(), middle_needs, _middle_alignment, pre_touch, _executable)) {
       return false;
     }
     _middle_high += middle_needs;
   }
-  if (upper_needs > 0) {
-    assert(middle_high_boundary() <= upper_high() &&
-           upper_high() + upper_needs <= upper_high_boundary(),
-           "must not expand beyond region");
-    if (!os::commit_memory(upper_high(), upper_needs, _executable)) {
-      debug_only(warning("INFO: os::commit_memory(" PTR_FORMAT
-                         ", upper_needs=" SIZE_FORMAT ", %d) failed",
-                         upper_high(), upper_needs, _executable);)
-      return false;
-    } else {
-      _upper_high += upper_needs;
-    }
-  }
 
-  if (pre_touch || AlwaysPreTouch) {
-    os::pretouch_memory(previous_high, unaligned_new_high);
+  if (upper_needs > 0) {
+    assert(upper_high() + upper_needs <= upper_high_boundary(), "must not expand beyond region");
+    if (!commit_expanded(upper_high(), upper_needs, _upper_alignment, pre_touch, _executable)) {
+      return false;
+    }
+    _upper_high += upper_needs;
   }
 
   _high += bytes;
@@ -1017,8 +995,8 @@ void VirtualSpace::print_on(outputStream* out) {
   out->cr();
   out->print_cr(" - committed: " SIZE_FORMAT, committed_size());
   out->print_cr(" - reserved:  " SIZE_FORMAT, reserved_size());
-  out->print_cr(" - [low, high]:     [" INTPTR_FORMAT ", " INTPTR_FORMAT "]",  low(), high());
-  out->print_cr(" - [low_b, high_b]: [" INTPTR_FORMAT ", " INTPTR_FORMAT "]",  low_boundary(), high_boundary());
+  out->print_cr(" - [low, high]:     [" INTPTR_FORMAT ", " INTPTR_FORMAT "]",  p2i(low()), p2i(high()));
+  out->print_cr(" - [low_b, high_b]: [" INTPTR_FORMAT ", " INTPTR_FORMAT "]",  p2i(low_boundary()), p2i(high_boundary()));
 }
 
 void VirtualSpace::print() {
@@ -1103,6 +1081,12 @@ class TestReservedSpace : AllStatic {
   static void test_reserved_space3(size_t size, size_t alignment, bool maybe_large) {
     test_log("test_reserved_space3(%p, %p, %d)",
         (void*)(uintptr_t)size, (void*)(uintptr_t)alignment, maybe_large);
+
+    if (size < alignment) {
+      // Tests might set -XX:LargePageSizeInBytes=<small pages> and cause unexpected input arguments for this test.
+      assert((size_t)os::vm_page_size() == os::large_page_size(), "Test needs further refinement");
+      return;
+    }
 
     assert(is_size_aligned(size, os::vm_allocation_granularity()), "Must be at least AG aligned");
     assert(is_size_aligned(size, alignment), "Must be at least aligned against alignment");
@@ -1205,20 +1189,20 @@ void TestReservedSpace_test() {
   TestReservedSpace::test_reserved_space();
 }
 
-#define assert_equals(actual, expected)     \
-  assert(actual == expected,                \
-    err_msg("Got " SIZE_FORMAT " expected " \
-      SIZE_FORMAT, actual, expected));
+#define assert_equals(actual, expected)  \
+  assert(actual == expected,             \
+         "Got " SIZE_FORMAT " expected " \
+         SIZE_FORMAT, actual, expected);
 
 #define assert_ge(value1, value2)                  \
   assert(value1 >= value2,                         \
-    err_msg("'" #value1 "': " SIZE_FORMAT " '"     \
-      #value2 "': " SIZE_FORMAT, value1, value2));
+         "'" #value1 "': " SIZE_FORMAT " '"        \
+         #value2 "': " SIZE_FORMAT, value1, value2);
 
 #define assert_lt(value1, value2)                  \
   assert(value1 < value2,                          \
-    err_msg("'" #value1 "': " SIZE_FORMAT " '"     \
-      #value2 "': " SIZE_FORMAT, value1, value2));
+         "'" #value1 "': " SIZE_FORMAT " '"        \
+         #value2 "': " SIZE_FORMAT, value1, value2);
 
 
 class TestVirtualSpace : AllStatic {

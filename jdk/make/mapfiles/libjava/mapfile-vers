@@ -1,5 +1,5 @@
 #
-# Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -56,6 +56,7 @@ SUNWprivate_1.1 {
 		JNU_ThrowArrayIndexOutOfBoundsException;
 		JNU_ThrowByName;
 		JNU_ThrowByNameWithLastError;
+		JNU_ThrowByNameWithMessageAndLastError;
 		JNU_ThrowClassNotFoundException;
 		JNU_ThrowIllegalAccessError;
 		JNU_ThrowIllegalAccessException;
@@ -76,13 +77,13 @@ SUNWprivate_1.1 {
 		Java_java_io_FileDescriptor_initIDs;
 		Java_java_io_FileDescriptor_sync;
 		Java_java_io_FileDescriptor_getAppend;
-		Java_java_io_FileInputStream_available;
+		Java_java_io_FileInputStream_available0;
 		Java_java_io_FileInputStream_close0;
 		Java_java_io_FileInputStream_initIDs;
 		Java_java_io_FileInputStream_open0;
 		Java_java_io_FileInputStream_read0;
 		Java_java_io_FileInputStream_readBytes;
-		Java_java_io_FileInputStream_skip;
+		Java_java_io_FileInputStream_skip0;
 		Java_java_io_FileOutputStream_close0;
 		Java_java_io_FileOutputStream_initIDs;
 		Java_java_io_FileOutputStream_open0;
@@ -113,6 +114,7 @@ SUNWprivate_1.1 {
 		Java_java_io_UnixFileSystem_getBooleanAttributes0;
 		Java_java_io_UnixFileSystem_getLastModifiedTime;
 		Java_java_io_UnixFileSystem_getLength;
+		Java_java_io_UnixFileSystem_getNameMax0;
 		Java_java_io_UnixFileSystem_getSpace;
 		Java_java_io_UnixFileSystem_initIDs;
 		Java_java_io_UnixFileSystem_list;
@@ -126,7 +128,6 @@ SUNWprivate_1.1 {
 		Java_java_lang_Class_isInstance;
 		Java_java_lang_Class_registerNatives;
 		Java_java_lang_ClassLoader_findBootstrapClass;
-		Java_java_lang_ClassLoader_defineClass0;
 		Java_java_lang_ClassLoader_defineClass1;
 		Java_java_lang_ClassLoader_defineClass2;
 		Java_java_lang_ClassLoader_findBuiltinLib;
@@ -137,34 +138,30 @@ SUNWprivate_1.1 {
 		Java_java_lang_ClassLoader_registerNatives;
 		Java_java_lang_Double_longBitsToDouble;
 		Java_java_lang_Double_doubleToRawLongBits;
-		Java_java_lang_reflect_Proxy_defineClass0;
-		Java_java_lang_Shutdown_runAllFinalizers;
 		Java_java_lang_Float_intBitsToFloat;
 		Java_java_lang_Float_floatToRawIntBits;
+                Java_java_lang_StackStreamFactory_checkStackWalkModes;
+                Java_java_lang_StackStreamFactory_00024AbstractStackWalker_callStackWalk;
+                Java_java_lang_StackStreamFactory_00024AbstractStackWalker_fetchStackFrames;
+		Java_java_lang_Shutdown_runAllFinalizers;
 		Java_java_lang_StrictMath_IEEEremainder;
 		Java_java_lang_StrictMath_acos;
 		Java_java_lang_StrictMath_asin;
 		Java_java_lang_StrictMath_atan;
 		Java_java_lang_StrictMath_atan2;
 		Java_java_lang_StrictMath_cos;
-		Java_java_lang_StrictMath_exp;
 		Java_java_lang_StrictMath_log;
 		Java_java_lang_StrictMath_log10;
-		Java_java_lang_StrictMath_pow;
 		Java_java_lang_StrictMath_sin;
 		Java_java_lang_StrictMath_sqrt;
-		Java_java_lang_StrictMath_cbrt;
 		Java_java_lang_StrictMath_tan;
 		Java_java_lang_StrictMath_cosh;
 		Java_java_lang_StrictMath_sinh;
 		Java_java_lang_StrictMath_tanh;
-		Java_java_lang_StrictMath_hypot;
 		Java_java_lang_StrictMath_log1p;
 		Java_java_lang_StrictMath_expm1;
 		Java_java_lang_Object_getClass;
 		Java_java_lang_Object_registerNatives;
-		Java_java_lang_Package_getSystemPackage0;
-		Java_java_lang_Package_getSystemPackages0;
 		Java_java_lang_ProcessEnvironment_environ;
 		Java_java_lang_ProcessHandleImpl_destroy0;
 		Java_java_lang_ProcessHandleImpl_getCurrentPid0;
@@ -177,6 +174,9 @@ SUNWprivate_1.1 {
 		Java_java_lang_ProcessHandleImpl_00024Info_info0;
 		Java_java_lang_ProcessImpl_init;
 		Java_java_lang_ProcessImpl_forkAndExec;
+		Java_java_lang_ref_Reference_getAndClearReferencePendingList;
+		Java_java_lang_ref_Reference_hasReferencePendingList;
+		Java_java_lang_ref_Reference_waitForReferencePendingList;
 		Java_java_lang_reflect_Array_get;
 		Java_java_lang_reflect_Array_getBoolean;
 		Java_java_lang_reflect_Array_getByte;
@@ -202,18 +202,22 @@ SUNWprivate_1.1 {
 		Java_java_lang_reflect_Executable_getTypeAnnotationBytes0;
 		Java_java_lang_reflect_Field_getTypeAnnotationBytes0;
 		Java_java_lang_Runtime_freeMemory;
-                Java_java_lang_Runtime_maxMemory;
+		Java_java_lang_Runtime_maxMemory;
 		Java_java_lang_Runtime_gc;
 		Java_java_lang_Runtime_runFinalization0;
 		Java_java_lang_Runtime_totalMemory;
-                Java_java_lang_Runtime_availableProcessors;
+		Java_java_lang_Runtime_availableProcessors;
 		Java_java_lang_SecurityManager_classDepth;
 		Java_java_lang_SecurityManager_classLoaderDepth0;
 		Java_java_lang_SecurityManager_currentClassLoader0;
 		Java_java_lang_SecurityManager_currentLoadedClass0;
 		Java_java_lang_SecurityManager_getClassContext;
 		Java_java_lang_Shutdown_halt0;
+                Java_java_lang_StackTraceElement_initStackTraceElement;
+                Java_java_lang_StackTraceElement_initStackTraceElements;
 		Java_java_lang_String_intern;
+		Java_java_lang_StringCoding_err;
+		Java_java_lang_StringUTF16_isBigEndian;
 		Java_java_lang_System_identityHashCode;
 		Java_java_lang_System_initProperties;
 		Java_java_lang_System_mapLibraryName;
@@ -223,14 +227,6 @@ SUNWprivate_1.1 {
 		Java_java_lang_System_setOut0;
 		Java_java_lang_Thread_registerNatives;
 		Java_java_lang_Throwable_fillInStackTrace;
-                Java_java_lang_Throwable_getStackTraceDepth;
-                Java_java_lang_Throwable_getStackTraceElement;
-                Java_java_nio_Bits_copyFromShortArray;
-                Java_java_nio_Bits_copyToShortArray;
-                Java_java_nio_Bits_copyFromIntArray;
-                Java_java_nio_Bits_copyToIntArray;
-                Java_java_nio_Bits_copyFromLongArray;
-                Java_java_nio_Bits_copyToLongArray;
 		Java_java_security_AccessController_doPrivileged__Ljava_security_PrivilegedAction_2;
 		Java_java_security_AccessController_doPrivileged__Ljava_security_PrivilegedAction_2Ljava_security_AccessControlContext_2;
 		Java_java_security_AccessController_doPrivileged__Ljava_security_PrivilegedExceptionAction_2;
@@ -240,62 +236,61 @@ SUNWprivate_1.1 {
 		Java_java_util_TimeZone_getSystemTimeZoneID;
 		Java_java_util_TimeZone_getSystemGMTOffsetID;
 		Java_java_util_concurrent_atomic_AtomicLong_VMSupportsCS8;
-                Java_jdk_internal_jimage_ImageNativeSubstrate_openImage;
-                Java_jdk_internal_jimage_ImageNativeSubstrate_closeImage;
-                Java_jdk_internal_jimage_ImageNativeSubstrate_getIndexAddress;
-                Java_jdk_internal_jimage_ImageNativeSubstrate_getDataAddress;
-                Java_jdk_internal_jimage_ImageNativeSubstrate_read;
-                Java_jdk_internal_jimage_ImageNativeSubstrate_readCompressed;
-                Java_jdk_internal_jimage_ImageNativeSubstrate_getStringBytes;
-                Java_jdk_internal_jimage_ImageNativeSubstrate_getAttributes;
-                Java_jdk_internal_jimage_ImageNativeSubstrate_findAttributes;
-                Java_jdk_internal_jimage_ImageNativeSubstrate_attributeOffsets;
-		Java_sun_misc_MessageUtils_toStderr;
-		Java_sun_misc_MessageUtils_toStdout;
-		Java_sun_misc_NativeSignalHandler_handle0;
-		Java_sun_misc_Signal_findSignal;
-		Java_sun_misc_Signal_handle0;
-		Java_sun_misc_Signal_raise0;
-              Java_sun_reflect_ConstantPool_getClassAt0;
-              Java_sun_reflect_ConstantPool_getClassAtIfLoaded0;
-              Java_sun_reflect_ConstantPool_getDoubleAt0;
-              Java_sun_reflect_ConstantPool_getFieldAt0;
-              Java_sun_reflect_ConstantPool_getFieldAtIfLoaded0;
-              Java_sun_reflect_ConstantPool_getFloatAt0;
-              Java_sun_reflect_ConstantPool_getIntAt0;
-              Java_sun_reflect_ConstantPool_getLongAt0;
-              Java_sun_reflect_ConstantPool_getMemberRefInfoAt0;
-              Java_sun_reflect_ConstantPool_getMethodAt0;
-              Java_sun_reflect_ConstantPool_getMethodAtIfLoaded0;
-              Java_sun_reflect_ConstantPool_getSize0;
-              Java_sun_reflect_ConstantPool_getStringAt0;
-              Java_sun_reflect_ConstantPool_getUTF8At0;
+		Java_jdk_internal_misc_Signal_findSignal0;
+		Java_jdk_internal_misc_Signal_handle0;
+		Java_jdk_internal_misc_Signal_raise0;
+              Java_jdk_internal_reflect_ConstantPool_getClassAt0;
+              Java_jdk_internal_reflect_ConstantPool_getClassAtIfLoaded0;
+              Java_jdk_internal_reflect_ConstantPool_getClassRefIndexAt0;
+              Java_jdk_internal_reflect_ConstantPool_getDoubleAt0;
+              Java_jdk_internal_reflect_ConstantPool_getFieldAt0;
+              Java_jdk_internal_reflect_ConstantPool_getFieldAtIfLoaded0;
+              Java_jdk_internal_reflect_ConstantPool_getFloatAt0;
+              Java_jdk_internal_reflect_ConstantPool_getIntAt0;
+              Java_jdk_internal_reflect_ConstantPool_getLongAt0;
+              Java_jdk_internal_reflect_ConstantPool_getMemberRefInfoAt0;
+              Java_jdk_internal_reflect_ConstantPool_getMethodAt0;
+              Java_jdk_internal_reflect_ConstantPool_getMethodAtIfLoaded0;
+              Java_jdk_internal_reflect_ConstantPool_getNameAndTypeRefIndexAt0;
+              Java_jdk_internal_reflect_ConstantPool_getNameAndTypeRefInfoAt0;
+              Java_jdk_internal_reflect_ConstantPool_getSize0;
+              Java_jdk_internal_reflect_ConstantPool_getStringAt0;
+              Java_jdk_internal_reflect_ConstantPool_getTagAt0;
+              Java_jdk_internal_reflect_ConstantPool_getUTF8At0;
 		Java_java_io_Console_istty;
 		Java_java_io_Console_encoding;
                 Java_java_io_Console_echo;
-		Java_sun_misc_GC_maxObjectInspectionAge;
-		Java_sun_reflect_NativeConstructorAccessorImpl_newInstance0;
-		Java_sun_reflect_NativeMethodAccessorImpl_invoke0;
-		Java_sun_reflect_Reflection_getCallerClass__;
-		Java_sun_reflect_Reflection_getCallerClass__I;
-		Java_sun_reflect_Reflection_getClassAccessFlags;
-                Java_sun_misc_Version_getJdkVersionInfo;
-                Java_sun_misc_Version_getJdkSpecialVersion;
-                Java_sun_misc_Version_getJvmVersionInfo;
-                Java_sun_misc_Version_getJvmSpecialVersion;
-		Java_sun_misc_VM_latestUserDefinedLoader;
-                Java_sun_misc_VM_getuid;
-                Java_sun_misc_VM_geteuid;
-                Java_sun_misc_VM_getgid;
-                Java_sun_misc_VM_getegid;
-                Java_sun_misc_VM_initialize;
-		Java_sun_misc_VMSupport_initAgentProperties;
-		Java_sun_misc_VMSupport_getVMTemporaryDirectory;
+		Java_jdk_internal_reflect_NativeConstructorAccessorImpl_newInstance0;
+		Java_jdk_internal_reflect_NativeMethodAccessorImpl_invoke0;
+		Java_jdk_internal_reflect_Reflection_getCallerClass__;
+		Java_jdk_internal_reflect_Reflection_getCallerClass__I;
+		Java_jdk_internal_reflect_Reflection_getClassAccessFlags;
+		Java_jdk_internal_misc_VM_latestUserDefinedLoader0;
+                Java_jdk_internal_misc_VM_getuid;
+                Java_jdk_internal_misc_VM_geteuid;
+                Java_jdk_internal_misc_VM_getgid;
+                Java_jdk_internal_misc_VM_getegid;
+                Java_jdk_internal_misc_VM_getRuntimeArguments;
+                Java_jdk_internal_misc_VM_initialize;
+
+                Java_java_lang_Module_defineModule0;
+                Java_java_lang_Module_addReads0;
+                Java_java_lang_Module_addExports0;
+                Java_java_lang_Module_addExportsToAll0;
+                Java_java_lang_Module_addExportsToAllUnnamed0;
+
+		Java_jdk_internal_loader_BootLoader_getSystemPackageLocation;
+		Java_jdk_internal_loader_BootLoader_getSystemPackageNames;
+                Java_jdk_internal_loader_BootLoader_setBootLoaderUnnamedModule0;
+
+		Java_jdk_internal_vm_VMSupport_initAgentProperties;
+		Java_jdk_internal_vm_VMSupport_getVMTemporaryDirectory;
 
                 # ZipFile.c needs this one
 		throwFileNotFoundException;
-                # zip_util.c needs this one
+                # zip_util.c needs these
 		getLastErrorString;
+		getErrorString;
 
 	# Outcalls from libjvm done using dlsym().
 

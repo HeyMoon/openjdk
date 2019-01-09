@@ -26,7 +26,8 @@
  * @bug 6292705
  * @summary Test support for arrays in parameterized types.
  * @author Luis-Miguel Alventosa
- * @modules java.management
+ * @key intermittent
+ * @modules java.management.rmi
  * @run clean GenericArrayTypeTest
  * @run build GenericArrayTypeTest
  * @run main GenericArrayTypeTest

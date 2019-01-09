@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -275,6 +275,7 @@ public:
     virtual void Show();
     virtual void Hide();
     virtual void Reshape(int x, int y, int w, int h);
+    void ReshapeNoScale(int x, int y, int w, int h);
 
     /*
      * Fix for 4046446.
@@ -438,6 +439,7 @@ public:
     static void InitDynamicKeyMapTable();
     static void BuildDynamicKeyMapTable();
     static jint GetJavaModifiers();
+    static jint GetActionModifiers();
     static jint GetButton(int mouseButton);
     static UINT GetButtonMK(int mouseButton);
     static UINT WindowsKeyToJavaKey(UINT windowsKey, UINT modifiers, UINT character, BOOL isDeadKey);
@@ -521,7 +523,7 @@ public:
     virtual MsgRouting WmMouseMove(UINT flags, int x, int y);
     virtual MsgRouting WmMouseExit(UINT flags, int x, int y);
     virtual MsgRouting WmMouseWheel(UINT flags, int x, int y,
-                                    int wheelRotation);
+                                    int wheelRotation, BOOL isHorizontal);
     virtual MsgRouting WmNcMouseDown(WPARAM hitTest, int x, int y, int button);
     virtual MsgRouting WmNcMouseUp(WPARAM hitTest, int x, int y, int button);
     virtual MsgRouting WmWindowPosChanging(LPARAM windowPos);
@@ -581,6 +583,7 @@ public:
     virtual MsgRouting WmNcPaint(HRGN hrgn);
     virtual MsgRouting WmNcHitTest(UINT x, UINT y, LRESULT &retVal);
     virtual MsgRouting WmSysCommand(UINT uCmdType, int xPos, int yPos);
+    virtual MsgRouting WmEnterSizeMove();
     virtual MsgRouting WmExitSizeMove();
     virtual MsgRouting WmEnterMenuLoop(BOOL isTrackPopupMenu);
     virtual MsgRouting WmExitMenuLoop(BOOL isTrackPopupMenu);
@@ -746,6 +749,11 @@ protected:
     virtual void FillBackground(HDC hMemoryDC, SIZE &size);
     virtual void FillAlpha(void *bitmapBits, SIZE &size, BYTE alpha);
 
+    int ScaleUpX(int x);
+    int ScaleUpY(int y);
+    int ScaleDownX(int x);
+    int ScaleDownY(int y);
+
 private:
     /* A bitmask keeps the button's numbers as MK_LBUTTON, MK_MBUTTON, MK_RBUTTON
      * which are allowed to
@@ -818,7 +826,10 @@ private:
     int windowMoveLockPosCY;
 
     // 6524352: support finer-resolution
-    int m_wheelRotationAmount;
+    int m_wheelRotationAmountX;
+    int m_wheelRotationAmountY;
+
+    BOOL deadKeyActive;
 
     /*
      * The association list of children's IDs and corresponding components.
@@ -900,13 +911,13 @@ public:
 
     void            AddDC(HDC hDC, HWND hWnd);
     void            AddDCItem(DCItem *newItem);
-    DCItem          *RemoveDC(HDC hDC);
+    DCItem          *RemoveDC(HDC hDC, HWND hWnd);
     DCItem          *RemoveAllDCs(HWND hWnd);
     void            RealizePalettes(int screen);
 };
 
 void ReleaseDCList(HWND hwnd, DCList &list);
-void MoveDCToPassiveList(HDC hDC);
+void MoveDCToPassiveList(HDC hDC, HWND hWnd);
 
 #include "ObjectList.h"
 

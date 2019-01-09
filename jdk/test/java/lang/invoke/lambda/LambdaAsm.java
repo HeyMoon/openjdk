@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,8 @@
  * @summary ensures that j.l.i.InvokerByteCodeGenerator and ASM visitMethodInsn
  * generate  bytecodes with correct constant pool references
  * @modules java.base/jdk.internal.org.objectweb.asm
- *          jdk.compiler/com.sun.tools.classfile
+ *          jdk.jdeps/com.sun.tools.classfile
+ *          jdk.zipfs
  * @compile -XDignore.symbol.file LambdaAsm.java LUtils.java
  * @run main/othervm LambdaAsm
  */

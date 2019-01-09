@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 
 #include "classfile/vmSymbols.hpp"
 #include "code/compressedStream.hpp"
+#include "compiler/compilerDefinitions.hpp"
 #include "compiler/oopMap.hpp"
 #include "interpreter/invocationCounter.hpp"
 #include "oops/annotations.hpp"
@@ -58,9 +59,11 @@ class MethodCounters;
 class ConstMethod;
 class InlineTableSizes;
 class KlassSizeStats;
+class CompiledMethod;
 
 class Method : public Metadata {
  friend class VMStructs;
+ friend class JVMCIVMStructs;
  private:
   ConstMethod*      _constMethod;                // Method read-only data.
   MethodData*       _method_data;
@@ -68,32 +71,28 @@ class Method : public Metadata {
   AccessFlags       _access_flags;               // Access flags
   int               _vtable_index;               // vtable index of this method (see VtableIndexFlag)
                                                  // note: can have vtables with >2**16 elements (because of inheritance)
-#ifdef CC_INTERP
-  int               _result_index;               // C++ interpreter needs for converting results to/from stack
-#endif
-  u2                _method_size;                // size of this object
-  u1                _intrinsic_id;               // vmSymbols::intrinsic_id (0 == _none)
+  u2                _intrinsic_id;               // vmSymbols::intrinsic_id (0 == _none)
 
   // Flags
   enum Flags {
-    _jfr_towrite          = 1 << 0,
-    _caller_sensitive     = 1 << 1,
-    _force_inline         = 1 << 2,
-    _dont_inline          = 1 << 3,
-    _hidden               = 1 << 4,
-    _has_injected_profile = 1 << 5,
-    _running_emcp         = 1 << 6,
-    _intrinsic_candidate  = 1 << 7
+    _caller_sensitive      = 1 << 0,
+    _force_inline          = 1 << 1,
+    _dont_inline           = 1 << 2,
+    _hidden                = 1 << 3,
+    _has_injected_profile  = 1 << 4,
+    _running_emcp          = 1 << 5,
+    _intrinsic_candidate   = 1 << 6,
+    _reserved_stack_access = 1 << 7
   };
-  u1 _flags;
+  mutable u2 _flags;
+
+  TRACE_DEFINE_FLAG;
 
 #ifndef PRODUCT
   int               _compiled_invocation_count;  // Number of nmethod invocations so far (for perf. debugging)
 #endif
   // Entry point for calling both from and to the interpreter.
   address _i2i_entry;           // All-args-on-stack calling convention
-  // Adapter blob (i2c/c2i) for this Method*. Set once when method is linked.
-  AdapterHandlerEntry* _adapter;
   // Entry point for calling from compiled code, to compiled code if it exists
   // or else the interpreter.
   volatile address _from_compiled_entry;        // Cache of: _code ? _code->entry_point() : _adapter->c2i_entry()
@@ -102,11 +101,15 @@ class Method : public Metadata {
   // field can come and go.  It can transition from NULL to not-null at any
   // time (whenever a compile completes).  It can transition from not-null to
   // NULL only at safepoints (because of a de-opt).
-  nmethod* volatile _code;                       // Points to the corresponding piece of native code
+  CompiledMethod* volatile _code;                       // Points to the corresponding piece of native code
   volatile address           _from_interpreted_entry; // Cache of _code ? _adapter->i2c_entry() : _i2i_entry
 
+#if INCLUDE_AOT && defined(TIERED)
+  CompiledMethod* _aot_code;
+#endif
+
   // Constructor
-  Method(ConstMethod* xconst, AccessFlags access_flags, int size);
+  Method(ConstMethod* xconst, AccessFlags access_flags);
  public:
 
   static Method* allocate(ClassLoaderData* loader_data,
@@ -136,6 +139,7 @@ class Method : public Metadata {
 
   static address make_adapters(methodHandle mh, TRAPS);
   volatile address from_compiled_entry() const   { return (address)OrderAccess::load_ptr_acquire(&_from_compiled_entry); }
+  volatile address from_compiled_entry_no_trampoline() const;
   volatile address from_interpreted_entry() const{ return (address)OrderAccess::load_ptr_acquire(&_from_interpreted_entry); }
 
   // access flag
@@ -171,11 +175,6 @@ class Method : public Metadata {
     return constMethod()->type_annotations();
   }
 
-#ifdef CC_INTERP
-  void set_result_index(BasicType type);
-  int  result_index()                            { return _result_index; }
-#endif
-
   // Helper routine: get klass name + "." + method name + signature as
   // C string, for the purpose of providing more useful NoSuchMethodErrors
   // and fatal error handling. The string is allocated in resource
@@ -195,8 +194,18 @@ class Method : public Metadata {
   }
 
   // JVMTI breakpoints
+#if !INCLUDE_JVMTI
+  Bytecodes::Code orig_bytecode_at(int bci) const {
+    ShouldNotReachHere();
+    return Bytecodes::_shouldnotreachhere;
+  }
+  void set_orig_bytecode_at(int bci, Bytecodes::Code code) {
+    ShouldNotReachHere();
+  };
+  u2   number_of_breakpoints() const {return 0;}
+#else // !INCLUDE_JVMTI
   Bytecodes::Code orig_bytecode_at(int bci) const;
-  void        set_orig_bytecode_at(int bci, Bytecodes::Code code);
+  void set_orig_bytecode_at(int bci, Bytecodes::Code code);
   void set_breakpoint(int bci);
   void clear_breakpoint(int bci);
   void clear_all_breakpoints();
@@ -229,6 +238,7 @@ class Method : public Metadata {
       mcs->clear_number_of_breakpoints();
     }
   }
+#endif // !INCLUDE_JVMTI
 
   // index into InstanceKlass methods() array
   // note: also used by jfr
@@ -241,12 +251,8 @@ class Method : public Metadata {
   // code size
   int code_size() const                  { return constMethod()->code_size(); }
 
-  // method size
-  int method_size() const                        { return _method_size; }
-  void set_method_size(int size) {
-    assert(0 <= size && size < (1 << 16), "invalid method size");
-    _method_size = size;
-  }
+  // method size in words
+  int method_size() const                { return sizeof(Method)/wordSize + ( is_native() ? 2 : 0 ); }
 
   // constant pool for Klass* holding this method
   ConstantPool* constants() const              { return constMethod()->constants(); }
@@ -267,6 +273,7 @@ class Method : public Metadata {
   int highest_osr_comp_level() const;
   void set_highest_osr_comp_level(int level);
 
+#if defined(COMPILER2) || INCLUDE_JVMCI
   // Count of times method was exited via exception while interpreting
   void interpreter_throwout_increment(TRAPS) {
     MethodCounters* mcs = get_method_counters(CHECK);
@@ -274,6 +281,7 @@ class Method : public Metadata {
       mcs->interpreter_throwout_increment();
     }
   }
+#endif
 
   int  interpreter_throwout_count() const        {
     MethodCounters* mcs = method_counters();
@@ -383,7 +391,20 @@ class Method : public Metadata {
       mcs->set_rate(rate);
     }
   }
-#endif
+
+#if INCLUDE_AOT
+  void set_aot_code(CompiledMethod* aot_code) {
+    _aot_code = aot_code;
+  }
+
+  CompiledMethod* aot_code() const {
+    return _aot_code;
+  }
+#else
+  CompiledMethod* aot_code() const { return NULL; }
+#endif // INCLUDE_AOT
+#endif // TIERED
+
   int nmethod_age() const {
     if (method_counters() == NULL) {
       return INT_MAX;
@@ -398,7 +419,7 @@ class Method : public Metadata {
   bool was_executed_more_than(int n);
   bool was_never_executed()                      { return !was_executed_more_than(0); }
 
-  static void build_interpreter_method_data(methodHandle method, TRAPS);
+  static void build_interpreter_method_data(const methodHandle& method, TRAPS);
 
   static MethodCounters* build_method_counters(Method* m, TRAPS);
 
@@ -410,11 +431,13 @@ class Method : public Metadata {
       return (mcs == NULL) ? 0 : mcs->interpreter_invocation_count();
     }
   }
+#if defined(COMPILER2) || INCLUDE_JVMCI
   int increment_interpreter_invocation_count(TRAPS) {
     if (TieredCompilation) ShouldNotReachHere();
     MethodCounters* mcs = get_method_counters(CHECK_0);
     return (mcs == NULL) ? 0 : mcs->increment_interpreter_invocation_count();
   }
+#endif
 
 #ifndef PRODUCT
   int  compiled_invocation_count() const         { return _compiled_invocation_count;  }
@@ -431,18 +454,26 @@ class Method : public Metadata {
   // nmethod/verified compiler entry
   address verified_code_entry();
   bool check_code() const;      // Not inline to avoid circular ref
-  nmethod* volatile code() const                 { assert( check_code(), "" ); return (nmethod *)OrderAccess::load_ptr_acquire(&_code); }
-  void clear_code();            // Clear out any compiled code
-  static void set_code(methodHandle mh, nmethod* code);
-  void set_adapter_entry(AdapterHandlerEntry* adapter) {  _adapter = adapter; }
+  CompiledMethod* volatile code() const                 { assert( check_code(), "" ); return (CompiledMethod *)OrderAccess::load_ptr_acquire(&_code); }
+  void clear_code(bool acquire_lock = true);    // Clear out any compiled code
+  static void set_code(methodHandle mh, CompiledMethod* code);
+  void set_adapter_entry(AdapterHandlerEntry* adapter) {
+    constMethod()->set_adapter_entry(adapter);
+  }
+  void update_adapter_trampoline(AdapterHandlerEntry* adapter) {
+    constMethod()->update_adapter_trampoline(adapter);
+  }
+
   address get_i2c_entry();
   address get_c2i_entry();
   address get_c2i_unverified_entry();
-  AdapterHandlerEntry* adapter() {  return _adapter; }
+  AdapterHandlerEntry* adapter() const {
+    return constMethod()->adapter();
+  }
   // setup entry points
-  void link_method(methodHandle method, TRAPS);
-  // clear entry points. Used by sharing code
-  void unlink_method();
+  void link_method(const methodHandle& method, TRAPS);
+  // clear entry points. Used by sharing code during dump time
+  void unlink_method() NOT_CDS_RETURN;
 
   // vtable index
   enum VtableIndexFlag {
@@ -458,17 +489,25 @@ class Method : public Metadata {
   DEBUG_ONLY(bool valid_vtable_index() const     { return _vtable_index >= nonvirtual_vtable_index; })
   bool has_vtable_index() const                  { return _vtable_index >= 0; }
   int  vtable_index() const                      { return _vtable_index; }
-  void set_vtable_index(int index)               { _vtable_index = index; }
+  void set_vtable_index(int index);
   DEBUG_ONLY(bool valid_itable_index() const     { return _vtable_index <= pending_itable_index; })
   bool has_itable_index() const                  { return _vtable_index <= itable_index_max; }
   int  itable_index() const                      { assert(valid_itable_index(), "");
                                                    return itable_index_max - _vtable_index; }
-  void set_itable_index(int index)               { _vtable_index = itable_index_max - index; assert(valid_itable_index(), ""); }
+  void set_itable_index(int index);
 
   // interpreter entry
   address interpreter_entry() const              { return _i2i_entry; }
   // Only used when first initialize so we can set _i2i_entry and _from_interpreted_entry
-  void set_interpreter_entry(address entry)      { _i2i_entry = entry;  _from_interpreted_entry = entry; }
+  void set_interpreter_entry(address entry) {
+    assert(!is_shared(), "shared method's interpreter entry should not be changed at run time");
+    if (_i2i_entry != entry) {
+      _i2i_entry = entry;
+    }
+    if (_from_interpreted_entry != entry) {
+      _from_interpreted_entry = entry;
+    }
+  }
 
   // native function (used for native methods only)
   enum {
@@ -536,7 +575,6 @@ class Method : public Metadata {
   void compute_size_of_parameters(Thread *thread); // word size of parameters (receiver if any + arguments)
   Symbol* klass_name() const;                    // returns the name of the method holder
   BasicType result_type() const;                 // type of the method result
-  int result_type_index() const;                 // type index of the method result
   bool is_returning_oop() const                  { BasicType r = result_type(); return (r == T_OBJECT || r == T_ARRAY); }
   bool is_returning_fp() const                   { BasicType r = result_type(); return (r == T_FLOAT || r == T_DOUBLE); }
 
@@ -565,6 +603,7 @@ class Method : public Metadata {
   // checks method and its method holder
   bool is_final_method() const;
   bool is_final_method(AccessFlags class_access_flags) const;
+  // interface method declared with 'default' - excludes private interface methods
   bool is_default_method() const;
 
   // true if method needs no dynamic dispatch (final and/or no vtable entry)
@@ -600,6 +639,12 @@ class Method : public Metadata {
   // returns true if the method is an accessor function (setter/getter).
   bool is_accessor() const;
 
+  // returns true if the method is a getter
+  bool is_getter() const;
+
+  // returns true if the method is a setter
+  bool is_setter() const;
+
   // returns true if the method does nothing but return a constant of primitive type
   bool is_constant_getter() const;
 
@@ -613,25 +658,33 @@ class Method : public Metadata {
   // valid static initializer flags.
   bool is_static_initializer() const;
 
+  // returns true if the method name is <init>
+  bool is_object_initializer() const;
+
   // compiled code support
   // NOTE: code() is inherently racy as deopt can be clearing code
   // simultaneously. Use with caution.
   bool has_compiled_code() const                 { return code() != NULL; }
 
+#ifdef TIERED
+  bool has_aot_code() const                      { return aot_code() != NULL; }
+#endif
+
   // sizing
-  static int header_size()                       { return sizeof(Method)/HeapWordSize; }
+  static int header_size()                       {
+    return align_size_up(sizeof(Method), wordSize) / wordSize;
+  }
   static int size(bool is_native);
   int size() const                               { return method_size(); }
 #if INCLUDE_SERVICES
   void collect_statistics(KlassSizeStats *sz) const;
 #endif
+  void log_touched(TRAPS);
+  static void print_touched_methods(outputStream* out);
 
   // interpreter support
   static ByteSize const_offset()                 { return byte_offset_of(Method, _constMethod       ); }
   static ByteSize access_flags_offset()          { return byte_offset_of(Method, _access_flags      ); }
-#ifdef CC_INTERP
-  static ByteSize result_index_offset()          { return byte_offset_of(Method, _result_index ); }
-#endif /* CC_INTERP */
   static ByteSize from_compiled_offset()         { return byte_offset_of(Method, _from_compiled_entry); }
   static ByteSize code_offset()                  { return byte_offset_of(Method, _code); }
   static ByteSize method_data_offset()           {
@@ -651,7 +704,7 @@ class Method : public Metadata {
   // for code generation
   static int method_data_offset_in_bytes()       { return offset_of(Method, _method_data); }
   static int intrinsic_id_offset_in_bytes()      { return offset_of(Method, _intrinsic_id); }
-  static int intrinsic_id_size_in_bytes()        { return sizeof(u1); }
+  static int intrinsic_id_size_in_bytes()        { return sizeof(u2); }
 
   // Static methods that are used to implement member methods where an exposed this pointer
   // is needed due to possible GCs
@@ -683,8 +736,10 @@ class Method : public Metadata {
                                                    TRAPS);
   static Klass* check_non_bcp_klass(Klass* klass);
 
-  // How many extra stack entries for invokedynamic when it's enabled
-  static const int extra_stack_entries_for_jsr292 = 1;
+  enum {
+    // How many extra stack entries for invokedynamic
+    extra_stack_entries_for_jsr292 = 1
+  };
 
   // this operates only on invoke methods:
   // presize interpreter frames for extra interpreter stack entries, if needed
@@ -775,18 +830,11 @@ class Method : public Metadata {
 
   // Support for inlining of intrinsic methods
   vmIntrinsics::ID intrinsic_id() const          { return (vmIntrinsics::ID) _intrinsic_id;           }
-  void     set_intrinsic_id(vmIntrinsics::ID id) {                           _intrinsic_id = (u1) id; }
+  void     set_intrinsic_id(vmIntrinsics::ID id) {                           _intrinsic_id = (u2) id; }
 
   // Helper routines for intrinsic_id() and vmIntrinsics::method().
   void init_intrinsic_id();     // updates from _none if a match
-  static vmSymbols::SID klass_id_for_intrinsics(Klass* holder);
-
-  bool jfr_towrite() {
-    return (_flags & _jfr_towrite) != 0;
-  }
-  void set_jfr_towrite(bool x) {
-    _flags = x ? (_flags | _jfr_towrite) : (_flags & ~_jfr_towrite);
-  }
+  static vmSymbols::SID klass_id_for_intrinsics(const Klass* holder);
 
   bool caller_sensitive() {
     return (_flags & _caller_sensitive) != 0;
@@ -829,6 +877,16 @@ class Method : public Metadata {
   void set_has_injected_profile(bool x) {
     _flags = x ? (_flags | _has_injected_profile) : (_flags & ~_has_injected_profile);
   }
+
+  bool has_reserved_stack_access() {
+    return (_flags & _reserved_stack_access) != 0;
+  }
+
+  void set_has_reserved_stack_access(bool x) {
+    _flags = x ? (_flags | _reserved_stack_access) : (_flags & ~_reserved_stack_access);
+  }
+
+  TRACE_DEFINE_FLAG_ACCESSOR;
 
   ConstMethod::MethodType method_type() const {
       return _constMethod->method_type();
@@ -925,6 +983,7 @@ class Method : public Metadata {
   void print_on(outputStream* st) const;
 #endif
   void print_value_on(outputStream* st) const;
+  void print_linkage_flags(outputStream* st) PRODUCT_RETURN;
 
   const char* internal_name() const { return "{method}"; }
 
@@ -1011,6 +1070,8 @@ class CompressedLineNumberReadStream: public CompressedReadStream {
 };
 
 
+#if INCLUDE_JVMTI
+
 /// Fast Breakpoints.
 
 // If this structure gets more complicated (because bpts get numerous),
@@ -1054,6 +1115,8 @@ class BreakpointInfo : public CHeapObj<mtClass> {
   void set(Method* method);
   void clear(Method* method);
 };
+
+#endif // INCLUDE_JVMTI
 
 // Utility class for access exception handlers
 class ExceptionTable : public StackObj {

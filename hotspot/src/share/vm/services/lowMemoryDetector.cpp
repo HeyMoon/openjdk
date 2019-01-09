@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #include "precompiled.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/interfaceSupport.hpp"
 #include "runtime/java.hpp"
@@ -200,9 +201,10 @@ SensorInfo::SensorInfo() {
 // any clears unless the usage becomes greater than or equal
 // to the high threshold.
 //
-// If the current level is between high and low threhsold, no change.
+// If the current level is between high and low threshold, no change.
 //
 void SensorInfo::set_gauge_sensor_level(MemoryUsage usage, ThresholdSupport* high_low_threshold) {
+  assert(Service_lock->owned_by_self(), "Must own Service_lock");
   assert(high_low_threshold->is_high_threshold_supported(), "just checking");
 
   bool is_over_high = high_low_threshold->is_high_threshold_crossed(usage);
@@ -257,6 +259,7 @@ void SensorInfo::set_gauge_sensor_level(MemoryUsage usage, ThresholdSupport* hig
 //      the sensor will be on (i.e. sensor is currently off
 //      and has pending trigger requests).
 void SensorInfo::set_counter_sensor_level(MemoryUsage usage, ThresholdSupport* counter_threshold) {
+  assert(Service_lock->owned_by_self(), "Must own Service_lock");
   assert(counter_threshold->is_high_threshold_supported(), "just checking");
 
   bool is_over_high = counter_threshold->is_high_threshold_crossed(usage);
@@ -278,10 +281,6 @@ void SensorInfo::oops_do(OopClosure* f) {
 }
 
 void SensorInfo::process_pending_requests(TRAPS) {
-  if (!has_pending_requests()) {
-    return;
-  }
-
   int pending_count = pending_trigger_count();
   if (pending_clear_count() > 0) {
     clear(pending_count, CHECK);
@@ -293,29 +292,51 @@ void SensorInfo::process_pending_requests(TRAPS) {
 
 void SensorInfo::trigger(int count, TRAPS) {
   assert(count <= _pending_trigger_count, "just checking");
-
   if (_sensor_obj != NULL) {
     Klass* k = Management::sun_management_Sensor_klass(CHECK);
     instanceKlassHandle sensorKlass (THREAD, k);
     Handle sensor_h(THREAD, _sensor_obj);
-    Handle usage_h = MemoryService::create_MemoryUsage_obj(_usage, CHECK);
+
+    Symbol* trigger_method_signature;
 
     JavaValue result(T_VOID);
     JavaCallArguments args(sensor_h);
     args.push_int((int) count);
-    args.push_oop(usage_h);
+
+    Handle usage_h = MemoryService::create_MemoryUsage_obj(_usage, THREAD);
+    // Call Sensor::trigger(int, MemoryUsage) to send notification to listeners.
+    // When OOME occurs and fails to allocate MemoryUsage object, call
+    // Sensor::trigger(int) instead.  The pending request will be processed
+    // but no notification will be sent.
+    if (HAS_PENDING_EXCEPTION) {
+       assert((PENDING_EXCEPTION->is_a(SystemDictionary::OutOfMemoryError_klass())), "we expect only an OOME here");
+       CLEAR_PENDING_EXCEPTION;
+       trigger_method_signature = vmSymbols::int_void_signature();
+    } else {
+       trigger_method_signature = vmSymbols::trigger_method_signature();
+       args.push_oop(usage_h);
+    }
 
     JavaCalls::call_virtual(&result,
-                            sensorKlass,
-                            vmSymbols::trigger_name(),
-                            vmSymbols::trigger_method_signature(),
-                            &args,
-                            CHECK);
+                        sensorKlass,
+                        vmSymbols::trigger_name(),
+                        trigger_method_signature,
+                        &args,
+                        THREAD);
+
+    if (HAS_PENDING_EXCEPTION) {
+       // We just clear the OOM pending exception that we might have encountered
+       // in Java's tiggerAction(), and continue with updating the counters since
+       // the Java counters have been updated too.
+       assert((PENDING_EXCEPTION->is_a(SystemDictionary::OutOfMemoryError_klass())), "we expect only an OOME here");
+       CLEAR_PENDING_EXCEPTION;
+     }
   }
 
   {
     // Holds Service_lock and update the sensor state
     MutexLockerEx ml(Service_lock, Mutex::_no_safepoint_check_flag);
+    assert(_pending_trigger_count > 0, "Must have pending trigger");
     _sensor_on = true;
     _sensor_count += count;
     _pending_trigger_count = _pending_trigger_count - count;
@@ -323,6 +344,20 @@ void SensorInfo::trigger(int count, TRAPS) {
 }
 
 void SensorInfo::clear(int count, TRAPS) {
+  {
+    // Holds Service_lock and update the sensor state
+    MutexLockerEx ml(Service_lock, Mutex::_no_safepoint_check_flag);
+    if (_pending_clear_count == 0) {
+      // Bail out if we lost a race to set_*_sensor_level() which may have
+      // reactivated the sensor in the meantime because it was triggered again.
+      return;
+    }
+    _sensor_on = false;
+    _sensor_count += count;
+    _pending_clear_count = 0;
+    _pending_trigger_count = _pending_trigger_count - count;
+  }
+
   if (_sensor_obj != NULL) {
     Klass* k = Management::sun_management_Sensor_klass(CHECK);
     instanceKlassHandle sensorKlass (THREAD, k);
@@ -337,14 +372,6 @@ void SensorInfo::clear(int count, TRAPS) {
                             vmSymbols::int_void_signature(),
                             &args,
                             CHECK);
-  }
-
-  {
-    // Holds Service_lock and update the sensor state
-    MutexLockerEx ml(Service_lock, Mutex::_no_safepoint_check_flag);
-    _sensor_on = false;
-    _pending_clear_count = 0;
-    _pending_trigger_count = _pending_trigger_count - count;
   }
 }
 

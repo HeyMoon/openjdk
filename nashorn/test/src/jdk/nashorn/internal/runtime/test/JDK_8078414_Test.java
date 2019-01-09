@@ -32,18 +32,46 @@ import java.util.Map;
 import javax.script.Bindings;
 import jdk.nashorn.api.scripting.JSObject;
 import jdk.nashorn.api.scripting.ScriptObjectMirror;
+import jdk.nashorn.internal.objects.Global;
 import jdk.nashorn.internal.objects.NativeArray;
+import jdk.nashorn.internal.runtime.Context;
+import jdk.nashorn.internal.runtime.ErrorManager;
 import jdk.nashorn.internal.runtime.ScriptObject;
 import jdk.nashorn.internal.runtime.linker.Bootstrap;
+import jdk.nashorn.internal.runtime.options.Options;
+import org.testng.annotations.AfterClass;
+import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 /**
  * @test
  * @bug 8078414
  * @summary Test that arbitrary classes can't be converted to mirror's superclasses/interfaces.
+ * @modules jdk.scripting.nashorn/jdk.nashorn.internal.runtime
+ * @modules jdk.scripting.nashorn/jdk.nashorn.internal.runtime.linker
+ * @modules jdk.scripting.nashorn/jdk.nashorn.internal.runtime.options
+ * @modules jdk.scripting.nashorn/jdk.nashorn.internal.objects
  * @run testng jdk.nashorn.internal.runtime.test.JDK_8078414_Test
  */
 public class JDK_8078414_Test {
+    private static Context cx;
+    private static Global oldGlobal;
+
+    @BeforeClass
+    public static void beforeClass() {
+        // We must have a Context for the DynamicLinker that Bootstrap.getLinkerServices() will use
+        oldGlobal = Context.getGlobal();
+        cx = new Context(new Options(""), new ErrorManager(), null);
+        Context.setGlobal(cx.createGlobal());
+    }
+
+    @AfterClass
+    public static void afterClass() {
+        Context.setGlobal(oldGlobal);
+        oldGlobal = null;
+        cx = null;
+    }
+
     @Test
     public void testCanNotConvertArbitraryClassToMirror() {
         assertCanNotConvert(Double.class, Map.class);

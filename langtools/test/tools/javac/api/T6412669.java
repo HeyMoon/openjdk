@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -51,7 +51,11 @@ public class T6412669 extends AbstractProcessor {
             fm.setLocation(StandardLocation.CLASS_PATH, Arrays.asList(testClasses));
             Iterable<? extends JavaFileObject> files =
                 fm.getJavaFileObjectsFromFiles(Arrays.asList(new File(testSrc, T6412669.class.getName()+".java")));
-            String[] opts = { "-proc:only", "-processor", T6412669.class.getName()};
+            String[] opts = {
+                "-proc:only",
+                "-processor", T6412669.class.getName(),
+                "--add-exports", "jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED"
+            };
             StringWriter sw = new StringWriter();
             JavacTask task = tool.getTask(sw, fm, null, Arrays.asList(opts), null, files);
             boolean ok = task.call();

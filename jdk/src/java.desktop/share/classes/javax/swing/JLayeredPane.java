@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,9 @@ import java.util.Hashtable;
 import java.awt.Color;
 import java.awt.Graphics;
 import java.awt.Rectangle;
+import java.beans.JavaBean;
+import java.beans.BeanProperty;
+
 import sun.awt.SunToolkit;
 
 import javax.accessibility.*;
@@ -44,9 +47,10 @@ import javax.accessibility.*;
  * <a href="http://docs.oracle.com/javase/tutorial/uiswing/components/layeredpane.html">How to Use a Layered Pane</a>,
  * a section in <em>The Java Tutorial</em>.
  *
- * <TABLE STYLE="FLOAT:RIGHT" BORDER="0" SUMMARY="layout">
+ * <table class="borderless" style="float:right">
+ * <caption>Example</caption>
  * <TR>
- *   <TD ALIGN="CENTER">
+ *   <TD style="text-align:center">
  *     <P STYLE="TEXT-ALIGN:CENTER"><IMG SRC="doc-files/JLayeredPane-1.gif"
  *     alt="The following text describes this image."
  *     WIDTH="269" HEIGHT="264" STYLE="FLOAT:BOTTOM; BORDER=0">
@@ -95,7 +99,7 @@ import javax.accessibility.*;
  * <PRE>
  *     layeredPane.add(child, JLayeredPane.DEFAULT_LAYER);
  * or
- *     layeredPane.add(child, new Integer(10));
+ *     layeredPane.add(child, Integer.valueOf.valueOf(10));
  * </PRE>
  * The layer attribute can also be set on a Component by calling<PRE>
  *     layeredPaneParent.setLayer(child, 10)</PRE>
@@ -155,29 +159,30 @@ import javax.accessibility.*;
  * @author David Kloba
  * @since 1.2
  */
+@JavaBean(defaultProperty = "accessibleContext")
 @SuppressWarnings("serial")
 public class JLayeredPane extends JComponent implements Accessible {
     /// Watch the values in getObjectForLayer()
-    /** Convenience object defining the Default layer. Equivalent to new Integer(0).*/
-    public final static Integer DEFAULT_LAYER = 0;
-    /** Convenience object defining the Palette layer. Equivalent to new Integer(100).*/
-    public final static Integer PALETTE_LAYER = 100;
-    /** Convenience object defining the Modal layer. Equivalent to new Integer(200).*/
-    public final static Integer MODAL_LAYER = 200;
-    /** Convenience object defining the Popup layer. Equivalent to new Integer(300).*/
-    public final static Integer POPUP_LAYER = 300;
-    /** Convenience object defining the Drag layer. Equivalent to new Integer(400).*/
-    public final static Integer DRAG_LAYER = 400;
+    /** Convenience object defining the Default layer. Equivalent to Integer.valueOf(0).*/
+    public static final Integer DEFAULT_LAYER = 0;
+    /** Convenience object defining the Palette layer. Equivalent to Integer.valueOf(100).*/
+    public static final Integer PALETTE_LAYER = 100;
+    /** Convenience object defining the Modal layer. Equivalent to Integer.valueOf(200).*/
+    public static final Integer MODAL_LAYER = 200;
+    /** Convenience object defining the Popup layer. Equivalent to Integer.valueOf(300).*/
+    public static final Integer POPUP_LAYER = 300;
+    /** Convenience object defining the Drag layer. Equivalent to Integer.valueOf(400).*/
+    public static final Integer DRAG_LAYER = 400;
     /** Convenience object defining the Frame Content layer.
       * This layer is normally only use to position the contentPane and menuBar
       * components of JFrame.
-      * Equivalent to new Integer(-30000).
+      * Equivalent to Integer.valueOf(-30000).
       * @see JFrame
       */
-    public final static Integer FRAME_CONTENT_LAYER = new Integer(-30000);
+    public static final Integer FRAME_CONTENT_LAYER = -30000;
 
     /** Bound property */
-    public final static String LAYER_PROPERTY = "layeredContainerLayer";
+    public static final String LAYER_PROPERTY = "layeredContainerLayer";
     // Hashtable to store layer values for non-JComponent components
     private Hashtable<Component,Integer> componentToLayer;
     private boolean optimizedDrawingPossible = true;
@@ -275,6 +280,7 @@ public class JLayeredPane extends JComponent implements Accessible {
      * @return false if components can overlap, else true
      * @see JComponent#isOptimizedDrawingEnabled
      */
+    @BeanProperty(bound = false)
     public boolean isOptimizedDrawingEnabled() {
         return optimizedDrawingPossible;
     }
@@ -738,6 +744,7 @@ public class JLayeredPane extends JComponent implements Accessible {
      * @return an AccessibleJLayeredPane that serves as the
      *         AccessibleContext of this JLayeredPane
      */
+    @BeanProperty(bound = false)
     public AccessibleContext getAccessibleContext() {
         if (accessibleContext == null) {
             accessibleContext = new AccessibleJLayeredPane();

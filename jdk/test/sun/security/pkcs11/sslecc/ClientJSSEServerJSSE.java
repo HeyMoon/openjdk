@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,26 +33,32 @@
  * @author Andreas Sterbenz
  * @library ..
  * @library ../../../../java/security/testlibrary
- * @run main/othervm ClientJSSEServerJSSE
+ * @modules jdk.crypto.cryptoki
+ * @run main/othervm -Djdk.tls.namedGroups="secp256r1,sect193r1"
+ *      ClientJSSEServerJSSE
+ * @run main/othervm -Djdk.tls.namedGroups="secp256r1,sect193r1"
+ *      ClientJSSEServerJSSE sm policy
  */
 
-import java.security.*;
+import java.security.Provider;
+import java.security.Security;
 
 public class ClientJSSEServerJSSE extends PKCS11Test {
 
     private static String[] cmdArgs;
 
     public static void main(String[] args) throws Exception {
-        cmdArgs = args;
-        main(new ClientJSSEServerJSSE());
-    }
-
-    public void main(Provider p) throws Exception {
         // reset security properties to make sure that the algorithms
         // and keys used in this test are not disabled.
         Security.setProperty("jdk.tls.disabledAlgorithms", "");
         Security.setProperty("jdk.certpath.disabledAlgorithms", "");
 
+        cmdArgs = args;
+        main(new ClientJSSEServerJSSE(), args);
+    }
+
+    @Override
+    public void main(Provider p) throws Exception {
         if (p.getService("KeyFactory", "EC") == null) {
             System.out.println("Provider does not support EC, skipping");
             return;
@@ -64,14 +70,17 @@ public class ClientJSSEServerJSSE extends PKCS11Test {
 
     private static class JSSEFactory extends CipherTest.PeerFactory {
 
+        @Override
         String getName() {
             return "Client JSSE - Server JSSE";
         }
 
+        @Override
         CipherTest.Client newClient(CipherTest cipherTest) throws Exception {
             return new JSSEClient(cipherTest);
         }
 
+        @Override
         CipherTest.Server newServer(CipherTest cipherTest) throws Exception {
             return new JSSEServer(cipherTest);
         }

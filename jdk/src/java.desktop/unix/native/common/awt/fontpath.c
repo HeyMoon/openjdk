@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -178,6 +178,7 @@ jboolean isDisplayLocal(JNIEnv *env) {
                                                        "()Z");
         JNU_CHECK_EXCEPTION_RETURN(env, JNI_FALSE);
         isLocal = (*env)->CallBooleanMethod(env, ge, isDisplayLocal);
+        JNU_CHECK_EXCEPTION_RETURN(env, JNI_FALSE);
       } else {
         isLocal = True;
       }
@@ -242,8 +243,8 @@ static void AddFontsToX11FontPath ( fDirRecord *fDirP )
 
         appendDirList[index] = 0;
         if ( doNotAppend == 0 ) {
-            strcpy ( fontDirPath, fDirP->name[index] );
-            strcat ( fontDirPath, "/fonts.dir" );
+            snprintf(fontDirPath, sizeof(fontDirPath), "%s/fonts.dir", fDirP->name[index]);
+            fontDirPath[sizeof(fontDirPath) - 1] = '\0';
             dirFile = open ( fontDirPath, O_RDONLY, 0 );
             if ( dirFile == -1 ) {
                 doNotAppend = 1;
@@ -288,6 +289,12 @@ static void AddFontsToX11FontPath ( fDirRecord *fDirP )
         onePath = SAFE_SIZE_ARRAY_ALLOC(malloc, strlen (fDirP->name[index]) + 2, sizeof( char ) );
         if (onePath == NULL) {
             free ( ( void *) appendDirList );
+
+            for ( index = origIndex; index < nPaths; index++ ) {
+                free( newFontPath[index] );
+            }
+
+            free( ( void *) newFontPath);
             XFreeFontPath ( origFontPath );
             return;
         }
@@ -804,30 +811,36 @@ static char **getFontConfigLocations() {
     pattern = (*FcPatternBuild)(NULL, FC_OUTLINE, FcTypeBool, FcTrue, NULL);
     objset = (*FcObjectSetBuild)(FC_FILE, NULL);
     fontSet = (*FcFontList)(NULL, pattern, objset);
-    fontdirs = (char**)calloc(fontSet->nfont+1, sizeof(char*));
-    for (f=0; f < fontSet->nfont; f++) {
-        FcChar8 *file;
-        FcChar8 *dir;
-        if ((*FcPatternGetString)(fontSet->fonts[f], FC_FILE, 0, &file) ==
-                                  FcResultMatch) {
-            dir = (*FcStrDirname)(file);
-            found = 0;
-            for (i=0;i<numdirs; i++) {
-                if (strcmp(fontdirs[i], (char*)dir) == 0) {
-                    found = 1;
-                    break;
+    if (fontSet == NULL) {
+        /* FcFontList() may return NULL if fonts are not installed. */
+        fontdirs = NULL;
+    } else {
+        fontdirs = (char**)calloc(fontSet->nfont+1, sizeof(char*));
+        for (f=0; f < fontSet->nfont; f++) {
+            FcChar8 *file;
+            FcChar8 *dir;
+            if ((*FcPatternGetString)(fontSet->fonts[f], FC_FILE, 0, &file) ==
+                                      FcResultMatch) {
+                dir = (*FcStrDirname)(file);
+                found = 0;
+                for (i=0;i<numdirs; i++) {
+                    if (strcmp(fontdirs[i], (char*)dir) == 0) {
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    fontdirs[numdirs++] = (char*)dir;
+                } else {
+                    free((char*)dir);
                 }
             }
-            if (!found) {
-                fontdirs[numdirs++] = (char*)dir;
-            } else {
-                free((char*)dir);
-            }
         }
+        /* Free fontset if one was returned */
+        (*FcFontSetDestroy)(fontSet);
     }
 
     /* Free memory and close the ".so" */
-    (*FcFontSetDestroy)(fontSet);
     (*FcPatternDestroy)(pattern);
     closeFontConfig(libfontconfig, JNI_TRUE);
     return fontdirs;
@@ -1011,17 +1024,20 @@ Java_sun_font_FontConfigManager_getFontConfig
     jfieldID familyNameID, styleNameID, fullNameID, fontFileID;
     jmethodID fcFontCons;
     char* debugMinGlyphsStr = getenv("J2D_DEBUG_MIN_GLYPHS");
+    jclass fcInfoClass;
+    jclass fcCompFontClass;
+    jclass fcFontClass;
 
     CHECK_NULL(fcInfoObj);
     CHECK_NULL(fcCompFontArray);
 
-    jclass fcInfoClass =
+    fcInfoClass =
         (*env)->FindClass(env, "sun/font/FontConfigManager$FontConfigInfo");
     CHECK_NULL(fcInfoClass);
-    jclass fcCompFontClass =
+    fcCompFontClass =
         (*env)->FindClass(env, "sun/font/FontConfigManager$FcCompFont");
     CHECK_NULL(fcCompFontClass);
-    jclass fcFontClass =
+    fcFontClass =
          (*env)->FindClass(env, "sun/font/FontConfigManager$FontConfigFont");
     CHECK_NULL(fcFontClass);
 
@@ -1127,6 +1143,7 @@ Java_sun_font_FontConfigManager_getFontConfig
                 JNU_CHECK_EXCEPTION(env);
 
                 (*env)->SetObjectArrayElement(env, cacheDirArray, cnt++, jstr);
+                (*env)->DeleteLocalRef(env, jstr);
             }
             (*FcStrListDone)(cacheDirs);
         }
@@ -1145,18 +1162,22 @@ Java_sun_font_FontConfigManager_getFontConfig
         int fn, j, fontCount, nfonts;
         unsigned int minGlyphs;
         FcChar8 **family, **styleStr, **fullname, **file;
-        jarray fcFontArr;
+        jarray fcFontArr = NULL;
+        FcCharSet *unionCharset = NULL;
 
         fcCompFontObj = (*env)->GetObjectArrayElement(env, fcCompFontArray, i);
         fcNameStr =
             (jstring)((*env)->GetObjectField(env, fcCompFontObj, fcNameID));
         fcName = (*env)->GetStringUTFChars(env, fcNameStr, 0);
         if (fcName == NULL) {
+            (*env)->DeleteLocalRef(env, fcCompFontObj);
+            (*env)->DeleteLocalRef(env, fcNameStr);
             continue;
         }
         pattern = (*FcNameParse)((FcChar8 *)fcName);
+        (*env)->ReleaseStringUTFChars(env, fcNameStr, (const char*)fcName);
+        (*env)->DeleteLocalRef(env, fcNameStr);
         if (pattern == NULL) {
-            (*env)->ReleaseStringUTFChars(env, fcNameStr, (const char*)fcName);
             closeFontConfig(libfontconfig, JNI_FALSE);
             return;
         }
@@ -1174,7 +1195,6 @@ Java_sun_font_FontConfigManager_getFontConfig
         fontset = (*FcFontSort)(NULL, pattern, FcTrue, NULL, &result);
         if (fontset == NULL) {
             (*FcPatternDestroy)(pattern);
-            (*env)->ReleaseStringUTFChars(env, fcNameStr, (const char*)fcName);
             closeFontConfig(libfontconfig, JNI_FALSE);
             return;
         }
@@ -1206,7 +1226,6 @@ Java_sun_font_FontConfigManager_getFontConfig
             }
             (*FcPatternDestroy)(pattern);
             (*FcFontSetDestroy)(fontset);
-            (*env)->ReleaseStringUTFChars(env, fcNameStr, (const char*)fcName);
             closeFontConfig(libfontconfig, JNI_FALSE);
             return;
         }
@@ -1219,10 +1238,11 @@ Java_sun_font_FontConfigManager_getFontConfig
                 minGlyphs = val;
             }
         }
+
         for (j=0; j<nfonts; j++) {
             FcPattern *fontPattern = fontset->fonts[j];
             FcChar8 *fontformat;
-            FcCharSet *unionCharset = NULL, *charset;
+            FcCharSet *charset = NULL;
 
             fontformat = NULL;
             (*FcPatternGetString)(fontPattern, FC_FONTFORMAT, 0, &fontformat);
@@ -1247,8 +1267,6 @@ Java_sun_font_FontConfigManager_getFontConfig
                 free(file);
                 (*FcPatternDestroy)(pattern);
                 (*FcFontSetDestroy)(fontset);
-                (*env)->ReleaseStringUTFChars(env,
-                                              fcNameStr, (const char*)fcName);
                 closeFontConfig(libfontconfig, JNI_FALSE);
                 return;
             }
@@ -1280,6 +1298,9 @@ Java_sun_font_FontConfigManager_getFontConfig
             if (!includeFallbacks) {
                 break;
             }
+            if (fontCount == 254) {
+                break; // CompositeFont will only use up to 254 slots from here.
+            }
         }
 
         /* Once we get here 'fontCount' is the number of returned fonts
@@ -1293,6 +1314,16 @@ Java_sun_font_FontConfigManager_getFontConfig
         if (includeFallbacks) {
             fcFontArr =
                 (*env)->NewObjectArray(env, fontCount, fcFontClass, NULL);
+            if (IS_NULL(fcFontArr)) {
+                free(family);
+                free(fullname);
+                free(styleStr);
+                free(file);
+                (*FcPatternDestroy)(pattern);
+                (*FcFontSetDestroy)(fontset);
+                closeFontConfig(libfontconfig, JNI_FALSE);
+                return;
+            }
             (*env)->SetObjectField(env,fcCompFontObj, fcAllFontsID, fcFontArr);
         }
         fn=0;
@@ -1301,19 +1332,28 @@ Java_sun_font_FontConfigManager_getFontConfig
             if (family[j] != NULL) {
                 jobject fcFont =
                     (*env)->NewObject(env, fcFontClass, fcFontCons);
+                if (IS_NULL(fcFont)) break;
                 jstr = (*env)->NewStringUTF(env, (const char*)family[j]);
+                if (IS_NULL(jstr)) break;
                 (*env)->SetObjectField(env, fcFont, familyNameID, jstr);
+                (*env)->DeleteLocalRef(env, jstr);
                 if (file[j] != NULL) {
                     jstr = (*env)->NewStringUTF(env, (const char*)file[j]);
+                    if (IS_NULL(jstr)) break;
                     (*env)->SetObjectField(env, fcFont, fontFileID, jstr);
+                    (*env)->DeleteLocalRef(env, jstr);
                 }
                 if (styleStr[j] != NULL) {
                     jstr = (*env)->NewStringUTF(env, (const char*)styleStr[j]);
+                    if (IS_NULL(jstr)) break;
                     (*env)->SetObjectField(env, fcFont, styleNameID, jstr);
+                    (*env)->DeleteLocalRef(env, jstr);
                 }
                 if (fullname[j] != NULL) {
                     jstr = (*env)->NewStringUTF(env, (const char*)fullname[j]);
+                    if (IS_NULL(jstr)) break;
                     (*env)->SetObjectField(env, fcFont, fullNameID, jstr);
+                    (*env)->DeleteLocalRef(env, jstr);
                 }
                 if (fn==0) {
                     (*env)->SetObjectField(env, fcCompFontObj,
@@ -1322,11 +1362,16 @@ Java_sun_font_FontConfigManager_getFontConfig
                 if (includeFallbacks) {
                     (*env)->SetObjectArrayElement(env, fcFontArr, fn++,fcFont);
                 } else {
+                    (*env)->DeleteLocalRef(env, fcFont);
                     break;
                 }
+                (*env)->DeleteLocalRef(env, fcFont);
             }
         }
-        (*env)->ReleaseStringUTFChars (env, fcNameStr, (const char*)fcName);
+        if (includeFallbacks) {
+            (*env)->DeleteLocalRef(env, fcFontArr);
+        }
+        (*env)->DeleteLocalRef(env, fcCompFontObj);
         (*FcFontSetDestroy)(fontset);
         (*FcPatternDestroy)(pattern);
         free(family);

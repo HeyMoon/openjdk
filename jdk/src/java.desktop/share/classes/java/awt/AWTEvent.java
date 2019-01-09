@@ -128,107 +128,107 @@ public abstract class AWTEvent extends EventObject {
     /**
      * The event mask for selecting component events.
      */
-    public final static long COMPONENT_EVENT_MASK = 0x01;
+    public static final long COMPONENT_EVENT_MASK = 0x01;
 
     /**
      * The event mask for selecting container events.
      */
-    public final static long CONTAINER_EVENT_MASK = 0x02;
+    public static final long CONTAINER_EVENT_MASK = 0x02;
 
     /**
      * The event mask for selecting focus events.
      */
-    public final static long FOCUS_EVENT_MASK = 0x04;
+    public static final long FOCUS_EVENT_MASK = 0x04;
 
     /**
      * The event mask for selecting key events.
      */
-    public final static long KEY_EVENT_MASK = 0x08;
+    public static final long KEY_EVENT_MASK = 0x08;
 
     /**
      * The event mask for selecting mouse events.
      */
-    public final static long MOUSE_EVENT_MASK = 0x10;
+    public static final long MOUSE_EVENT_MASK = 0x10;
 
     /**
      * The event mask for selecting mouse motion events.
      */
-    public final static long MOUSE_MOTION_EVENT_MASK = 0x20;
+    public static final long MOUSE_MOTION_EVENT_MASK = 0x20;
 
     /**
      * The event mask for selecting window events.
      */
-    public final static long WINDOW_EVENT_MASK = 0x40;
+    public static final long WINDOW_EVENT_MASK = 0x40;
 
     /**
      * The event mask for selecting action events.
      */
-    public final static long ACTION_EVENT_MASK = 0x80;
+    public static final long ACTION_EVENT_MASK = 0x80;
 
     /**
      * The event mask for selecting adjustment events.
      */
-    public final static long ADJUSTMENT_EVENT_MASK = 0x100;
+    public static final long ADJUSTMENT_EVENT_MASK = 0x100;
 
     /**
      * The event mask for selecting item events.
      */
-    public final static long ITEM_EVENT_MASK = 0x200;
+    public static final long ITEM_EVENT_MASK = 0x200;
 
     /**
      * The event mask for selecting text events.
      */
-    public final static long TEXT_EVENT_MASK = 0x400;
+    public static final long TEXT_EVENT_MASK = 0x400;
 
     /**
      * The event mask for selecting input method events.
      */
-    public final static long INPUT_METHOD_EVENT_MASK = 0x800;
+    public static final long INPUT_METHOD_EVENT_MASK = 0x800;
 
     /**
      * The pseudo event mask for enabling input methods.
      * We're using one bit in the eventMask so we don't need
      * a separate field inputMethodsEnabled.
      */
-    final static long INPUT_METHODS_ENABLED_MASK = 0x1000;
+    static final long INPUT_METHODS_ENABLED_MASK = 0x1000;
 
     /**
      * The event mask for selecting paint events.
      */
-    public final static long PAINT_EVENT_MASK = 0x2000;
+    public static final long PAINT_EVENT_MASK = 0x2000;
 
     /**
      * The event mask for selecting invocation events.
      */
-    public final static long INVOCATION_EVENT_MASK = 0x4000;
+    public static final long INVOCATION_EVENT_MASK = 0x4000;
 
     /**
      * The event mask for selecting hierarchy events.
      */
-    public final static long HIERARCHY_EVENT_MASK = 0x8000;
+    public static final long HIERARCHY_EVENT_MASK = 0x8000;
 
     /**
      * The event mask for selecting hierarchy bounds events.
      */
-    public final static long HIERARCHY_BOUNDS_EVENT_MASK = 0x10000;
+    public static final long HIERARCHY_BOUNDS_EVENT_MASK = 0x10000;
 
     /**
      * The event mask for selecting mouse wheel events.
      * @since 1.4
      */
-    public final static long MOUSE_WHEEL_EVENT_MASK = 0x20000;
+    public static final long MOUSE_WHEEL_EVENT_MASK = 0x20000;
 
     /**
      * The event mask for selecting window state events.
      * @since 1.4
      */
-    public final static long WINDOW_STATE_EVENT_MASK = 0x40000;
+    public static final long WINDOW_STATE_EVENT_MASK = 0x40000;
 
     /**
      * The event mask for selecting window focus events.
      * @since 1.4
      */
-    public final static long WINDOW_FOCUS_EVENT_MASK = 0x80000;
+    public static final long WINDOW_FOCUS_EVENT_MASK = 0x80000;
 
     /**
      * WARNING: there are more mask defined privately.  See
@@ -239,7 +239,7 @@ public abstract class AWTEvent extends EventObject {
      * The maximum value for reserved AWT event IDs. Programs defining
      * their own event IDs should use IDs greater than this value.
      */
-    public final static int RESERVED_ID_MAX = 1999;
+    public static final int RESERVED_ID_MAX = 1999;
 
     // security stuff
     private static Field inputEvent_CanAccessSystemClipboard_Field = null;
@@ -284,35 +284,6 @@ public abstract class AWTEvent extends EventObject {
             });
     }
 
-    private static synchronized Field get_InputEvent_CanAccessSystemClipboard() {
-        if (inputEvent_CanAccessSystemClipboard_Field == null) {
-            inputEvent_CanAccessSystemClipboard_Field =
-                java.security.AccessController.doPrivileged(
-                    new java.security.PrivilegedAction<Field>() {
-                            public Field run() {
-                                Field field = null;
-                                try {
-                                    field = InputEvent.class.
-                                        getDeclaredField("canAccessSystemClipboard");
-                                    field.setAccessible(true);
-                                    return field;
-                                } catch (SecurityException e) {
-                                    if (log.isLoggable(PlatformLogger.Level.FINE)) {
-                                        log.fine("AWTEvent.get_InputEvent_CanAccessSystemClipboard() got SecurityException ", e);
-                                    }
-                                } catch (NoSuchFieldException e) {
-                                    if (log.isLoggable(PlatformLogger.Level.FINE)) {
-                                        log.fine("AWTEvent.get_InputEvent_CanAccessSystemClipboard() got NoSuchFieldException ", e);
-                                    }
-                                }
-                                return null;
-                            }
-                        });
-        }
-
-        return inputEvent_CanAccessSystemClipboard_Field;
-    }
-
     /**
      * Initialize JNI field and method IDs for fields that may be
      * accessed from C.
@@ -321,8 +292,12 @@ public abstract class AWTEvent extends EventObject {
 
     /**
      * Constructs an AWTEvent object from the parameters of a 1.0-style event.
+     *
      * @param event the old-style event
+     * @deprecated It is recommended that {@link #AWTEvent(Object, int)} be used
+     *             instead
      */
+    @Deprecated(since = "9")
     public AWTEvent(Event event) {
         this(event.target, event.id);
     }
@@ -410,11 +385,11 @@ public abstract class AWTEvent extends EventObject {
     }
 
     /**
-     * Returns a string representing the state of this <code>Event</code>.
+     * Returns a string representing the state of this {@code Event}.
      * This method is intended to be used only for debugging purposes, and the
      * content and format of the returned string may vary between
      * implementations. The returned string may be empty but may not be
-     * <code>null</code>.
+     * {@code null}.
      *
      * @return  a string representation of this event
      */
@@ -465,6 +440,7 @@ public abstract class AWTEvent extends EventObject {
      * event class in java.awt.event because we don't want to make
      * it public and it needs to be called from java.awt.
      */
+    @SuppressWarnings("deprecation")
     Event convertToOld() {
         Object src = getSource();
         int newid = id;
@@ -593,33 +569,20 @@ public abstract class AWTEvent extends EventObject {
         that.bdata = this.bdata;
         // Copy canAccessSystemClipboard value from this into that.
         if (this instanceof InputEvent && that instanceof InputEvent) {
-            Field field = get_InputEvent_CanAccessSystemClipboard();
-            if (field != null) {
-                try {
-                    boolean b = field.getBoolean(this);
-                    field.setBoolean(that, b);
-                } catch(IllegalAccessException e) {
-                    if (log.isLoggable(PlatformLogger.Level.FINE)) {
-                        log.fine("AWTEvent.copyPrivateDataInto() got IllegalAccessException ", e);
-                    }
-                }
-            }
+
+            AWTAccessor.InputEventAccessor accessor
+                    = AWTAccessor.getInputEventAccessor();
+
+            boolean b = accessor.canAccessSystemClipboard((InputEvent) this);
+            accessor.setCanAccessSystemClipboard((InputEvent) that, b);
         }
         that.isSystemGenerated = this.isSystemGenerated;
     }
 
     void dispatched() {
         if (this instanceof InputEvent) {
-            Field field = get_InputEvent_CanAccessSystemClipboard();
-            if (field != null) {
-                try {
-                    field.setBoolean(this, false);
-                } catch(IllegalAccessException e) {
-                    if (log.isLoggable(PlatformLogger.Level.FINE)) {
-                        log.fine("AWTEvent.dispatched() got IllegalAccessException ", e);
-                    }
-                }
-            }
+            AWTAccessor.getInputEventAccessor().
+                    setCanAccessSystemClipboard((InputEvent) this, false);
         }
     }
 } // class AWTEvent

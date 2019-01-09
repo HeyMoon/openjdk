@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,6 +32,7 @@
 #include "runtime/interfaceSupport.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "runtime/os.hpp"
+#include "runtime/safepoint.hpp"
 #include "runtime/thread.inline.hpp"
 #include "runtime/vmThread.hpp"
 #include "runtime/vm_operations.hpp"
@@ -40,8 +41,6 @@
 #include "utilities/dtrace.hpp"
 #include "utilities/events.hpp"
 #include "utilities/xmlstream.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 // Dummy VM operation to act as first element in our circular double-linked list
 class VM_Dummy: public VM_Operation {
@@ -227,22 +226,17 @@ void VMThread::create() {
   }
 }
 
-
 VMThread::VMThread() : NamedThread() {
   set_name("VM Thread");
 }
 
 void VMThread::destroy() {
-  if (_vm_thread != NULL) {
-    delete _vm_thread;
-    _vm_thread = NULL;      // VM thread is gone
-  }
+  _vm_thread = NULL;      // VM thread is gone
 }
 
 void VMThread::run() {
   assert(this == vm_thread(), "check");
 
-  this->initialize_thread_local_storage();
   this->initialize_named_thread();
   this->record_stack_base_and_size();
   // Notify_lock wait checks on active_handles() to rewait in
@@ -285,10 +279,9 @@ void VMThread::run() {
     HandleMark hm(VMThread::vm_thread());
     // Among other things, this ensures that Eden top is correct.
     Universe::heap()->prepare_for_verify();
-    os::check_heap();
     // Silent verification so as not to pollute normal output,
     // unless we really asked for it.
-    Universe::verify(!(PrintGCDetails || Verbose) || VerifySilently);
+    Universe::verify();
   }
 
   CompileBroker::set_should_block();
@@ -310,12 +303,9 @@ void VMThread::run() {
     _terminate_lock->notify();
   }
 
-  // Thread destructor usually does this.
-  ThreadLocalStorage::set_thread(NULL);
-
-  // Deletion must be done synchronously by the JNI DestroyJavaVM thread
-  // so that the VMThread deletion completes before the main thread frees
-  // up the CodeHeap.
+  // We are now racing with the VM termination being carried out in
+  // another thread, so we don't "delete this". Numerous threads don't
+  // get deleted when the VM terminates
 
 }
 
@@ -358,14 +348,16 @@ void VMThread::evaluate_operation(VM_Operation* op) {
     op->evaluate();
 
     if (event.should_commit()) {
-      bool is_concurrent = op->evaluate_concurrently();
+      const bool is_concurrent = op->evaluate_concurrently();
+      const bool evaluate_at_safepoint = op->evaluate_at_safepoint();
       event.set_operation(op->type());
-      event.set_safepoint(op->evaluate_at_safepoint());
+      event.set_safepoint(evaluate_at_safepoint);
       event.set_blocking(!is_concurrent);
       // Only write caller thread information for non-concurrent vm operations.
       // For concurrent vm operations, the thread id is set to 0 indicating thread is unknown.
       // This is because the caller thread could have exited already.
-      event.set_caller(is_concurrent ? 0 : op->calling_thread()->osthread()->thread_id());
+      event.set_caller(is_concurrent ? 0 : THREAD_TRACE_ID(op->calling_thread()));
+      event.set_safepointId(evaluate_at_safepoint ? SafepointSynchronize::safepoint_counter() : 0);
       event.commit();
     }
 
@@ -410,7 +402,7 @@ void VMThread::loop() {
           !_cur_vm_operation->evaluate_concurrently()) {
         long stall = os::javaTimeMillis() - _cur_vm_operation->timestamp();
         if (stall > 0)
-          tty->print_cr("%s stall: %Ld",  _cur_vm_operation->name(), stall);
+          tty->print_cr("%s stall: %ld",  _cur_vm_operation->name(), stall);
       }
 
       while (!should_terminate() && _cur_vm_operation == NULL) {
@@ -421,7 +413,7 @@ void VMThread::loop() {
 
         // Support for self destruction
         if ((SelfDestructTimer != 0) && !is_error_reported() &&
-            (os::elapsedTime() > SelfDestructTimer * 60)) {
+            (os::elapsedTime() > (double)SelfDestructTimer * 60.0)) {
           tty->print_cr("VM self-destructed");
           exit(-1);
         }
@@ -630,8 +622,8 @@ void VMThread::execute(VM_Operation* op) {
       // Check the VM operation allows nested VM operation. This normally not the case, e.g., the compiler
       // does not allow nested scavenges or compiles.
       if (!prev_vm_operation->allow_nested_vm_operations()) {
-        fatal(err_msg("Nested VM operation %s requested by operation %s",
-                      op->name(), vm_operation()->name()));
+        fatal("Nested VM operation %s requested by operation %s",
+              op->name(), vm_operation()->name());
       }
       op->set_calling_thread(prev_vm_operation->calling_thread(), prev_vm_operation->priority());
     }
@@ -658,8 +650,8 @@ void VMThread::execute(VM_Operation* op) {
 }
 
 
-void VMThread::oops_do(OopClosure* f, CLDClosure* cld_f, CodeBlobClosure* cf) {
-  Thread::oops_do(f, cld_f, cf);
+void VMThread::oops_do(OopClosure* f, CodeBlobClosure* cf) {
+  Thread::oops_do(f, cf);
   _vm_queue->oops_do(f);
 }
 
@@ -691,5 +683,5 @@ void VMOperationQueue::verify_queue(int prio) {
 #endif
 
 void VMThread::verify() {
-  oops_do(&VerifyOopClosure::verify_oop, NULL, NULL);
+  oops_do(&VerifyOopClosure::verify_oop, NULL);
 }

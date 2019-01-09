@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2014, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -78,7 +78,7 @@ int StubAssembler::call_RT(Register oop_result1, Register metadata_result, addre
   }
   pop(r0, sp);
 #endif
-  reset_last_Java_frame(true, true);
+  reset_last_Java_frame(true);
   maybe_isb();
 
   // check for pending exceptions
@@ -547,7 +547,7 @@ OopMapSet* Runtime1::generate_patching(StubAssembler* sasm, address target) {
     __ bind(L);
   }
 #endif
-  __ reset_last_Java_frame(true, false);
+  __ reset_last_Java_frame(true);
   __ maybe_isb();
 
   // check for pending exceptions
@@ -728,7 +728,7 @@ OopMapSet* Runtime1::generate_code_for(StubID id, StubAssembler* sasm) {
 
           __ tlab_allocate(obj, obj_size, 0, t1, t2, slow_path);
 
-          __ initialize_object(obj, klass, obj_size, 0, t1, t2);
+          __ initialize_object(obj, klass, obj_size, 0, t1, t2, /* is_tlab_allocated */ true);
           __ verify_oop(obj);
           __ ldp(r5, r19, Address(__ post(sp, 2 * wordSize)));
           __ ret(lr);
@@ -740,7 +740,7 @@ OopMapSet* Runtime1::generate_code_for(StubID id, StubAssembler* sasm) {
           __ eden_allocate(obj, obj_size, 0, t1, slow_path);
           __ incr_allocated_bytes(rthread, obj_size, 0, rscratch1);
 
-          __ initialize_object(obj, klass, obj_size, 0, t1, t2);
+          __ initialize_object(obj, klass, obj_size, 0, t1, t2, /* is_tlab_allocated */ false);
           __ verify_oop(obj);
           __ ldp(r5, r19, Address(__ post(sp, 2 * wordSize)));
           __ ret(lr);
@@ -853,7 +853,9 @@ OopMapSet* Runtime1::generate_code_for(StubID id, StubAssembler* sasm) {
           __ andr(t1, t1, Klass::_lh_header_size_mask);
           __ sub(arr_size, arr_size, t1);  // body length
           __ add(t1, t1, obj);       // body start
-          __ initialize_body(t1, arr_size, 0, t2);
+          if (!ZeroTLAB) {
+           __ initialize_body(t1, arr_size, 0, t2);
+          }
           __ verify_oop(obj);
 
           __ ret(lr);
@@ -944,8 +946,7 @@ OopMapSet* Runtime1::generate_code_for(StubID id, StubAssembler* sasm) {
         Register t = r5;
         __ load_klass(t, r0);
         __ ldrw(t, Address(t, Klass::access_flags_offset()));
-        __ tst(t, JVM_ACC_HAS_FINALIZER);
-        __ br(Assembler::NE, register_finalizer);
+        __ tbnz(t, exact_log2(JVM_ACC_HAS_FINALIZER), register_finalizer);
         __ ret(lr);
 
         __ bind(register_finalizer);
@@ -1066,7 +1067,9 @@ OopMapSet* Runtime1::generate_code_for(StubID id, StubAssembler* sasm) {
       {
         StubFrame f(sasm, "deoptimize", dont_gc_arguments);
         OopMap* oop_map = save_live_registers(sasm);
-        int call_offset = __ call_RT(noreg, noreg, CAST_FROM_FN_PTR(address, deoptimize));
+        f.load_argument(0, c_rarg1);
+        int call_offset = __ call_RT(noreg, noreg, CAST_FROM_FN_PTR(address, deoptimize), c_rarg1);
+
         oop_maps = new OopMapSet();
         oop_maps->add_gc_map(call_offset, oop_map);
         restore_live_registers(sasm);
@@ -1148,9 +1151,6 @@ OopMapSet* Runtime1::generate_code_for(StubID id, StubAssembler* sasm) {
 
 #if INCLUDE_ALL_GCS
 
-// Registers to be saved around calls to g1_wb_pre or g1_wb_post
-#define G1_SAVE_REGS (RegSet::range(r0, r18) - RegSet::of(rscratch1, rscratch2))
-
     case g1_pre_barrier_slow_id:
       {
         StubFrame f(sasm, "g1_pre_barrier", dont_gc_arguments);
@@ -1169,15 +1169,24 @@ OopMapSet* Runtime1::generate_code_for(StubID id, StubAssembler* sasm) {
         const Register tmp = rscratch1;
 
         Address in_progress(thread, in_bytes(JavaThread::satb_mark_queue_offset() +
-                                             PtrQueue::byte_offset_of_active()));
+                                             SATBMarkQueue::byte_offset_of_active()));
 
         Address queue_index(thread, in_bytes(JavaThread::satb_mark_queue_offset() +
-                                             PtrQueue::byte_offset_of_index()));
+                                             SATBMarkQueue::byte_offset_of_index()));
         Address buffer(thread, in_bytes(JavaThread::satb_mark_queue_offset() +
-                                        PtrQueue::byte_offset_of_buf()));
+                                        SATBMarkQueue::byte_offset_of_buf()));
 
         Label done;
         Label runtime;
+
+        // Is marking still active?
+        if (in_bytes(SATBMarkQueue::byte_width_of_active()) == 4) {
+          __ ldrw(tmp, in_progress);
+        } else {
+          assert(in_bytes(SATBMarkQueue::byte_width_of_active()) == 1, "Assumption");
+          __ ldrb(tmp, in_progress);
+        }
+        __ cbzw(tmp, done);
 
         // Can we store original value in the thread's buffer?
         __ ldr(tmp, queue_index);
@@ -1192,10 +1201,10 @@ OopMapSet* Runtime1::generate_code_for(StubID id, StubAssembler* sasm) {
         __ b(done);
 
         __ bind(runtime);
-        __ push(G1_SAVE_REGS, sp);
+        __ push_call_clobbered_registers();
         f.load_argument(0, pre_val);
         __ call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::g1_wb_pre), pre_val, thread);
-        __ pop(G1_SAVE_REGS, sp);
+        __ pop_call_clobbered_registers();
         __ bind(done);
       }
       break;
@@ -1219,49 +1228,53 @@ OopMapSet* Runtime1::generate_code_for(StubID id, StubAssembler* sasm) {
         const Register thread = rthread;
 
         Address queue_index(thread, in_bytes(JavaThread::dirty_card_queue_offset() +
-                                             PtrQueue::byte_offset_of_index()));
+                                             DirtyCardQueue::byte_offset_of_index()));
         Address buffer(thread, in_bytes(JavaThread::dirty_card_queue_offset() +
-                                        PtrQueue::byte_offset_of_buf()));
+                                        DirtyCardQueue::byte_offset_of_buf()));
 
-        const Register card_addr = rscratch2;
-        ExternalAddress cardtable((address) ct->byte_map_base);
+        const Register card_offset = rscratch2;
+        // LR is free here, so we can use it to hold the byte_map_base.
+        const Register byte_map_base = lr;
 
-        f.load_argument(0, card_addr);
-        __ lsr(card_addr, card_addr, CardTableModRefBS::card_shift);
-        unsigned long offset;
-        __ adrp(rscratch1, cardtable, offset);
-        __ add(card_addr, card_addr, rscratch1);
-        __ ldrb(rscratch1, Address(card_addr, offset));
+        assert_different_registers(card_offset, byte_map_base, rscratch1);
+
+        f.load_argument(0, card_offset);
+        __ lsr(card_offset, card_offset, CardTableModRefBS::card_shift);
+        __ load_byte_map_base(byte_map_base);
+        __ ldrb(rscratch1, Address(byte_map_base, card_offset));
         __ cmpw(rscratch1, (int)G1SATBCardTableModRefBS::g1_young_card_val());
         __ br(Assembler::EQ, done);
 
         assert((int)CardTableModRefBS::dirty_card_val() == 0, "must be 0");
 
         __ membar(Assembler::StoreLoad);
-        __ ldrb(rscratch1, Address(card_addr, offset));
+        __ ldrb(rscratch1, Address(byte_map_base, card_offset));
         __ cbzw(rscratch1, done);
 
         // storing region crossing non-NULL, card is clean.
         // dirty card and log.
-        __ strb(zr, Address(card_addr, offset));
+        __ strb(zr, Address(byte_map_base, card_offset));
+
+        // Convert card offset into an address in card_addr
+        Register card_addr = card_offset;
+        __ add(card_addr, byte_map_base, card_addr);
 
         __ ldr(rscratch1, queue_index);
         __ cbz(rscratch1, runtime);
         __ sub(rscratch1, rscratch1, wordSize);
         __ str(rscratch1, queue_index);
 
-        const Register buffer_addr = r0;
+        // Reuse LR to hold buffer_addr
+        const Register buffer_addr = lr;
 
-        __ push(RegSet::of(r0, r1), sp);
         __ ldr(buffer_addr, buffer);
         __ str(card_addr, Address(buffer_addr, rscratch1));
-        __ pop(RegSet::of(r0, r1), sp);
         __ b(done);
 
         __ bind(runtime);
-        __ push(G1_SAVE_REGS, sp);
+        __ push_call_clobbered_registers();
         __ call_VM_leaf(CAST_FROM_FN_PTR(address, SharedRuntime::g1_wb_post), card_addr, thread);
-        __ pop(G1_SAVE_REGS, sp);
+        __ pop_call_clobbered_registers();
         __ bind(done);
 
       }

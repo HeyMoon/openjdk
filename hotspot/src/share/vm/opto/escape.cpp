@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 #include "compiler/compileLog.hpp"
 #include "libadt/vectset.hpp"
 #include "memory/allocation.hpp"
+#include "memory/resourceArea.hpp"
 #include "opto/c2compiler.hpp"
 #include "opto/arraycopynode.hpp"
 #include "opto/callnode.hpp"
@@ -490,6 +491,8 @@ void ConnectionGraph::add_node_to_connection_graph(Node *n, Unique_Node_List *de
       }
       break;
     }
+    case Op_CompareAndExchangeP:
+    case Op_CompareAndExchangeN:
     case Op_GetAndSetP:
     case Op_GetAndSetN: {
       add_objload_to_connection_graph(n, delayed_worklist);
@@ -499,6 +502,8 @@ void ConnectionGraph::add_node_to_connection_graph(Node *n, Unique_Node_List *de
     case Op_StoreN:
     case Op_StoreNKlass:
     case Op_StorePConditional:
+    case Op_WeakCompareAndSwapP:
+    case Op_WeakCompareAndSwapN:
     case Op_CompareAndSwapP:
     case Op_CompareAndSwapN: {
       Node* adr = n->in(MemNode::Address);
@@ -526,7 +531,7 @@ void ConnectionGraph::add_node_to_connection_graph(Node *n, Unique_Node_List *de
         if (adr->is_BoxLock())
           break;
         // Stored value escapes in unsafe access.
-        if ((opcode == Op_StoreP) && (adr_type == TypeRawPtr::BOTTOM)) {
+        if ((opcode == Op_StoreP) && adr_type->isa_rawptr()) {
           // Pointer stores in G1 barriers looks like unsafe access.
           // Ignore such stores to be able scalar replace non-escaping
           // allocations.
@@ -539,12 +544,12 @@ void ConnectionGraph::add_node_to_connection_graph(Node *n, Unique_Node_List *de
               if (tls->Opcode() == Op_ThreadLocal) {
                 int offs = (int)igvn->find_intptr_t_con(adr->in(AddPNode::Offset), Type::OffsetBot);
                 if (offs == in_bytes(JavaThread::satb_mark_queue_offset() +
-                                     PtrQueue::byte_offset_of_buf())) {
-                  break; // G1 pre barier previous oop value store.
+                                     SATBMarkQueue::byte_offset_of_buf())) {
+                  break; // G1 pre barrier previous oop value store.
                 }
                 if (offs == in_bytes(JavaThread::dirty_card_queue_offset() +
-                                     PtrQueue::byte_offset_of_buf())) {
-                  break; // G1 post barier card address store.
+                                     DirtyCardQueue::byte_offset_of_buf())) {
+                  break; // G1 post barrier card address store.
                 }
               }
             }
@@ -560,9 +565,13 @@ void ConnectionGraph::add_node_to_connection_graph(Node *n, Unique_Node_List *de
       break;
     }
     case Op_AryEq:
+    case Op_HasNegatives:
     case Op_StrComp:
     case Op_StrEquals:
     case Op_StrIndexOf:
+    case Op_StrIndexOfChar:
+    case Op_StrInflatedCopy:
+    case Op_StrCompressedCopy:
     case Op_EncodeISOArray: {
       add_local_var(n, PointsToNode::ArgEscape);
       delayed_worklist->push(n); // Process it later.
@@ -694,8 +703,12 @@ void ConnectionGraph::add_final_edges(Node *n) {
     case Op_StoreN:
     case Op_StoreNKlass:
     case Op_StorePConditional:
+    case Op_CompareAndExchangeP:
+    case Op_CompareAndExchangeN:
     case Op_CompareAndSwapP:
     case Op_CompareAndSwapN:
+    case Op_WeakCompareAndSwapP:
+    case Op_WeakCompareAndSwapN:
     case Op_GetAndSetP:
     case Op_GetAndSetN: {
       Node* adr = n->in(MemNode::Address);
@@ -708,7 +721,8 @@ void ConnectionGraph::add_final_edges(Node *n) {
         break;
       }
 #endif
-      if (opcode == Op_GetAndSetP || opcode == Op_GetAndSetN) {
+      if (opcode == Op_GetAndSetP || opcode == Op_GetAndSetN ||
+          opcode == Op_CompareAndExchangeN || opcode == Op_CompareAndExchangeP) {
         add_local_var_and_edge(n, PointsToNode::NoEscape, adr, NULL);
       }
       if (adr_type->isa_oopptr() ||
@@ -725,7 +739,7 @@ void ConnectionGraph::add_final_edges(Node *n) {
         assert(ptn != NULL, "node should be registered");
         add_edge(adr_ptn, ptn);
         break;
-      } else if ((opcode == Op_StoreP) && (adr_type == TypeRawPtr::BOTTOM)) {
+      } else if ((opcode == Op_StoreP) && adr_type->isa_rawptr()) {
         // Stored value escapes in unsafe access.
         Node *val = n->in(MemNode::ValueIn);
         PointsToNode* ptn = ptnode_adr(val->_idx);
@@ -743,11 +757,15 @@ void ConnectionGraph::add_final_edges(Node *n) {
       ELSE_FAIL("Op_StoreP");
     }
     case Op_AryEq:
+    case Op_HasNegatives:
     case Op_StrComp:
     case Op_StrEquals:
     case Op_StrIndexOf:
+    case Op_StrIndexOfChar:
+    case Op_StrInflatedCopy:
+    case Op_StrCompressedCopy:
     case Op_EncodeISOArray: {
-      // char[] arrays passed to string intrinsic do not escape but
+      // char[]/byte[] arrays passed to string intrinsic do not escape but
       // they are not scalar replaceable. Adjust escape state for them.
       // Start from in(2) edge since in(1) is memory edge.
       for (uint i = 2; i < n->req(); i++) {
@@ -802,6 +820,7 @@ void ConnectionGraph::add_call_node(CallNode* call) {
       if (cik->is_subclass_of(_compile->env()->Thread_klass()) ||
           cik->is_subclass_of(_compile->env()->Reference_klass()) ||
          !cik->is_instance_klass() || // StressReflectiveCode
+         !cik->as_instance_klass()->can_be_instantiated() ||
           cik->as_instance_klass()->has_finalizer()) {
         es = PointsToNode::GlobalEscape;
       }
@@ -963,10 +982,12 @@ void ConnectionGraph::process_call_arguments(CallNode *call) {
                   strcmp(call->as_CallLeaf()->_name, "g1_wb_post") == 0 ||
                   strcmp(call->as_CallLeaf()->_name, "updateBytesCRC32") == 0 ||
                   strcmp(call->as_CallLeaf()->_name, "updateBytesCRC32C") == 0 ||
+                  strcmp(call->as_CallLeaf()->_name, "updateBytesAdler32") == 0 ||
                   strcmp(call->as_CallLeaf()->_name, "aescrypt_encryptBlock") == 0 ||
                   strcmp(call->as_CallLeaf()->_name, "aescrypt_decryptBlock") == 0 ||
                   strcmp(call->as_CallLeaf()->_name, "cipherBlockChaining_encryptAESCrypt") == 0 ||
                   strcmp(call->as_CallLeaf()->_name, "cipherBlockChaining_decryptAESCrypt") == 0 ||
+                  strcmp(call->as_CallLeaf()->_name, "counterMode_AESCrypt") == 0 ||
                   strcmp(call->as_CallLeaf()->_name, "ghash_processBlocks") == 0 ||
                   strcmp(call->as_CallLeaf()->_name, "sha1_implCompress") == 0 ||
                   strcmp(call->as_CallLeaf()->_name, "sha1_implCompressMB") == 0 ||
@@ -978,10 +999,11 @@ void ConnectionGraph::process_call_arguments(CallNode *call) {
                   strcmp(call->as_CallLeaf()->_name, "squareToLen") == 0 ||
                   strcmp(call->as_CallLeaf()->_name, "mulAdd") == 0 ||
                   strcmp(call->as_CallLeaf()->_name, "montgomery_multiply") == 0 ||
-                  strcmp(call->as_CallLeaf()->_name, "montgomery_square") == 0)
+                  strcmp(call->as_CallLeaf()->_name, "montgomery_square") == 0 ||
+                  strcmp(call->as_CallLeaf()->_name, "vectorizedMismatch") == 0)
                  ))) {
             call->dump();
-            fatal(err_msg_res("EA unexpected CallLeaf %s", call->as_CallLeaf()->_name));
+            fatal("EA unexpected CallLeaf %s", call->as_CallLeaf()->_name);
           }
 #endif
           // Always process arraycopy's destination object since
@@ -1200,8 +1222,8 @@ bool ConnectionGraph::complete_connection_graph(
       C->log()->text("%s", timeout ? "time" : "iterations");
       C->log()->end_elem(" limit'");
     }
-    assert(ExitEscapeAnalysisOnTimeout, err_msg_res("infinite EA connection graph build (%f sec, %d iterations) with %d nodes and worklist size %d",
-           time.seconds(), iterations, nodes_size(), ptnodes_worklist.length()));
+    assert(ExitEscapeAnalysisOnTimeout, "infinite EA connection graph build (%f sec, %d iterations) with %d nodes and worklist size %d",
+           time.seconds(), iterations, nodes_size(), ptnodes_worklist.length());
     // Possible infinite build_connection_graph loop,
     // bailout (no changes to ideal graph were made).
     return false;
@@ -2045,7 +2067,9 @@ bool ConnectionGraph::is_oop_field(Node* n, int offset, bool* unsafe) {
         bt = field->layout_type();
       } else {
         // Check for unsafe oop field access
-        if (n->has_out_with(Op_StoreP, Op_LoadP, Op_StoreN, Op_LoadN)) {
+        if (n->has_out_with(Op_StoreP, Op_LoadP, Op_StoreN, Op_LoadN) ||
+            n->has_out_with(Op_GetAndSetP, Op_GetAndSetN, Op_CompareAndExchangeP, Op_CompareAndExchangeN) ||
+            n->has_out_with(Op_CompareAndSwapP, Op_CompareAndSwapN, Op_WeakCompareAndSwapP, Op_WeakCompareAndSwapN)) {
           bt = T_OBJECT;
           (*unsafe) = true;
         }
@@ -2061,7 +2085,9 @@ bool ConnectionGraph::is_oop_field(Node* n, int offset, bool* unsafe) {
       }
     } else if (adr_type->isa_rawptr() || adr_type->isa_klassptr()) {
       // Allocation initialization, ThreadLocal field access, unsafe access
-      if (n->has_out_with(Op_StoreP, Op_LoadP, Op_StoreN, Op_LoadN)) {
+      if (n->has_out_with(Op_StoreP, Op_LoadP, Op_StoreN, Op_LoadN) ||
+          n->has_out_with(Op_GetAndSetP, Op_GetAndSetN, Op_CompareAndExchangeP, Op_CompareAndExchangeN) ||
+          n->has_out_with(Op_CompareAndSwapP, Op_CompareAndSwapN, Op_WeakCompareAndSwapP, Op_WeakCompareAndSwapN)) {
         bt = T_OBJECT;
       }
     }
@@ -2721,17 +2747,34 @@ Node* ConnectionGraph::find_inst_mem(Node *orig_mem, int alias_idx, GrowableArra
       if (mem->is_LoadStore()) {
         adr = mem->in(MemNode::Address);
       } else {
-        assert(mem->Opcode() == Op_EncodeISOArray, "sanity");
+        assert(mem->Opcode() == Op_EncodeISOArray ||
+               mem->Opcode() == Op_StrCompressedCopy, "sanity");
         adr = mem->in(3); // Memory edge corresponds to destination array
       }
       const Type *at = igvn->type(adr);
       if (at != Type::TOP) {
-        assert (at->isa_ptr() != NULL, "pointer type required.");
+        assert(at->isa_ptr() != NULL, "pointer type required.");
         int idx = C->get_alias_index(at->is_ptr());
-        assert(idx != alias_idx, "Object is not scalar replaceable if a LoadStore node access its field");
-        break;
+        if (idx == alias_idx) {
+          // Assert in debug mode
+          assert(false, "Object is not scalar replaceable if a LoadStore node accesses its field");
+          break; // In product mode return SCMemProj node
+        }
       }
       result = mem->in(MemNode::Memory);
+    } else if (result->Opcode() == Op_StrInflatedCopy) {
+      Node* adr = result->in(3); // Memory edge corresponds to destination array
+      const Type *at = igvn->type(adr);
+      if (at != Type::TOP) {
+        assert(at->isa_ptr() != NULL, "pointer type required.");
+        int idx = C->get_alias_index(at->is_ptr());
+        if (idx == alias_idx) {
+          // Assert in debug mode
+          assert(false, "Object is not scalar replaceable if a StrInflatedCopy node accesses its field");
+          break; // In product mode return SCMemProj node
+        }
+      }
+      result = result->in(MemNode::Memory);
     }
   }
   if (result->is_Phi()) {
@@ -3095,10 +3138,15 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
         }
       } else {
         uint op = use->Opcode();
-        if (!(op == Op_CmpP || op == Op_Conv2B ||
+        if ((op == Op_StrCompressedCopy || op == Op_StrInflatedCopy) &&
+            (use->in(MemNode::Memory) == n)) {
+          // They overwrite memory edge corresponding to destination array,
+          memnode_worklist.append_if_missing(use);
+        } else if (!(op == Op_CmpP || op == Op_Conv2B ||
               op == Op_CastP2X || op == Op_StoreCM ||
-              op == Op_FastLock || op == Op_AryEq || op == Op_StrComp ||
-              op == Op_StrEquals || op == Op_StrIndexOf)) {
+              op == Op_FastLock || op == Op_AryEq || op == Op_StrComp || op == Op_HasNegatives ||
+              op == Op_StrCompressedCopy || op == Op_StrInflatedCopy ||
+              op == Op_StrEquals || op == Op_StrIndexOf || op == Op_StrIndexOfChar)) {
           n->dump();
           use->dump();
           assert(false, "EA: missing allocation reference path");
@@ -3160,7 +3208,8 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
       n = n->as_MemBar()->proj_out(TypeFunc::Memory);
       if (n == NULL)
         continue;
-    } else if (n->Opcode() == Op_EncodeISOArray) {
+    } else if (n->Opcode() == Op_StrCompressedCopy ||
+               n->Opcode() == Op_EncodeISOArray) {
       // get the memory projection
       n = n->find_out_with(Op_SCMemProj);
       assert(n->Opcode() == Op_SCMemProj, "memory projection required");
@@ -3215,11 +3264,16 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
         }
       } else {
         uint op = use->Opcode();
-        if (!(op == Op_StoreCM ||
+        if ((use->in(MemNode::Memory) == n) &&
+            (op == Op_StrCompressedCopy || op == Op_StrInflatedCopy)) {
+          // They overwrite memory edge corresponding to destination array,
+          memnode_worklist.append_if_missing(use);
+        } else if (!(op == Op_StoreCM ||
               (op == Op_CallLeaf && use->as_CallLeaf()->_name != NULL &&
                strcmp(use->as_CallLeaf()->_name, "g1_wb_pre") == 0) ||
-              op == Op_AryEq || op == Op_StrComp ||
-              op == Op_StrEquals || op == Op_StrIndexOf)) {
+              op == Op_AryEq || op == Op_StrComp || op == Op_HasNegatives ||
+              op == Op_StrCompressedCopy || op == Op_StrInflatedCopy ||
+              op == Op_StrEquals || op == Op_StrIndexOf || op == Op_StrIndexOfChar)) {
           n->dump();
           use->dump();
           assert(false, "EA: missing memory path");
@@ -3241,7 +3295,7 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
     // Note 2: MergeMem may already contains instance memory slices added
     // during find_inst_mem() call when memory nodes were processed above.
     igvn->hash_delete(nmm);
-    uint nslices = nmm->req();
+    uint nslices = MIN2(nmm->req(), new_index_start);
     for (uint i = Compile::AliasIdxRaw+1; i < nslices; i++) {
       Node* mem = nmm->in(i);
       Node* cur = NULL;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -111,8 +111,9 @@ public final class TerminalFactory {
                 type = "PC/SC";
                 Provider sun = Security.getProvider("SunPCSC");
                 if (sun == null) {
-                    Class<?> clazz = Class.forName("sun.security.smartcardio.SunPCSC");
-                    sun = (Provider)clazz.newInstance();
+                    @SuppressWarnings("deprecation")
+                    Object o = Class.forName("sun.security.smartcardio.SunPCSC").newInstance();
+                    sun = (Provider)o;
                 }
                 factory = TerminalFactory.getInstance(type, null, sun);
             } catch (Exception e) {
@@ -133,7 +134,7 @@ public final class TerminalFactory {
         private static final long serialVersionUID = 2745808869881593918L;
         final static Provider INSTANCE = new NoneProvider();
         private NoneProvider() {
-            super("None", 1.0d, "none");
+            super("None", "1.0", "none");
         }
     }
 
@@ -228,6 +229,14 @@ public final class TerminalFactory {
      * <p>The <code>TerminalFactory</code> is initialized with the
      * specified parameters Object. The type of parameters
      * needed may vary between different types of <code>TerminalFactory</code>s.
+     *
+     * @implNote
+     * The JDK Reference Implementation additionally uses the
+     * {@code jdk.security.provider.preferred}
+     * {@link Security#getProperty(String) Security} property to determine
+     * the preferred provider order for the specified algorithm. This
+     * may be different than the order of providers returned by
+     * {@link Security#getProviders() Security.getProviders()}.
      *
      * @param type the type of the requested TerminalFactory
      * @param params the parameters to pass to the TerminalFactorySpi

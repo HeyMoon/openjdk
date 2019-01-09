@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #
-# Copyright (c) 2002, 2014 Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2002, 2014, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 #  @bug 4525714
 #  @summary jtreg test PopAsynchronousTest fails in build 85 with -Xcomp
 #  @author Jim Holmlund/Swamy Venkataramanappa
+#  @key intermittent
 #  @run shell DeoptimizeWalk.sh
 
 #  This is another test of the same bug.  The bug occurs when trying
@@ -95,7 +96,7 @@ mysetup()
 
     for ii in . $TESTSRC $TESTSRC/.. ; do
         if [ -r "$ii/ShellScaffold.sh" ] ; then
-            . $ii/ShellScaffold.sh 
+            . $ii/ShellScaffold.sh
             break
         fi
     done

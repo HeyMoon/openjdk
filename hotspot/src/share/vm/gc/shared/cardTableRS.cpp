@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,13 +29,53 @@
 #include "gc/shared/space.inline.hpp"
 #include "memory/allocation.inline.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/java.hpp"
 #include "runtime/os.hpp"
 #include "utilities/macros.hpp"
 
+class HasAccumulatedModifiedOopsClosure : public KlassClosure {
+  bool _found;
+ public:
+  HasAccumulatedModifiedOopsClosure() : _found(false) {}
+  void do_klass(Klass* klass) {
+    if (_found) {
+      return;
+    }
+
+    if (klass->has_accumulated_modified_oops()) {
+      _found = true;
+    }
+  }
+  bool found() {
+    return _found;
+  }
+};
+
+bool KlassRemSet::mod_union_is_clear() {
+  HasAccumulatedModifiedOopsClosure closure;
+  ClassLoaderDataGraph::classes_do(&closure);
+
+  return !closure.found();
+}
+
+
+class ClearKlassModUnionClosure : public KlassClosure {
+ public:
+  void do_klass(Klass* klass) {
+    if (klass->has_accumulated_modified_oops()) {
+      klass->clear_accumulated_modified_oops();
+    }
+  }
+};
+
+void KlassRemSet::clear_mod_union() {
+  ClearKlassModUnionClosure closure;
+  ClassLoaderDataGraph::classes_do(&closure);
+}
+
 CardTableRS::CardTableRS(MemRegion whole_heap) :
-  GenRemSet(),
+  _bs(NULL),
   _cur_youngergen_card_val(youngergenP1_card)
 {
   _ct_bs = new CardTableModRefBSForCTRS(whole_heap);
@@ -80,7 +120,9 @@ jbyte CardTableRS::find_unused_youngergenP_card_value() {
         break;
       }
     }
-    if (!seen) return v;
+    if (!seen) {
+      return v;
+    }
   }
   ShouldNotReachHere();
   return 0;
@@ -240,7 +282,7 @@ void ClearNoncleanCardWrapper::do_MemRegion(MemRegion mr) {
 // cur-younger-gen                ==> cur_younger_gen
 // cur_youngergen_and_prev_nonclean_card ==> no change.
 void CardTableRS::write_ref_field_gc_par(void* field, oop new_val) {
-  jbyte* entry = ct_bs()->byte_for(field);
+  jbyte* entry = _ct_bs->byte_for(field);
   do {
     jbyte entry_val = *entry;
     // We put this first because it's probably the most common case.
@@ -276,24 +318,24 @@ void CardTableRS::younger_refs_in_space_iterate(Space* sp,
   // CMS+ParNew until related bug is fixed.
   MemRegion ur    = sp->used_region();
   assert(ur.contains(urasm) || (UseConcMarkSweepGC),
-         err_msg("Did you forget to call save_marks()? "
-                 "[" PTR_FORMAT ", " PTR_FORMAT ") is not contained in "
-                 "[" PTR_FORMAT ", " PTR_FORMAT ")",
-                 p2i(urasm.start()), p2i(urasm.end()), p2i(ur.start()), p2i(ur.end())));
+         "Did you forget to call save_marks()? "
+         "[" PTR_FORMAT ", " PTR_FORMAT ") is not contained in "
+         "[" PTR_FORMAT ", " PTR_FORMAT ")",
+         p2i(urasm.start()), p2i(urasm.end()), p2i(ur.start()), p2i(ur.end()));
   // In the case of CMS+ParNew, issue a warning
   if (!ur.contains(urasm)) {
     assert(UseConcMarkSweepGC, "Tautology: see assert above");
-    warning("CMS+ParNew: Did you forget to call save_marks()? "
-            "[" PTR_FORMAT ", " PTR_FORMAT ") is not contained in "
-            "[" PTR_FORMAT ", " PTR_FORMAT ")",
-             p2i(urasm.start()), p2i(urasm.end()), p2i(ur.start()), p2i(ur.end()));
+    log_warning(gc)("CMS+ParNew: Did you forget to call save_marks()? "
+                    "[" PTR_FORMAT ", " PTR_FORMAT ") is not contained in "
+                    "[" PTR_FORMAT ", " PTR_FORMAT ")",
+                    p2i(urasm.start()), p2i(urasm.end()), p2i(ur.start()), p2i(ur.end()));
     MemRegion ur2 = sp->used_region();
     MemRegion urasm2 = sp->used_region_at_save_marks();
     if (!ur.equals(ur2)) {
-      warning("CMS+ParNew: Flickering used_region()!!");
+      log_warning(gc)("CMS+ParNew: Flickering used_region()!!");
     }
     if (!urasm.equals(urasm2)) {
-      warning("CMS+ParNew: Flickering used_region_at_save_marks()!!");
+      log_warning(gc)("CMS+ParNew: Flickering used_region_at_save_marks()!!");
     }
     ShouldNotReachHere();
   }
@@ -340,25 +382,25 @@ protected:
   template <class T> void do_oop_work(T* p) {
     HeapWord* jp = (HeapWord*)p;
     assert(jp >= _begin && jp < _end,
-           err_msg("Error: jp " PTR_FORMAT " should be within "
-                   "[_begin, _end) = [" PTR_FORMAT "," PTR_FORMAT ")",
-                   p2i(jp), p2i(_begin), p2i(_end)));
+           "Error: jp " PTR_FORMAT " should be within "
+           "[_begin, _end) = [" PTR_FORMAT "," PTR_FORMAT ")",
+           p2i(jp), p2i(_begin), p2i(_end));
     oop obj = oopDesc::load_decode_heap_oop(p);
     guarantee(obj == NULL || (HeapWord*)obj >= _boundary,
-              err_msg("pointer " PTR_FORMAT " at " PTR_FORMAT " on "
-                      "clean card crosses boundary" PTR_FORMAT,
-                      p2i((HeapWord*)obj), p2i(jp), p2i(_boundary)));
+              "pointer " PTR_FORMAT " at " PTR_FORMAT " on "
+              "clean card crosses boundary" PTR_FORMAT,
+              p2i(obj), p2i(jp), p2i(_boundary));
   }
 
 public:
   VerifyCleanCardClosure(HeapWord* b, HeapWord* begin, HeapWord* end) :
     _boundary(b), _begin(begin), _end(end) {
     assert(b <= begin,
-           err_msg("Error: boundary " PTR_FORMAT " should be at or below begin " PTR_FORMAT,
-                   p2i(b), p2i(begin)));
+           "Error: boundary " PTR_FORMAT " should be at or below begin " PTR_FORMAT,
+           p2i(b), p2i(begin));
     assert(begin <= end,
-           err_msg("Error: begin " PTR_FORMAT " should be strictly below end " PTR_FORMAT,
-                   p2i(begin), p2i(end)));
+           "Error: begin " PTR_FORMAT " should be strictly below end " PTR_FORMAT,
+           p2i(begin), p2i(end));
   }
 
   virtual void do_oop(oop* p)       { VerifyCleanCardClosure::do_oop_work(p); }
@@ -398,10 +440,10 @@ void CardTableRS::verify_space(Space* s, HeapWord* gen_boundary) {
   jbyte* cur_entry = byte_for(used.start());
   jbyte* limit = byte_after(used.last());
   while (cur_entry < limit) {
-    if (*cur_entry == CardTableModRefBS::clean_card) {
+    if (*cur_entry == clean_card_val()) {
       jbyte* first_dirty = cur_entry+1;
       while (first_dirty < limit &&
-             *first_dirty == CardTableModRefBS::clean_card) {
+             *first_dirty == clean_card_val()) {
         first_dirty++;
       }
       // If the first object is a regular object, and it has a
@@ -418,7 +460,7 @@ void CardTableRS::verify_space(Space* s, HeapWord* gen_boundary) {
               !boundary_obj->is_typeArray()) {
             guarantee(cur_entry > byte_for(used.start()),
                       "else boundary would be boundary_block");
-            if (*byte_for(boundary_block) != CardTableModRefBS::clean_card) {
+            if (*byte_for(boundary_block) != clean_card_val()) {
               begin = boundary_block + s->block_size(boundary_block);
               start_block = begin;
             }
@@ -502,7 +544,7 @@ void CardTableRS::verify_space(Space* s, HeapWord* gen_boundary) {
       //
       // The main point below is that the parallel card scanning code
       // deals correctly with these stale card values. There are two main
-      // cases to consider where we have a stale "younger gen" value and a
+      // cases to consider where we have a stale "young gen" value and a
       // "derivative" case to consider, where we have a stale
       // "cur_younger_gen_and_prev_non_clean" value, as will become
       // apparent in the case analysis below.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,18 +25,34 @@
 
 package sun.awt.X11;
 
-import java.awt.*;
-import java.awt.event.*;
-import java.awt.peer.TrayIconPeer;
-import sun.awt.*;
-import sun.misc.ManagedLocalsThread;
-
-import java.awt.image.*;
-import java.text.BreakIterator;
-import java.util.concurrent.ArrayBlockingQueue;
+import java.awt.BorderLayout;
+import java.awt.Button;
+import java.awt.Color;
+import java.awt.Component;
+import java.awt.Container;
+import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.Frame;
+import java.awt.GridLayout;
+import java.awt.Image;
+import java.awt.Insets;
+import java.awt.Label;
+import java.awt.MouseInfo;
+import java.awt.Panel;
+import java.awt.Point;
+import java.awt.Rectangle;
+import java.awt.Toolkit;
+import java.awt.Window;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
-import java.lang.reflect.InvocationTargetException;
+import java.text.BreakIterator;
+import java.util.concurrent.ArrayBlockingQueue;
+
+import sun.awt.SunToolkit;
 
 /**
  * An utility window class. This is a base class for Tooltip and Balloon.
@@ -80,20 +96,18 @@ public abstract class InfoWindow extends Window {
         pack();
 
         Dimension size = getSize();
-        // TODO: When 6356322 is fixed we should get screen bounds in
-        // this way: eframe.getGraphicsConfiguration().getBounds().
-        Dimension scrSize = Toolkit.getDefaultToolkit().getScreenSize();
+        Rectangle scrSize = getGraphicsConfiguration().getBounds();
 
-        if (corner.x < scrSize.width/2 && corner.y < scrSize.height/2) { // 1st square
+        if (corner.x < scrSize.x + scrSize.width/2 && corner.y < scrSize.y + scrSize.height/2) { // 1st square
             setLocation(corner.x + indent, corner.y + indent);
 
-        } else if (corner.x >= scrSize.width/2 && corner.y < scrSize.height/2) { // 2nd square
+        } else if (corner.x >= scrSize.x + scrSize.width/2 && corner.y < scrSize.y + scrSize.height/2) { // 2nd square
             setLocation(corner.x - indent - size.width, corner.y + indent);
 
-        } else if (corner.x < scrSize.width/2 && corner.y >= scrSize.height/2) { // 3rd square
+        } else if (corner.x < scrSize.x + scrSize.width/2 && corner.y >= scrSize.y + scrSize.height/2) { // 3rd square
             setLocation(corner.x + indent, corner.y - indent - size.height);
 
-        } else if (corner.x >= scrSize.width/2 && corner.y >= scrSize.height/2) { // 4th square
+        } else if (corner.x >= scrSize.x +scrSize.width/2 && corner.y >= scrSize.y +scrSize.height/2) { // 4th square
             setLocation(corner.x - indent - size.width, corner.y - indent - size.height);
         }
 
@@ -169,12 +183,12 @@ public abstract class InfoWindow extends Window {
                     display();
                 }};
 
-        private final static int TOOLTIP_SHOW_TIME = 10000;
-        private final static int TOOLTIP_START_DELAY_TIME = 1000;
-        private final static int TOOLTIP_MAX_LENGTH = 64;
-        private final static int TOOLTIP_MOUSE_CURSOR_INDENT = 5;
-        private final static Color TOOLTIP_BACKGROUND_COLOR = new Color(255, 255, 220);
-        private final static Font TOOLTIP_TEXT_FONT = XWindow.getDefaultFont();
+        private static final int TOOLTIP_SHOW_TIME = 10000;
+        private static final int TOOLTIP_START_DELAY_TIME = 1000;
+        private static final int TOOLTIP_MAX_LENGTH = 64;
+        private static final int TOOLTIP_MOUSE_CURSOR_INDENT = 5;
+        private static final Color TOOLTIP_BACKGROUND_COLOR = new Color(255, 255, 220);
+        private static final Font TOOLTIP_TEXT_FONT = XWindow.getDefaultFont();
 
         public Tooltip(Frame parent, Object target,
                 LiveArguments liveArguments)
@@ -258,15 +272,15 @@ public abstract class InfoWindow extends Window {
         private final LiveArguments liveArguments;
         private final Object target;
 
-        private final static int BALLOON_SHOW_TIME = 10000;
-        private final static int BALLOON_TEXT_MAX_LENGTH = 256;
-        private final static int BALLOON_WORD_LINE_MAX_LENGTH = 16;
-        private final static int BALLOON_WORD_LINE_MAX_COUNT = 4;
-        private final static int BALLOON_ICON_WIDTH = 32;
-        private final static int BALLOON_ICON_HEIGHT = 32;
-        private final static int BALLOON_TRAY_ICON_INDENT = 0;
-        private final static Color BALLOON_CAPTION_BACKGROUND_COLOR = new Color(200, 200 ,255);
-        private final static Font BALLOON_CAPTION_FONT = new Font(Font.DIALOG, Font.BOLD, 12);
+        private static final int BALLOON_SHOW_TIME = 10000;
+        private static final int BALLOON_TEXT_MAX_LENGTH = 256;
+        private static final int BALLOON_WORD_LINE_MAX_LENGTH = 16;
+        private static final int BALLOON_WORD_LINE_MAX_COUNT = 4;
+        private static final int BALLOON_ICON_WIDTH = 32;
+        private static final int BALLOON_ICON_HEIGHT = 32;
+        private static final int BALLOON_TRAY_ICON_INDENT = 0;
+        private static final Color BALLOON_CAPTION_BACKGROUND_COLOR = new Color(200, 200 ,255);
+        private static final Font BALLOON_CAPTION_FONT = new Font(Font.DIALOG, Font.BOLD, 12);
 
         private Panel mainPanel = new Panel();
         private Panel captionPanel = new Panel();
@@ -432,7 +446,7 @@ public abstract class InfoWindow extends Window {
                 gtkImagesLoaded = true;
             }
         }
-
+        @SuppressWarnings("deprecation")
         private class ActionPerformer extends MouseAdapter {
             public void mouseClicked(MouseEvent e) {
                 // hide the balloon by any click
@@ -454,7 +468,7 @@ public abstract class InfoWindow extends Window {
             final Thread thread;
 
             Displayer() {
-                this.thread = new ManagedLocalsThread(this);
+                this.thread = new Thread(null, this, "Displayer", 0, false);
                 this.thread.setDaemon(true);
             }
 

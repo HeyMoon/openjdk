@@ -3,11 +3,12 @@
  * DO NOT REMOVE OR ALTER!
  */
 /*
- * Copyright 2004,2005 The Apache Software Foundation.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -61,9 +62,19 @@ import com.sun.org.apache.xml.internal.resolver.readers.SAXCatalogReader;
  * catalog resolution outside of a parsing context. It may be shared
  * between several parsers and the application.</p>
  *
+ * @deprecated This class and the JDK internal Catalog API in package
+ * {@code com.sun.org.apache.xml.internal.resolver}
+ * is encapsulated in JDK 9. The entire implementation under the package is now
+ * deprecated and subject to removal in a future release. Users of the API should
+ * migrate to the {@linkplain javax.xml.catalog new public API}.
+ * <p>
+ * The new Catalog API is supported throughout the JDK XML Processors, which allows
+ * the use of Catalog by simply setting a path to a Catalog file as a property.
+ *
  * @author Michael Glavassevich, IBM
  *
  */
+@Deprecated(since="9", forRemoval=true)
 public class XMLCatalogResolver
     implements XMLEntityResolver, EntityResolver2, LSResourceResolver {
 
@@ -395,8 +406,7 @@ public class XMLCatalogResolver
         String resolvedId = resolveIdentifier(resourceIdentifier);
         if (resolvedId != null) {
             return new XMLInputSource(resourceIdentifier.getPublicId(),
-                                      resolvedId,
-                                      resourceIdentifier.getBaseSystemId());
+                    resolvedId, resourceIdentifier.getBaseSystemId(), false);
         }
         return null;
     }

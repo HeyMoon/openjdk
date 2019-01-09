@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #include "precompiled.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "jvmtifiles/jvmtiEnv.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "oops/objArrayOop.hpp"
 #include "oops/oop.inline.hpp"
@@ -95,7 +96,7 @@ JvmtiEnvBase::initialize() {
   {
     // This block of code must not contain any safepoints, as list deallocation
     // (which occurs at a safepoint) cannot occur simultaneously with this list
-    // addition.  Note: No_Safepoint_Verifier cannot, currently, be used before
+    // addition.  Note: NoSafepointVerifier cannot, currently, be used before
     // threads exist.
     JvmtiEnvIterator it;
     JvmtiEnvBase *previous_env = NULL;
@@ -114,6 +115,17 @@ JvmtiEnvBase::initialize() {
   }
 }
 
+jvmtiPhase
+JvmtiEnvBase::phase() {
+  // For the JVMTI environments possessed the can_generate_early_vmstart:
+  //   replace JVMTI_PHASE_PRIMORDIAL with JVMTI_PHASE_START
+  if (_phase == JVMTI_PHASE_PRIMORDIAL &&
+      JvmtiExport::early_vmstart_recorded() &&
+      early_vmstart_env()) {
+    return JVMTI_PHASE_START;
+  }
+  return _phase; // Normal case
+}
 
 bool
 JvmtiEnvBase::is_valid() {
@@ -512,7 +524,7 @@ JvmtiEnvBase::is_thread_fully_suspended(JavaThread* thr, bool wait_for_suspend, 
 // mean much better out of memory handling
 unsigned char *
 JvmtiEnvBase::jvmtiMalloc(jlong size) {
-  unsigned char* mem;
+  unsigned char* mem = NULL;
   jvmtiError result = allocate(size, &mem);
   assert(result == JVMTI_ERROR_NONE, "Allocate failed");
   return mem;
@@ -1032,7 +1044,7 @@ JvmtiEnvBase::get_object_monitor_usage(JavaThread* calling_thread, jobject objec
     // implied else: entry_count == 0
   }
 
-  jint nWant, nWait;
+  jint nWant = 0, nWait = 0;
   if (mon != NULL) {
     // this object has a heavyweight monitor
     nWant = mon->contentions(); // # of threads contending for monitor
@@ -1342,7 +1354,7 @@ JvmtiEnvBase::check_top_frame(JavaThread* current_thread, JavaThread* java_threa
   ResultTypeFinder rtf(signature);
   TosState fr_tos = as_TosState(rtf.type());
   if (fr_tos != tos) {
-    if (tos != itos || (fr_tos != btos && fr_tos != ctos && fr_tos != stos)) {
+    if (tos != itos || (fr_tos != btos && fr_tos != ztos && fr_tos != ctos && fr_tos != stos)) {
       return JVMTI_ERROR_TYPE_MISMATCH;
     }
   }
@@ -1475,3 +1487,35 @@ JvmtiMonitorClosure::do_monitor(ObjectMonitor* mon) {
     }
   }
 }
+
+GrowableArray<jobject>* JvmtiModuleClosure::_tbl = NULL;
+
+jvmtiError
+JvmtiModuleClosure::get_all_modules(JvmtiEnv* env, jint* module_count_ptr, jobject** modules_ptr) {
+  ResourceMark rm;
+  MutexLocker ml(Module_lock);
+
+  _tbl = new GrowableArray<jobject>(77);
+  if (_tbl == NULL) {
+    return JVMTI_ERROR_OUT_OF_MEMORY;
+  }
+
+  // Iterate over all the modules loaded to the system.
+  ClassLoaderDataGraph::modules_do(&do_module);
+
+  jint len = _tbl->length();
+  guarantee(len > 0, "at least one module must be present");
+
+  jobject* array = (jobject*)env->jvmtiMalloc((jlong)(len * sizeof(jobject)));
+  if (array == NULL) {
+    return JVMTI_ERROR_OUT_OF_MEMORY;
+  }
+  for (jint idx = 0; idx < len; idx++) {
+    array[idx] = _tbl->at(idx);
+  }
+  _tbl = NULL;
+  *modules_ptr = array;
+  *module_count_ptr = len;
+  return JVMTI_ERROR_NONE;
+}
+

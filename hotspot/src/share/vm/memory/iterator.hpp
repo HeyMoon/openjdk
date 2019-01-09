@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,7 @@
 
 #include "memory/allocation.hpp"
 #include "memory/memRegion.hpp"
-#include "utilities/top.hpp"
+#include "oops/oopsHierarchy.hpp"
 
 class CodeBlob;
 class nmethod;
@@ -35,6 +35,7 @@ class ReferenceProcessor;
 class DataLayout;
 class KlassClosure;
 class ClassLoaderData;
+class Symbol;
 
 // The following classes are C++ `closures` for iterating over objects, roots and spaces
 
@@ -51,17 +52,25 @@ class OopClosure : public Closure {
 // This is needed by the GC and is extracted to a separate type to not
 // pollute the OopClosure interface.
 class ExtendedOopClosure : public OopClosure {
- public:
+ private:
   ReferenceProcessor* _ref_processor;
+
+ protected:
   ExtendedOopClosure(ReferenceProcessor* rp) : _ref_processor(rp) { }
-  ExtendedOopClosure() : OopClosure(), _ref_processor(NULL) { }
+  ExtendedOopClosure() : _ref_processor(NULL) { }
+  ~ExtendedOopClosure() { }
+
+  void set_ref_processor_internal(ReferenceProcessor* rp) { _ref_processor = rp; }
+
+ public:
+  ReferenceProcessor* ref_processor() const { return _ref_processor; }
 
   // If the do_metadata functions return "true",
   // we invoke the following when running oop_iterate():
   //
   // 1) do_klass on the header klass pointer.
   // 2) do_klass on the klass pointer in the mirrors.
-  // 3) do_class_loader_data on the class loader data in class loaders.
+  // 3) do_cld   on the class loader data in class loaders.
   //
   // The virtual (without suffix) and the non-virtual (with _nv suffix) need
   // to be updated together, or else the devirtualization will break.
@@ -71,13 +80,14 @@ class ExtendedOopClosure : public OopClosure {
   // ExtendedOopClosures that don't need to walk the metadata.
   // Currently, only CMS and G1 need these.
 
-  virtual bool do_metadata() { return do_metadata_nv(); }
   bool do_metadata_nv()      { return false; }
+  virtual bool do_metadata() { return do_metadata_nv(); }
 
-  virtual void do_klass(Klass* k)   { do_klass_nv(k); }
-  void do_klass_nv(Klass* k)        { ShouldNotReachHere(); }
+  void do_klass_nv(Klass* k)      { ShouldNotReachHere(); }
+  virtual void do_klass(Klass* k) { do_klass_nv(k); }
 
-  virtual void do_class_loader_data(ClassLoaderData* cld) { ShouldNotReachHere(); }
+  void do_cld_nv(ClassLoaderData* cld)      { ShouldNotReachHere(); }
+  virtual void do_cld(ClassLoaderData* cld) { do_cld_nv(cld); }
 
   // True iff this closure may be safely applied more than once to an oop
   // location without an intervening "major reset" (like the end of a GC).
@@ -180,13 +190,14 @@ class MetadataAwareOopClosure: public ExtendedOopClosure {
     _klass_closure.initialize(this);
   }
 
-  virtual bool do_metadata()    { return do_metadata_nv(); }
-  inline  bool do_metadata_nv() { return true; }
+  bool do_metadata_nv()      { return true; }
+  virtual bool do_metadata() { return do_metadata_nv(); }
 
-  virtual void do_klass(Klass* k);
   void do_klass_nv(Klass* k);
+  virtual void do_klass(Klass* k) { do_klass_nv(k); }
 
-  virtual void do_class_loader_data(ClassLoaderData* cld);
+  void do_cld_nv(ClassLoaderData* cld);
+  virtual void do_cld(ClassLoaderData* cld) { do_cld_nv(cld); }
 };
 
 // ObjectClosure is used for iterating through an object space
@@ -201,6 +212,16 @@ class ObjectClosure : public Closure {
 class BoolObjectClosure : public Closure {
  public:
   virtual bool do_object_b(oop obj) = 0;
+};
+
+class AlwaysTrueClosure: public BoolObjectClosure {
+ public:
+  bool do_object_b(oop p) { return true; }
+};
+
+class AlwaysFalseClosure : public BoolObjectClosure {
+ public:
+  bool do_object_b(oop p) { return false; }
 };
 
 // Applies an oop closure to all ref fields in objects iterated over in an
@@ -275,9 +296,12 @@ class CodeBlobToOopClosure : public CodeBlobClosure {
  protected:
   void do_nmethod(nmethod* nm);
  public:
+  // If fix_relocations(), then cl must copy objects to their new location immediately to avoid
+  // patching nmethods with the old locations.
   CodeBlobToOopClosure(OopClosure* cl, bool fix_relocations) : _cl(cl), _fix_relocations(fix_relocations) {}
   virtual void do_code_blob(CodeBlob* cb);
 
+  bool fix_relocations() const { return _fix_relocations; }
   const static bool FixRelocations = true;
 };
 
@@ -331,6 +355,9 @@ public:
   // Read/write the void pointer pointed to by p.
   virtual void do_ptr(void** p) = 0;
 
+  // Read/write the 32-bit unsigned integer pointed to by p.
+  virtual void do_u4(u4* p) = 0;
+
   // Read/write the region specified.
   virtual void do_region(u_char* start, size_t size) = 0;
 
@@ -339,6 +366,10 @@ public:
   // for verification that sections of the serialized data are of the
   // correct length.
   virtual void do_tag(int tag) = 0;
+
+  bool writing() {
+    return !reading();
+  }
 };
 
 class SymbolClosure : public StackObj {
@@ -370,6 +401,7 @@ template <> class Devirtualizer<true> {
  public:
   template <class OopClosureType, typename T> static void do_oop(OopClosureType* closure, T* p);
   template <class OopClosureType>             static void do_klass(OopClosureType* closure, Klass* k);
+  template <class OopClosureType>             static void do_cld(OopClosureType* closure, ClassLoaderData* cld);
   template <class OopClosureType>             static bool do_metadata(OopClosureType* closure);
 };
 
@@ -378,6 +410,7 @@ template <> class Devirtualizer<false> {
  public:
   template <class OopClosureType, typename T> static void do_oop(OopClosureType* closure, T* p);
   template <class OopClosureType>             static void do_klass(OopClosureType* closure, Klass* k);
+  template <class OopClosureType>             static void do_cld(OopClosureType* closure, ClassLoaderData* cld);
   template <class OopClosureType>             static bool do_metadata(OopClosureType* closure);
 };
 

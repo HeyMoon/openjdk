@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 package sun.awt.windows;
 
+import java.awt.peer.TaskbarPeer;
 import java.awt.*;
 import java.awt.im.InputMethodHighlight;
 import java.awt.im.spi.InputMethodDescriptor;
@@ -51,7 +52,6 @@ import sun.awt.datatransfer.DataTransferer;
 import sun.java2d.d3d.D3DRenderQueue;
 import sun.java2d.opengl.OGLRenderQueue;
 
-import sun.misc.ManagedLocalsThread;
 import sun.print.PrintJob2D;
 
 import java.awt.dnd.DragSource;
@@ -67,10 +67,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 
+import sun.awt.util.PerformanceLogger;
 import sun.font.FontManager;
 import sun.font.FontManagerFactory;
 import sun.font.SunFontManager;
-import sun.misc.PerformanceLogger;
 import sun.util.logging.PlatformLogger;
 
 public final class WToolkit extends SunToolkit implements Runnable {
@@ -79,8 +79,6 @@ public final class WToolkit extends SunToolkit implements Runnable {
 
     // Desktop property which specifies whether XP visual styles are in effect
     public static final String XPSTYLE_THEME_ACTIVE = "win.xpstyle.themeActive";
-
-    static GraphicsConfiguration config;
 
     // System clipboard.
     WClipboard clipboard;
@@ -143,21 +141,6 @@ public final class WToolkit extends SunToolkit implements Runnable {
     }
 
     private static native void disableCustomPalette();
-
-    /*
-     * Reset the static GraphicsConfiguration to the default.  Called on
-     * startup and when display settings have changed.
-     */
-    public static void resetGC() {
-        if (GraphicsEnvironment.isHeadless()) {
-            config = null;
-        } else {
-          config = (GraphicsEnvironment
-                  .getLocalGraphicsEnvironment()
-          .getDefaultScreenDevice()
-          .getDefaultConfiguration());
-        }
-    }
 
     /*
      * NOTE: The following embedded*() methods are non-public API intended
@@ -255,7 +238,7 @@ public final class WToolkit extends SunToolkit implements Runnable {
                 (PrivilegedAction<ThreadGroup>) ThreadGroupUtils::getRootThreadGroup);
         if (!startToolkitThread(this, rootTG)) {
             String name = "AWT-Windows";
-            Thread toolkitThread = new ManagedLocalsThread(rootTG, this, name);
+            Thread toolkitThread = new Thread(rootTG, this, name, 0, false);
             toolkitThread.setDaemon(true);
             toolkitThread.start();
         }
@@ -282,8 +265,9 @@ public final class WToolkit extends SunToolkit implements Runnable {
 
     private void registerShutdownHook() {
         AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
-            Thread shutdown = new ManagedLocalsThread(
-                    ThreadGroupUtils.getRootThreadGroup(), this::shutdown);
+            Thread shutdown = new Thread(
+                    ThreadGroupUtils.getRootThreadGroup(), this::shutdown,
+                    "ToolkitShutdown", 0, false);
             shutdown.setContextClassLoader(null);
             Runtime.getRuntime().addShutdownHook(shutdown);
             return null;
@@ -558,6 +542,16 @@ public final class WToolkit extends SunToolkit implements Runnable {
         return WKeyboardFocusManagerPeer.getInstance();
     }
 
+    private static WMouseInfoPeer wPeer = null;
+
+    @Override
+    public synchronized MouseInfoPeer getMouseInfoPeer() {
+        if (wPeer == null) {
+            wPeer = new WMouseInfoPeer();
+        }
+        return wPeer;
+    }
+
     private native void setDynamicLayoutNative(boolean b);
 
     @Override
@@ -587,7 +581,7 @@ public final class WToolkit extends SunToolkit implements Runnable {
     }
 
     /**
-     * Returns <code>true</code> if this frame state is supported.
+     * Returns {@code true} if this frame state is supported.
      */
     @Override
     public boolean isFrameStateSupported(int state) {
@@ -604,21 +598,6 @@ public final class WToolkit extends SunToolkit implements Runnable {
     static native ColorModel makeColorModel();
     static ColorModel screenmodel;
 
-    static ColorModel getStaticColorModel() {
-        if (GraphicsEnvironment.isHeadless()) {
-            throw new IllegalArgumentException();
-        }
-        if (config == null) {
-            resetGC();
-        }
-        return config.getColorModel();
-    }
-
-    @Override
-    public ColorModel getColorModel() {
-        return getStaticColorModel();
-    }
-
     @Override
     public Insets getScreenInsets(GraphicsConfiguration gc)
     {
@@ -631,10 +610,7 @@ public final class WToolkit extends SunToolkit implements Runnable {
             GraphicsEnvironment.getLocalGraphicsEnvironment();
         return ge.getXResolution();
     }
-    @Override
-    protected native int getScreenWidth();
-    @Override
-    protected native int getScreenHeight();
+
     private native Insets getScreenInsets(int screen);
 
 
@@ -832,7 +808,7 @@ public final class WToolkit extends SunToolkit implements Runnable {
      * Have Win32GraphicsEnvironment execute the display change code on the
      * Event thread.
      */
-    static public void displayChanged() {
+    public static void displayChanged() {
         EventQueue.invokeLater(new Runnable() {
             @Override
             public void run() {
@@ -1110,6 +1086,7 @@ public final class WToolkit extends SunToolkit implements Runnable {
 
     @Override
     public native boolean syncNativeQueue(final long timeout);
+
     @Override
     public boolean isDesktopSupported() {
         return true;
@@ -1120,6 +1097,16 @@ public final class WToolkit extends SunToolkit implements Runnable {
         return new WDesktopPeer();
     }
 
+    @Override
+    public boolean isTaskbarSupported() {
+        return WTaskbarPeer.isTaskbarSupported();
+    }
+
+    @Override
+    public TaskbarPeer createTaskbarPeer(Taskbar target) {
+        return new WTaskbarPeer();
+    }
+
     private static native void setExtraMouseButtonsEnabledNative(boolean enable);
 
     @Override
@@ -1127,7 +1114,7 @@ public final class WToolkit extends SunToolkit implements Runnable {
         return areExtraMouseButtonsEnabled;
     }
 
-    private native synchronized int getNumberOfButtonsImpl();
+    private synchronized native int getNumberOfButtonsImpl();
 
     @Override
     public int getNumberOfButtons(){

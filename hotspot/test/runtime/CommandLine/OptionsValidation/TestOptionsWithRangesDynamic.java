@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,12 +24,11 @@
 /*
  * @test
  * @summary Test writeable VM Options with ranges.
- * @library /testlibrary /runtime/CommandLine/OptionsValidation/common
- * @modules java.base/sun.misc
+ * @library /test/lib /runtime/CommandLine/OptionsValidation/common
+ * @modules java.base/jdk.internal.misc
+ *          jdk.attach/sun.tools.attach
  *          java.management
- *          jdk.attach
- *          jdk.management/sun.tools.attach
- * @run main/othervm -XX:MinHeapFreeRatio=0 -XX:MaxHeapFreeRatio=100 TestOptionsWithRangesDynamic
+ * @run main/othervm -XX:MinHeapFreeRatio=0 -XX:MaxHeapFreeRatio=100 -Djdk.attach.allowAttachSelf TestOptionsWithRangesDynamic
  */
 
 import java.util.List;

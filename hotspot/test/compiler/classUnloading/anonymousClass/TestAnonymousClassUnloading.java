@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,31 +21,32 @@
  * questions.
  */
 
-import sun.hotspot.WhiteBox;
-import sun.misc.Unsafe;
-import sun.misc.IOUtils;
-
-import java.lang.reflect.Method;
-import java.net.URL;
-import java.net.URLConnection;
-
 /*
  * @test TestAnonymousClassUnloading
  * @bug 8054402
  * @summary "Tests unloading of anonymous classes."
- * @library /testlibrary /../../test/lib
- * @modules java.base/sun.misc
- * @compile TestAnonymousClassUnloading.java
- * @run main ClassFileInstaller TestAnonymousClassUnloading
- *                              sun.hotspot.WhiteBox
- *                              sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:-BackgroundCompilation TestAnonymousClassUnloading
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ *
+ * @run main/othervm/bootclasspath -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
+ *      -XX:-BackgroundCompilation
+ *      compiler.classUnloading.anonymousClass.TestAnonymousClassUnloading
  */
+
+package compiler.classUnloading.anonymousClass;
+
+import jdk.internal.misc.Unsafe;
+import sun.hotspot.WhiteBox;
+
+import java.io.IOException;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLConnection;
+import compiler.whitebox.CompilerWhiteBoxTest;
+
 public class TestAnonymousClassUnloading {
     private static final WhiteBox WHITE_BOX = WhiteBox.getWhiteBox();
     private static final Unsafe UNSAFE = Unsafe.getUnsafe();
-    private static int COMP_LEVEL_SIMPLE = 1;
-    private static int COMP_LEVEL_FULL_OPTIMIZATION = 4;
 
     /**
      * We override hashCode here to be able to access this implementation
@@ -85,9 +86,9 @@ public class TestAnonymousClassUnloading {
         // Check if already compiled
         if (!WHITE_BOX.isMethodCompiled(m)) {
             // If not, try to compile it with C2
-            if(!WHITE_BOX.enqueueMethodForCompilation(m, COMP_LEVEL_FULL_OPTIMIZATION)) {
+            if(!WHITE_BOX.enqueueMethodForCompilation(m, CompilerWhiteBoxTest.COMP_LEVEL_FULL_OPTIMIZATION)) {
                 // C2 compiler not available, try to compile with C1
-                WHITE_BOX.enqueueMethodForCompilation(m, COMP_LEVEL_SIMPLE);
+                WHITE_BOX.enqueueMethodForCompilation(m, CompilerWhiteBoxTest.COMP_LEVEL_SIMPLE);
             }
             // Because background compilation is disabled, method should now be compiled
             if(!WHITE_BOX.isMethodCompiled(m)) {
@@ -107,9 +108,16 @@ public class TestAnonymousClassUnloading {
      */
     static public void main(String[] args) throws Exception {
         // (1) Load an anonymous version of this class using the corresponding Unsafe method
-        URL classUrl = TestAnonymousClassUnloading.class.getResource("TestAnonymousClassUnloading.class");
+        URL classUrl = TestAnonymousClassUnloading.class.getResource(
+                TestAnonymousClassUnloading.class.getName().replace('.', '/') + ".class");
         URLConnection connection = classUrl.openConnection();
-        byte[] classBytes = IOUtils.readFully(connection.getInputStream(), connection.getContentLength(), true);
+
+        int length = connection.getContentLength();
+        byte[] classBytes = connection.getInputStream().readAllBytes();
+        if (length != -1 && classBytes.length != length) {
+            throw new IOException("Expected:" + length + ", actual: " + classBytes.length);
+        }
+
         Class<?> anonymousClass = UNSAFE.defineAnonymousClass(TestAnonymousClassUnloading.class, classBytes, null);
 
         // (2) Make sure all paths of doWork are profiled and compiled

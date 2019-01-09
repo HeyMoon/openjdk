@@ -31,13 +31,18 @@ import java.security.Policy;
 import java.security.ProtectionDomain;
 import java.security.SecurityPermission;
 import java.util.Arrays;
-import java.util.Optional;
 import java.util.PropertyPermission;
 
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeGroups;
 import org.testng.annotations.Test;
+
+/*
+ * @test
+ * @run testng/othervm PermissionTest
+ * @summary Test Permissions to access Info
+ */
 
 public class PermissionTest {
     /**
@@ -62,9 +67,9 @@ public class PermissionTest {
     }
 
     @Test
-    public void allChildrenWithPermission() {
+    public void descendantsWithPermission() {
         Policy.setPolicy(new TestPolicy(new RuntimePermission("manageProcess")));
-        currentHndl.allChildren();
+        currentHndl.descendants();
     }
 
     @Test
@@ -122,7 +127,7 @@ public class PermissionTest {
 
     @Test(groups = { "NoManageProcessPermission" }, expectedExceptions = SecurityException.class)
     public void noPermissionAllChildren() {
-        currentHndl.allChildren();
+        currentHndl.descendants();
     }
 
     @Test(groups = { "NoManageProcessPermission" }, expectedExceptions = SecurityException.class)

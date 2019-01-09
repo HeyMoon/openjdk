@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,18 +25,19 @@
 
 package com.sun.media.sound;
 
-import java.io.File;
-import java.io.InputStream;
-import java.io.IOException;
+import java.io.BufferedInputStream;
 import java.io.DataInputStream;
+import java.io.EOFException;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
 
 import javax.sound.sampled.AudioFileFormat;
 import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.UnsupportedAudioFileException;
 import javax.sound.sampled.spi.AudioFileReader;
-
-
 
 /**
  * Abstract File Reader class.
@@ -45,124 +46,123 @@ import javax.sound.sampled.spi.AudioFileReader;
  */
 abstract class SunFileReader extends AudioFileReader {
 
-    // buffer size for temporary input streams
-    protected static final int bisBufferSize = 4096;
-
-    /**
-     * Constructs a new SunFileReader object.
-     */
-    SunFileReader() {
+    @Override
+    public final StandardFileFormat getAudioFileFormat(final InputStream stream)
+            throws UnsupportedAudioFileException, IOException {
+        stream.mark(200); // The biggest value which was historically used
+        try {
+            return getAudioFileFormatImpl(stream);
+        } catch (final EOFException ignored) {
+            // the header is less than was expected
+            throw new UnsupportedAudioFileException();
+        } finally {
+            stream.reset();
+        }
     }
 
+    @Override
+    public final AudioFileFormat getAudioFileFormat(final URL url)
+            throws UnsupportedAudioFileException, IOException {
+        try (InputStream is = url.openStream()) {
+            return getAudioFileFormatImpl(new BufferedInputStream(is));
+        } catch (final EOFException ignored) {
+            // the header is less than was expected
+            throw new UnsupportedAudioFileException();
+        }
+    }
 
-    // METHODS TO IMPLEMENT AudioFileReader
+    @Override
+    public final AudioFileFormat getAudioFileFormat(final File file)
+            throws UnsupportedAudioFileException, IOException {
+        try (InputStream is = new FileInputStream(file)) {
+            return getAudioFileFormatImpl(new BufferedInputStream(is));
+        } catch (final EOFException ignored) {
+            // the header is less than was expected
+            throw new UnsupportedAudioFileException();
+        }
+    }
 
-    /**
-     * Obtains the audio file format of the input stream provided.  The stream must
-     * point to valid audio file data.  In general, audio file providers may
-     * need to read some data from the stream before determining whether they
-     * support it.  These parsers must
-     * be able to mark the stream, read enough data to determine whether they
-     * support the stream, and, if not, reset the stream's read pointer to its original
-     * position.  If the input stream does not support this, this method may fail
-     * with an IOException.
-     * @param stream the input stream from which file format information should be
-     * extracted
-     * @return an <code>AudioFileFormat</code> object describing the audio file format
-     * @throws UnsupportedAudioFileException if the stream does not point to valid audio
-     * file data recognized by the system
-     * @throws IOException if an I/O exception occurs
-     * @see InputStream#markSupported
-     * @see InputStream#mark
-     */
-    abstract public AudioFileFormat getAudioFileFormat(InputStream stream) throws UnsupportedAudioFileException, IOException;
+    @Override
+    public AudioInputStream getAudioInputStream(final InputStream stream)
+            throws UnsupportedAudioFileException, IOException {
+        stream.mark(200); // The biggest value which was historically used
+        try {
+            final StandardFileFormat format = getAudioFileFormatImpl(stream);
+            // we've got everything, the stream is supported and it is at the
+            // beginning of the audio data, so return an AudioInputStream
+            return new AudioInputStream(stream, format.getFormat(),
+                                        format.getLongFrameLength());
+        } catch (UnsupportedAudioFileException | EOFException ignored) {
+            // stream is unsupported or the header is less than was expected
+            stream.reset();
+            throw new UnsupportedAudioFileException();
+        }
+    }
 
+    @Override
+    public final AudioInputStream getAudioInputStream(final URL url)
+            throws UnsupportedAudioFileException, IOException {
+        final InputStream urlStream = url.openStream();
+        try {
+            return getAudioInputStream(new BufferedInputStream(urlStream));
+        } catch (final Throwable e) {
+            closeSilently(urlStream);
+            throw e;
+        }
+    }
 
-    /**
-     * Obtains the audio file format of the URL provided.  The URL must
-     * point to valid audio file data.
-     * @param url the URL from which file format information should be
-     * extracted
-     * @return an <code>AudioFileFormat</code> object describing the audio file format
-     * @throws UnsupportedAudioFileException if the URL does not point to valid audio
-     * file data recognized by the system
-     * @throws IOException if an I/O exception occurs
-     */
-    abstract public AudioFileFormat getAudioFileFormat(URL url) throws UnsupportedAudioFileException, IOException;
-
-
-    /**
-     * Obtains the audio file format of the File provided.  The File must
-     * point to valid audio file data.
-     * @param file the File from which file format information should be
-     * extracted
-     * @return an <code>AudioFileFormat</code> object describing the audio file format
-     * @throws UnsupportedAudioFileException if the File does not point to valid audio
-     * file data recognized by the system
-     * @throws IOException if an I/O exception occurs
-     */
-    abstract public AudioFileFormat getAudioFileFormat(File file) throws UnsupportedAudioFileException, IOException;
-
-
-    /**
-     * Obtains an audio stream from the input stream provided.  The stream must
-     * point to valid audio file data.  In general, audio file providers may
-     * need to read some data from the stream before determining whether they
-     * support it.  These parsers must
-     * be able to mark the stream, read enough data to determine whether they
-     * support the stream, and, if not, reset the stream's read pointer to its original
-     * position.  If the input stream does not support this, this method may fail
-     * with an IOException.
-     * @param stream the input stream from which the <code>AudioInputStream</code> should be
-     * constructed
-     * @return an <code>AudioInputStream</code> object based on the audio file data contained
-     * in the input stream.
-     * @throws UnsupportedAudioFileException if the stream does not point to valid audio
-     * file data recognized by the system
-     * @throws IOException if an I/O exception occurs
-     * @see InputStream#markSupported
-     * @see InputStream#mark
-     */
-    abstract public AudioInputStream getAudioInputStream(InputStream stream) throws UnsupportedAudioFileException, IOException;
-
+    @Override
+    public final AudioInputStream getAudioInputStream(final File file)
+            throws UnsupportedAudioFileException, IOException {
+        final InputStream fileStream = new FileInputStream(file);
+        try {
+            return getAudioInputStream(new BufferedInputStream(fileStream));
+        } catch (final Throwable e) {
+            closeSilently(fileStream);
+            throw e;
+        }
+    }
 
     /**
-     * Obtains an audio stream from the URL provided.  The URL must
-     * point to valid audio file data.
-     * @param url the URL for which the <code>AudioInputStream</code> should be
-     * constructed
-     * @return an <code>AudioInputStream</code> object based on the audio file data pointed
-     * to by the URL
-     * @throws UnsupportedAudioFileException if the URL does not point to valid audio
-     * file data recognized by the system
+     * Obtains the audio file format of the input stream provided. The stream
+     * must point to valid audio file data. Note that default implementation of
+     * {@link #getAudioInputStream(InputStream)} assume that this method leaves
+     * the input stream at the beginning of the audio data.
+     *
+     * @param  stream the input stream from which file format information should
+     *         be extracted
+     * @return an {@code AudioFileFormat} object describing the audio file
+     *         format
+     * @throws UnsupportedAudioFileException if the stream does not point to
+     *         valid audio file data recognized by the system
      * @throws IOException if an I/O exception occurs
+     * @throws EOFException is used incorrectly by our readers instead of
+     *         UnsupportedAudioFileException if the header is less than was
+     *         expected
      */
-    abstract public AudioInputStream getAudioInputStream(URL url) throws UnsupportedAudioFileException, IOException;
-
-
-    /**
-     * Obtains an audio stream from the File provided.  The File must
-     * point to valid audio file data.
-     * @param file the File for which the <code>AudioInputStream</code> should be
-     * constructed
-     * @return an <code>AudioInputStream</code> object based on the audio file data pointed
-     * to by the File
-     * @throws UnsupportedAudioFileException if the File does not point to valid audio
-     * file data recognized by the system
-     * @throws IOException if an I/O exception occurs
-     */
-    abstract public AudioInputStream getAudioInputStream(File file) throws UnsupportedAudioFileException, IOException;
-
+    abstract StandardFileFormat getAudioFileFormatImpl(InputStream stream)
+            throws UnsupportedAudioFileException, IOException;
 
     // HELPER METHODS
 
-
+    /**
+     * Closes the InputStream when we have read all necessary data from it, and
+     * ignores an IOException.
+     *
+     * @param is the InputStream which should be closed
+     */
+    private static void closeSilently(final InputStream is) {
+        try {
+            is.close();
+        } catch (final IOException ignored) {
+            // IOException is ignored
+        }
+    }
 
     /**
      * rllong
      * Protected helper method to read 64 bits and changing the order of
      * each bytes.
-     * @param DataInputStream
      * @return 32 bits swapped value.
      * @exception IOException
      */
@@ -186,7 +186,6 @@ abstract class SunFileReader extends AudioFileReader {
     /**
      * big2little
      * Protected helper method to swap the order of bytes in a 32 bit int
-     * @param int
      * @return 32 bits swapped value
      */
     final int big2little(int i) {
@@ -206,7 +205,6 @@ abstract class SunFileReader extends AudioFileReader {
     /**
      * rlshort
      * Protected helper method to read 16 bits value. Swap high with low byte.
-     * @param DataInputStream
      * @return the swapped value.
      * @exception IOException
      */
@@ -228,7 +226,6 @@ abstract class SunFileReader extends AudioFileReader {
     /**
      * big2little
      * Protected helper method to swap the order of bytes in a 16 bit short
-     * @param int
      * @return 16 bits swapped value
      */
     final short big2littleShort(short i) {
@@ -251,6 +248,10 @@ abstract class SunFileReader extends AudioFileReader {
      * @return the size of a PCM frame in bytes.
      */
     static final int calculatePCMFrameSize(int sampleSizeInBits, int channels) {
-        return ((sampleSizeInBits + 7) / 8) * channels;
+        try {
+            return Math.multiplyExact((sampleSizeInBits + 7) / 8, channels);
+        } catch (final ArithmeticException ignored) {
+            return 0;
+        }
     }
 }

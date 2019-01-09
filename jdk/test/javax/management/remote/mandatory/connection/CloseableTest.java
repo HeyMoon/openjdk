@@ -28,7 +28,7 @@
  *          the method "void close() throws IOException;" extend
  *          or implement the java.io.Closeable interface.
  * @author Luis-Miguel Alventosa
- * @modules java.management
+ *
  * @run clean CloseableTest
  * @run build CloseableTest
  * @run main CloseableTest
@@ -40,7 +40,6 @@ import javax.management.remote.rmi.RMIConnection;
 import javax.management.remote.rmi.RMIConnectionImpl;
 import javax.management.remote.rmi.RMIConnectionImpl_Stub;
 import javax.management.remote.rmi.RMIConnector;
-import javax.management.remote.rmi.RMIIIOPServerImpl;
 import javax.management.remote.rmi.RMIJRMPServerImpl;
 import javax.management.remote.rmi.RMIServerImpl;
 
@@ -52,7 +51,6 @@ public class CloseableTest {
         RMIConnectionImpl.class,
         RMIConnectionImpl_Stub.class,
         RMIServerImpl.class,
-        RMIIIOPServerImpl.class,
         RMIJRMPServerImpl.class
     };
 

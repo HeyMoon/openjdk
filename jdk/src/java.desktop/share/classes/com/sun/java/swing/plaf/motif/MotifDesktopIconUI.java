@@ -59,10 +59,10 @@ public class MotifDesktopIconUI extends BasicDesktopIconUI
     JPopupMenu systemMenu;
     EventListener mml;
 
-    final static int LABEL_HEIGHT = 18;
-    final static int LABEL_DIVIDER = 4;    // padding between icon and label
+    static final int LABEL_HEIGHT = 18;
+    static final int LABEL_DIVIDER = 4;    // padding between icon and label
 
-    final static Font defaultTitleFont =
+    static final Font defaultTitleFont =
         new Font(Font.SANS_SERIF, Font.PLAIN, 12);
 
     public static ComponentUI createUI(JComponent c)    {
@@ -236,7 +236,7 @@ public class MotifDesktopIconUI extends BasicDesktopIconUI
                 }
             });
         }
-
+        @SuppressWarnings("deprecation")
         void forwardEventToParent(MouseEvent e) {
             getParent().dispatchEvent(new MouseEvent(
                 getParent(), e.getID(), e.getWhen(), e.getModifiers(),
@@ -329,7 +329,7 @@ public class MotifDesktopIconUI extends BasicDesktopIconUI
                 }
             });
         }
-
+        @SuppressWarnings("deprecation")
         void forwardEventToParent(MouseEvent e) {
             getParent().dispatchEvent(new MouseEvent(
                 getParent(), e.getID(), e.getWhen(), e.getModifiers(),

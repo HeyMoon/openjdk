@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2009, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -20,10 +21,6 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- */
-
-/*
- * Copyright (c) 2009 by Oracle Corporation. All Rights Reserved.
  */
 
 package javax.xml.stream;
@@ -67,21 +64,17 @@ public interface XMLEventWriter extends XMLEventConsumer {
    * Add an event to the output stream
    * Adding a START_ELEMENT will open a new namespace scope that
    * will be closed when the corresponding END_ELEMENT is written.
-   * <table border="2" rules="all" cellpadding="4">
+   * <table class="striped">
+   *   <caption>Required and optional fields for events added to the writer</caption>
    *   <thead>
-   *     <tr>
-   *       <th align="center" colspan="2">
-   *         Required and optional fields for events added to the writer
-   *       </th>
-   *     </tr>
-   *   </thead>
-   *   <tbody>
    *     <tr>
    *       <th>Event Type</th>
    *       <th>Required Fields</th>
    *       <th>Optional Fields</th>
    *       <th>Required Behavior</th>
    *     </tr>
+   *   </thead>
+   *   <tbody>
    *     <tr>
    *       <td> START_ELEMENT  </td>
    *       <td> QName name </td>

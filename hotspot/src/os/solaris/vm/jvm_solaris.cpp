@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -73,11 +73,6 @@ JVM_ENTRY_NO_ENV(void*, JVM_RegisterSignal(jint sig, void* handler))
       if (os::Solaris::is_sig_ignored(sig)) return (void*)1;
   }
 
-  /* Check parameterized signals. Don't allow sharing of our interrupt signal */
-  if (sig == os::Solaris::SIGinterrupt()) {
-      return (void *)-1;
-  }
-
   void* oldHandler = os::signal(sig, newHandler);
   if (oldHandler == os::user_handler()) {
       return (void *)2;
@@ -111,40 +106,3 @@ JVM_ENTRY_NO_ENV(jboolean, JVM_RaiseSignal(jint sig))
   return JNI_TRUE;
 JVM_END
 
-
-/*
-  All the defined signal names for Solaris are defined by str2sig().
-
-  NOTE that not all of these names are accepted by our Java implementation
-
-  Via an existing claim by the VM, sigaction restrictions, or
-  the "rules of Unix" some of these names will be rejected at runtime.
-  For example the VM sets up to handle USR1, sigaction returns EINVAL for
-  CANCEL, and Solaris simply doesn't allow catching of KILL.
-
-  Here are the names currently accepted by a user of sun.misc.Signal with
-  1.4.1 (ignoring potential interaction with use of chaining, etc):
-
-      HUP, INT, TRAP, IOT, ABRT, EMT, BUS, SYS, PIPE, ALRM, TERM, USR2,
-      CLD, CHLD, PWR, WINCH, URG, POLL, IO, TSTP, CONT, TTIN, TTOU, VTALRM,
-      PROF, XCPU, XFSZ, FREEZE, THAW, LOST
-*/
-
-JVM_ENTRY_NO_ENV(jint, JVM_FindSignal(const char *name))
-
-  int sig;
-
-  /* return the named signal's number */
-
-  if(str2sig(name, &sig))
-    return -1;
-  else
-    return sig;
-
-JVM_END
-
-
-//Reconciliation History
-// 1.4 98/10/07 13:39:41 jvm_win32.cpp
-// 1.6 99/06/22 16:39:00 jvm_win32.cpp
-//End

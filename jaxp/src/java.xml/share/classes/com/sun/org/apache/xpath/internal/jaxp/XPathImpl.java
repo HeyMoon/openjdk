@@ -2,13 +2,14 @@
  * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright 1999-2004 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,24 +17,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// $Id: XPathImpl.java,v 1.2 2005/08/16 22:41:08 jeffsuttor Exp $
 
 package com.sun.org.apache.xpath.internal.jaxp;
 
-import javax.xml.namespace.QName;
-import javax.xml.namespace.NamespaceContext;
-import javax.xml.xpath.XPathExpressionException;
-import javax.xml.xpath.XPathConstants;
-import javax.xml.xpath.XPathFunctionResolver;
-import javax.xml.xpath.XPathVariableResolver;
-import javax.xml.xpath.XPathExpression;
 import com.sun.org.apache.xpath.internal.*;
 import com.sun.org.apache.xpath.internal.objects.XObject;
-import com.sun.org.apache.xalan.internal.utils.FeatureManager;
+import javax.xml.namespace.NamespaceContext;
+import javax.xml.namespace.QName;
+import javax.xml.transform.TransformerException;
+import javax.xml.xpath.XPathConstants;
+import javax.xml.xpath.XPathEvaluationResult;
+import javax.xml.xpath.XPathExpression;
+import javax.xml.xpath.XPathExpressionException;
+import javax.xml.xpath.XPathFunctionResolver;
+import javax.xml.xpath.XPathVariableResolver;
+import jdk.xml.internal.JdkXmlFeatures;
 import org.w3c.dom.Document;
 import org.xml.sax.InputSource;
-import javax.xml.transform.TransformerException;
-import javax.xml.xpath.XPathEvaluationResult;
 
 /**
  * The XPathImpl class provides implementation for the methods defined  in
@@ -54,12 +54,12 @@ public class XPathImpl extends XPathImplUtil implements javax.xml.xpath.XPath {
     private NamespaceContext namespaceContext=null;
 
     XPathImpl(XPathVariableResolver vr, XPathFunctionResolver fr) {
-        this(vr, fr, false, true, new FeatureManager());
+        this(vr, fr, false, true, new JdkXmlFeatures(false));
     }
 
     XPathImpl(XPathVariableResolver vr, XPathFunctionResolver fr,
             boolean featureSecureProcessing, boolean useServiceMechanism,
-            FeatureManager featureManager) {
+            JdkXmlFeatures featureManager) {
         this.origVariableResolver = this.variableResolver = vr;
         this.origFunctionResolver = this.functionResolver = fr;
         this.featureSecureProcessing = featureSecureProcessing;

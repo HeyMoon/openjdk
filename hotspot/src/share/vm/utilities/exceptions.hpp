@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 
 #include "memory/allocation.hpp"
 #include "oops/oopsHierarchy.hpp"
+#include "utilities/ostream.hpp"
 #include "utilities/sizes.hpp"
 
 // This file provides the basic support for exception handling in the VM.
@@ -46,7 +47,6 @@
 
 
 // Forward declarations to be independent of the include structure.
-// This allows us to have exceptions.hpp included in top.hpp.
 
 class Thread;
 class Handle;
@@ -59,6 +59,7 @@ class JavaCallArguments;
 
 class ThreadShadow: public CHeapObj<mtThread> {
   friend class VMStructs;
+  friend class JVMCIVMStructs;
 
  protected:
   oop  _pending_exception;                       // Thread has gc actions.
@@ -163,7 +164,7 @@ class Exceptions {
                               const char* message,
                               ExceptionMsgToUtf8Mode to_utf8_safe = safe_to_utf8);
 
-  static void throw_stack_overflow_exception(Thread* thread, const char* file, int line, methodHandle method);
+  static void throw_stack_overflow_exception(Thread* thread, const char* file, int line, const methodHandle& method);
 
   // Exception counting for error files of interesting exceptions that may have
   // caused a problem for the jvm
@@ -174,8 +175,12 @@ class Exceptions {
   static void print_exception_counts_on_error(outputStream* st);
 
   // for AbortVMOnException flag
-  NOT_PRODUCT(static void debug_check_abort(Handle exception, const char* message = NULL);)
-  NOT_PRODUCT(static void debug_check_abort(const char *value_string, const char* message = NULL);)
+  static void debug_check_abort(Handle exception, const char* message = NULL);
+  static void debug_check_abort_helper(Handle exception, const char* message = NULL);
+  static void debug_check_abort(const char *value_string, const char* message = NULL);
+
+  // for logging exceptions
+  static void log_exception(Handle exception, stringStream tempst);
 };
 
 

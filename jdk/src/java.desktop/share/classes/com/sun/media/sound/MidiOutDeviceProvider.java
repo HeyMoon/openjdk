@@ -27,7 +27,6 @@ package com.sun.media.sound;
 
 import javax.sound.midi.MidiDevice;
 
-
 /**
  * MIDI output device provider.
  *
@@ -42,17 +41,13 @@ public final class MidiOutDeviceProvider extends AbstractMidiDeviceProvider {
     /** Cache of open MIDI output devices on the system. */
     private static MidiDevice[] devices = null;
 
-    private final static boolean enabled;
-
-    // STATIC
+    private static final boolean enabled;
 
     static {
         // initialize
         Platform.initialize();
         enabled = Platform.isMidiIOEnabled();
     }
-
-    // CONSTRUCTOR
 
     /**
      * Required public no-arg constructor.
@@ -61,8 +56,7 @@ public final class MidiOutDeviceProvider extends AbstractMidiDeviceProvider {
         if (Printer.trace) Printer.trace("MidiOutDeviceProvider: constructor");
     }
 
-    // implementation of abstract methods in AbstractMidiDeviceProvider
-
+    @Override
     AbstractMidiDeviceProvider.Info createInfo(int index) {
         if (!enabled) {
             return null;
@@ -70,6 +64,7 @@ public final class MidiOutDeviceProvider extends AbstractMidiDeviceProvider {
         return new MidiOutDeviceInfo(index, MidiOutDeviceProvider.class);
     }
 
+    @Override
     MidiDevice createDevice(AbstractMidiDeviceProvider.Info info) {
         if (enabled && (info instanceof MidiOutDeviceInfo)) {
             return new MidiOutDevice(info);
@@ -77,6 +72,7 @@ public final class MidiOutDeviceProvider extends AbstractMidiDeviceProvider {
         return null;
     }
 
+    @Override
     int getNumDevices() {
         if (!enabled) {
             if (Printer.debug)Printer.debug("MidiOutDevice not enabled, returning 0 devices");
@@ -85,13 +81,14 @@ public final class MidiOutDeviceProvider extends AbstractMidiDeviceProvider {
         return nGetNumDevices();
     }
 
+    @Override
     MidiDevice[] getDeviceCache() { return devices; }
+    @Override
     void setDeviceCache(MidiDevice[] devices) { MidiOutDeviceProvider.devices = devices; }
+    @Override
     Info[] getInfoCache() { return infos; }
+    @Override
     void setInfoCache(Info[] infos) { MidiOutDeviceProvider.infos = infos; }
-
-
-    // INNER CLASSES
 
     /**
      * Info class for MidiOutDevices.  Adds the
@@ -112,9 +109,6 @@ public final class MidiOutDeviceProvider extends AbstractMidiDeviceProvider {
         }
 
     } // class MidiOutDeviceInfo
-
-
-    // NATIVE METHODS
 
     private static native int nGetNumDevices();
     private static native String nGetName(int index);

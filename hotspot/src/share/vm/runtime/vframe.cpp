@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,8 +46,6 @@
 #include "runtime/vframeArray.hpp"
 #include "runtime/vframe_hp.hpp"
 
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
-
 vframe::vframe(const frame* fr, const RegisterMap* reg_map, JavaThread* thread)
 : _reg_map(reg_map), _thread(thread) {
   assert(fr != NULL, "must have frame");
@@ -69,8 +67,8 @@ vframe* vframe::new_vframe(const frame* f, const RegisterMap* reg_map, JavaThrea
   // Compiled frame
   CodeBlob* cb = f->cb();
   if (cb != NULL) {
-    if (cb->is_nmethod()) {
-      nmethod* nm = (nmethod*)cb;
+    if (cb->is_compiled()) {
+      CompiledMethod* nm = (CompiledMethod*)cb;
       return new compiledVFrame(f, reg_map, thread, nm);
     }
 
@@ -144,12 +142,11 @@ GrowableArray<MonitorInfo*>* javaVFrame::locked_monitors() {
   return result;
 }
 
-static void print_locked_object_class_name(outputStream* st, Handle obj, const char* lock_state) {
+void javaVFrame::print_locked_object_class_name(outputStream* st, Handle obj, const char* lock_state) {
   if (obj.not_null()) {
-    st->print("\t- %s <" INTPTR_FORMAT "> ", lock_state, (address)obj());
+    st->print("\t- %s <" INTPTR_FORMAT "> ", lock_state, p2i(obj()));
     if (obj->klass() == SystemDictionary::Class_klass()) {
-      Klass* target_klass = java_lang_Class::as_Klass(obj());
-      st->print_cr("(a java.lang.Class for %s)", InstanceKlass::cast(target_klass)->external_name());
+      st->print_cr("(a java.lang.Class for %s)", java_lang_Class::as_external_name(obj()));
     } else {
       Klass* k = obj->klass();
       st->print_cr("(a %s)", k->external_name());
@@ -160,27 +157,39 @@ static void print_locked_object_class_name(outputStream* st, Handle obj, const c
 void javaVFrame::print_lock_info_on(outputStream* st, int frame_count) {
   ResourceMark rm;
 
-  // If this is the first frame, and java.lang.Object.wait(...) then print out the receiver.
+  // If this is the first frame and it is java.lang.Object.wait(...)
+  // then print out the receiver. Locals are not always available,
+  // e.g., compiled native frames have no scope so there are no locals.
   if (frame_count == 0) {
     if (method()->name() == vmSymbols::wait_name() &&
         method()->method_holder()->name() == vmSymbols::java_lang_Object()) {
+      const char *wait_state = "waiting on"; // assume we are waiting
+      // If earlier in the output we reported java.lang.Thread.State ==
+      // "WAITING (on object monitor)" and now we report "waiting on", then
+      // we are still waiting for notification or timeout. Otherwise if
+      // we earlier reported java.lang.Thread.State == "BLOCKED (on object
+      // monitor)", then we are actually waiting to re-lock the monitor.
+      // At this level we can't distinguish the two cases to report
+      // "waited on" rather than "waiting on" for the second case.
       StackValueCollection* locs = locals();
       if (!locs->is_empty()) {
         StackValue* sv = locs->at(0);
         if (sv->type() == T_OBJECT) {
           Handle o = locs->at(0)->get_obj();
-          print_locked_object_class_name(st, o, "waiting on");
+          print_locked_object_class_name(st, o, wait_state);
         }
+      } else {
+        st->print_cr("\t- %s <no object reference available>", wait_state);
       }
     } else if (thread()->current_park_blocker() != NULL) {
       oop obj = thread()->current_park_blocker();
       Klass* k = obj->klass();
-      st->print_cr("\t- %s <" INTPTR_FORMAT "> (a %s)", "parking to wait for ", (address)obj, k->external_name());
+      st->print_cr("\t- %s <" INTPTR_FORMAT "> (a %s)", "parking to wait for ", p2i(obj), k->external_name());
     }
   }
 
-
-  // Print out all monitors that we have locked or are trying to lock
+  // Print out all monitors that we have locked, or are trying to lock,
+  // including re-locking after being notified or timing out in a wait().
   GrowableArray<MonitorInfo*>* mons = monitors();
   if (!mons->is_empty()) {
     bool found_first_monitor = false;
@@ -202,14 +211,14 @@ void javaVFrame::print_lock_info_on(outputStream* st, int frame_count) {
       if (monitor->owner() != NULL) {
         // the monitor is associated with an object, i.e., it is locked
 
-        // First, assume we have the monitor locked. If we haven't found an
-        // owned monitor before and this is the first frame, then we need to
-        // see if we have completed the lock or we are blocked trying to
-        // acquire it - we can only be blocked if the monitor is inflated
-
         markOop mark = NULL;
         const char *lock_state = "locked"; // assume we have the monitor locked
         if (!found_first_monitor && frame_count == 0) {
+          // If this is the first frame and we haven't found an owned
+          // monitor before, then we need to see if we have completed
+          // the lock or if we are blocked trying to acquire it. Only
+          // an inflated monitor that is first on the monitor list in
+          // the first frame can block us on a monitor enter.
           mark = monitor->owner()->mark();
           if (mark->has_monitor() &&
               ( // we have marked ourself as pending on this monitor
@@ -219,13 +228,33 @@ void javaVFrame::print_lock_info_on(outputStream* st, int frame_count) {
               )) {
             lock_state = "waiting to lock";
           } else {
-            mark = NULL; // Disable printing below
+            // We own the monitor which is not as interesting so
+            // disable the extra printing below.
+            mark = NULL;
+          }
+        } else if (frame_count != 0) {
+          // This is not the first frame so we either own this monitor
+          // or we owned the monitor before and called wait(). Because
+          // wait() could have been called on any monitor in a lower
+          // numbered frame on the stack, we have to check all the
+          // monitors on the list for this frame.
+          mark = monitor->owner()->mark();
+          if (mark->has_monitor() &&
+              ( // we have marked ourself as pending on this monitor
+                mark->monitor() == thread()->current_pending_monitor() ||
+                // we are not the owner of this monitor
+                !mark->monitor()->is_entered(thread())
+              )) {
+            lock_state = "waiting to re-lock in wait()";
+          } else {
+            // We own the monitor which is not as interesting so
+            // disable the extra printing below.
+            mark = NULL;
           }
         }
         print_locked_object_class_name(st, monitor->owner(), lock_state);
-        if (Verbose && mark != NULL) {
-          // match with format above, replacing "-" with " ".
-          st->print("\t  lockbits=");
+        if (ObjectMonitor::Knob_Verbose && mark != NULL) {
+          st->print("\t- lockbits=");
           mark->print_on(st);
           st->cr();
         }
@@ -367,7 +396,7 @@ StackValueCollection* interpretedVFrame::stack_data(bool expressions) const {
 
   InterpreterOopMap oop_mask;
   // oopmap for current bci
-  if (TraceDeoptimization && Verbose) {
+  if ((TraceDeoptimization && Verbose) JVMCI_ONLY( || PrintDeoptimizationDetails)) {
     methodHandle m_h(Thread::current(), method());
     OopMapCache::compute_one_oop_map(m_h, bci(), &oop_mask);
   } else {
@@ -434,14 +463,15 @@ void interpretedVFrame::set_locals(StackValueCollection* values) const {
 entryVFrame::entryVFrame(const frame* fr, const RegisterMap* reg_map, JavaThread* thread)
 : externalVFrame(fr, reg_map, thread) {}
 
-
-void vframeStreamCommon::found_bad_method_frame() {
+#ifdef ASSERT
+void vframeStreamCommon::found_bad_method_frame() const {
   // 6379830 Cut point for an assertion that occasionally fires when
   // we are using the performance analyzer.
   // Disable this assert when testing the analyzer with fastdebug.
   // -XX:SuppressErrorAt=vframe.cpp:XXX (XXX=following line number)
-  assert(false, "invalid bci or invalid scope desc");
+  fatal("invalid bci or invalid scope desc");
 }
+#endif
 
 // top-frame will be skipped
 vframeStream::vframeStream(JavaThread* thread, frame top_frame,
@@ -460,7 +490,7 @@ vframeStream::vframeStream(JavaThread* thread, frame top_frame,
 // This function is used in Class.forName, Class.newInstance, Method.Invoke,
 // AccessController.doPrivileged.
 void vframeStreamCommon::security_get_caller_frame(int depth) {
-  assert(depth >= 0, err_msg("invalid depth: %d", depth));
+  assert(depth >= 0, "invalid depth: %d", depth);
   for (int n = 0; !at_end(); security_next()) {
     if (!method()->is_ignored_by_security_stack_walk()) {
       if (n == depth) {
@@ -550,7 +580,7 @@ void entryVFrame::print_value() const {
 void entryVFrame::print() {
   vframe::print();
   tty->print_cr("C Chunk inbetween Java");
-  tty->print_cr("C     link " INTPTR_FORMAT, _fr.link());
+  tty->print_cr("C     link " INTPTR_FORMAT, p2i(_fr.link()));
 }
 
 
@@ -587,7 +617,7 @@ void javaVFrame::print() {
       tty->print("( null )");
     } else {
       monitor->owner()->print_value();
-      tty->print("(owner=" INTPTR_FORMAT ")", (address)monitor->owner());
+      tty->print("(owner=" INTPTR_FORMAT ")", p2i(monitor->owner()));
     }
     if (monitor->eliminated()) {
       if(is_compiled_frame()) {
@@ -608,7 +638,7 @@ void javaVFrame::print_value() const {
   Method*    m = method();
   InstanceKlass*     k = m->method_holder();
   tty->print_cr("frame( sp=" INTPTR_FORMAT ", unextended_sp=" INTPTR_FORMAT ", fp=" INTPTR_FORMAT ", pc=" INTPTR_FORMAT ")",
-                _fr.sp(),  _fr.unextended_sp(), _fr.fp(), _fr.pc());
+                p2i(_fr.sp()),  p2i(_fr.unextended_sp()), p2i(_fr.fp()), p2i(_fr.pc()));
   tty->print("%s.%s", k->internal_name(), m->name()->as_C_string());
 
   if (!m->is_native()) {

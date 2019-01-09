@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -19,32 +19,32 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
-
-import java.lang.reflect.Method;
-import java.util.EnumSet;
-
-import sun.hotspot.WhiteBox;
-import sun.hotspot.code.BlobType;
-
-import jdk.test.lib.Asserts;
-import jdk.test.lib.InfiniteLoop;
 
 /*
  * @test
- * @bug 8059624 8064669
- * @library /testlibrary /../../test/lib
- * @modules java.management
- * @build ForceNMethodSweepTest
- * @run main ClassFileInstaller sun.hotspot.WhiteBox
- *                              sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @bug 8059624 8064669 8153265
+ * @summary testing of WB::forceNMethodSweep
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ *          java.management
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *                                sun.hotspot.WhiteBox$WhiteBoxPermission
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
  *                   -XX:-TieredCompilation -XX:+WhiteBoxAPI
- *                   -XX:CompileCommand=compileonly,SimpleTestCase$Helper::*
- *                   -XX:-BackgroundCompilation ForceNMethodSweepTest
- * @summary testing of WB::forceNMethodSweep
+ *                   -XX:CompileCommand=compileonly,compiler.whitebox.SimpleTestCaseHelper::*
+ *                   -XX:-BackgroundCompilation -XX:-UseCounterDecay
+ *                   compiler.whitebox.ForceNMethodSweepTest
  */
+
+package compiler.whitebox;
+
+import jdk.test.lib.Asserts;
+import sun.hotspot.code.BlobType;
+
+import java.util.EnumSet;
+
 public class ForceNMethodSweepTest extends CompilerWhiteBoxTest {
     public static void main(String[] args) throws Exception {
         CompilerWhiteBoxTest.main(ForceNMethodSweepTest::new, args);
@@ -59,6 +59,12 @@ public class ForceNMethodSweepTest extends CompilerWhiteBoxTest {
 
     @Override
     protected void test() throws Exception {
+        // prime the asserts: get their bytecodes loaded, any lazy computation
+        // resolved, and executed once
+        Asserts.assertGT(1, 0, "message");
+        Asserts.assertLTE(0, 0, "message");
+        Asserts.assertLT(-1, 0, "message");
+
         checkNotCompiled();
         guaranteedSweep();
         int usage = getTotalUsage();
@@ -89,7 +95,7 @@ public class ForceNMethodSweepTest extends CompilerWhiteBoxTest {
         return usage;
     }
     private void guaranteedSweep() {
-        // not entrant -> ++stack_traversal_mark -> zombie -> reclamation -> flushed
+        // not entrant -> ++stack_traversal_mark -> zombie -> flushed
         for (int i = 0; i < 5; ++i) {
             WHITE_BOX.fullGC();
             WHITE_BOX.forceNMethodSweep();

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -50,9 +50,7 @@ import com.sun.xml.internal.messaging.saaj.util.*;
 class HttpSOAPConnection extends SOAPConnection {
 
     public static final String vmVendor = SAAJUtil.getSystemProperty("java.vendor.url");
-    private static final String sunVmVendor = "http://java.sun.com/";
     private static final String ibmVmVendor = "http://www.ibm.com/";
-    private static final boolean isSunVM = sunVmVendor.equals(vmVendor) ? true: false;
     private static final boolean isIBMVM = ibmVmVendor.equals(vmVendor) ? true : false;
     private static final String JAXM_URLENDPOINT="javax.xml.messaging.URLEndpoint";
 
@@ -78,6 +76,7 @@ class HttpSOAPConnection extends SOAPConnection {
         }
     }
 
+    @Override
     public void close() throws SOAPException {
         if (closed) {
             log.severe("SAAJ0002.p2p.close.already.closed.conn");
@@ -88,6 +87,7 @@ class HttpSOAPConnection extends SOAPConnection {
         closed = true;
     }
 
+    @Override
    public SOAPMessage call(SOAPMessage message, Object endPoint)
         throws SOAPException {
         if (closed) {
@@ -95,7 +95,7 @@ class HttpSOAPConnection extends SOAPConnection {
             throw new SOAPExceptionImpl("Connection is closed");
         }
 
-        Class urlEndpointClass = null;
+        Class<?> urlEndpointClass = null;
         ClassLoader loader = Thread.currentThread().getContextClassLoader();
         try {
             if (loader != null) {
@@ -198,7 +198,7 @@ class HttpSOAPConnection extends SOAPConnection {
 
             MimeHeaders headers = message.getMimeHeaders();
 
-            Iterator it = headers.getAllHeaders();
+            Iterator<?> it = headers.getAllHeaders();
             boolean hasAuth = false; // true if we find explicit Auth header
             while (it.hasNext()) {
                 MimeHeader header = (MimeHeader) it.next();
@@ -209,7 +209,7 @@ class HttpSOAPConnection extends SOAPConnection {
                         header.getName(),
                         header.getValue());
                 else {
-                    StringBuffer concat = new StringBuffer();
+                    StringBuilder concat = new StringBuilder();
                     int i = 0;
                     while (i < values.length) {
                         if (i != 0)
@@ -350,12 +350,13 @@ class HttpSOAPConnection extends SOAPConnection {
     // Object identifies where the request should be sent.
     // It is required to support objects of type String and java.net.URL.
 
+    @Override
     public SOAPMessage get(Object endPoint) throws SOAPException {
         if (closed) {
             log.severe("SAAJ0011.p2p.get.already.closed.conn");
             throw new SOAPExceptionImpl("Connection is closed");
         }
-        Class urlEndpointClass = null;
+        Class<?> urlEndpointClass = null;
 
         try {
             urlEndpointClass = Class.forName("javax.xml.messaging.URLEndpoint");
@@ -441,7 +442,7 @@ class HttpSOAPConnection extends SOAPConnection {
             httpConnection.setDoOutput(true);
             httpConnection.setDoInput(true);
             httpConnection.setUseCaches(false);
-            httpConnection.setFollowRedirects(true);
+            httpConnection.setInstanceFollowRedirects(true);
 
             httpConnection.connect();
 
@@ -591,7 +592,7 @@ class HttpSOAPConnection extends SOAPConnection {
                 log.log(Level.FINE, "SAAJ0054.p2p.set.providers",
                         new String[] { pkgs });
             try {
-                Class c = Class.forName(SSL_PROVIDER);
+                Class<?> c = Class.forName(SSL_PROVIDER);
                 Provider p = (Provider) c.newInstance();
                 Security.addProvider(p);
                 if (log.isLoggable(Level.FINE))

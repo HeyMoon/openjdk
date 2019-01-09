@@ -50,8 +50,7 @@ JvmtiThreadState::JvmtiThreadState(JavaThread* thread)
   : _thread_event_enable() {
   assert(JvmtiThreadState_lock->is_locked(), "sanity check");
   _thread               = thread;
-  _exception_detected   = false;
-  _exception_caught     = false;
+  _exception_state      = ES_CLEARED;
   _debuggable           = true;
   _hide_single_stepping = false;
   _hide_level           = 0;
@@ -86,7 +85,7 @@ JvmtiThreadState::JvmtiThreadState(JavaThread* thread)
   {
     // The thread state list manipulation code must not have safepoints.
     // See periodic_clean_up().
-    debug_only(No_Safepoint_Verifier nosafepoint;)
+    debug_only(NoSafepointVerifier nosafepoint;)
 
     _prev = NULL;
     _next = _head;
@@ -123,7 +122,7 @@ JvmtiThreadState::~JvmtiThreadState()   {
   {
     // The thread state list manipulation code must not have safepoints.
     // See periodic_clean_up().
-    debug_only(No_Safepoint_Verifier nosafepoint;)
+    debug_only(NoSafepointVerifier nosafepoint;)
 
     if (_prev == NULL) {
       assert(_head == this, "sanity check");
@@ -147,7 +146,7 @@ JvmtiThreadState::periodic_clean_up() {
 
   // This iteration is initialized with "_head" instead of "JvmtiThreadState::first()"
   // because the latter requires the JvmtiThreadState_lock.
-  // This iteration is safe at a safepoint as well, see the No_Safepoint_Verifier
+  // This iteration is safe at a safepoint as well, see the NoSafepointVerifier
   // asserts at all list manipulation sites.
   for (JvmtiThreadState *state = _head; state != NULL; state = state->next()) {
     // For each environment thread state corresponding to an invalid environment
@@ -182,7 +181,7 @@ void JvmtiThreadState::add_env(JvmtiEnvBase *env) {
   // add this environment thread state to the end of the list (order is important)
   {
     // list deallocation (which occurs at a safepoint) cannot occur simultaneously
-    debug_only(No_Safepoint_Verifier nosafepoint;)
+    debug_only(NoSafepointVerifier nosafepoint;)
 
     JvmtiEnvThreadStateIterator it(this);
     JvmtiEnvThreadState* previous_ets = NULL;
@@ -224,18 +223,11 @@ int JvmtiThreadState::count_frames() {
   RegisterMap reg_map(get_thread());
   javaVFrame *jvf = get_thread()->last_java_vframe(&reg_map);
   int n = 0;
-  // tty->print_cr("CSD: counting frames on %s ...",
-  //               JvmtiTrace::safe_get_thread_name(get_thread()));
   while (jvf != NULL) {
     Method* method = jvf->method();
-    // tty->print_cr("CSD: frame - method %s.%s - loc %d",
-    //               method->klass_name()->as_C_string(),
-    //               method->name()->as_C_string(),
-    //               jvf->bci() );
     jvf = jvf->java_sender();
     n++;
   }
-  // tty->print_cr("CSD: frame count: %d", n);
   return n;
 }
 
@@ -317,7 +309,7 @@ void JvmtiThreadState::process_pending_step_for_popframe() {
   // an exception.
   //
   if (is_exception_detected()) {
-    clear_exception_detected();
+    clear_exception_state();
   }
   // If step is pending for popframe then it may not be
   // a repeat step. The new_bci and method_id is same as current_bci
@@ -392,7 +384,7 @@ void JvmtiThreadState::process_pending_step_for_earlyret() {
   // an exception.
   //
   if (is_exception_detected()) {
-    clear_exception_detected();
+    clear_exception_state();
   }
   // If step is pending for earlyret then it may not be a repeat step.
   // The new_bci and method_id is same as current_bci and current

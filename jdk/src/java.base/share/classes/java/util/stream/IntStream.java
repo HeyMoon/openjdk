@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -209,6 +209,11 @@ public interface IntStream extends BaseStream<Integer, IntStream> {
      *         .sum();
      * }</pre>
      *
+     * <p>In cases where the stream implementation is able to optimize away the
+     * production of some or all the elements (such as with short-circuiting
+     * operations like {@code findFirst}, or in the example described in
+     * {@link #count}), the action will not be invoked for those elements.
+     *
      * @param action a <a href="package-summary.html#NonInterference">
      *               non-interfering</a> action to perform on the elements as
      *               they are consumed from the stream
@@ -291,7 +296,7 @@ public interface IntStream extends BaseStream<Integer, IntStream> {
      *
      * <p>Independent of whether this stream is ordered or unordered if all
      * elements of this stream match the given predicate then this operation
-     * takes all elements (the result is the same is the input), or if no
+     * takes all elements (the result is the same as the input), or if no
      * elements of the stream match the given predicate then no elements are
      * taken (the result is an empty stream).
      *
@@ -326,6 +331,7 @@ public interface IntStream extends BaseStream<Integer, IntStream> {
      *                  predicate to apply to elements to determine the longest
      *                  prefix of elements.
      * @return the new stream
+     * @since 9
      */
     default IntStream takeWhile(IntPredicate predicate) {
         Objects.requireNonNull(predicate);
@@ -358,7 +364,7 @@ public interface IntStream extends BaseStream<Integer, IntStream> {
      * elements of this stream match the given predicate then this operation
      * drops all elements (the result is an empty stream), or if no elements of
      * the stream match the given predicate then no elements are dropped (the
-     * result is the same is the input).
+     * result is the same as the input).
      *
      * <p>This is a <a href="package-summary.html#StreamOps">stateful
      * intermediate operation</a>.
@@ -391,6 +397,7 @@ public interface IntStream extends BaseStream<Integer, IntStream> {
      *                  predicate to apply to elements to determine the longest
      *                  prefix of elements.
      * @return the new stream
+     * @since 9
      */
     default IntStream dropWhile(IntPredicate predicate) {
         Objects.requireNonNull(predicate);
@@ -555,19 +562,23 @@ public interface IntStream extends BaseStream<Integer, IntStream> {
      * <p>This is a <a href="package-summary.html#StreamOps">terminal
      * operation</a>.
      *
-     * @param <R> type of the result
-     * @param supplier a function that creates a new result container. For a
-     *                 parallel execution, this function may be called
+     * @param <R> the type of the mutable result container
+     * @param supplier a function that creates a new mutable result container.
+     *                 For a parallel execution, this function may be called
      *                 multiple times and must return a fresh value each time.
      * @param accumulator an <a href="package-summary.html#Associativity">associative</a>,
      *                    <a href="package-summary.html#NonInterference">non-interfering</a>,
      *                    <a href="package-summary.html#Statelessness">stateless</a>
-     *                    function for incorporating an additional element into a result
+     *                    function that must fold an element into a result
+     *                    container.
      * @param combiner an <a href="package-summary.html#Associativity">associative</a>,
      *                    <a href="package-summary.html#NonInterference">non-interfering</a>,
      *                    <a href="package-summary.html#Statelessness">stateless</a>
-     *                    function for combining two values, which must be
-     *                    compatible with the accumulator function
+     *                    function that accepts two partial result containers
+     *                    and merges them, which must be compatible with the
+     *                    accumulator function.  The combiner function must fold
+     *                    the elements from the second result container into the
+     *                    first result container.
      * @return the result of the reduction
      * @see Stream#collect(Supplier, BiConsumer, BiConsumer)
      */
@@ -880,31 +891,120 @@ public interface IntStream extends BaseStream<Integer, IntStream> {
      * {@code n}, will be the result of applying the function {@code f} to the
      * element at position {@code n - 1}.
      *
+     * <p>The action of applying {@code f} for one element
+     * <a href="../concurrent/package-summary.html#MemoryVisibility"><i>happens-before</i></a>
+     * the action of applying {@code f} for subsequent elements.  For any given
+     * element the action may be performed in whatever thread the library
+     * chooses.
+     *
      * @param seed the initial element
      * @param f a function to be applied to the previous element to produce
      *          a new element
-     * @return A new sequential {@code IntStream}
+     * @return a new sequential {@code IntStream}
      */
     public static IntStream iterate(final int seed, final IntUnaryOperator f) {
         Objects.requireNonNull(f);
-        final PrimitiveIterator.OfInt iterator = new PrimitiveIterator.OfInt() {
-            int t = seed;
+        Spliterator.OfInt spliterator = new Spliterators.AbstractIntSpliterator(Long.MAX_VALUE,
+               Spliterator.ORDERED | Spliterator.IMMUTABLE | Spliterator.NONNULL) {
+            int prev;
+            boolean started;
 
             @Override
-            public boolean hasNext() {
+            public boolean tryAdvance(IntConsumer action) {
+                Objects.requireNonNull(action);
+                int t;
+                if (started)
+                    t = f.applyAsInt(prev);
+                else {
+                    t = seed;
+                    started = true;
+                }
+                action.accept(prev = t);
+                return true;
+            }
+        };
+        return StreamSupport.intStream(spliterator, false);
+    }
+
+    /**
+     * Returns a sequential ordered {@code IntStream} produced by iterative
+     * application of the given {@code next} function to an initial element,
+     * conditioned on satisfying the given {@code hasNext} predicate.  The
+     * stream terminates as soon as the {@code hasNext} predicate returns false.
+     *
+     * <p>{@code IntStream.iterate} should produce the same sequence of elements as
+     * produced by the corresponding for-loop:
+     * <pre>{@code
+     *     for (int index=seed; hasNext.test(index); index = next.applyAsInt(index)) {
+     *         ...
+     *     }
+     * }</pre>
+     *
+     * <p>The resulting sequence may be empty if the {@code hasNext} predicate
+     * does not hold on the seed value.  Otherwise the first element will be the
+     * supplied {@code seed} value, the next element (if present) will be the
+     * result of applying the {@code next} function to the {@code seed} value,
+     * and so on iteratively until the {@code hasNext} predicate indicates that
+     * the stream should terminate.
+     *
+     * <p>The action of applying the {@code hasNext} predicate to an element
+     * <a href="../concurrent/package-summary.html#MemoryVisibility"><i>happens-before</i></a>
+     * the action of applying the {@code next} function to that element.  The
+     * action of applying the {@code next} function for one element
+     * <i>happens-before</i> the action of applying the {@code hasNext}
+     * predicate for subsequent elements.  For any given element an action may
+     * be performed in whatever thread the library chooses.
+     *
+     * @param seed the initial element
+     * @param hasNext a predicate to apply to elements to determine when the
+     *                stream must terminate.
+     * @param next a function to be applied to the previous element to produce
+     *             a new element
+     * @return a new sequential {@code IntStream}
+     * @since 9
+     */
+    public static IntStream iterate(int seed, IntPredicate hasNext, IntUnaryOperator next) {
+        Objects.requireNonNull(next);
+        Objects.requireNonNull(hasNext);
+        Spliterator.OfInt spliterator = new Spliterators.AbstractIntSpliterator(Long.MAX_VALUE,
+               Spliterator.ORDERED | Spliterator.IMMUTABLE | Spliterator.NONNULL) {
+            int prev;
+            boolean started, finished;
+
+            @Override
+            public boolean tryAdvance(IntConsumer action) {
+                Objects.requireNonNull(action);
+                if (finished)
+                    return false;
+                int t;
+                if (started)
+                    t = next.applyAsInt(prev);
+                else {
+                    t = seed;
+                    started = true;
+                }
+                if (!hasNext.test(t)) {
+                    finished = true;
+                    return false;
+                }
+                action.accept(prev = t);
                 return true;
             }
 
             @Override
-            public int nextInt() {
-                int v = t;
-                t = f.applyAsInt(t);
-                return v;
+            public void forEachRemaining(IntConsumer action) {
+                Objects.requireNonNull(action);
+                if (finished)
+                    return;
+                finished = true;
+                int t = started ? next.applyAsInt(prev) : seed;
+                while (hasNext.test(t)) {
+                    action.accept(t);
+                    t = next.applyAsInt(t);
+                }
             }
         };
-        return StreamSupport.intStream(Spliterators.spliteratorUnknownSize(
-                iterator,
-                Spliterator.ORDERED | Spliterator.IMMUTABLE | Spliterator.NONNULL), false);
+        return StreamSupport.intStream(spliterator, false);
     }
 
     /**

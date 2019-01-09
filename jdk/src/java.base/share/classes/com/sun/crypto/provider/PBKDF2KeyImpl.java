@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -107,7 +107,12 @@ final class PBKDF2KeyImpl implements javax.crypto.interfaces.PBEKey {
             throw new InvalidKeySpecException("Key length is negative");
         }
         try {
-            this.prf = Mac.getInstance(prfAlgo, SunJCE.getInstance());
+            this.prf = Mac.getInstance(prfAlgo);
+            // SunPKCS11 requires a non-empty PBE password
+            if (passwdBytes.length == 0 &&
+                this.prf.getProvider().getName().startsWith("SunPKCS11")) {
+                this.prf = Mac.getInstance(prfAlgo, SunJCE.getInstance());
+            }
         } catch (NoSuchAlgorithmException nsae) {
             // not gonna happen; re-throw just in case
             InvalidKeySpecException ike = new InvalidKeySpecException();
@@ -262,6 +267,7 @@ final class PBKDF2KeyImpl implements javax.crypto.interfaces.PBEKey {
      * Ensures that the password bytes of this key are
      * erased when there are no more references to it.
      */
+    @SuppressWarnings("deprecation")
     protected void finalize() throws Throwable {
         try {
             if (this.passwd != null) {

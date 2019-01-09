@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,8 @@
  * these rules are embodied in the regression tests below, and duplicated
  * in the jdk regression tests.
  */
+
+#include <assert.h>
 
 #ifndef IDE_STANDALONE
 #include "java.h"
@@ -155,6 +157,7 @@ static char* next_arg(char* cmdline, char* arg, jboolean* wildcard) {
                 }
             }
             dest += copyCh(ch, dest);
+            slashes = 0;
             break;
 
         default:
@@ -197,20 +200,72 @@ void JLI_CmdToArgs(char* cmdline) {
     int nargs = 0;
     StdArg* argv = NULL;
     jboolean wildcard = JNI_FALSE;
-    char* src = cmdline;
+    char* src = cmdline, *arg = NULL;
+    JLI_List argsInFile;
+    size_t i, cnt;
+
+    JLI_List envArgs = JLI_List_new(1);
+    if (JLI_AddArgsFromEnvVar(envArgs, JDK_JAVA_OPTIONS)) {
+        // JLI_SetTraceLauncher is not called yet
+        // Show _JAVA_OPTIONS content along with JDK_JAVA_OPTIONS to aid diagnosis
+        if (getenv(JLDEBUG_ENV_ENTRY)) {
+            char *tmp = getenv("_JAVA_OPTIONS");
+            if (NULL != tmp) {
+                JLI_ReportMessage(ARG_INFO_ENVVAR, "_JAVA_OPTIONS", tmp);
+            }
+        }
+    }
+    cnt = envArgs->size + 1;
+    argv = JLI_MemAlloc(cnt * sizeof(StdArg));
 
     // allocate arg buffer with sufficient space to receive the largest arg
-    char* arg = JLI_StringDup(cmdline);
+    arg = JLI_StringDup(cmdline);
 
-    do {
-        src = next_arg(src, arg, &wildcard);
-        // resize to accommodate another Arg
-        argv = (StdArg*) JLI_MemRealloc(argv, (nargs+1) * sizeof(StdArg));
-        argv[nargs].arg = JLI_StringDup(arg);
-        argv[nargs].has_wildcard = wildcard;
-        *arg = '\0';
+    src = next_arg(src, arg, &wildcard);
+    // first argument is the app name, do not preprocess and make sure remains first
+    argv[0].arg = JLI_StringDup(arg);
+    argv[0].has_wildcard = wildcard;
+    nargs++;
+
+    for (i = 1; i < cnt; i++) {
+        argv[i].arg = envArgs->elements[i - 1];
+        // wildcard is not supported in argfile
+        argv[i].has_wildcard = JNI_FALSE;
         nargs++;
-    } while (src != NULL);
+    }
+    JLI_MemFree(envArgs->elements);
+    JLI_MemFree(envArgs);
+
+    assert ((size_t) nargs == cnt);
+    *arg = '\0';
+
+    // iterate through rest of command line
+    while (src != NULL) {
+        src = next_arg(src, arg, &wildcard);
+        argsInFile = JLI_PreprocessArg(arg);
+        if (argsInFile != NULL) {
+            // resize to accommodate another Arg
+            cnt = argsInFile->size;
+            argv = (StdArg*) JLI_MemRealloc(argv, (nargs + cnt) * sizeof(StdArg));
+            for (i = 0; i < cnt; i++) {
+                argv[nargs].arg = argsInFile->elements[i];
+                // wildcard is not supported in argfile
+                argv[nargs].has_wildcard = JNI_FALSE;
+                nargs++;
+            }
+            // Shallow free, we reuse the string to avoid copy
+            JLI_MemFree(argsInFile->elements);
+            JLI_MemFree(argsInFile);
+        } else {
+            // resize to accommodate another Arg
+            argv = (StdArg*) JLI_MemRealloc(argv, (nargs+1) * sizeof(StdArg));
+            argv[nargs].arg = JLI_StringDup(arg);
+            argv[nargs].has_wildcard = wildcard;
+            *arg = '\0';
+            nargs++;
+        }
+        *arg = '\0';
+    }
 
     JLI_MemFree(arg);
 

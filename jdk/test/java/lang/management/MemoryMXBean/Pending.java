@@ -24,8 +24,6 @@
 /*
  * @test
  * @bug     4530538
- * @modules java.base/sun.misc
- *          java.management
  * @summary Basic unit test of
  *          RuntimeMXBean.getObjectPendingFinalizationCount()
  *          1. GC and runFinalization() to get the current pending number
@@ -34,14 +32,17 @@
  *          4. GC and runFinalization() and the finalizable objects should
  *             be garbage collected.
  * @author  Alexei Guibadoulline and Mandy Chung
+ *
+ * @modules java.base/jdk.internal.misc
+ *          java.management
  */
 
 import java.lang.management.*;
 
 public class Pending {
-    final static int NO_REF_COUNT = 600;
-    final static int REF_COUNT = 500;
-    final static int TOTAL_FINALIZABLE = (NO_REF_COUNT + REF_COUNT);
+    static final int NO_REF_COUNT = 600;
+    static final int REF_COUNT = 500;
+    static final int TOTAL_FINALIZABLE = (NO_REF_COUNT + REF_COUNT);
     private static int finalized = 0;
     private static MemoryMXBean mbean
         = ManagementFactory.getMemoryMXBean();
@@ -50,10 +51,10 @@ public class Pending {
     private static void printFinalizerInstanceCount() {
         if (!trace) return;
 
-        int count = sun.misc.VM.getFinalRefCount();
+        int count = jdk.internal.misc.VM.getFinalRefCount();
         System.out.println(INDENT + "Finalizable object Count = " + count);
 
-        count = sun.misc.VM.getPeakFinalRefCount();
+        count = jdk.internal.misc.VM.getPeakFinalRefCount();
         System.out.println(INDENT + "Peak Finalizable object Count = " + count);
     }
 

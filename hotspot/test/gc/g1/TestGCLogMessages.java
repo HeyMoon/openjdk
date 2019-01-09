@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,24 +23,42 @@
 
 /*
  * @test TestGCLogMessages
- * @bug 8035406 8027295 8035398 8019342 8027959 8048179 8027962
- * @summary Ensure that the PrintGCDetails output for a minor GC with G1
+ * @bug 8035406 8027295 8035398 8019342 8027959 8048179 8027962 8069330 8076463 8150630 8160055
+ * @summary Ensure the output for a minor GC with G1
  * includes the expected necessary messages.
  * @key gc
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @requires vm.gc.G1
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
+ * @build sun.hotspot.WhiteBox
+ * @run main ClassFileInstaller sun.hotspot.WhiteBox
+ * @run main TestGCLogMessages
  */
 
-import jdk.test.lib.ProcessTools;
-import jdk.test.lib.OutputAnalyzer;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
 
 public class TestGCLogMessages {
 
     private enum Level {
-        OFF, FINER, FINEST;
-        public boolean lessOrEqualTo(Level other) {
+        OFF(""),
+        INFO("info"),
+        DEBUG("debug"),
+        TRACE("trace");
+
+        private String logName;
+
+        Level(String logName) {
+            this.logName = logName;
+        }
+
+        public boolean lessThan(Level other) {
             return this.compareTo(other) < 0;
+        }
+
+        public String toString() {
+            return logName;
         }
     }
 
@@ -55,42 +73,56 @@ public class TestGCLogMessages {
     };
 
     private LogMessageWithLevel allLogMessages[] = new LogMessageWithLevel[] {
+        new LogMessageWithLevel("Pre Evacuate Collection Set", Level.INFO),
+        new LogMessageWithLevel("Evacuate Collection Set", Level.INFO),
+        new LogMessageWithLevel("Post Evacuate Collection Set", Level.INFO),
+        new LogMessageWithLevel("Other", Level.INFO),
+
+        // Update RS
+        new LogMessageWithLevel("Scan HCC", Level.TRACE),
         // Ext Root Scan
-        new LogMessageWithLevel("Thread Roots (ms)", Level.FINEST),
-        new LogMessageWithLevel("StringTable Roots (ms)", Level.FINEST),
-        new LogMessageWithLevel("Universe Roots (ms)", Level.FINEST),
-        new LogMessageWithLevel("JNI Handles Roots (ms)", Level.FINEST),
-        new LogMessageWithLevel("ObjectSynchronizer Roots (ms)", Level.FINEST),
-        new LogMessageWithLevel("FlatProfiler Roots", Level.FINEST),
-        new LogMessageWithLevel("Management Roots", Level.FINEST),
-        new LogMessageWithLevel("SystemDictionary Roots", Level.FINEST),
-        new LogMessageWithLevel("CLDG Roots", Level.FINEST),
-        new LogMessageWithLevel("JVMTI Roots", Level.FINEST),
-        new LogMessageWithLevel("SATB Filtering", Level.FINEST),
-        new LogMessageWithLevel("CM RefProcessor Roots", Level.FINEST),
-        new LogMessageWithLevel("Wait For Strong CLD", Level.FINEST),
-        new LogMessageWithLevel("Weak CLD Roots", Level.FINEST),
+        new LogMessageWithLevel("Thread Roots", Level.TRACE),
+        new LogMessageWithLevel("StringTable Roots", Level.TRACE),
+        new LogMessageWithLevel("Universe Roots", Level.TRACE),
+        new LogMessageWithLevel("JNI Handles Roots", Level.TRACE),
+        new LogMessageWithLevel("ObjectSynchronizer Roots", Level.TRACE),
+        new LogMessageWithLevel("FlatProfiler Roots", Level.TRACE),
+        new LogMessageWithLevel("Management Roots", Level.TRACE),
+        new LogMessageWithLevel("SystemDictionary Roots", Level.TRACE),
+        new LogMessageWithLevel("CLDG Roots", Level.TRACE),
+        new LogMessageWithLevel("JVMTI Roots", Level.TRACE),
+        new LogMessageWithLevel("SATB Filtering", Level.TRACE),
+        new LogMessageWithLevel("CM RefProcessor Roots", Level.TRACE),
+        new LogMessageWithLevel("Wait For Strong CLD", Level.TRACE),
+        new LogMessageWithLevel("Weak CLD Roots", Level.TRACE),
         // Redirty Cards
-        new LogMessageWithLevel("Redirty Cards", Level.FINER),
-        new LogMessageWithLevel("Parallel Redirty", Level.FINEST),
-        new LogMessageWithLevel("Redirtied Cards", Level.FINEST),
+        new LogMessageWithLevel("Redirty Cards", Level.DEBUG),
+        new LogMessageWithLevel("Parallel Redirty", Level.TRACE),
+        new LogMessageWithLevel("Redirtied Cards", Level.TRACE),
         // Misc Top-level
-        new LogMessageWithLevel("Code Root Purge", Level.FINER),
-        new LogMessageWithLevel("String Dedup Fixup", Level.FINER),
+        new LogMessageWithLevel("Code Roots Purge", Level.DEBUG),
+        new LogMessageWithLevel("String Dedup Fixup", Level.DEBUG),
+        new LogMessageWithLevel("Expand Heap After Collection", Level.DEBUG),
         // Free CSet
-        new LogMessageWithLevel("Young Free CSet", Level.FINEST),
-        new LogMessageWithLevel("Non-Young Free CSet", Level.FINEST),
+        new LogMessageWithLevel("Free Collection Set", Level.DEBUG),
+        new LogMessageWithLevel("Free Collection Set Serial", Level.TRACE),
+        new LogMessageWithLevel("Young Free Collection Set", Level.TRACE),
+        new LogMessageWithLevel("Non-Young Free Collection Set", Level.TRACE),
         // Humongous Eager Reclaim
-        new LogMessageWithLevel("Humongous Reclaim", Level.FINER),
-        new LogMessageWithLevel("Humongous Register", Level.FINER),
+        new LogMessageWithLevel("Humongous Reclaim", Level.DEBUG),
+        new LogMessageWithLevel("Humongous Register", Level.DEBUG),
+        // Preserve CM Referents
+        new LogMessageWithLevel("Preserve CM Refs", Level.DEBUG),
+        // Merge PSS
+        new LogMessageWithLevel("Merge Per-Thread State", Level.DEBUG),
     };
 
     void checkMessagesAtLevel(OutputAnalyzer output, LogMessageWithLevel messages[], Level level) throws Exception {
         for (LogMessageWithLevel l : messages) {
-            if (level.lessOrEqualTo(l.level)) {
+            if (level.lessThan(l.level)) {
                 output.shouldNotContain(l.message);
             } else {
-                output.shouldContain(l.message);
+                output.shouldMatch("\\[" + l.level + ".*" + l.message);
             }
         }
     }
@@ -98,6 +130,7 @@ public class TestGCLogMessages {
     public static void main(String[] args) throws Exception {
         new TestGCLogMessages().testNormalLogs();
         new TestGCLogMessages().testWithToSpaceExhaustionLogs();
+        new TestGCLogMessages().testWithInitialMark();
     }
 
     private void testNormalLogs() throws Exception {
@@ -113,53 +146,63 @@ public class TestGCLogMessages {
         pb = ProcessTools.createJavaProcessBuilder("-XX:+UseG1GC",
                                                    "-XX:+UseStringDeduplication",
                                                    "-Xmx10M",
-                                                   "-XX:+PrintGCDetails",
+                                                   "-Xlog:gc+phases=debug",
                                                    GCTest.class.getName());
 
         output = new OutputAnalyzer(pb.start());
-        checkMessagesAtLevel(output, allLogMessages, Level.FINER);
+        checkMessagesAtLevel(output, allLogMessages, Level.DEBUG);
 
         pb = ProcessTools.createJavaProcessBuilder("-XX:+UseG1GC",
                                                    "-XX:+UseStringDeduplication",
                                                    "-Xmx10M",
-                                                   "-XX:+PrintGCDetails",
-                                                   "-XX:+UnlockExperimentalVMOptions",
-                                                   "-XX:G1LogLevel=finest",
+                                                   "-Xlog:gc+phases=trace",
                                                    GCTest.class.getName());
 
         output = new OutputAnalyzer(pb.start());
-        checkMessagesAtLevel(output, allLogMessages, Level.FINEST);
+        checkMessagesAtLevel(output, allLogMessages, Level.TRACE);
         output.shouldHaveExitValue(0);
     }
 
     LogMessageWithLevel exhFailureMessages[] = new LogMessageWithLevel[] {
-        new LogMessageWithLevel("Evacuation Failure", Level.FINER),
-        new LogMessageWithLevel("Recalculate Used", Level.FINEST),
-        new LogMessageWithLevel("Remove Self Forwards", Level.FINEST),
-        new LogMessageWithLevel("Restore RemSet", Level.FINEST),
+        new LogMessageWithLevel("Evacuation Failure", Level.DEBUG),
+        new LogMessageWithLevel("Recalculate Used", Level.TRACE),
+        new LogMessageWithLevel("Remove Self Forwards", Level.TRACE),
+        new LogMessageWithLevel("Restore RemSet", Level.TRACE),
     };
 
     private void testWithToSpaceExhaustionLogs() throws Exception {
         ProcessBuilder pb = ProcessTools.createJavaProcessBuilder("-XX:+UseG1GC",
                                                                   "-Xmx32M",
                                                                   "-Xmn16M",
-                                                                  "-XX:+PrintGCDetails",
+                                                                  "-Xlog:gc+phases=debug",
                                                                   GCTestWithToSpaceExhaustion.class.getName());
 
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
-        checkMessagesAtLevel(output, exhFailureMessages, Level.FINER);
+        checkMessagesAtLevel(output, exhFailureMessages, Level.DEBUG);
         output.shouldHaveExitValue(0);
 
         pb = ProcessTools.createJavaProcessBuilder("-XX:+UseG1GC",
                                                    "-Xmx32M",
                                                    "-Xmn16M",
-                                                   "-XX:+PrintGCDetails",
-                                                   "-XX:+UnlockExperimentalVMOptions",
-                                                   "-XX:G1LogLevel=finest",
+                                                   "-Xlog:gc+phases=trace",
                                                    GCTestWithToSpaceExhaustion.class.getName());
 
         output = new OutputAnalyzer(pb.start());
-        checkMessagesAtLevel(output, exhFailureMessages, Level.FINEST);
+        checkMessagesAtLevel(output, exhFailureMessages, Level.TRACE);
+        output.shouldHaveExitValue(0);
+    }
+
+    private void testWithInitialMark() throws Exception {
+        ProcessBuilder pb = ProcessTools.createJavaProcessBuilder("-XX:+UseG1GC",
+                                                                  "-Xmx10M",
+                                                                  "-Xbootclasspath/a:.",
+                                                                  "-Xlog:gc*=debug",
+                                                                  "-XX:+UnlockDiagnosticVMOptions",
+                                                                  "-XX:+WhiteBoxAPI",
+                                                                  GCTestWithInitialMark.class.getName());
+
+        OutputAnalyzer output = new OutputAnalyzer(pb.start());
+        output.shouldContain("Clear Claimed Marks");
         output.shouldHaveExitValue(0);
     }
 
@@ -189,5 +232,13 @@ public class TestGCLogMessages {
             System.out.println("Done");
         }
     }
+
+    static class GCTestWithInitialMark {
+        public static void main(String [] args) {
+            sun.hotspot.WhiteBox WB = sun.hotspot.WhiteBox.getWhiteBox();
+            WB.g1StartConcMarkCycle();
+        }
+    }
+
 }
 

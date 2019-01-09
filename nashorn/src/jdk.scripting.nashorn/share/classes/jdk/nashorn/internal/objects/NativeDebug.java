@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 package jdk.nashorn.internal.objects;
 
 import static jdk.nashorn.internal.runtime.ScriptRuntime.UNDEFINED;
+
 import java.io.PrintWriter;
 import java.util.LinkedList;
 import java.util.Objects;
@@ -223,6 +224,18 @@ public final class NativeDebug extends ScriptObject {
     }
 
     /**
+     * Returns {@code true} if passed object is a function that is fully debuggable (has all vars in scope).
+     *
+     * @param self self reference
+     * @param obj  object
+     * @return true {@code obj} is a debuggable function
+     */
+    @Function(attributes = Attribute.NOT_ENUMERABLE, where = Where.CONSTRUCTOR)
+    public static Object isDebuggableFunction(final Object self, final Object obj) {
+        return  (obj instanceof ScriptFunction && ((ScriptFunction) obj).hasAllVarsInScope());
+    }
+
+    /**
      * Returns the property listener count for a script object
      *
      * @param self self reference
@@ -246,7 +259,7 @@ public final class NativeDebug extends ScriptObject {
         final PrintWriter out = Context.getCurrentErr();
 
         out.println("ScriptObject count " + ScriptObject.getCount());
-        out.println("Scope count " + Scope.getCount());
+        out.println("Scope count " + Scope.getScopeCount());
         out.println("ScriptObject listeners added " + PropertyListeners.getListenersAdded());
         out.println("ScriptObject listeners removed " + PropertyListeners.getListenersRemoved());
         out.println("ScriptFunction constructor calls " + ScriptFunction.getConstructorCount());
@@ -366,7 +379,7 @@ public final class NativeDebug extends ScriptObject {
     @Function(attributes = Attribute.NOT_ENUMERABLE, where = Where.CONSTRUCTOR)
     public static Object getRuntimeEvents(final Object self) {
         final LinkedList<RuntimeEvent<?>> q = getEventQueue(self);
-        return q.toArray(new RuntimeEvent<?>[q.size()]);
+        return q.toArray(new RuntimeEvent<?>[0]);
     }
 
     /**

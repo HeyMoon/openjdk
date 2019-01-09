@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,11 +21,12 @@
  * questions.
  */
 
-/**
+/*
  * @test
  * @bug 6239117 6445367
  * @summary test that CardTerminals.waitForCard() works
  * @author Andreas Sterbenz
+ * @modules java.smartcardio/javax.smartcardio
  * @run main/manual TestMultiplePresent
  */
 
@@ -41,7 +42,12 @@ public class TestMultiplePresent {
 
     public static void main(String[] args) throws Exception {
         Utils.setLibrary(args);
-        TerminalFactory factory = TerminalFactory.getInstance("PC/SC", null);
+        TerminalFactory factory = Utils.getTerminalFactory(null);
+        if (factory == null) {
+            System.out.println("Skipping the test: " +
+                    "no card terminals available");
+            return;
+        }
         System.out.println(factory);
 
         CardTerminals terminals = factory.terminals();
@@ -50,7 +56,9 @@ public class TestMultiplePresent {
         boolean multipleReaders = true;
         if (list.size() < 2) {
             if (list.isEmpty()) {
-                throw new Exception("no terminals");
+                System.out.println("Skipping the test: " +
+                        "no card terminals available");
+                return;
             }
             System.out.println("Only one reader present, using simplified test");
             multipleReaders = false;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 
 #include "gc/cms/concurrentMarkSweepGeneration.hpp"
 #include "gc/shared/gcCause.hpp"
+#include "gc/shared/gcId.hpp"
 #include "gc/shared/vmGCOperations.hpp"
 #include "runtime/vm_operations.hpp"
 
@@ -53,24 +54,22 @@ class VM_CMS_Operation: public VM_Operation {
  protected:
   CMSCollector*  _collector;                 // associated collector
   bool           _prologue_succeeded;     // whether doit_prologue succeeded
+  uint           _gc_id;
 
   bool lost_race() const;
-
-  // java.lang.ref.Reference support
-  void acquire_pending_list_lock();
-  void release_and_notify_pending_list_lock();
 
  public:
   VM_CMS_Operation(CMSCollector* collector):
     _collector(collector),
-    _prologue_succeeded(false) {}
+    _prologue_succeeded(false),
+    _gc_id(GCId::current()) {}
   ~VM_CMS_Operation() {}
 
   // The legal collector state for executing this CMS op.
   virtual const CMSCollector::CollectorState legal_state() const = 0;
 
   // Whether the pending list lock needs to be held
-  virtual const bool needs_pll() const = 0;
+  virtual const bool needs_pending_list_lock() const = 0;
 
   // Execute operations in the context of the caller,
   // prior to execution of the vm operation itself.
@@ -102,7 +101,7 @@ class VM_CMS_Initial_Mark: public VM_CMS_Operation {
     return CMSCollector::InitialMarking;
   }
 
-  virtual const bool needs_pll() const {
+  virtual const bool needs_pending_list_lock() const {
     return false;
   }
 };
@@ -119,7 +118,7 @@ class VM_CMS_Final_Remark: public VM_CMS_Operation {
     return CMSCollector::FinalMarking;
   }
 
-  virtual const bool needs_pll() const {
+  virtual const bool needs_pending_list_lock() const {
     return true;
   }
 };
@@ -135,7 +134,6 @@ class VM_GenCollectFullConcurrent: public VM_GC_Operation {
     : VM_GC_Operation(gc_count_before, gc_cause, full_gc_count_before, true /* full */)
   {
     assert(FullGCCount_lock != NULL, "Error");
-    assert(UseAsyncConcMarkSweepGC, "Else will hang caller");
   }
   ~VM_GenCollectFullConcurrent() {}
   virtual VMOp_Type type() const { return VMOp_GenCollectFullConcurrent; }

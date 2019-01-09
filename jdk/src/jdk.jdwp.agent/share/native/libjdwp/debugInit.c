@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -194,7 +194,7 @@ compatible_versions(jint major_runtime,     jint minor_runtime,
  *   Returning JNI_ERR will cause the java_g VM to core dump, be careful.
  */
 JNIEXPORT jint JNICALL
-Agent_OnLoad(JavaVM *vm, char *options, void *reserved)
+DEF_Agent_OnLoad(JavaVM *vm, char *options, void *reserved)
 {
     jvmtiError error;
     jvmtiCapabilities needed_capabilities;
@@ -380,7 +380,7 @@ Agent_OnLoad(JavaVM *vm, char *options, void *reserved)
 }
 
 JNIEXPORT void JNICALL
-Agent_OnUnload(JavaVM *vm)
+DEF_Agent_OnUnload(JavaVM *vm)
 {
 
     gdata->isLoaded = JNI_FALSE;
@@ -870,8 +870,9 @@ printUsage(void)
  "onuncaught=y|n                   debug on any uncaught?            n\n"
  "timeout=<timeout value>          for listen/attach in milliseconds n\n"
  "mutf8=y|n                        output modified utf-8             n\n"
- "quiet=y|n                        control over terminal messages    n\n"
- "\n"
+ "quiet=y|n                        control over terminal messages    n\n"));
+
+    TTY_MESSAGE((
  "Obsolete Options\n"
  "----------------\n"
  "strict=y|n\n"
@@ -914,7 +915,9 @@ printUsage(void)
  "                               locations     = 0x020\n"
  "                               callbacks     = 0x040\n"
  "                               errors        = 0x080\n"
- "                               everything    = 0xfff\n"
+ "                               everything    = 0xfff"));
+
+    TTY_MESSAGE((
  "debugflags=flags             debug flags (bitmask)           none\n"
  "                               USE_ITERATE_THROUGH_HEAP 0x01\n"
  "\n"

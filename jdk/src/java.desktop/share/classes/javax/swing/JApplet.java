@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,6 +33,8 @@ import java.awt.Container;
 import java.awt.Graphics;
 import java.awt.HeadlessException;
 import java.awt.LayoutManager;
+import java.beans.BeanProperty;
+import java.beans.JavaBean;
 
 import javax.accessibility.Accessible;
 import javax.accessibility.AccessibleContext;
@@ -87,14 +89,18 @@ import javax.accessibility.AccessibleContext;
  * Please see {@link java.beans.XMLEncoder}.
  *
  * @see javax.swing.RootPaneContainer
- * @beaninfo
- *      attribute: isContainer true
- *      attribute: containerDelegate getContentPane
- *    description: Swing's Applet subclass.
  *
  * @author Arnaud Weber
  * @since 1.2
+ *
+ * @deprecated  The Applet API is deprecated. See the
+ * <a href="../../java/applet/package-summary.html"> java.applet package documentation</a>
+ * for further information.
  */
+
+@Deprecated(since = "9")
+@JavaBean(defaultProperty = "JMenuBar", description = "Swing's Applet subclass.")
+@SwingContainer(delegate = "getContentPane")
 @SuppressWarnings("serial") // Same-version serialization only
 public class JApplet extends Applet implements Accessible,
                                                RootPaneContainer,
@@ -203,12 +209,9 @@ public class JApplet extends Applet implements Accessible,
      * @see #getTransferHandler
      * @see java.awt.Component#setDropTarget
      * @since 1.6
-     *
-     * @beaninfo
-     *        bound: true
-     *       hidden: true
-     *  description: Mechanism for transfer of data into the component
      */
+    @BeanProperty(hidden = true, description
+            = "Mechanism for transfer of data into the component")
     public void setTransferHandler(TransferHandler newHandler) {
         TransferHandler oldHandler = transferHandler;
         transferHandler = newHandler;
@@ -242,11 +245,9 @@ public class JApplet extends Applet implements Accessible,
     * @param menuBar the menubar being placed in the applet
     *
     * @see #getJMenuBar
-    *
-    * @beaninfo
-    *      hidden: true
-    * description: The menubar for accessing pulldown menus from this applet.
     */
+    @BeanProperty(bound = false, hidden = true, description
+            = "The menubar for accessing pulldown menus from this applet.")
     public void setJMenuBar(final JMenuBar menuBar) {
         getRootPane().setJMenuBar(menuBar);
     }
@@ -291,10 +292,9 @@ public class JApplet extends Applet implements Accessible,
      * @see #setLayout
      * @see #isRootPaneCheckingEnabled
      * @see javax.swing.RootPaneContainer
-     * @beaninfo
-     *      hidden: true
-     * description: Whether the add and setLayout methods are forwarded
      */
+    @BeanProperty(hidden = true, description
+            = "Whether the add and setLayout methods are forwarded")
     protected void setRootPaneCheckingEnabled(boolean enabled) {
         rootPaneCheckingEnabled = enabled;
     }
@@ -377,6 +377,8 @@ public class JApplet extends Applet implements Accessible,
      * @see #setRootPane
      * @see RootPaneContainer#getRootPane
      */
+    @BeanProperty(bound = false, hidden = true, description
+            = "the RootPane object for this applet.")
     public JRootPane getRootPane() {
         return rootPane;
     }
@@ -387,10 +389,6 @@ public class JApplet extends Applet implements Accessible,
      * @param root the rootPane object for this applet
      *
      * @see #getRootPane
-     *
-     * @beaninfo
-     *   hidden: true
-     * description: the RootPane object for this applet.
      */
     protected void setRootPane(JRootPane root) {
         if(rootPane != null) {
@@ -428,12 +426,9 @@ public class JApplet extends Applet implements Accessible,
      *            exception) if the content pane parameter is null
      * @see #getContentPane
      * @see RootPaneContainer#setContentPane
-     *
-     * @beaninfo
-     *     hidden: true
-     *     description: The client area of the applet where child
-     *                  components are normally inserted.
      */
+   @BeanProperty(bound = false, hidden = true, description
+           = "The client area of the applet where child components are normally inserted.")
     public void setContentPane(Container contentPane) {
         getRootPane().setContentPane(contentPane);
     }
@@ -456,11 +451,9 @@ public class JApplet extends Applet implements Accessible,
      *
      * @see #getLayeredPane
      * @see RootPaneContainer#setLayeredPane
-     *
-     * @beaninfo
-     *     hidden: true
-     *     description: The pane which holds the various applet layers.
      */
+    @BeanProperty(bound = false, hidden = true, description
+            = "The pane which holds the various applet layers.")
     public void setLayeredPane(JLayeredPane layeredPane) {
         getRootPane().setLayeredPane(layeredPane);
     }
@@ -482,11 +475,9 @@ public class JApplet extends Applet implements Accessible,
      *
      * @see #getGlassPane
      * @see RootPaneContainer#setGlassPane
-     *
-     * @beaninfo
-     *     hidden: true
-     *     description: A transparent pane used for menu rendering.
      */
+    @BeanProperty(bound = false, hidden = true, description
+            = "A transparent pane used for menu rendering.")
     public void setGlassPane(Component glassPane) {
         getRootPane().setGlassPane(glassPane);
     }
@@ -496,6 +487,7 @@ public class JApplet extends Applet implements Accessible,
      *
      * @since 1.6
      */
+    @BeanProperty(bound = false)
     public Graphics getGraphics() {
         JComponent.getGraphicsInvoked(this);
         return super.getGraphics();

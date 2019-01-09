@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,16 +24,17 @@
 
 #include "precompiled.hpp"
 #include "classfile/altHashing.hpp"
-#include "classfile/compactHashtable.hpp"
-#include "classfile/javaClasses.hpp"
+#include "classfile/compactHashtable.inline.hpp"
+#include "classfile/javaClasses.inline.hpp"
 #include "classfile/stringTable.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "gc/shared/collectedHeap.inline.hpp"
 #include "gc/shared/gcLocker.inline.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/filemap.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "utilities/hashtable.inline.hpp"
 #include "utilities/macros.hpp"
@@ -42,8 +43,6 @@
 #include "gc/g1/g1SATBCardTableModRefBS.hpp"
 #include "gc/g1/g1StringDedup.hpp"
 #endif
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 // the number of buckets a thread claims
 const int ClaimChunkSize = 32;
@@ -97,15 +96,35 @@ CompactHashtable<oop, char> StringTable::_shared_table;
 
 // Pick hashing algorithm
 unsigned int StringTable::hash_string(const jchar* s, int len) {
-  return use_alternate_hashcode() ? AltHashing::murmur3_32(seed(), s, len) :
+  return use_alternate_hashcode() ? alt_hash_string(s, len) :
                                     java_lang_String::hash_code(s, len);
 }
 
-oop StringTable::lookup_shared(jchar* name, int len) {
-  // java_lang_String::hash_code() was used to compute hash values in the shared table. Don't
-  // use the hash value from StringTable::hash_string() as it might use alternate hashcode.
-  return _shared_table.lookup((const char*)name,
-                              java_lang_String::hash_code(name, len), len);
+unsigned int StringTable::alt_hash_string(const jchar* s, int len) {
+  return AltHashing::murmur3_32(seed(), s, len);
+}
+
+unsigned int StringTable::hash_string(oop string) {
+  EXCEPTION_MARK;
+  if (string == NULL) {
+    return hash_string((jchar*)NULL, 0);
+  }
+  ResourceMark rm(THREAD);
+  // All String oops are hashed as unicode
+  int length;
+  jchar* chars = java_lang_String::as_unicode_string(string, length, THREAD);
+  if (chars != NULL) {
+    return hash_string(chars, length);
+  } else {
+    vm_exit_out_of_memory(length, OOM_MALLOC_ERROR, "unable to create Unicode string for verification");
+    return 0;
+  }
+}
+
+oop StringTable::lookup_shared(jchar* name, int len, unsigned int hash) {
+  assert(hash == java_lang_String::hash_code(name, len),
+         "hash must be computed using java_lang_String::hash_code");
+  return _shared_table.lookup((const char*)name, hash, len);
 }
 
 oop StringTable::lookup_in_main_table(int index, jchar* name,
@@ -133,14 +152,14 @@ oop StringTable::basic_add(int index_arg, Handle string, jchar* name,
   assert(java_lang_String::equals(string(), name, len),
          "string must be properly initialized");
   // Cannot hit a safepoint in this function because the "this" pointer can move.
-  No_Safepoint_Verifier nsv;
+  NoSafepointVerifier nsv;
 
   // Check if the symbol table has been rehashed, if so, need to recalculate
   // the hash value and index before second lookup.
   unsigned int hashValue;
   int index;
   if (use_alternate_hashcode()) {
-    hashValue = hash_string(name, len);
+    hashValue = alt_hash_string(name, len);
     index = hash_to_index(hashValue);
   } else {
     hashValue = hashValue_arg;
@@ -183,12 +202,15 @@ static void ensure_string_alive(oop string) {
 }
 
 oop StringTable::lookup(jchar* name, int len) {
-  oop string = lookup_shared(name, len);
+  // shared table always uses java_lang_String::hash_code
+  unsigned int hash = java_lang_String::hash_code(name, len);
+  oop string = lookup_shared(name, len, hash);
   if (string != NULL) {
     return string;
   }
-
-  unsigned int hash = hash_string(name, len);
+  if (use_alternate_hashcode()) {
+    hash = alt_hash_string(name, len);
+  }
   int index = the_table()->hash_to_index(hash);
   string = the_table()->lookup_in_main_table(index, name, len, hash);
 
@@ -197,21 +219,25 @@ oop StringTable::lookup(jchar* name, int len) {
   return string;
 }
 
-
 oop StringTable::intern(Handle string_or_null, jchar* name,
                         int len, TRAPS) {
-  oop found_string = lookup_shared(name, len);
+  // shared table always uses java_lang_String::hash_code
+  unsigned int hashValue = java_lang_String::hash_code(name, len);
+  oop found_string = lookup_shared(name, len, hashValue);
   if (found_string != NULL) {
     return found_string;
   }
-
-  unsigned int hashValue = hash_string(name, len);
+  if (use_alternate_hashcode()) {
+    hashValue = alt_hash_string(name, len);
+  }
   int index = the_table()->hash_to_index(hashValue);
   found_string = the_table()->lookup_in_main_table(index, name, len, hashValue);
 
   // Found
   if (found_string != NULL) {
-    ensure_string_alive(found_string);
+    if (found_string != string_or_null()) {
+      ensure_string_alive(found_string);
+    }
     return found_string;
   }
 
@@ -246,7 +272,9 @@ oop StringTable::intern(Handle string_or_null, jchar* name,
                                   hashValue, CHECK_NULL);
   }
 
-  ensure_string_alive(added_or_found);
+  if (added_or_found != string()) {
+    ensure_string_alive(added_or_found);
+  }
 
   return added_or_found;
 }
@@ -286,7 +314,11 @@ oop StringTable::intern(const char* utf8_string, TRAPS) {
 }
 
 void StringTable::unlink_or_oops_do(BoolObjectClosure* is_alive, OopClosure* f, int* processed, int* removed) {
-  buckets_unlink_or_oops_do(is_alive, f, 0, the_table()->table_size(), processed, removed);
+  BucketUnlinkContext context;
+  buckets_unlink_or_oops_do(is_alive, f, 0, the_table()->table_size(), &context);
+  _the_table->bulk_free_entries(&context);
+  *processed = context._num_processed;
+  *removed = context._num_removed;
 }
 
 void StringTable::possibly_parallel_unlink_or_oops_do(BoolObjectClosure* is_alive, OopClosure* f, int* processed, int* removed) {
@@ -295,6 +327,7 @@ void StringTable::possibly_parallel_unlink_or_oops_do(BoolObjectClosure* is_aliv
   assert(SafepointSynchronize::is_at_safepoint(), "must be at safepoint");
   const int limit = the_table()->table_size();
 
+  BucketUnlinkContext context;
   for (;;) {
     // Grab next set of buckets to scan
     int start_idx = Atomic::add(ClaimChunkSize, &_parallel_claimed_idx) - ClaimChunkSize;
@@ -304,20 +337,23 @@ void StringTable::possibly_parallel_unlink_or_oops_do(BoolObjectClosure* is_aliv
     }
 
     int end_idx = MIN2(limit, start_idx + ClaimChunkSize);
-    buckets_unlink_or_oops_do(is_alive, f, start_idx, end_idx, processed, removed);
+    buckets_unlink_or_oops_do(is_alive, f, start_idx, end_idx, &context);
   }
+  _the_table->bulk_free_entries(&context);
+  *processed = context._num_processed;
+  *removed = context._num_removed;
 }
 
 void StringTable::buckets_oops_do(OopClosure* f, int start_idx, int end_idx) {
   const int limit = the_table()->table_size();
 
   assert(0 <= start_idx && start_idx <= limit,
-         err_msg("start_idx (%d) is out of bounds", start_idx));
+         "start_idx (%d) is out of bounds", start_idx);
   assert(0 <= end_idx && end_idx <= limit,
-         err_msg("end_idx (%d) is out of bounds", end_idx));
+         "end_idx (%d) is out of bounds", end_idx);
   assert(start_idx <= end_idx,
-         err_msg("Index ordering: start_idx=%d, end_idx=%d",
-                 start_idx, end_idx));
+         "Index ordering: start_idx=%d, end_idx=%d",
+         start_idx, end_idx);
 
   for (int i = start_idx; i < end_idx; i += 1) {
     HashtableEntry<oop, mtSymbol>* entry = the_table()->bucket(i);
@@ -331,16 +367,16 @@ void StringTable::buckets_oops_do(OopClosure* f, int start_idx, int end_idx) {
   }
 }
 
-void StringTable::buckets_unlink_or_oops_do(BoolObjectClosure* is_alive, OopClosure* f, int start_idx, int end_idx, int* processed, int* removed) {
+void StringTable::buckets_unlink_or_oops_do(BoolObjectClosure* is_alive, OopClosure* f, int start_idx, int end_idx, BucketUnlinkContext* context) {
   const int limit = the_table()->table_size();
 
   assert(0 <= start_idx && start_idx <= limit,
-         err_msg("start_idx (%d) is out of bounds", start_idx));
+         "start_idx (%d) is out of bounds", start_idx);
   assert(0 <= end_idx && end_idx <= limit,
-         err_msg("end_idx (%d) is out of bounds", end_idx));
+         "end_idx (%d) is out of bounds", end_idx);
   assert(start_idx <= end_idx,
-         err_msg("Index ordering: start_idx=%d, end_idx=%d",
-                 start_idx, end_idx));
+         "Index ordering: start_idx=%d, end_idx=%d",
+         start_idx, end_idx);
 
   for (int i = start_idx; i < end_idx; ++i) {
     HashtableEntry<oop, mtSymbol>** p = the_table()->bucket_addr(i);
@@ -355,10 +391,9 @@ void StringTable::buckets_unlink_or_oops_do(BoolObjectClosure* is_alive, OopClos
         p = entry->next_addr();
       } else {
         *p = entry->next();
-        the_table()->free_entry(entry);
-        (*removed)++;
+        context->free_entry(entry);
       }
-      (*processed)++;
+      context->_num_processed++;
       entry = *p;
     }
   }
@@ -392,7 +427,7 @@ void StringTable::verify() {
     for ( ; p != NULL; p = p->next()) {
       oop s = p->literal();
       guarantee(s != NULL, "interned string is NULL");
-      unsigned int h = java_lang_String::hash_string(s);
+      unsigned int h = hash_string(s);
       guarantee(p->hash() == h, "broken hash in string table entry");
       guarantee(the_table()->hash_to_index(h) == i,
                 "wrong index in string table");
@@ -411,17 +446,23 @@ void StringTable::dump(outputStream* st, bool verbose) {
       for ( ; p != NULL; p = p->next()) {
         oop s = p->literal();
         typeArrayOop value  = java_lang_String::value(s);
-        int          offset = java_lang_String::offset(s);
         int          length = java_lang_String::length(s);
+        bool      is_latin1 = java_lang_String::is_latin1(s);
 
         if (length <= 0) {
           st->print("%d: ", length);
         } else {
           ResourceMark rm(THREAD);
-          jchar* chars = (jchar*)value->char_at_addr(offset);
-          int utf8_length = UNICODE::utf8_length(chars, length);
-          char* utf8_string = NEW_RESOURCE_ARRAY(char, utf8_length + 1);
-          UNICODE::convert_to_utf8(chars, length, utf8_string);
+          int utf8_length = length;
+          char* utf8_string;
+
+          if (!is_latin1) {
+            jchar* chars = value->char_at_addr(0);
+            utf8_string = UNICODE::as_utf8(chars, utf8_length);
+          } else {
+            jbyte* bytes = value->byte_at_addr(0);
+            utf8_string = UNICODE::as_utf8(bytes, utf8_length);
+          }
 
           st->print("%d: ", utf8_length);
           HashtableTextDump::put_utf8(st, utf8_string, utf8_length);
@@ -445,7 +486,7 @@ StringTable::VerifyRetTypes StringTable::compare_entries(
   if (str1 == str2) {
     tty->print_cr("ERROR: identical oop values (0x" PTR_FORMAT ") "
                   "in entry @ bucket[%d][%d] and entry @ bucket[%d][%d]",
-                  (void *)str1, bkt1, e_cnt1, bkt2, e_cnt2);
+                  p2i(str1), bkt1, e_cnt1, bkt2, e_cnt2);
     return _verify_fail_continue;
   }
 
@@ -484,7 +525,7 @@ StringTable::VerifyRetTypes StringTable::verify_entry(int bkt, int e_cnt,
     return _verify_fail_done;
   }
 
-  unsigned int h = java_lang_String::hash_string(str);
+  unsigned int h = hash_string(str);
   if (e_ptr->hash() != h) {
     if (mesg_mode == _verify_with_mesgs) {
       tty->print_cr("ERROR: broken hash value in entry @ bucket[%d][%d], "
@@ -635,7 +676,7 @@ int StringtableDCmd::num_arguments() {
 
 // Sharing
 bool StringTable::copy_shared_string(GrowableArray<MemRegion> *string_space,
-                                     CompactHashtableWriter* ch_table) {
+                                     CompactStringTableWriter* writer) {
 #if INCLUDE_CDS && INCLUDE_ALL_GCS && defined(_LP64) && !defined(_WINDOWS)
   assert(UseG1GC, "Only support G1 GC");
   assert(UseCompressedOops && UseCompressedClassPointers,
@@ -686,7 +727,7 @@ bool StringTable::copy_shared_string(GrowableArray<MemRegion> *string_space,
       }
 
       // add to the compact table
-      ch_table->add(hash, new_s);
+      writer->add(hash, new_s);
     }
   }
 
@@ -696,40 +737,46 @@ bool StringTable::copy_shared_string(GrowableArray<MemRegion> *string_space,
   return true;
 }
 
-bool StringTable::copy_compact_table(char** top, char *end, GrowableArray<MemRegion> *string_space,
-                                     size_t* space_size) {
+void StringTable::serialize(SerializeClosure* soc, GrowableArray<MemRegion> *string_space,
+                            size_t* space_size) {
 #if INCLUDE_CDS && defined(_LP64) && !defined(_WINDOWS)
-  if (!(UseG1GC && UseCompressedOops && UseCompressedClassPointers)) {
-    if (PrintSharedSpaces) {
-      tty->print_cr("Shared strings are excluded from the archive as UseG1GC, "
-                    "UseCompressedOops and UseCompressedClassPointers are required.");
+  _shared_table.reset();
+  if (soc->writing()) {
+    if (!(UseG1GC && UseCompressedOops && UseCompressedClassPointers)) {
+      if (PrintSharedSpaces) {
+        tty->print_cr(
+          "Shared strings are excluded from the archive as UseG1GC, "
+          "UseCompressedOops and UseCompressedClassPointers are required."
+          "Current settings: UseG1GC=%s, UseCompressedOops=%s, UseCompressedClassPointers=%s.",
+          BOOL_TO_STR(UseG1GC), BOOL_TO_STR(UseCompressedOops),
+          BOOL_TO_STR(UseCompressedClassPointers));
+      }
+    } else {
+      int num_buckets = the_table()->number_of_entries() /
+                             SharedSymbolTableBucketSize;
+      // calculation of num_buckets can result in zero buckets, we need at least one
+      CompactStringTableWriter writer(num_buckets > 1 ? num_buckets : 1,
+                                      &MetaspaceShared::stats()->string);
+
+      // Copy the interned strings into the "string space" within the java heap
+      if (copy_shared_string(string_space, &writer)) {
+        for (int i = 0; i < string_space->length(); i++) {
+          *space_size += string_space->at(i).byte_size();
+        }
+        writer.dump(&_shared_table);
+      }
     }
-    return true;
   }
 
-  CompactHashtableWriter ch_table(CompactHashtable<oop, char>::_string_table,
-                                  the_table()->number_of_entries(),
-                                  &MetaspaceShared::stats()->string);
+  _shared_table.set_type(CompactHashtable<oop, char>::_string_table);
+  _shared_table.serialize(soc);
 
-  // Copy the interned strings into the "string space" within the java heap
-  if (!copy_shared_string(string_space, &ch_table)) {
-    return false;
+  if (soc->writing()) {
+    _shared_table.reset(); // Sanity. Make sure we don't use the shared table at dump time
+  } else if (_ignore_shared_strings) {
+    _shared_table.reset();
   }
-
-  for (int i = 0; i < string_space->length(); i++) {
-    *space_size += string_space->at(i).byte_size();
-  }
-
-  // Now dump the compact table
-  if (*top + ch_table.get_required_bytes() > end) {
-    // not enough space left
-    return false;
-  }
-  ch_table.dump(top, end);
-  *top = (char*)align_pointer_up(*top, sizeof(void*));
-
 #endif
-  return true;
 }
 
 void StringTable::shared_oops_do(OopClosure* f) {
@@ -738,25 +785,3 @@ void StringTable::shared_oops_do(OopClosure* f) {
 #endif
 }
 
-const char* StringTable::init_shared_table(FileMapInfo *mapinfo, char *buffer) {
-#if INCLUDE_CDS && defined(_LP64) && !defined(_WINDOWS)
-  if (mapinfo->space_capacity(MetaspaceShared::first_string) == 0) {
-    // no shared string data
-    return buffer;
-  }
-
-  // initialize the shared table
-  juint *p = (juint*)buffer;
-  const char* end = _shared_table.init(
-          CompactHashtable<oop, char>::_string_table, (char*)p);
-  const char* aligned_end = (const char*)align_pointer_up(end, sizeof(void*));
-
-  if (_ignore_shared_strings) {
-    _shared_table.reset();
-  }
-
-  return aligned_end;
-#endif
-
-  return buffer;
-}

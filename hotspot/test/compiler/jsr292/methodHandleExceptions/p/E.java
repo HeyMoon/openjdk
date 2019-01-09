@@ -19,7 +19,6 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
 package p;
@@ -31,7 +30,7 @@ package p;
  * of course is NOT usually the case in this test).
  *
  */
-public abstract class E implements p.I {
+public abstract class E implements I {
        public int m() {
            return 2;
        }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2014, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -28,9 +28,11 @@
 
 #include "runtime/globals_extension.hpp"
 #include "runtime/vm_version.hpp"
+#include "utilities/sizes.hpp"
 
 class VM_Version : public Abstract_VM_Version {
-public:
+  friend class JVMCIVMStructs;
+
 protected:
   static int _cpu;
   static int _model;
@@ -38,10 +40,12 @@ protected:
   static int _variant;
   static int _revision;
   static int _stepping;
-  static int _cpuFeatures;     // features returned by the "cpuid" instruction
-                               // 0 if this instruction is not available
-  static const char* _features_str;
 
+  struct PsrInfo {
+    uint32_t dczid_el0;
+    uint32_t ctr_el0;
+  };
+  static PsrInfo _psr_info;
   static void get_processor_features();
 
 public:
@@ -52,7 +56,7 @@ public:
   static void assert_is_initialized() {
   }
 
-  enum {
+  enum Family {
     CPU_ARM       = 'A',
     CPU_BROADCOM  = 'B',
     CPU_CAVIUM    = 'C',
@@ -64,9 +68,9 @@ public:
     CPU_QUALCOM   = 'Q',
     CPU_MARVELL   = 'V',
     CPU_INTEL     = 'i',
-  } cpuFamily;
+  };
 
-  enum {
+  enum Feature_Flag {
     CPU_FP           = (1<<0),
     CPU_ASIMD        = (1<<1),
     CPU_EVTSTRM      = (1<<2),
@@ -75,18 +79,35 @@ public:
     CPU_SHA1         = (1<<5),
     CPU_SHA2         = (1<<6),
     CPU_CRC32        = (1<<7),
+    CPU_LSE          = (1<<8),
+    CPU_STXR_PREFETCH= (1 << 29),
     CPU_A53MAC       = (1 << 30),
     CPU_DMB_ATOMICS  = (1 << 31),
-  } cpuFeatureFlags;
+  };
 
-  static const char* cpu_features()           { return _features_str; }
   static int cpu_family()                     { return _cpu; }
   static int cpu_model()                      { return _model; }
   static int cpu_model2()                     { return _model2; }
   static int cpu_variant()                    { return _variant; }
   static int cpu_revision()                   { return _revision; }
-  static int cpu_cpuFeatures()                { return _cpuFeatures; }
-
+  static ByteSize dczid_el0_offset() { return byte_offset_of(PsrInfo, dczid_el0); }
+  static ByteSize ctr_el0_offset()   { return byte_offset_of(PsrInfo, ctr_el0); }
+  static bool is_zva_enabled() {
+    // Check the DZP bit (bit 4) of dczid_el0 is zero
+    // and block size (bit 0~3) is not zero.
+    return ((_psr_info.dczid_el0 & 0x10) == 0 &&
+            (_psr_info.dczid_el0 & 0xf) != 0);
+  }
+  static int zva_length() {
+    assert(is_zva_enabled(), "ZVA not available");
+    return 4 << (_psr_info.dczid_el0 & 0xf);
+  }
+  static int icache_line_size() {
+    return (1 << (_psr_info.ctr_el0 & 0x0f)) * 4;
+  }
+  static int dcache_line_size() {
+    return (1 << ((_psr_info.ctr_el0 >> 16) & 0x0f)) * 4;
+  }
 };
 
 #endif // CPU_AARCH64_VM_VM_VERSION_AARCH64_HPP

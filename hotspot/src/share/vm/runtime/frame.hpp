@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,8 +29,8 @@
 #include "runtime/basicLock.hpp"
 #include "runtime/monitorChunk.hpp"
 #include "runtime/registerMap.hpp"
-#include "utilities/top.hpp"
-#ifdef TARGET_ARCH_zero
+#include "utilities/macros.hpp"
+#ifdef ZERO
 # include "stack_zero.hpp"
 #endif
 
@@ -165,6 +165,8 @@ class frame VALUE_OBJ_CLASS_SPEC {
   frame sender_for_entry_frame(RegisterMap* map) const;
   frame sender_for_interpreter_frame(RegisterMap* map) const;
   frame sender_for_native_frame(RegisterMap* map) const;
+
+  bool is_entry_frame_valid(JavaThread* thread) const;
 
   // All frames:
 
@@ -321,6 +323,9 @@ class frame VALUE_OBJ_CLASS_SPEC {
   void interpreter_frame_set_method(Method* method);
   Method** interpreter_frame_method_addr() const;
   ConstantPoolCache** interpreter_frame_cache_addr() const;
+  oop* interpreter_frame_mirror_addr() const;
+
+  void interpreter_frame_set_mirror(oop mirror);
 
  public:
   // Entry frames
@@ -387,57 +392,24 @@ class frame VALUE_OBJ_CLASS_SPEC {
 
   // Oops-do's
   void oops_compiled_arguments_do(Symbol* signature, bool has_receiver, bool has_appendix, const RegisterMap* reg_map, OopClosure* f);
-  void oops_interpreted_do(OopClosure* f, CLDClosure* cld_f, const RegisterMap* map, bool query_oop_map_cache = true);
+  void oops_interpreted_do(OopClosure* f, const RegisterMap* map, bool query_oop_map_cache = true);
 
  private:
   void oops_interpreted_arguments_do(Symbol* signature, bool has_receiver, OopClosure* f);
 
   // Iteration of oops
-  void oops_do_internal(OopClosure* f, CLDClosure* cld_f, CodeBlobClosure* cf, RegisterMap* map, bool use_interpreter_oop_map_cache);
+  void oops_do_internal(OopClosure* f, CodeBlobClosure* cf, RegisterMap* map, bool use_interpreter_oop_map_cache);
   void oops_entry_do(OopClosure* f, const RegisterMap* map);
   void oops_code_blob_do(OopClosure* f, CodeBlobClosure* cf, const RegisterMap* map);
   int adjust_offset(Method* method, int index); // helper for above fn
  public:
   // Memory management
-  void oops_do(OopClosure* f, CLDClosure* cld_f, CodeBlobClosure* cf, RegisterMap* map) { oops_do_internal(f, cld_f, cf, map, true); }
+  void oops_do(OopClosure* f, CodeBlobClosure* cf, RegisterMap* map) { oops_do_internal(f, cf, map, true); }
   void nmethods_do(CodeBlobClosure* cf);
 
   // RedefineClasses support for finding live interpreted methods on the stack
   void metadata_do(void f(Metadata*));
 
-# ifdef ENABLE_ZAP_DEAD_LOCALS
- private:
-  class CheckValueClosure: public OopClosure {
-   public:
-    void do_oop(oop* p);
-    void do_oop(narrowOop* p) { ShouldNotReachHere(); }
-  };
-  static CheckValueClosure _check_value;
-
-  class CheckOopClosure: public OopClosure {
-   public:
-    void do_oop(oop* p);
-    void do_oop(narrowOop* p) { ShouldNotReachHere(); }
-  };
-  static CheckOopClosure _check_oop;
-
-  static void check_derived_oop(oop* base, oop* derived);
-
-  class ZapDeadClosure: public OopClosure {
-   public:
-    void do_oop(oop* p);
-    void do_oop(narrowOop* p) { ShouldNotReachHere(); }
-  };
-  static ZapDeadClosure _zap_dead;
-
- public:
-  // Zapping
-  void zap_dead_locals            (JavaThread* thread, const RegisterMap* map);
-  void zap_dead_interpreted_locals(JavaThread* thread, const RegisterMap* map);
-  void zap_dead_compiled_locals   (JavaThread* thread, const RegisterMap* map);
-  void zap_dead_entry_locals      (JavaThread* thread, const RegisterMap* map);
-  void zap_dead_deoptimized_locals(JavaThread* thread, const RegisterMap* map);
-# endif
   // Verification
   void verify(const RegisterMap* map);
   static bool verify_return_pc(address x);
@@ -446,24 +418,7 @@ class frame VALUE_OBJ_CLASS_SPEC {
 
   int pd_oop_map_offset_adjustment() const;
 
-#ifdef TARGET_ARCH_x86
-# include "frame_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "frame_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "frame_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "frame_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "frame_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "frame_aarch64.hpp"
-#endif
+#include CPU_HEADER(frame)
 
 };
 
@@ -475,6 +430,14 @@ class FrameValue VALUE_OBJ_CLASS_SPEC {
   char* description;
   int owner;
   int priority;
+
+  FrameValue() {
+    location = NULL;
+    description = NULL;
+    owner = -1;
+    priority = 0;
+  }
+
 };
 
 

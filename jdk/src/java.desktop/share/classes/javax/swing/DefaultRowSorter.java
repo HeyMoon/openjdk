@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
-import javax.swing.SortOrder;
 
 /**
  * An implementation of <code>RowSorter</code> that provides sorting and
@@ -81,11 +80,6 @@ import javax.swing.SortOrder;
  * javax.swing.table.TableRowSorter TableRowSorter}).  The default
  * sort order is unsorted (the same as the model), and columns are
  * sortable by default.
- * <p>
- * If the underlying model structure changes (the
- * <code>modelStructureChanged</code> method is invoked) the following
- * are reset to their default values: <code>Comparator</code>s by column,
- * current sort order and whether a column is sortable.
  * <p>
  * <code>DefaultRowSorter</code> is an abstract class.  Concrete
  * subclasses must provide access to the underlying data by invoking
@@ -188,6 +182,8 @@ public abstract class DefaultRowSorter<M, I> extends RowSorter<M> {
      */
     private int modelRowCount;
 
+    // Whether to print warning about JDK-8160087
+    private static boolean warning8160087 = true;
 
     /**
      * Creates an empty <code>DefaultRowSorter</code>.
@@ -495,10 +491,7 @@ public abstract class DefaultRowSorter<M, I> extends RowSorter<M> {
      */
     public int convertRowIndexToView(int index) {
         if (modelToView == null) {
-            if (index < 0 || index >= getModelWrapper().getRowCount()) {
-                throw new IndexOutOfBoundsException("Invalid index");
-            }
-            return index;
+            return convertUnsortedUnfiltered(index);
         }
         return modelToView[index];
     }
@@ -510,13 +503,29 @@ public abstract class DefaultRowSorter<M, I> extends RowSorter<M> {
      */
     public int convertRowIndexToModel(int index) {
         if (viewToModel == null) {
-            if (index < 0 || index >= getModelWrapper().getRowCount()) {
-                throw new IndexOutOfBoundsException("Invalid index");
-            }
-            return index;
+            return convertUnsortedUnfiltered(index);
         }
         return viewToModel[index].modelIndex;
     }
+
+    private int convertUnsortedUnfiltered(int index) {
+        if (index < 0 || index >= modelRowCount) {
+            if(index >= modelRowCount &&
+                                      index < getModelWrapper().getRowCount()) {
+                // 8160087
+                if(warning8160087) {
+                    warning8160087 = false;
+                    System.err.println("WARNING: row index is bigger than " +
+                            "sorter's row count. Most likely this is a wrong " +
+                            "sorter usage.");
+                }
+            } else {
+                throw new IndexOutOfBoundsException("Invalid index");
+            }
+        }
+        return index;
+    }
+
 
     private boolean isUnsorted() {
         List<? extends SortKey> keys = getSortKeys();
@@ -814,7 +823,7 @@ public abstract class DefaultRowSorter<M, I> extends RowSorter<M> {
             // When filtering this may differ from getModelWrapper().getRowCount()
             return viewToModel.length;
         }
-        return getModelWrapper().getRowCount();
+        return Math.max(getModelWrapper().getRowCount(), modelRowCount);
     }
 
     /**

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,7 @@
 
 #include "precompiled.hpp"
 #include "classfile/altHashing.hpp"
-#include "classfile/javaClasses.hpp"
+#include "classfile/javaClasses.inline.hpp"
 #include "classfile/stringTable.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/filemap.hpp"
@@ -173,6 +173,35 @@ template <MEMFLAGS F> void BasicHashtable<F>::reverse() {
   }
 }
 
+template <MEMFLAGS F> void BasicHashtable<F>::BucketUnlinkContext::free_entry(BasicHashtableEntry<F>* entry) {
+  entry->set_next(_removed_head);
+  _removed_head = entry;
+  if (_removed_tail == NULL) {
+    _removed_tail = entry;
+  }
+  _num_removed++;
+}
+
+template <MEMFLAGS F> void BasicHashtable<F>::bulk_free_entries(BucketUnlinkContext* context) {
+  if (context->_num_removed == 0) {
+    assert(context->_removed_head == NULL && context->_removed_tail == NULL,
+           "Zero entries in the unlink context, but elements linked from " PTR_FORMAT " to " PTR_FORMAT,
+           p2i(context->_removed_head), p2i(context->_removed_tail));
+    return;
+  }
+
+  // MT-safe add of the list of BasicHashTableEntrys from the context to the free list.
+  BasicHashtableEntry<F>* current = _free_list;
+  while (true) {
+    context->_removed_tail->set_next(current);
+    BasicHashtableEntry<F>* old = (BasicHashtableEntry<F>*)Atomic::cmpxchg_ptr(context->_removed_head, &_free_list, current);
+    if (old == current) {
+      break;
+    }
+    current = old;
+  }
+  Atomic::add(-context->_num_removed, &_number_of_entries);
+}
 
 // Copy the table to the shared space.
 
@@ -342,13 +371,18 @@ template <MEMFLAGS F> void BasicHashtable<F>::verify() {
 
 #ifdef ASSERT
 
-template <MEMFLAGS F> void BasicHashtable<F>::verify_lookup_length(double load) {
-  if ((double)_lookup_length / (double)_lookup_count > load * 2.0) {
-    warning("Performance bug: SystemDictionary lookup_count=%d "
+template <MEMFLAGS F> bool BasicHashtable<F>::verify_lookup_length(double load, const char *table_name) {
+  if ((!_lookup_warning) && (_lookup_count != 0)
+      && ((double)_lookup_length / (double)_lookup_count > load * 2.0)) {
+    warning("Performance bug: %s lookup_count=%d "
             "lookup_length=%d average=%lf load=%f",
-            _lookup_count, _lookup_length,
-            (double) _lookup_length / _lookup_count, load);
+            table_name, _lookup_count, _lookup_length,
+            (double)_lookup_length / _lookup_count, load);
+    _lookup_warning = true;
+
+    return false;
   }
+  return true;
 }
 
 #endif
@@ -365,6 +399,7 @@ template class RehashableHashtable<Symbol*, mtSymbol>;
 template class RehashableHashtable<oopDesc*, mtSymbol>;
 template class Hashtable<Symbol*, mtSymbol>;
 template class Hashtable<Klass*, mtClass>;
+template class Hashtable<InstanceKlass*, mtClass>;
 template class Hashtable<oop, mtClass>;
 #if defined(SOLARIS) || defined(CHECK_UNHANDLED_OOPS)
 template class Hashtable<oop, mtSymbol>;
@@ -378,7 +413,14 @@ template class HashtableEntry<oop, mtSymbol>;
 template class BasicHashtableEntry<mtSymbol>;
 template class BasicHashtableEntry<mtCode>;
 template class BasicHashtable<mtClass>;
+template class BasicHashtable<mtClassShared>;
 template class BasicHashtable<mtSymbol>;
 template class BasicHashtable<mtCode>;
 template class BasicHashtable<mtInternal>;
+template class BasicHashtable<mtModule>;
+#if INCLUDE_TRACE
+template class Hashtable<Symbol*, mtTracing>;
+template class HashtableEntry<Symbol*, mtTracing>;
+template class BasicHashtable<mtTracing>;
+#endif
 template class BasicHashtable<mtCompiler>;

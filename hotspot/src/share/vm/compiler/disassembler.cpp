@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,35 +28,17 @@
 #include "compiler/disassembler.hpp"
 #include "gc/shared/cardTableModRefBS.hpp"
 #include "gc/shared/collectedHeap.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/fprofiler.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/os.hpp"
 #include "runtime/stubCodeGenerator.hpp"
 #include "runtime/stubRoutines.hpp"
-#ifdef TARGET_ARCH_x86
-# include "depChecker_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "depChecker_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "depChecker_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "depChecker_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "depChecker_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "depChecker_aarch64.hpp"
-#endif
+#include CPU_HEADER(depChecker)
 #ifdef SHARK
 #include "shark/sharkEntry.hpp"
 #endif
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 void*       Disassembler::_library               = NULL;
 bool        Disassembler::_tried_to_load_library = false;
@@ -88,14 +70,21 @@ bool Disassembler::load_library() {
   os::jvm_path(buf, sizeof(buf));
   int jvm_offset = -1;
   int lib_offset = -1;
+#ifdef STATIC_BUILD
+  char* p = strrchr(buf, '/');
+  *p = '\0';
+  strcat(p, "/lib/");
+  lib_offset = jvm_offset = strlen(buf);
+#else
   {
     // Match "jvm[^/]*" in jvm_path.
     const char* base = buf;
     const char* p = strrchr(buf, *os::file_separator());
     if (p != NULL) lib_offset = p - base + 1;
     p = strstr(p ? p : base, "jvm");
-    if (p != NULL)  jvm_offset = p - base;
+    if (p != NULL) jvm_offset = p - base;
   }
+#endif
   // Find the disassembler shared library.
   // Search for several paths derived from libjvm, in this order:
   // 1. <home>/jre/lib/<arch>/<vm>/libhsdis-<arch>.so  (for compatibility)
@@ -107,13 +96,13 @@ bool Disassembler::load_library() {
     strcpy(&buf[jvm_offset], hsdis_library_name);
     strcat(&buf[jvm_offset], os::dll_file_extension());
     _library = os::dll_load(buf, ebuf, sizeof ebuf);
-    if (_library == NULL) {
+    if (_library == NULL && lib_offset >= 0) {
       // 2. <home>/jre/lib/<arch>/<vm>/hsdis-<arch>.so
       strcpy(&buf[lib_offset], hsdis_library_name);
       strcat(&buf[lib_offset], os::dll_file_extension());
       _library = os::dll_load(buf, ebuf, sizeof ebuf);
     }
-    if (_library == NULL) {
+    if (_library == NULL && lib_offset > 0) {
       // 3. <home>/jre/lib/<arch>/hsdis-<arch>.so
       buf[lib_offset - 1] = '\0';
       const char* p = strrchr(buf, *os::file_separator());
@@ -330,16 +319,19 @@ void decode_env::print_address(address adr) {
   if (Universe::is_fully_initialized()) {
     if (StubRoutines::contains(adr)) {
       StubCodeDesc* desc = StubCodeDesc::desc_for(adr);
-      if (desc == NULL)
+      if (desc == NULL) {
         desc = StubCodeDesc::desc_for(adr + frame::pc_return_offset);
+      }
       if (desc != NULL) {
         st->print("Stub::%s", desc->name());
-        if (desc->begin() != adr)
-          st->print("%+d 0x%p",adr - desc->begin(), adr);
-        else if (WizardMode) st->print(" " PTR_FORMAT, adr);
+        if (desc->begin() != adr) {
+          st->print(INTX_FORMAT_W(+) " " PTR_FORMAT, adr - desc->begin(), p2i(adr));
+        } else if (WizardMode) {
+          st->print(" " PTR_FORMAT, p2i(adr));
+        }
         return;
       }
-      st->print("Stub::<unknown> " PTR_FORMAT, adr);
+      st->print("Stub::<unknown> " PTR_FORMAT, p2i(adr));
       return;
     }
 
@@ -347,13 +339,29 @@ void decode_env::print_address(address adr) {
     if (bs->is_a(BarrierSet::CardTableModRef) &&
         adr == (address)(barrier_set_cast<CardTableModRefBS>(bs)->byte_map_base)) {
       st->print("word_map_base");
-      if (WizardMode) st->print(" " INTPTR_FORMAT, (intptr_t)adr);
+      if (WizardMode) st->print(" " INTPTR_FORMAT, p2i(adr));
+      return;
+    }
+  }
+
+  if (_nm == NULL) {
+    // Don't do this for native methods, as the function name will be printed in
+    // nmethod::reloc_string_for().
+    ResourceMark rm;
+    const int buflen = 1024;
+    char* buf = NEW_RESOURCE_ARRAY(char, buflen);
+    int offset;
+    if (os::dll_address_to_function_name(adr, buf, buflen, &offset)) {
+      st->print(PTR_FORMAT " = %s",  p2i(adr), buf);
+      if (offset != 0) {
+        st->print("+%d", offset);
+      }
       return;
     }
   }
 
   // Fall through to a simple (hexadecimal) numeral.
-  st->print(PTR_FORMAT, adr);
+  st->print(PTR_FORMAT, p2i(adr));
 }
 
 void decode_env::print_insn_labels() {
@@ -365,7 +373,7 @@ void decode_env::print_insn_labels() {
   }
   _strings.print_block_comment(st, (intptr_t)(p - _start));
   if (_print_pc) {
-    st->print("  " PTR_FORMAT ": ", p);
+    st->print("  " PTR_FORMAT ": ", p2i(p));
   }
 }
 
@@ -386,13 +394,16 @@ void decode_env::print_insn_bytes(address pc, address pc_limit) {
     address pc1 = pc + perline;
     if (pc1 > pc_limit)  pc1 = pc_limit;
     for (; pc < pc1; pc += incr) {
-      if (pc == pc0)
+      if (pc == pc0) {
         st->print(BYTES_COMMENT);
-      else if ((uint)(pc - pc0) % sizeof(int) == 0)
+      } else if ((uint)(pc - pc0) % sizeof(int) == 0) {
         st->print(" ");         // put out a space on word boundaries
-      if (incr == sizeof(int))
-            st->print("%08lx", *(int*)pc);
-      else  st->print("%02x",   (*pc)&0xFF);
+      }
+      if (incr == sizeof(int)) {
+        st->print("%08x", *(int*)pc);
+      } else {
+        st->print("%02x", (*pc)&0xFF);
+      }
     }
     st->cr();
   }
@@ -486,23 +497,45 @@ address decode_env::decode_instructions(address start, address end) {
 
 
 void Disassembler::decode(CodeBlob* cb, outputStream* st) {
+  ttyLocker ttyl;
   if (!load_library())  return;
+  if (cb->is_nmethod()) {
+    decode((nmethod*)cb, st);
+    return;
+  }
   decode_env env(cb, st);
-  env.output()->print_cr("Decoding CodeBlob " PTR_FORMAT, cb);
+  env.output()->print_cr("----------------------------------------------------------------------");
+  if (cb->is_aot()) {
+    env.output()->print("A ");
+    if (cb->is_compiled()) {
+      CompiledMethod* cm = (CompiledMethod*)cb;
+      env.output()->print("%d ",cm->compile_id());
+      cm->method()->method_holder()->name()->print_symbol_on(env.output());
+      env.output()->print(".");
+      cm->method()->name()->print_symbol_on(env.output());
+      cm->method()->signature()->print_symbol_on(env.output());
+    } else {
+      env.output()->print_cr("%s", cb->name());
+    }
+  } else {
+    env.output()->print_cr("%s", cb->name());
+  }
+  env.output()->print_cr(" at  [" PTR_FORMAT ", " PTR_FORMAT "]  " JLONG_FORMAT " bytes", p2i(cb->code_begin()), p2i(cb->code_end()), ((jlong)(cb->code_end() - cb->code_begin())) * sizeof(unsigned char*));
   env.decode_instructions(cb->code_begin(), cb->code_end());
 }
 
 void Disassembler::decode(address start, address end, outputStream* st, CodeStrings c) {
+  ttyLocker ttyl;
   if (!load_library())  return;
   decode_env env(CodeCache::find_blob_unsafe(start), st, c);
   env.decode_instructions(start, end);
 }
 
 void Disassembler::decode(nmethod* nm, outputStream* st) {
+  ttyLocker ttyl;
   if (!load_library())  return;
   decode_env env(nm, st);
-  env.output()->print_cr("Decoding compiled method " PTR_FORMAT ":", nm);
-  env.output()->print_cr("Code:");
+  env.output()->print_cr("----------------------------------------------------------------------");
 
 #ifdef SHARK
   SharkEntry* entry = (SharkEntry *) nm->code_begin();
@@ -512,6 +545,21 @@ void Disassembler::decode(nmethod* nm, outputStream* st) {
   unsigned char* p   = nm->code_begin();
   unsigned char* end = nm->code_end();
 #endif // SHARK
+
+  nm->method()->method_holder()->name()->print_symbol_on(env.output());
+  env.output()->print(".");
+  nm->method()->name()->print_symbol_on(env.output());
+  nm->method()->signature()->print_symbol_on(env.output());
+#if INCLUDE_JVMCI
+  {
+    char buffer[O_BUFLEN];
+    char* jvmciName = nm->jvmci_installed_code_name(buffer, O_BUFLEN);
+    if (jvmciName != NULL) {
+      env.output()->print(" (%s)", jvmciName);
+    }
+  }
+#endif
+  env.output()->print_cr("  [" PTR_FORMAT ", " PTR_FORMAT "]  " JLONG_FORMAT " bytes", p2i(p), p2i(end), ((jlong)(end - p)));
 
   // If there has been profiling, print the buckets.
   if (FlatProfiler::bucket_start_for(p) != NULL) {
@@ -533,9 +581,9 @@ void Disassembler::decode(nmethod* nm, outputStream* st) {
     int offset = 0;
     for (address p = nm->consts_begin(); p < nm->consts_end(); p += 4, offset += 4) {
       if ((offset % 8) == 0) {
-        env.output()->print_cr("  " PTR_FORMAT " (offset: %4d): " PTR32_FORMAT "   " PTR64_FORMAT, p, offset, *((int32_t*) p), *((int64_t*) p));
+        env.output()->print_cr("  " PTR_FORMAT " (offset: %4d): " PTR32_FORMAT "   " PTR64_FORMAT, p2i(p), offset, *((int32_t*) p), *((int64_t*) p));
       } else {
-        env.output()->print_cr("  " PTR_FORMAT " (offset: %4d): " PTR32_FORMAT,                    p, offset, *((int32_t*) p));
+        env.output()->print_cr("  " PTR_FORMAT " (offset: %4d): " PTR32_FORMAT,                    p2i(p), offset, *((int32_t*) p));
       }
     }
   }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,24 +22,31 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package java.awt;
 
+import java.awt.event.KeyEvent;
+import java.awt.peer.MenuBarPeer;
 import java.io.IOException;
 import java.io.ObjectInputStream;
-import java.util.Vector;
+import java.io.ObjectOutputStream;
 import java.util.Enumeration;
+import java.util.EventListener;
+import java.util.Vector;
+
+import javax.accessibility.Accessible;
+import javax.accessibility.AccessibleContext;
+import javax.accessibility.AccessibleRole;
+
 import sun.awt.AWTAccessor;
-import java.awt.peer.MenuBarPeer;
-import java.awt.event.KeyEvent;
-import javax.accessibility.*;
 
 /**
- * The <code>MenuBar</code> class encapsulates the platform's
+ * The {@code MenuBar} class encapsulates the platform's
  * concept of a menu bar bound to a frame. In order to associate
- * the menu bar with a <code>Frame</code> object, call the
- * frame's <code>setMenuBar</code> method.
+ * the menu bar with a {@code Frame} object, call the
+ * frame's {@code setMenuBar} method.
  * <p>
- * <A NAME="mbexample"></A><!-- target for cross references -->
+ * <a id="mbexample"></a><!-- target for cross references -->
  * This is what a menu bar might look like:
  * <p>
  * <img src="doc-files/MenuBar-1.gif"
@@ -52,8 +59,8 @@ import javax.accessibility.*;
  * (Keyboard shortcuts, which are optional, provide the user with
  * an alternative to the mouse for invoking a menu item and the
  * action that is associated with it.)
- * Each menu item can maintain an instance of <code>MenuShortcut</code>.
- * The <code>MenuBar</code> class defines several methods,
+ * Each menu item can maintain an instance of {@code MenuShortcut}.
+ * The {@code MenuBar} class defines several methods,
  * {@link MenuBar#shortcuts} and
  * {@link MenuBar#getShortcutMenuItem}
  * that retrieve information about the shortcuts a given
@@ -94,7 +101,7 @@ public class MenuBar extends MenuComponent implements MenuContainer, Accessible 
      * @serial
      * @see #countMenus()
      */
-    Vector<Menu> menus = new Vector<>();
+    private final Vector<Menu> menus = new Vector<>();
 
     /**
      * This menu is a special menu dedicated to
@@ -106,7 +113,7 @@ public class MenuBar extends MenuComponent implements MenuContainer, Accessible 
      * @see #getHelpMenu()
      * @see #setHelpMenu(Menu)
      */
-    Menu helpMenu;
+    private volatile Menu helpMenu;
 
     private static final String base = "menubar";
     private static int nameCounter = 0;
@@ -229,9 +236,11 @@ public class MenuBar extends MenuComponent implements MenuContainer, Accessible 
                 if (m.peer == null) {
                     m.addNotify();
                 }
+                menus.addElement(m);
                 peer.addMenu(m);
+            } else {
+                menus.addElement(m);
             }
-            menus.addElement(m);
             return m;
         }
     }
@@ -250,8 +259,8 @@ public class MenuBar extends MenuComponent implements MenuContainer, Accessible 
             if (peer != null) {
                 peer.delMenu(index);
                 m.removeNotify();
-                m.parent = null;
             }
+            m.parent = null;
             if (helpMenu == m) {
                 helpMenu = null;
                 m.isHelpMenu = false;
@@ -287,7 +296,7 @@ public class MenuBar extends MenuComponent implements MenuContainer, Accessible 
      *
      * @return the number of menus on the menu bar.
      * @deprecated As of JDK version 1.1,
-     * replaced by <code>getMenuCount()</code>.
+     * replaced by {@code getMenuCount()}.
      */
     @Deprecated
     public int countMenus() {
@@ -340,9 +349,9 @@ public class MenuBar extends MenuComponent implements MenuContainer, Accessible 
     }
 
     /**
-     * Gets the instance of <code>MenuItem</code> associated
-     * with the specified <code>MenuShortcut</code> object,
-     * or <code>null</code> if none of the menu items being managed
+     * Gets the instance of {@code MenuItem} associated
+     * with the specified {@code MenuShortcut} object,
+     * or {@code null} if none of the menu items being managed
      * by this menu bar is associated with the specified menu
      * shortcut.
      * @param  s the specified menu shortcut.
@@ -368,6 +377,7 @@ public class MenuBar extends MenuComponent implements MenuContainer, Accessible 
      * keydown).  Returns true if there is an associated
      * keyboard event.
      */
+    @SuppressWarnings("deprecation")
     boolean handleShortcut(KeyEvent e) {
         // Is it a key event?
         int id = e.getID();
@@ -418,7 +428,7 @@ public class MenuBar extends MenuComponent implements MenuContainer, Accessible 
     /**
      * Writes default serializable fields to stream.
      *
-     * @param s the <code>ObjectOutputStream</code> to write
+     * @param s the {@code ObjectOutputStream} to write
      * @see AWTEventMulticaster#save(ObjectOutputStream, String, EventListener)
      * @see #readObject(java.io.ObjectInputStream)
      */
@@ -430,13 +440,13 @@ public class MenuBar extends MenuComponent implements MenuContainer, Accessible 
     }
 
     /**
-     * Reads the <code>ObjectInputStream</code>.
+     * Reads the {@code ObjectInputStream}.
      * Unrecognized keys or values will be ignored.
      *
-     * @param s the <code>ObjectInputStream</code> to read
+     * @param s the {@code ObjectInputStream} to read
      * @exception HeadlessException if
-     *   <code>GraphicsEnvironment.isHeadless</code> returns
-     *   <code>true</code>
+     *   {@code GraphicsEnvironment.isHeadless} returns
+     *   {@code true}
      * @see java.awt.GraphicsEnvironment#isHeadless
      * @see #writeObject(java.io.ObjectOutputStream)
      */
@@ -492,7 +502,7 @@ public class MenuBar extends MenuComponent implements MenuContainer, Accessible 
      * subclassed by menu component developers.
      * <p>
      * This class implements accessibility support for the
-     * <code>MenuBar</code> class.  It provides an implementation of the
+     * {@code MenuBar} class.  It provides an implementation of the
      * Java Accessibility API appropriate to menu bar user-interface elements.
      * @since 1.3
      */

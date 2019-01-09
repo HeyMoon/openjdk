@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,22 +24,22 @@
 /*
  * @test
  * @summary Verifies the behaviour of Unsafe.defineClass
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.compiler
  *          java.management
  * @run main DefineClass
  */
 
 import java.security.ProtectionDomain;
-import java.io.InputStream;
-import jdk.test.lib.*;
-import sun.misc.Unsafe;
+
+import jdk.test.lib.compiler.InMemoryJavaCompiler;
+import jdk.internal.misc.Unsafe;
 import static jdk.test.lib.Asserts.*;
 
 public class DefineClass {
     public static void main(String args[]) throws Exception {
-        Unsafe unsafe = Utils.getUnsafe();
+        Unsafe unsafe = Unsafe.getUnsafe();
         TestClassLoader classloader = new TestClassLoader();
         ProtectionDomain pd = new ProtectionDomain(null, null);
 

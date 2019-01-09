@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -49,6 +49,8 @@ import com.sun.tools.javac.processing.AnnotationProcessingError;
 import com.sun.tools.javac.tree.*;
 import com.sun.tools.javac.tree.JCTree.JCClassDecl;
 import com.sun.tools.javac.tree.JCTree.JCCompilationUnit;
+import com.sun.tools.javac.tree.JCTree.JCModuleDecl;
+import com.sun.tools.javac.tree.JCTree.Tag;
 import com.sun.tools.javac.util.*;
 import com.sun.tools.javac.util.DefinedBy.Api;
 import com.sun.tools.javac.util.List;
@@ -75,8 +77,9 @@ public class JavacTaskImpl extends BasicJavacTask {
     private ListBuffer<Env<AttrContext>> genList;
     private final AtomicBoolean used = new AtomicBoolean();
     private Iterable<? extends Processor> processors;
+    private ListBuffer<String> addModules = new ListBuffer<>();
 
-    JavacTaskImpl(Context context) {
+    protected JavacTaskImpl(Context context) {
         super(context, true);
         args = Arguments.instance(context);
         fileManager = context.get(JavaFileManager.class);
@@ -90,13 +93,12 @@ public class JavacTaskImpl extends BasicJavacTask {
     /* Internal version of call exposing Main.Result. */
     public Main.Result doCall() {
         try {
-            return handleExceptions(new Callable<Main.Result>() {
-                @Override
-                public Main.Result call() throws Exception {
-                    prepareCompiler(false);
-                    compiler.compile(args.getFileObjects(), args.getClassNames(), processors);
-                    return (compiler.errorCount() > 0) ? Main.Result.ERROR : Main.Result.OK; // FIXME?
-                }
+            return handleExceptions(() -> {
+                prepareCompiler(false);
+                if (compiler.errorCount() > 0)
+                    return Main.Result.ERROR;
+                compiler.compile(args.getFileObjects(), args.getClassNames(), processors, addModules);
+                return (compiler.errorCount() > 0) ? Main.Result.ERROR : Main.Result.OK; // FIXME?
             }, Main.Result.SYSERR, Main.Result.ABNORMAL);
         } finally {
             try {
@@ -104,6 +106,18 @@ public class JavacTaskImpl extends BasicJavacTask {
             } catch (ClientCodeException e) {
                 throw new RuntimeException(e.getCause());
             }
+        }
+    }
+
+    @Override @DefinedBy(Api.COMPILER)
+    public void addModules(Iterable<String> moduleNames) {
+        Objects.requireNonNull(moduleNames);
+        // not mt-safe
+        if (used.get())
+            throw new IllegalStateException();
+        for (String m : moduleNames) {
+            Objects.requireNonNull(m);
+            addModules.add(m);
         }
     }
 
@@ -184,7 +198,7 @@ public class JavacTaskImpl extends BasicJavacTask {
             compiler.genEndPos = true;
             notYetEntered = new HashMap<>();
             if (forParse) {
-                compiler.initProcessAnnotations(processors);
+                compiler.initProcessAnnotations(processors, args.getFileObjects(), args.getClassNames());
                 for (JavaFileObject file: args.getFileObjects())
                     notYetEntered.put(file, null);
                 genList = new ListBuffer<>();
@@ -219,12 +233,7 @@ public class JavacTaskImpl extends BasicJavacTask {
 
     @Override @DefinedBy(Api.COMPILER_TREE)
     public Iterable<? extends CompilationUnitTree> parse() {
-        return handleExceptions(new Callable<Iterable<? extends CompilationUnitTree>>() {
-            @Override
-            public Iterable<? extends CompilationUnitTree> call() {
-                return parseInternal();
-            }
-        }, List.<CompilationUnitTree>nil(), List.<CompilationUnitTree>nil());
+        return handleExceptions(this::parseInternal, List.nil(), List.nil());
     }
 
     private Iterable<? extends CompilationUnitTree> parseInternal() {
@@ -253,7 +262,7 @@ public class JavacTaskImpl extends BasicJavacTask {
      * @return a list of elements corresponding to the top level
      * classes in the abstract syntax trees
      */
-    public Iterable<? extends TypeElement> enter() {
+    public Iterable<? extends Element> enter() {
         return enter(null);
     }
 
@@ -264,10 +273,12 @@ public class JavacTaskImpl extends BasicJavacTask {
      * @return a list of elements corresponding to the top level
      * classes in the abstract syntax trees
      */
-    public Iterable<? extends TypeElement> enter(Iterable<? extends CompilationUnitTree> trees)
+    public Iterable<? extends Element> enter(Iterable<? extends CompilationUnitTree> trees)
     {
         if (trees == null && notYetEntered != null && notYetEntered.isEmpty())
             return List.nil();
+
+        boolean wasInitialized = compiler != null;
 
         prepareCompiler(true);
 
@@ -305,22 +316,38 @@ public class JavacTaskImpl extends BasicJavacTask {
             }
         }
 
-        if (roots == null)
+        if (roots == null) {
+            if (trees == null && !wasInitialized) {
+                compiler.initModules(List.nil());
+            }
             return List.nil();
+        }
+
+        List<JCCompilationUnit> units = compiler.initModules(roots.toList());
 
         try {
-            List<JCCompilationUnit> units = compiler.enterTrees(roots.toList());
+            units = compiler.enterTrees(units);
 
             if (notYetEntered.isEmpty())
                 compiler.processAnnotations(units);
 
-            ListBuffer<TypeElement> elements = new ListBuffer<>();
+            ListBuffer<Element> elements = new ListBuffer<>();
             for (JCCompilationUnit unit : units) {
-                for (JCTree node : unit.defs) {
-                    if (node.hasTag(JCTree.Tag.CLASSDEF)) {
-                        JCClassDecl cdef = (JCClassDecl) node;
-                        if (cdef.sym != null) // maybe null if errors in anno processing
-                            elements.append(cdef.sym);
+                boolean isPkgInfo = unit.sourcefile.isNameCompatible("package-info",
+                                                                     JavaFileObject.Kind.SOURCE);
+                if (isPkgInfo) {
+                    elements.append(unit.packge);
+                } else {
+                    for (JCTree node : unit.defs) {
+                        if (node.hasTag(JCTree.Tag.CLASSDEF)) {
+                            JCClassDecl cdef = (JCClassDecl) node;
+                            if (cdef.sym != null) // maybe null if errors in anno processing
+                                elements.append(cdef.sym);
+                        } else if (node.hasTag(JCTree.Tag.MODULEDEF)) {
+                            JCModuleDecl mdef = (JCModuleDecl) node;
+                            if (mdef.sym != null)
+                                elements.append(mdef.sym);
+                        }
                     }
                 }
             }
@@ -333,12 +360,7 @@ public class JavacTaskImpl extends BasicJavacTask {
 
     @Override @DefinedBy(Api.COMPILER_TREE)
     public Iterable<? extends Element> analyze() {
-        return handleExceptions(new Callable<Iterable<? extends Element>>() {
-            @Override
-            public Iterable<? extends Element> call() {
-                return analyze(null);
-            }
-        }, List.<Element>nil(), List.<Element>nil());
+        return handleExceptions(() -> analyze(null), List.nil(), List.nil());
     }
 
     /**
@@ -353,7 +375,7 @@ public class JavacTaskImpl extends BasicJavacTask {
     // This implementation requires that we open up privileges on JavaCompiler.
     // An alternative implementation would be to move this code to JavaCompiler and
     // wrap it here
-    public Iterable<? extends Element> analyze(Iterable<? extends TypeElement> classes) {
+    public Iterable<? extends Element> analyze(Iterable<? extends Element> classes) {
         enter(null);  // ensure all classes have been entered
 
         final ListBuffer<Element> results = new ListBuffer<>();
@@ -383,8 +405,13 @@ public class JavacTaskImpl extends BasicJavacTask {
                         if (cdef.sym != null)
                             elems.append(cdef.sym);
                         break;
-                    case TOPLEVEL:
-                        JCCompilationUnit unit = (JCCompilationUnit) env.tree;
+                    case MODULEDEF:
+                        JCModuleDecl mod = (JCModuleDecl) env.tree;
+                        if (mod.sym != null)
+                            elems.append(mod.sym);
+                        break;
+                    case PACKAGEDEF:
+                        JCCompilationUnit unit = env.toplevel;
                         if (unit.packge != null)
                             elems.append(unit.packge);
                         break;
@@ -395,12 +422,7 @@ public class JavacTaskImpl extends BasicJavacTask {
 
     @Override @DefinedBy(Api.COMPILER_TREE)
     public Iterable<? extends JavaFileObject> generate() {
-        return handleExceptions(new Callable<Iterable<? extends JavaFileObject>>() {
-            @Override
-            public Iterable<? extends JavaFileObject> call() {
-                return generate(null);
-            }
-        }, List.<JavaFileObject>nil(), List.<JavaFileObject>nil());
+        return handleExceptions(() -> generate(null), List.nil(), List.nil());
     }
 
     /**
@@ -413,7 +435,7 @@ public class JavacTaskImpl extends BasicJavacTask {
      * @param classes a list of class elements
      * @return the files that were generated
      */
-    public Iterable<? extends JavaFileObject> generate(Iterable<? extends TypeElement> classes) {
+    public Iterable<? extends JavaFileObject> generate(Iterable<? extends Element> classes) {
         final ListBuffer<JavaFileObject> results = new ListBuffer<>();
         try {
             analyze(null);  // ensure all classes have been parsed, entered, and analyzed
@@ -447,17 +469,33 @@ public class JavacTaskImpl extends BasicJavacTask {
         return TreeInfo.pathFor((JCTree) node, (JCTree.JCCompilationUnit) unit).reverse();
     }
 
+    public void ensureEntered() {
+        args.allowEmpty();
+        enter(null);
+    }
+
     abstract class Filter {
-        void run(Queue<Env<AttrContext>> list, Iterable<? extends TypeElement> classes) {
-            Set<TypeElement> set = new HashSet<>();
-            for (TypeElement item: classes)
+        void run(Queue<Env<AttrContext>> list, Iterable<? extends Element> elements) {
+            Set<Element> set = new HashSet<>();
+            for (Element item: elements) {
                 set.add(item);
+            }
 
             ListBuffer<Env<AttrContext>> defer = new ListBuffer<>();
             while (list.peek() != null) {
                 Env<AttrContext> env = list.remove();
-                ClassSymbol csym = env.enclClass.sym;
-                if (csym != null && set.contains(csym.outermostClass()))
+                Symbol test = null;
+
+                if (env.tree.hasTag(Tag.MODULEDEF)) {
+                    test = ((JCModuleDecl) env.tree).sym;
+                } else if (env.tree.hasTag(Tag.PACKAGEDEF)) {
+                    test = env.toplevel.packge;
+                } else {
+                    ClassSymbol csym = env.enclClass.sym;
+                    if (csym != null)
+                        test = csym.outermostClass();
+                }
+                if (test != null && set.contains(test))
                     process(env);
                 else
                     defer = defer.append(env);

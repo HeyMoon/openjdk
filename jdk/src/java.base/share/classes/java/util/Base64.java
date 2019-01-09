@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,21 +41,21 @@ import java.nio.charset.StandardCharsets;
  * <a href="http://www.ietf.org/rfc/rfc2045.txt">RFC 2045</a>.
  *
  * <ul>
- * <li><a name="basic"><b>Basic</b></a>
+ * <li><a id="basic"><b>Basic</b></a>
  * <p> Uses "The Base64 Alphabet" as specified in Table 1 of
  *     RFC 4648 and RFC 2045 for encoding and decoding operation.
  *     The encoder does not add any line feed (line separator)
  *     character. The decoder rejects data that contains characters
  *     outside the base64 alphabet.</p></li>
  *
- * <li><a name="url"><b>URL and Filename safe</b></a>
+ * <li><a id="url"><b>URL and Filename safe</b></a>
  * <p> Uses the "URL and Filename safe Base64 Alphabet" as specified
  *     in Table 2 of RFC 4648 for encoding and decoding. The
  *     encoder does not add any line feed (line separator) character.
  *     The decoder rejects data that contains characters outside the
  *     base64 alphabet.</p></li>
  *
- * <li><a name="mime"><b>MIME</b></a>
+ * <li><a id="mime"><b>MIME</b></a>
  * <p> Uses the "The Base64 Alphabet" as specified in Table 1 of
  *     RFC 2045 for encoding and decoding operation. The encoded output
  *     must be represented in lines of no more than 76 characters each
@@ -788,7 +788,7 @@ public class Base64 {
         public void write(byte[] b, int off, int len) throws IOException {
             if (closed)
                 throw new IOException("Stream is closed");
-            if (off < 0 || len < 0 || off + len > b.length)
+            if (off < 0 || len < 0 || len > b.length - off)
                 throw new ArrayIndexOutOfBoundsException();
             if (len == 0)
                 return;

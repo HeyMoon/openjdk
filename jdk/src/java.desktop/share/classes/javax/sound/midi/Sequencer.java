@@ -324,6 +324,7 @@ public interface Sequencer extends MidiDevice {
      * @return the current position in microseconds
      * @see #setMicrosecondPosition
      */
+    @Override
     long getMicrosecondPosition();
 
     /**
@@ -680,7 +681,7 @@ public interface Sequencer extends MidiDevice {
         /**
          * Synchronization mode name.
          */
-        private String name;
+        private final String name;
 
         /**
          * Constructs a synchronization mode.
@@ -700,6 +701,7 @@ public interface Sequencer extends MidiDevice {
          * @return {@code true} if this object is the same as the {@code obj}
          *         argument, {@code false} otherwise
          */
+        @Override
         public final boolean equals(Object obj) {
 
             return super.equals(obj);
@@ -708,6 +710,7 @@ public interface Sequencer extends MidiDevice {
         /**
          * Finalizes the hashcode method.
          */
+        @Override
         public final int hashCode() {
 
             return super.hashCode();
@@ -719,6 +722,7 @@ public interface Sequencer extends MidiDevice {
          *
          * @return the name of this synchronization mode
          */
+        @Override
         public final String toString() {
 
             return name;
@@ -729,7 +733,7 @@ public interface Sequencer extends MidiDevice {
          * information from its internal clock. This is not a legal slave sync
          * mode.
          */
-        public static final SyncMode INTERNAL_CLOCK             = new SyncMode("Internal Clock");
+        public static final SyncMode INTERNAL_CLOCK = new SyncMode("Internal Clock");
 
         /**
          * A master or slave synchronization mode that specifies the use of MIDI
@@ -741,7 +745,7 @@ public interface Sequencer extends MidiDevice {
          * receiver. MIDI clock messages are sent at a rate of 24 per quarter
          * note.
          */
-        public static final SyncMode MIDI_SYNC                  = new SyncMode("MIDI Sync");
+        public static final SyncMode MIDI_SYNC = new SyncMode("MIDI Sync");
 
         /**
          * A master or slave synchronization mode that specifies the use of MIDI
@@ -752,13 +756,13 @@ public interface Sequencer extends MidiDevice {
          * sequencer sends MIDI Time Code messages to its receiver. (See the
          * MIDI 1.0 Detailed Specification for a description of MIDI Time Code.)
          */
-        public static final SyncMode MIDI_TIME_CODE             = new SyncMode("MIDI Time Code");
+        public static final SyncMode MIDI_TIME_CODE = new SyncMode("MIDI Time Code");
 
         /**
          * A slave synchronization mode indicating that no timing information
          * should be sent to the receiver. This is not a legal master sync mode.
          */
-        public static final SyncMode NO_SYNC                            = new SyncMode("No Timing");
+        public static final SyncMode NO_SYNC = new SyncMode("No Timing");
 
     }
 }

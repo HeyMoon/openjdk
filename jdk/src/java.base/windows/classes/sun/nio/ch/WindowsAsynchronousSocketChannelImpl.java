@@ -34,7 +34,7 @@ import java.io.IOException;
 import java.security.AccessController;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 /**
  * Windows implementation of AsynchronousSocketChannel using overlapped I/O.
@@ -378,11 +378,7 @@ class WindowsAsynchronousSocketChannelImpl
         result.setContext(task);
 
         // initiate I/O
-        if (Iocp.supportsThreadAgnosticIo()) {
-            task.run();
-        } else {
-            Invoker.invokeOnThreadInThreadPool(this, task);
-        }
+        task.run();
         return result;
     }
 
@@ -653,11 +649,7 @@ class WindowsAsynchronousSocketChannelImpl
         }
 
         // initiate I/O
-        if (Iocp.supportsThreadAgnosticIo()) {
-            readTask.run();
-        } else {
-            Invoker.invokeOnThreadInThreadPool(this, readTask);
-        }
+        readTask.run();
         return result;
     }
 
@@ -910,13 +902,8 @@ class WindowsAsynchronousSocketChannelImpl
             result.setTimeoutTask(timeoutTask);
         }
 
-        // initiate I/O (can only be done from thread in thread pool)
         // initiate I/O
-        if (Iocp.supportsThreadAgnosticIo()) {
-            writeTask.run();
-        } else {
-            Invoker.invokeOnThreadInThreadPool(this, writeTask);
-        }
+        writeTask.run();
         return result;
     }
 

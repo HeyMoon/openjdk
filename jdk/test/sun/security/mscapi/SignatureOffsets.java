@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,7 +28,7 @@ import java.security.SignatureException;
 /*
  * @test
  * @bug 8050374
- * @key randomness
+ * @key randomness intermittent
  * @summary This test validates signature verification
  *          Signature.verify(byte[], int, int). The test uses RandomFactory to
  *          get random set of clear text data to sign. After the signature
@@ -36,6 +36,7 @@ import java.security.SignatureException;
  *          and passing in different signature offset (0, 33, 66, 99).
  * @library /lib/testlibrary
  * @compile ../../../java/security/Signature/Offsets.java
+ * @requires os.family == "windows"
  * @run main SignatureOffsets SunMSCAPI NONEwithRSA
  * @run main SignatureOffsets SunMSCAPI MD2withRSA
  * @run main SignatureOffsets SunMSCAPI MD5withRSA

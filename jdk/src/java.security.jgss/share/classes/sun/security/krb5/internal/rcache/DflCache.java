@@ -60,7 +60,7 @@ import sun.security.krb5.internal.ReplayCache;
  *
  *    service_euid
  *
- * in which euid is available as sun.misc.VM.geteuid().
+ * in which euid is available as jdk.internal.misc.VM.geteuid().
  *
  * The file has a header:
  *
@@ -96,6 +96,8 @@ import sun.security.krb5.internal.ReplayCache;
  * Java also does this way.
  *
  * See src/lib/krb5/rcache/rc_io.c and src/lib/krb5/rcache/rc_dfl.c.
+ *
+ * Update: New version can use other hash algorithms.
  */
 public class DflCache extends ReplayCache {
 
@@ -107,7 +109,7 @@ public class DflCache extends ReplayCache {
     private static long uid;
     static {
         // Available on Solaris, Linux and Mac. Otherwise, -1 and no _euid suffix
-        uid = sun.misc.VM.geteuid();
+        uid = jdk.internal.misc.VM.geteuid();
     }
 
     public DflCache (String source) {
@@ -300,7 +302,7 @@ public class DflCache extends ReplayCache {
                         if (time.equals(a)) {
                             // Exact match, must be a replay
                             throw new KrbApErrException(Krb5.KRB_AP_ERR_REPEAT);
-                        } else if (time.isSameIgnoresHash(a)) {
+                        } else if (time.sameTimeDiffHash((AuthTimeWithHash)a)) {
                             // Two different authenticators in the same second.
                             // Remember it
                             seeNewButNotSame = true;

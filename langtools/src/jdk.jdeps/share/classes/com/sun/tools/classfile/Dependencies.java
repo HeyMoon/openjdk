@@ -22,6 +22,7 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package com.sun.tools.classfile;
 
 import java.util.Deque;
@@ -32,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 import com.sun.tools.classfile.Dependency.Filter;
@@ -246,11 +248,7 @@ public class Dependencies {
             boolean transitiveClosure)
             throws ClassFileNotFoundException {
         final Set<Dependency> results = new HashSet<>();
-        Recorder r = new Recorder() {
-            public void addDependency(Dependency d) {
-                results.add(d);
-            }
-        };
+        Recorder r = results::add;
         findAllDependencies(classFinder, rootClassNames, transitiveClosure, r);
         return results;
     }
@@ -560,13 +558,10 @@ public class Dependencies {
     }
 
     static abstract class BasicDependencyFinder implements Finder {
-        private Map<String,Location> locations = new HashMap<>();
+        private Map<String,Location> locations = new ConcurrentHashMap<>();
 
         Location getLocation(String className) {
-            Location l = locations.get(className);
-            if (l == null)
-                locations.put(className, l = new SimpleLocation(className));
-            return l;
+            return locations.computeIfAbsent(className, SimpleLocation::new);
         }
 
         class Visitor implements ConstantPool.Visitor<Void,Void>, Type.Visitor<Void, Void> {
@@ -709,6 +704,10 @@ public class Dependencies {
                 return visitRef(info, p);
             }
 
+            public Void visitModule(CONSTANT_Module_info info, Void p) {
+                return null;
+            }
+
             public Void visitNameAndType(CONSTANT_NameAndType_info info, Void p) {
                 try {
                     new Signature(info.type_index).getType(constant_pool).accept(this, null);
@@ -716,6 +715,10 @@ public class Dependencies {
                 } catch (ConstantPoolException e) {
                     throw new ClassFileError(e);
                 }
+            }
+
+            public Void visitPackage(CONSTANT_Package_info info, Void p) {
+                return null;
             }
 
             public Void visitString(CONSTANT_String_info info, Void p) {

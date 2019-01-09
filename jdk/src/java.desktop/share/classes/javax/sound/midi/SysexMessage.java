@@ -81,7 +81,7 @@ public class SysexMessage extends MidiMessage {
      *
      * @see MidiMessage#getStatus
      */
-    public static final int SYSTEM_EXCLUSIVE                    = 0xF0; // 240
+    public static final int SYSTEM_EXCLUSIVE = 0xF0; // 240
 
     /**
      * Status byte for Special System Exclusive message (0xF7, or 247), which is
@@ -90,7 +90,7 @@ public class SysexMessage extends MidiMessage {
      *
      * @see MidiMessage#getStatus
      */
-    public static final int SPECIAL_SYSTEM_EXCLUSIVE    = 0xF7; // 247
+    public static final int SPECIAL_SYSTEM_EXCLUSIVE = 0xF7; // 247
 
     /**
      * The data bytes for this system exclusive message. These are initialized
@@ -124,7 +124,7 @@ public class SysexMessage extends MidiMessage {
      *         including the status byte; it should be non-negative and less
      *         than or equal to {@code data.length}
      * @throws InvalidMidiDataException if the parameter values do not specify a
-     *         valid MIDI meta message.
+     *         valid MIDI meta message
      * @see #setMessage(byte[], int)
      * @see #setMessage(int, byte[], int)
      * @see #getData()
@@ -179,6 +179,7 @@ public class SysexMessage extends MidiMessage {
      * @param  length the length of the valid message data in the array,
      *         including the status byte
      */
+    @Override
     public void setMessage(byte[] data, int length) throws InvalidMidiDataException {
         int status = (data[0] & 0xFF);
         if ((status != 0xF0) && (status != 0xF7)) {
@@ -233,6 +234,7 @@ public class SysexMessage extends MidiMessage {
      *
      * @return a clone of this instance
      */
+    @Override
     public Object clone() {
         byte[] newData = new byte[length];
         System.arraycopy(data, 0, newData, 0, newData.length);

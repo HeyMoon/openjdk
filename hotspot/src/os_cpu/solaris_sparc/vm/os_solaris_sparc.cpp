@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
 
 // no precompiled headers
 #include "asm/macroAssembler.hpp"
+#include "macroAssembler_sparc.hpp"
 #include "classfile/classLoader.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
@@ -33,7 +34,6 @@
 #include "interpreter/interpreter.hpp"
 #include "jvm_solaris.h"
 #include "memory/allocation.inline.hpp"
-#include "mutex_solaris.inline.hpp"
 #include "nativeInst_sparc.hpp"
 #include "os_share_solaris.hpp"
 #include "prims/jniFastGetField.hpp"
@@ -73,7 +73,6 @@
 # include <sys/systeminfo.h>
 # include <sys/socket.h>
 # include <sys/lwp.h>
-# include <pwd.h>
 # include <poll.h>
 # include <sys/lwp.h>
 
@@ -82,12 +81,14 @@
 
 #define MAX_PATH (2 * K)
 
-// Minimum stack size for the VM.  It's easier to document a constant
-// but it's different for x86 and sparc because the page sizes are different.
+// Minimum usable stack sizes required to get to user code. Space for
+// HotSpot guard pages is added later.
+size_t os::Posix::_compiler_thread_min_stack_allowed = 104 * K;
+size_t os::Posix::_java_thread_min_stack_allowed = 86 * K;
 #ifdef _LP64
-size_t os::Solaris::min_stack_allowed = 128*K;
+size_t os::Posix::_vm_internal_thread_min_stack_allowed = 128 * K;
 #else
-size_t os::Solaris::min_stack_allowed = 96*K;
+size_t os::Posix::_vm_internal_thread_min_stack_allowed = 96 * K;
 #endif
 
 int os::Solaris::max_register_window_saves_before_flushing() {
@@ -120,7 +121,7 @@ char* os::non_memory_address_word() {
 // There are issues with libthread giving out uc_links for different threads
 // on the same uc_link chain and bad or circular links.
 //
-bool os::Solaris::valid_ucontext(Thread* thread, ucontext_t* valid, ucontext_t* suspect) {
+bool os::Solaris::valid_ucontext(Thread* thread, const ucontext_t* valid, const ucontext_t* suspect) {
   if (valid >= suspect ||
       valid->uc_stack.ss_flags != suspect->uc_stack.ss_flags ||
       valid->uc_stack.ss_sp    != suspect->uc_stack.ss_sp    ||
@@ -147,10 +148,10 @@ bool os::Solaris::valid_ucontext(Thread* thread, ucontext_t* valid, ucontext_t* 
 // We will only follow one level of uc_link since there are libthread
 // issues with ucontext linking and it is better to be safe and just
 // let caller retry later.
-ucontext_t* os::Solaris::get_valid_uc_in_signal_handler(Thread *thread,
-  ucontext_t *uc) {
+const ucontext_t* os::Solaris::get_valid_uc_in_signal_handler(Thread *thread,
+  const ucontext_t *uc) {
 
-  ucontext_t *retuc = NULL;
+  const ucontext_t *retuc = NULL;
 
   // Sometimes the topmost register windows are not properly flushed.
   // i.e., if the kernel would have needed to take a page fault
@@ -178,7 +179,7 @@ ucontext_t* os::Solaris::get_valid_uc_in_signal_handler(Thread *thread,
 }
 
 // Assumes ucontext is valid
-ExtendedPC os::Solaris::ucontext_get_ExtendedPC(ucontext_t *uc) {
+ExtendedPC os::Solaris::ucontext_get_ExtendedPC(const ucontext_t *uc) {
   address pc = (address)uc->uc_mcontext.gregs[REG_PC];
   // set npc to zero to avoid using it for safepoint, good for profiling only
   return ExtendedPC(pc);
@@ -190,17 +191,17 @@ void os::Solaris::ucontext_set_pc(ucontext_t* uc, address pc) {
 }
 
 // Assumes ucontext is valid
-intptr_t* os::Solaris::ucontext_get_sp(ucontext_t *uc) {
+intptr_t* os::Solaris::ucontext_get_sp(const ucontext_t *uc) {
   return (intptr_t*)((intptr_t)uc->uc_mcontext.gregs[REG_SP] + STACK_BIAS);
 }
 
 // Solaris X86 only
-intptr_t* os::Solaris::ucontext_get_fp(ucontext_t *uc) {
+intptr_t* os::Solaris::ucontext_get_fp(const ucontext_t *uc) {
   ShouldNotReachHere();
   return NULL;
 }
 
-address os::Solaris::ucontext_get_pc(ucontext_t *uc) {
+address os::Solaris::ucontext_get_pc(const ucontext_t *uc) {
   return (address) uc->uc_mcontext.gregs[REG_PC];
 }
 
@@ -212,25 +213,26 @@ address os::Solaris::ucontext_get_pc(ucontext_t *uc) {
 //
 // The difference between this and os::fetch_frame_from_context() is that
 // here we try to skip nested signal frames.
+// This method is also used for stack overflow signal handling.
 ExtendedPC os::Solaris::fetch_frame_from_ucontext(Thread* thread,
-  ucontext_t* uc, intptr_t** ret_sp, intptr_t** ret_fp) {
+  const ucontext_t* uc, intptr_t** ret_sp, intptr_t** ret_fp) {
 
   assert(thread != NULL, "just checking");
   assert(ret_sp != NULL, "just checking");
   assert(ret_fp == NULL, "just checking");
 
-  ucontext_t *luc = os::Solaris::get_valid_uc_in_signal_handler(thread, uc);
+  const ucontext_t *luc = os::Solaris::get_valid_uc_in_signal_handler(thread, uc);
 
   return os::fetch_frame_from_context(luc, ret_sp, ret_fp);
 }
 
 
 // ret_fp parameter is only used by Solaris X86.
-ExtendedPC os::fetch_frame_from_context(void* ucVoid,
+ExtendedPC os::fetch_frame_from_context(const void* ucVoid,
                     intptr_t** ret_sp, intptr_t** ret_fp) {
 
   ExtendedPC  epc;
-  ucontext_t *uc = (ucontext_t*)ucVoid;
+  const ucontext_t *uc = (const ucontext_t*)ucVoid;
 
   if (uc != NULL) {
     epc = os::Solaris::ucontext_get_ExtendedPC(uc);
@@ -244,11 +246,52 @@ ExtendedPC os::fetch_frame_from_context(void* ucVoid,
   return epc;
 }
 
-frame os::fetch_frame_from_context(void* ucVoid) {
+frame os::fetch_frame_from_context(const void* ucVoid) {
   intptr_t* sp;
   intptr_t* fp;
   ExtendedPC epc = fetch_frame_from_context(ucVoid, &sp, &fp);
   return frame(sp, frame::unpatchable, epc.pc());
+}
+
+frame os::fetch_frame_from_ucontext(Thread* thread, void* ucVoid) {
+  intptr_t* sp;
+  ExtendedPC epc = os::Solaris::fetch_frame_from_ucontext(thread, (ucontext_t*)ucVoid, &sp, NULL);
+  return frame(sp, frame::unpatchable, epc.pc());
+}
+
+bool os::Solaris::get_frame_at_stack_banging_point(JavaThread* thread, ucontext_t* uc, frame* fr) {
+  address pc = (address) os::Solaris::ucontext_get_pc(uc);
+  if (Interpreter::contains(pc)) {
+    *fr = os::fetch_frame_from_ucontext(thread, uc);
+    if (!fr->is_first_java_frame()) {
+      assert(fr->safe_for_sender(thread), "Safety check");
+      *fr = fr->java_sender();
+    }
+  } else {
+    // more complex code with compiled code
+    assert(!Interpreter::contains(pc), "Interpreted methods should have been handled above");
+    CodeBlob* cb = CodeCache::find_blob(pc);
+    if (cb == NULL || !cb->is_nmethod() || cb->is_frame_complete_at(pc)) {
+      // Not sure where the pc points to, fallback to default
+      // stack overflow handling
+      return false;
+    } else {
+      // Returned frame will be the caller of the method that faults on the stack bang.
+      // Register window not yet rotated (happens at SAVE after stack bang), so there is no new
+      // frame to go with the faulting PC. Using caller SP that is still in SP, and caller PC
+      // that was written to O7 at call.
+      intptr_t* sp = os::Solaris::ucontext_get_sp(uc);
+      address pc = (address)uc->uc_mcontext.gregs[REG_O7];
+      *fr = frame(sp, frame::unpatchable, pc);
+
+      if (!fr->is_java_frame()) {
+        assert(fr->safe_for_sender(thread), "Safety check");
+        *fr = fr->java_sender();
+      }
+    }
+  }
+  assert(fr->is_java_frame(), "Safety check");
+  return true;
 }
 
 frame os::get_sender_for_C_frame(frame* fr) {
@@ -289,7 +332,7 @@ JVM_handle_solaris_signal(int sig, siginfo_t* info, void* ucVoid,
                           int abort_if_unrecognized) {
   ucontext_t* uc = (ucontext_t*) ucVoid;
 
-  Thread* t = ThreadLocalStorage::get_thread_slow();
+  Thread* t = Thread::current_or_null_safe();
 
   // Must do this before SignalHandlerMark, if crash protection installed we will longjmp away
   // (no destructors can be run)
@@ -301,12 +344,7 @@ JVM_handle_solaris_signal(int sig, siginfo_t* info, void* ucVoid,
     if (os::Solaris::chained_handler(sig, info, ucVoid)) {
       return true;
     } else {
-      if (PrintMiscellaneous && (WizardMode || Verbose)) {
-        char buf[64];
-        warning("Ignoring %s - see 4229104 or 6499219",
-                os::exception_name(sig, buf, sizeof(buf)));
-
-      }
+      // Ignoring SIGPIPE/SIGXFSZ - see bugs 4229104 or 6499219
       return true;
     }
   }
@@ -323,8 +361,6 @@ JVM_handle_solaris_signal(int sig, siginfo_t* info, void* ucVoid,
       }
     }
   }
-
-  guarantee(sig != os::Solaris::SIGinterrupt(), "Can not chain VM interrupt signal, try -XX:+UseAltSigs");
 
   if (sig == os::Solaris::SIGasync()) {
     if (thread || vmthread) {
@@ -367,18 +403,33 @@ JVM_handle_solaris_signal(int sig, siginfo_t* info, void* ucVoid,
     // Handle ALL stack overflow variations here
     if (sig == SIGSEGV && info->si_code == SEGV_ACCERR) {
       address addr = (address) info->si_addr;
-      if (thread->in_stack_yellow_zone(addr)) {
-        thread->disable_stack_yellow_zone();
+      if (thread->in_stack_yellow_reserved_zone(addr)) {
         // Sometimes the register windows are not properly flushed.
         if(uc->uc_mcontext.gwins != NULL) {
           ::handle_unflushed_register_windows(uc->uc_mcontext.gwins);
         }
         if (thread->thread_state() == _thread_in_Java) {
+          if (thread->in_stack_reserved_zone(addr)) {
+            frame fr;
+            if (os::Solaris::get_frame_at_stack_banging_point(thread, uc, &fr)) {
+              assert(fr.is_java_frame(), "Must be a Java frame");
+              frame activation = SharedRuntime::look_for_reserved_stack_annotated_method(thread, fr);
+              if (activation.sp() != NULL) {
+                thread->disable_stack_reserved_zone();
+                RegisterMap map(thread);
+                int frame_size = activation.frame_size(&map);
+                thread->set_reserved_stack_activation((address)(((address)activation.sp()) - STACK_BIAS));
+                return true;
+              }
+            }
+          }
           // Throw a stack overflow exception.  Guard pages will be reenabled
           // while unwinding the stack.
+          thread->disable_stack_yellow_reserved_zone();
           stub = SharedRuntime::continuation_for_implicit_exception(thread, pc, SharedRuntime::STACK_OVERFLOW);
         } else {
           // Thread was in the vm or native code.  Return and try to finish.
+          thread->disable_stack_yellow_reserved_zone();
           return true;
         }
       } else if (thread->in_stack_red_zone(addr)) {
@@ -395,8 +446,8 @@ JVM_handle_solaris_signal(int sig, siginfo_t* info, void* ucVoid,
 
 
     if (thread->thread_state() == _thread_in_vm) {
-      if (sig == SIGBUS && info->si_code == BUS_OBJERR && thread->doing_unsafe_access()) {
-        stub = StubRoutines::handler_for_unsafe_access();
+      if (sig == SIGBUS && thread->doing_unsafe_access()) {
+        stub = SharedRuntime::handle_unsafe_access(thread, npc);
       }
     }
 
@@ -433,9 +484,9 @@ JVM_handle_solaris_signal(int sig, siginfo_t* info, void* ucVoid,
         // here if the underlying file has been truncated.
         // Do not crash the VM in such a case.
         CodeBlob* cb = CodeCache::find_blob_unsafe(pc);
-        nmethod* nm = cb->is_nmethod() ? (nmethod*)cb : NULL;
+        CompiledMethod* nm = cb->as_compiled_method_or_null();
         if (nm != NULL && nm->has_unsafe_access()) {
-          stub = StubRoutines::handler_for_unsafe_access();
+          stub = SharedRuntime::handle_unsafe_access(thread, npc);
         }
       }
 
@@ -500,10 +551,6 @@ JVM_handle_solaris_signal(int sig, siginfo_t* info, void* ucVoid,
     // factor me: setPC
     os::Solaris::ucontext_set_pc(uc, stub);
 
-#ifndef PRODUCT
-    if (TraceJumps) thread->record_jump(stub, NULL, __FILE__, __LINE__);
-#endif /* PRODUCT */
-
     return true;
   }
 
@@ -549,16 +596,16 @@ JVM_handle_solaris_signal(int sig, siginfo_t* info, void* ucVoid,
     vm_exit_out_of_memory(0, OOM_MMAP_ERROR, "Out of swap space to map in thread stack.");
   }
 
-  VMError err(t, sig, pc, info, ucVoid);
-  err.report_and_die();
+  VMError::report_and_die(t, sig, pc, info, ucVoid);
 
   ShouldNotReachHere();
+  return false;
 }
 
-void os::print_context(outputStream *st, void *context) {
+void os::print_context(outputStream *st, const void *context) {
   if (context == NULL) return;
 
-  ucontext_t *uc = (ucontext_t*)context;
+  const ucontext_t *uc = (const ucontext_t*)context;
   st->print_cr("Registers:");
 
   st->print_cr(" G1=" INTPTR_FORMAT " G2=" INTPTR_FORMAT
@@ -632,10 +679,10 @@ void os::print_context(outputStream *st, void *context) {
   print_hex_dump(st, pc - 32, pc + 32, sizeof(char));
 }
 
-void os::print_register_info(outputStream *st, void *context) {
+void os::print_register_info(outputStream *st, const void *context) {
   if (context == NULL) return;
 
-  ucontext_t *uc = (ucontext_t*)context;
+  const ucontext_t *uc = (const ucontext_t*)context;
   intptr_t *sp = (intptr_t *)os::Solaris::ucontext_get_sp(uc);
 
   st->print_cr("Register to memory mapping:");

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,9 @@
 #ifndef SHARE_VM_ASM_REGISTER_HPP
 #define SHARE_VM_ASM_REGISTER_HPP
 
-#include "utilities/top.hpp"
+#include "utilities/debug.hpp"
+#include "utilities/globalDefinitions.hpp"
+#include "utilities/macros.hpp"
 
 // Use AbstractRegister as shortcut
 class AbstractRegisterImpl;
@@ -93,25 +95,7 @@ enum { name##_##type##EnumValue = value##_##type##EnumValue }
 #define REGISTER_DEFINITION(type, name) \
 const type name = ((type)name##_##type##EnumValue)
 
-#ifdef TARGET_ARCH_x86
-# include "register_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "register_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "register_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "register_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "register_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "register_aarch64.hpp"
-#endif
-
+#include CPU_HEADER(register)
 
 // Debugging support
 
@@ -121,8 +105,7 @@ inline void assert_different_registers(
 ) {
   assert(
     a != b,
-    err_msg_res("registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT "",
-                p2i(a), p2i(b))
+    "registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT "", p2i(a), p2i(b)
   );
 }
 
@@ -135,9 +118,9 @@ inline void assert_different_registers(
   assert(
     a != b && a != c
            && b != c,
-    err_msg_res("registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
-                ", c=" INTPTR_FORMAT "",
-                p2i(a), p2i(b), p2i(c))
+    "registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
+    ", c=" INTPTR_FORMAT "",
+    p2i(a), p2i(b), p2i(c)
   );
 }
 
@@ -152,9 +135,9 @@ inline void assert_different_registers(
     a != b && a != c && a != d
            && b != c && b != d
                      && c != d,
-    err_msg_res("registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
-                ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT "",
-                p2i(a), p2i(b), p2i(c), p2i(d))
+    "registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
+    ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT "",
+    p2i(a), p2i(b), p2i(c), p2i(d)
   );
 }
 
@@ -171,9 +154,9 @@ inline void assert_different_registers(
            && b != c && b != d && b != e
                      && c != d && c != e
                                && d != e,
-    err_msg_res("registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
-                ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT "",
-                p2i(a), p2i(b), p2i(c), p2i(d), p2i(e))
+    "registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
+    ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT "",
+    p2i(a), p2i(b), p2i(c), p2i(d), p2i(e)
   );
 }
 
@@ -192,10 +175,10 @@ inline void assert_different_registers(
                      && c != d && c != e && c != f
                                && d != e && d != f
                                          && e != f,
-    err_msg_res("registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
-                ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
-                ", f=" INTPTR_FORMAT "",
-                p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f))
+    "registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
+    ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
+    ", f=" INTPTR_FORMAT "",
+    p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f)
   );
 }
 
@@ -216,10 +199,10 @@ inline void assert_different_registers(
                                && d != e && d != f && d != g
                                          && e != f && e != g
                                                    && f != g,
-    err_msg_res("registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
-                ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
-                ", f=" INTPTR_FORMAT ", g=" INTPTR_FORMAT "",
-                p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f), p2i(g))
+    "registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
+    ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
+    ", f=" INTPTR_FORMAT ", g=" INTPTR_FORMAT "",
+    p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f), p2i(g)
   );
 }
 
@@ -242,10 +225,10 @@ inline void assert_different_registers(
                                          && e != f && e != g && e != h
                                                    && f != g && f != h
                                                              && g != h,
-    err_msg_res("registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
-                ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
-                ", f=" INTPTR_FORMAT ", g=" INTPTR_FORMAT ", h=" INTPTR_FORMAT "",
-                p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f), p2i(g), p2i(h))
+    "registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
+    ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
+    ", f=" INTPTR_FORMAT ", g=" INTPTR_FORMAT ", h=" INTPTR_FORMAT "",
+    p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f), p2i(g), p2i(h)
   );
 }
 
@@ -270,11 +253,11 @@ inline void assert_different_registers(
                                                    && f != g && f != h && f != i
                                                              && g != h && g != i
                                                                        && h != i,
-    err_msg_res("registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
-                ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
-                ", f=" INTPTR_FORMAT ", g=" INTPTR_FORMAT ", h=" INTPTR_FORMAT
-                ", i=" INTPTR_FORMAT "",
-                p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f), p2i(g), p2i(h), p2i(i))
+    "registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
+    ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
+    ", f=" INTPTR_FORMAT ", g=" INTPTR_FORMAT ", h=" INTPTR_FORMAT
+    ", i=" INTPTR_FORMAT "",
+    p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f), p2i(g), p2i(h), p2i(i)
   );
 }
 
@@ -300,11 +283,11 @@ inline void assert_different_registers(
                                                              && g != h && g != i && g != j
                                                                        && h != i && h != j
                                                                                  && i != j,
-    err_msg_res("registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
-                ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
-                ", f=" INTPTR_FORMAT ", g=" INTPTR_FORMAT ", h=" INTPTR_FORMAT
-                ", i=" INTPTR_FORMAT ", j=" INTPTR_FORMAT "",
-                p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f), p2i(g), p2i(h), p2i(i), p2i(j))
+    "registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
+    ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
+    ", f=" INTPTR_FORMAT ", g=" INTPTR_FORMAT ", h=" INTPTR_FORMAT
+    ", i=" INTPTR_FORMAT ", j=" INTPTR_FORMAT "",
+    p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f), p2i(g), p2i(h), p2i(i), p2i(j)
   );
 }
 
@@ -332,11 +315,11 @@ inline void assert_different_registers(
                                                                        && h != i && h != j && h !=k
                                                                                  && i != j && i !=k
                                                                                            && j !=k,
-    err_msg_res("registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
-                ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
-                ", f=" INTPTR_FORMAT ", g=" INTPTR_FORMAT ", h=" INTPTR_FORMAT
-                ", i=" INTPTR_FORMAT ", j=" INTPTR_FORMAT ", k=" INTPTR_FORMAT "",
-                p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f), p2i(g), p2i(h), p2i(i), p2i(j), p2i(k))
+    "registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
+    ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
+    ", f=" INTPTR_FORMAT ", g=" INTPTR_FORMAT ", h=" INTPTR_FORMAT
+    ", i=" INTPTR_FORMAT ", j=" INTPTR_FORMAT ", k=" INTPTR_FORMAT "",
+    p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f), p2i(g), p2i(h), p2i(i), p2i(j), p2i(k)
   );
 }
 
@@ -366,12 +349,12 @@ inline void assert_different_registers(
                                                                                  && i != j && i !=k && i !=l
                                                                                            && j !=k && j !=l
                                                                                                     && k !=l,
-    err_msg_res("registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
-                ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
-                ", f=" INTPTR_FORMAT ", g=" INTPTR_FORMAT ", h=" INTPTR_FORMAT
-                ", i=" INTPTR_FORMAT ", j=" INTPTR_FORMAT ", k=" INTPTR_FORMAT
-                ", l=" INTPTR_FORMAT "",
-                p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f), p2i(g), p2i(h), p2i(i), p2i(j), p2i(k), p2i(l))
+    "registers must be different: a=" INTPTR_FORMAT ", b=" INTPTR_FORMAT
+    ", c=" INTPTR_FORMAT ", d=" INTPTR_FORMAT ", e=" INTPTR_FORMAT
+    ", f=" INTPTR_FORMAT ", g=" INTPTR_FORMAT ", h=" INTPTR_FORMAT
+    ", i=" INTPTR_FORMAT ", j=" INTPTR_FORMAT ", k=" INTPTR_FORMAT
+    ", l=" INTPTR_FORMAT "",
+    p2i(a), p2i(b), p2i(c), p2i(d), p2i(e), p2i(f), p2i(g), p2i(h), p2i(i), p2i(j), p2i(k), p2i(l)
   );
 }
 

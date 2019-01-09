@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,6 +31,8 @@
 #include "runtime/handles.hpp"
 #include "utilities/macros.hpp"
 
+class ClassFileParser;
+
 // An InstanceMirrorKlass is a specialized InstanceKlass for
 // java.lang.Class instances.  These instances are special because
 // they contain the static fields of the class in addition to the
@@ -46,19 +48,16 @@ class InstanceMirrorKlass: public InstanceKlass {
  private:
   static int _offset_of_static_fields;
 
-  // Constructor
-  InstanceMirrorKlass(int vtable_len, int itable_len, int static_field_size, int nonstatic_oop_map_size, ReferenceType rt, AccessFlags access_flags,  bool is_anonymous)
-    : InstanceKlass(vtable_len, itable_len, static_field_size, nonstatic_oop_map_size, rt, access_flags, is_anonymous) {}
+  InstanceMirrorKlass(const ClassFileParser& parser) : InstanceKlass(parser, InstanceKlass::_misc_kind_mirror) {}
 
  public:
   InstanceMirrorKlass() { assert(DumpSharedSpaces || UseSharedSpaces, "only for CDS"); }
-  // Type testing
-  bool oop_is_instanceMirror() const             { return true; }
 
   // Casting from Klass*
   static InstanceMirrorKlass* cast(Klass* k) {
-    assert(k->oop_is_instanceMirror(), "cast to InstanceMirrorKlass");
-    return (InstanceMirrorKlass*) k;
+    assert(InstanceKlass::cast(k)->is_mirror_instance_klass(),
+           "cast to InstanceMirrorKlass");
+    return static_cast<InstanceMirrorKlass*>(k);
   }
 
   // Returns the size of the instance including the extra static fields.
@@ -91,14 +90,13 @@ class InstanceMirrorKlass: public InstanceKlass {
   // GC specific object visitors
   //
   // Mark Sweep
-  void oop_ms_follow_contents(oop obj);
   int  oop_ms_adjust_pointers(oop obj);
 #if INCLUDE_ALL_GCS
   // Parallel Scavenge
   void oop_ps_push_contents(  oop obj, PSPromotionManager* pm);
   // Parallel Compact
   void oop_pc_follow_contents(oop obj, ParCompactionManager* cm);
-  void oop_pc_update_pointers(oop obj);
+  void oop_pc_update_pointers(oop obj, ParCompactionManager* cm);
 #endif
 
   // Oop fields (and metadata) iterators
@@ -121,21 +119,21 @@ class InstanceMirrorKlass: public InstanceKlass {
   // Forward iteration
   // Iterate over the oop fields and metadata.
   template <bool nv, class OopClosureType>
-  inline int oop_oop_iterate(oop obj, OopClosureType* closure);
+  inline void oop_oop_iterate(oop obj, OopClosureType* closure);
 
 
   // Reverse iteration
 #if INCLUDE_ALL_GCS
   // Iterate over the oop fields and metadata.
   template <bool nv, class OopClosureType>
-  inline int oop_oop_iterate_reverse(oop obj, OopClosureType* closure);
+  inline void oop_oop_iterate_reverse(oop obj, OopClosureType* closure);
 #endif
 
 
   // Bounded range iteration
   // Iterate over the oop fields and metadata.
   template <bool nv, class OopClosureType>
-  inline int oop_oop_iterate_bounded(oop obj, OopClosureType* closure, MemRegion mr);
+  inline void oop_oop_iterate_bounded(oop obj, OopClosureType* closure, MemRegion mr);
 
   // Iterate over the static fields.
   template <bool nv, class OopClosureType>

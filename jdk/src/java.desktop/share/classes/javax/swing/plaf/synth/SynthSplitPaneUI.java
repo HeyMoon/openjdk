@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,13 +48,13 @@ public class SynthSplitPaneUI extends BasicSplitPaneUI
      * Keys to use for forward focus traversal when the JComponent is
      * managing focus.
      */
-    private static Set<KeyStroke> managingFocusForwardTraversalKeys;
+    private Set<KeyStroke> managingFocusForwardTraversalKeys;
 
     /**
      * Keys to use for backward focus traversal when the JComponent is
      * managing focus.
      */
-    private static Set<KeyStroke> managingFocusBackwardTraversalKeys;
+    private Set<KeyStroke> managingFocusBackwardTraversalKeys;
 
     /**
      * Style for the JSplitPane.
@@ -80,6 +80,7 @@ public class SynthSplitPaneUI extends BasicSplitPaneUI
      * Installs the UI defaults.
      */
     @Override
+    @SuppressWarnings("deprecation")
     protected void installDefaults() {
         updateStyle(splitPane);
 
@@ -121,7 +122,6 @@ public class SynthSplitPaneUI extends BasicSplitPaneUI
                                           ENABLED);
         SynthStyle oldDividerStyle = dividerStyle;
         dividerStyle = SynthLookAndFeel.updateStyle(context, this);
-        context.dispose();
 
         context = getContext(splitPane, ENABLED);
         SynthStyle oldStyle = style;
@@ -160,7 +160,6 @@ public class SynthSplitPaneUI extends BasicSplitPaneUI
             divider.setBasicSplitPaneUI(this);
             splitPane.add(divider, JSplitPane.DIVIDER);
         }
-        context.dispose();
     }
 
     /**
@@ -180,12 +179,10 @@ public class SynthSplitPaneUI extends BasicSplitPaneUI
         SynthContext context = getContext(splitPane, ENABLED);
 
         style.uninstallDefaults(context);
-        context.dispose();
         style = null;
 
         context = getContext(splitPane, Region.SPLIT_PANE_DIVIDER, ENABLED);
         dividerStyle.uninstallDefaults(context);
-        context.dispose();
         dividerStyle = null;
 
         super.uninstallDefaults();
@@ -287,7 +284,6 @@ public class SynthSplitPaneUI extends BasicSplitPaneUI
         context.getPainter().paintSplitPaneBackground(context,
                           g, 0, 0, c.getWidth(), c.getHeight());
         paint(context, g);
-        context.dispose();
     }
 
     /**
@@ -304,7 +300,6 @@ public class SynthSplitPaneUI extends BasicSplitPaneUI
         SynthContext context = getContext(c);
 
         paint(context, g);
-        context.dispose();
     }
 
     /**
@@ -338,7 +333,6 @@ public class SynthSplitPaneUI extends BasicSplitPaneUI
         context.getPainter().paintSplitPaneDragDivider(context, g, x, y, w, h,
                                            splitPane.getOrientation());
         g.setClip(oldClip);
-        context.dispose();
     }
 
     /**

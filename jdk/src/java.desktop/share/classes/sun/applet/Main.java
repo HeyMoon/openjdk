@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,8 +30,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.lang.reflect.Method;
-import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.net.MalformedURLException;
 import java.util.Enumeration;
@@ -41,7 +39,12 @@ import sun.net.www.ParseUtil;
 
 /**
  * The main entry point into AppletViewer.
+ *
+ * @deprecated The Applet API is deprecated. See the
+ * <a href="../../java/applet/package-summary.html"> java.applet package
+ * documentation</a> for further information.
  */
+@Deprecated(since = "9")
 public class Main {
     /**
      * The file which contains all of the AppletViewer specific properties.
@@ -75,7 +78,6 @@ public class Main {
     /**
      * Member variables set according to options passed in to AppletViewer.
      */
-    private boolean debugFlag = false;
     private boolean helpFlag  = false;
     private String  encoding  = null;
     private boolean noSecurityFlag  = false;
@@ -107,6 +109,8 @@ public class Main {
     private int run(String [] args) {
         // DECODE ARGS
         try {
+            System.err.println(lookup("deprecated"));
+            System.err.flush();
             if (args.length == 0) {
                 usage();
                 return 0;
@@ -133,14 +137,6 @@ public class Main {
         if (urlList.size() == 0) {
             System.err.println(lookup("main.err.inputfile"));
             return 1;
-        }
-
-        if (debugFlag) {
-            // START A DEBUG SESSION
-            // Given the current architecture, we will end up decoding the
-            // arguments again, but at least we are guaranteed to have
-            // arguments which are valid.
-            return invokeDebugger(args);
         }
 
         // INSTALL THE SECURITY MANAGER (if necessary)
@@ -190,9 +186,6 @@ public class Main {
                 throw new ParseException(lookup("main.err.dupoption", arg));
             encoding = args[++i];
             return 2;
-        } else if ("-debug".equals(arg)) {
-            debugFlag = true;
-            return 1;
         } else if ("-Xnosecurity".equals(arg)) {
             // This is an undocumented (and, in the future, unsupported)
             // flag which prevents AppletViewer from installing its own
@@ -229,7 +222,7 @@ public class Main {
      *
      * @param url  a string which represents either a relative or absolute URL.
      * @return     a URL when the passed in string can be interpreted according
-     *             to the RFC, <code>null</code> otherwise.
+     *             to the RFC, {@code null} otherwise.
      * @exception  ParseException
      *             Thrown when we are unable to construct a proper URL from the
      *             passed in string.
@@ -264,68 +257,6 @@ public class Main {
         }
 
         return u;
-    }
-
-    /**
-     * Invoke the debugger with the arguments passed in to appletviewer.
-     *
-     * @param args The arguments passed into the debugger.
-     * @return     <code>0</code> if the debugger is invoked successfully,
-     *             <code>1</code> otherwise.
-     */
-    private int invokeDebugger(String [] args) {
-        // CONSTRUCT THE COMMAND LINE
-        String [] newArgs = new String[args.length + 1];
-        int current = 0;
-
-        // Add a -classpath argument that prevents
-        // the debugger from launching appletviewer with the default of
-        // ".". appletviewer's classpath should never contain valid
-        // classes since they will result in security exceptions.
-        // Ideally, the classpath should be set to "", but the VM won't
-        // allow an empty classpath, so a phony directory name is used.
-        String phonyDir = System.getProperty("java.home") +
-                          File.separator + "phony";
-        newArgs[current++] = "-Djava.class.path=" + phonyDir;
-
-        // Appletviewer's main class is the debuggee
-        newArgs[current++] = "sun.applet.Main";
-
-        // Append all the of the original appletviewer arguments,
-        // leaving out the "-debug" option.
-        for (int i = 0; i < args.length; i++) {
-            if (!("-debug".equals(args[i]))) {
-                newArgs[current++] = args[i];
-            }
-        }
-
-        // LAUNCH THE DEBUGGER
-        // Reflection is used for two reasons:
-        // 1) The debugger classes are on classpath and thus must be loaded
-        // by the application class loader. (Currently, appletviewer are
-        // loaded through the boot class path out of rt.jar.)
-        // 2) Reflection removes any build dependency between appletviewer
-        // and jdb.
-        try {
-            Class<?> c = Class.forName("com.sun.tools.example.debug.tty.TTY", true,
-                                    ClassLoader.getSystemClassLoader());
-            Method m = c.getDeclaredMethod("main",
-                                           new Class<?>[] { String[].class });
-            m.invoke(null, new Object[] { newArgs });
-        } catch (ClassNotFoundException cnfe) {
-            System.err.println(lookup("main.debug.cantfinddebug"));
-            return 1;
-        } catch (NoSuchMethodException nsme) {
-            System.err.println(lookup("main.debug.cantfindmain"));
-            return 1;
-        } catch (InvocationTargetException ite) {
-            System.err.println(lookup("main.debug.exceptionindebug"));
-            return 1;
-        } catch (IllegalAccessException iae) {
-            System.err.println(lookup("main.debug.cantaccess"));
-            return 1;
-        }
-        return 0;
     }
 
     private void init() {

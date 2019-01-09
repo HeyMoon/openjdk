@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -121,7 +121,7 @@ Node *CMoveNode::is_cmove_id( PhaseTransform *phase, Node *cmp, Node *t, Node *f
 //------------------------------Identity---------------------------------------
 // Conditional-move is an identity if both inputs are the same, or the test
 // true or false.
-Node *CMoveNode::Identity( PhaseTransform *phase ) {
+Node* CMoveNode::Identity(PhaseGVN* phase) {
   if( phase->eqv(in(IfFalse),in(IfTrue)) ) // C-moving identical inputs?
   return in(IfFalse);         // Then it doesn't matter
   if( phase->type(in(Condition)) == TypeInt::ZERO )
@@ -149,7 +149,7 @@ Node *CMoveNode::Identity( PhaseTransform *phase ) {
 
 //------------------------------Value------------------------------------------
 // Result is the meet of inputs
-const Type *CMoveNode::Value( PhaseTransform *phase ) const {
+const Type* CMoveNode::Value(PhaseGVN* phase) const {
   if( phase->type(in(Condition)) == Type::TOP )
   return Type::TOP;
   return phase->type(in(IfFalse))->meet_speculative(phase->type(in(IfTrue)));
@@ -230,9 +230,7 @@ Node *CMoveINode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
   // Convert to a bool (flipped)
   // Build int->bool conversion
-#ifndef PRODUCT
-  if( PrintOpto ) tty->print_cr("CMOV to I2B");
-#endif
+  if (PrintOpto) { tty->print_cr("CMOV to I2B"); }
   Node *n = new Conv2BNode( cmp->in(1) );
   if( flip )
   n = new XorINode( phase->transform(n), phase->intcon(1) );
@@ -353,7 +351,7 @@ Node *CMoveDNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 }
 
 //------------------------------Value------------------------------------------
-const Type *MoveL2DNode::Value( PhaseTransform *phase ) const {
+const Type* MoveL2DNode::Value(PhaseGVN* phase) const {
   const Type *t = phase->type( in(1) );
   if( t == Type::TOP ) return Type::TOP;
   const TypeLong *tl = t->is_long();
@@ -364,7 +362,7 @@ const Type *MoveL2DNode::Value( PhaseTransform *phase ) const {
 }
 
 //------------------------------Value------------------------------------------
-const Type *MoveI2FNode::Value( PhaseTransform *phase ) const {
+const Type* MoveI2FNode::Value(PhaseGVN* phase) const {
   const Type *t = phase->type( in(1) );
   if( t == Type::TOP ) return Type::TOP;
   const TypeInt *ti = t->is_int();
@@ -375,7 +373,7 @@ const Type *MoveI2FNode::Value( PhaseTransform *phase ) const {
 }
 
 //------------------------------Value------------------------------------------
-const Type *MoveF2INode::Value( PhaseTransform *phase ) const {
+const Type* MoveF2INode::Value(PhaseGVN* phase) const {
   const Type *t = phase->type( in(1) );
   if( t == Type::TOP )       return Type::TOP;
   if( t == Type::FLOAT ) return TypeInt::INT;
@@ -386,7 +384,7 @@ const Type *MoveF2INode::Value( PhaseTransform *phase ) const {
 }
 
 //------------------------------Value------------------------------------------
-const Type *MoveD2LNode::Value( PhaseTransform *phase ) const {
+const Type* MoveD2LNode::Value(PhaseGVN* phase) const {
   const Type *t = phase->type( in(1) );
   if( t == Type::TOP ) return Type::TOP;
   if( t == Type::DOUBLE ) return TypeLong::LONG;
@@ -396,3 +394,17 @@ const Type *MoveD2LNode::Value( PhaseTransform *phase ) const {
   return TypeLong::make( v.get_jlong() );
 }
 
+#ifndef PRODUCT
+//----------------------------BinaryNode---------------------------------------
+// The set of related nodes for a BinaryNode is all data inputs and all outputs
+// till level 2 (i.e., one beyond the associated CMoveNode). In compact mode,
+// it's the inputs till level 1 and the outputs till level 2.
+void BinaryNode::related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const {
+  if (compact) {
+    this->collect_nodes(in_rel, 1, false, true);
+  } else {
+    this->collect_nodes_in_all_data(in_rel, false);
+  }
+  this->collect_nodes(out_rel, -2, false, false);
+}
+#endif

@@ -34,19 +34,24 @@
 /*
  * @test
  * @bug 4486658
- * @run main/timeout=4500 SimpleReentrantLockLoops
  * @summary multiple threads using a single lock
+ * @library /lib/testlibrary/
  */
 
-import java.util.concurrent.*;
-import java.util.concurrent.locks.*;
-import java.util.*;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.ThreadLocalRandom;
+import jdk.testlibrary.Utils;
 
 public final class SimpleReentrantLockLoops {
+    static final long LONG_DELAY_MS = Utils.adjustTimeout(10_000);
     static final ExecutorService pool = Executors.newCachedThreadPool();
-    static final LoopHelpers.SimpleRandom rng = new LoopHelpers.SimpleRandom();
     static boolean print = false;
-    static int iters = 1000000;
+    static int iters = 100_000;
 
     public static void main(String[] args) throws Exception {
         int maxThreads = 5;
@@ -62,16 +67,15 @@ public final class SimpleReentrantLockLoops {
             while (n-- > 0) {
                 System.out.print("Threads: " + i);
                 new ReentrantLockLoop(i).test();
-                Thread.sleep(100);
             }
         }
         pool.shutdown();
-        if (! pool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS))
+        if (! pool.awaitTermination(LONG_DELAY_MS, MILLISECONDS))
             throw new Error();
     }
 
     static final class ReentrantLockLoop implements Runnable {
-        private int v = rng.next();
+        private int v = ThreadLocalRandom.current().nextInt();
         private volatile int result = 17;
         private final ReentrantLock lock = new ReentrantLock();
         private final LoopHelpers.BarrierTimer timer = new LoopHelpers.BarrierTimer();
@@ -127,7 +131,7 @@ public final class SimpleReentrantLockLoops {
                 barrier.await();
                 result += sum;
             }
-            catch (Exception ie) {
+            catch (Exception ex) {
                 return;
             }
         }

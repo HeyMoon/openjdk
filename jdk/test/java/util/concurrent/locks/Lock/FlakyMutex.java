@@ -28,9 +28,14 @@
  * @author Martin Buchholz
  */
 
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.locks.*;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.AbstractQueuedLongSynchronizer;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
 
 /**
  * This uses a variant of the standard Mutex demo, except with a
@@ -43,17 +48,6 @@ public class FlakyMutex implements Lock {
     static class MyException extends Exception {}
     static class MyRuntimeException extends RuntimeException {}
 
-    static final Random rnd = new Random();
-
-    static void maybeThrow() {
-        switch (rnd.nextInt(10)) {
-        case 0: throw new MyError();
-        case 1: throw new MyRuntimeException();
-        case 2: FlakyMutex.<RuntimeException>uncheckedThrow(new MyException());
-        default: /* Do nothing */ break;
-        }
-    }
-
     static void checkThrowable(Throwable t) {
         check((t instanceof MyError) ||
               (t instanceof MyException) ||
@@ -62,31 +56,35 @@ public class FlakyMutex implements Lock {
 
     static void realMain(String[] args) throws Throwable {
         final int nThreads = 3;
-        final CyclicBarrier barrier = new CyclicBarrier(nThreads + 1);
-        final FlakyMutex m = new FlakyMutex();
+        final int iterations = 10_000;
+        final CyclicBarrier startingGate = new CyclicBarrier(nThreads);
+        final FlakyMutex mutex = new FlakyMutex();
         final ExecutorService es = Executors.newFixedThreadPool(nThreads);
-        for (int i = 0; i < nThreads; i++) {
-            es.submit(new Runnable() { public void run() {
-                try {
-                    barrier.await();
-                    for (int i = 0; i < 10000; i++) {
-                        for (;;) {
-                            try { m.lock(); break; }
-                            catch (Throwable t) { checkThrowable(t); }
-                        }
-
-                        try { check(! m.tryLock()); }
+        final Runnable task = () -> {
+            try {
+                startingGate.await();
+                for (int i = 0; i < iterations; i++) {
+                    for (;;) {
+                        try { mutex.lock(); break; }
                         catch (Throwable t) { checkThrowable(t); }
-
-                        try { check(! m.tryLock(1, TimeUnit.MICROSECONDS)); }
-                        catch (Throwable t) { checkThrowable(t); }
-
-                        m.unlock();
                     }
-                } catch (Throwable t) { unexpected(t); }}});}
-        barrier.await();
+
+                    try { check(! mutex.tryLock()); }
+                    catch (Throwable t) { checkThrowable(t); }
+
+                    try { check(! mutex.tryLock(1, TimeUnit.MICROSECONDS)); }
+                    catch (Throwable t) { checkThrowable(t); }
+
+                    mutex.unlock();
+                }
+            } catch (Throwable t) { unexpected(t); }
+        };
+
+        for (int i = 0; i < nThreads; i++)
+            es.submit(task);
         es.shutdown();
-        check(es.awaitTermination(30, TimeUnit.SECONDS));
+        // Let test harness handle timeout
+        check(es.awaitTermination(Long.MAX_VALUE, TimeUnit.DAYS));
     }
 
     private static class FlakySync extends AbstractQueuedLongSynchronizer {
@@ -106,8 +104,12 @@ public class FlakyMutex implements Lock {
                 do {} while (hasQueuedPredecessors() != hasQueuedThreads());
             }
 
-            maybeThrow();
-            return compareAndSetState(0, 1);
+            switch (ThreadLocalRandom.current().nextInt(10)) {
+            case 0: throw new MyError();
+            case 1: throw new MyRuntimeException();
+            case 2: FlakyMutex.<RuntimeException>uncheckedThrow(new MyException());
+            default: return compareAndSetState(0, 1);
+            }
         }
 
         public boolean tryRelease(long releases) {
@@ -146,8 +148,8 @@ public class FlakyMutex implements Lock {
         try {realMain(args);} catch (Throwable t) {unexpected(t);}
         System.out.printf("%nPassed = %d, failed = %d%n%n", passed, failed);
         if (failed > 0) throw new AssertionError("Some tests failed");}
-    @SuppressWarnings("unchecked") static <T extends Throwable>
-        void uncheckedThrow(Throwable t) throws T {
+    @SuppressWarnings("unchecked")
+    static <T extends Throwable> void uncheckedThrow(Throwable t) throws T {
         throw (T)t; // rely on vacuous cast
     }
 }

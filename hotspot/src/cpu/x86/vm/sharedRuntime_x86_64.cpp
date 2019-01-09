@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,8 +32,9 @@
 #include "code/icBuffer.hpp"
 #include "code/vtableStubs.hpp"
 #include "interpreter/interpreter.hpp"
+#include "logging/log.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/compiledICHolder.hpp"
-#include "prims/jvmtiRedefineClassesTrace.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/vframeArray.hpp"
 #include "vmreg_x86.inline.hpp"
@@ -42,6 +43,9 @@
 #endif
 #ifdef COMPILER2
 #include "opto/runtime.hpp"
+#endif
+#if INCLUDE_JVMCI
+#include "jvmci/jvmciJavaClasses.hpp"
 #endif
 
 #define __ masm->
@@ -69,43 +73,29 @@ class SimpleRuntimeFrame {
 class RegisterSaver {
   // Capture info about frame layout.  Layout offsets are in jint
   // units because compiler frame slots are jints.
+#define XSAVE_AREA_BEGIN 160
+#define XSAVE_AREA_YMM_BEGIN 576
+#define XSAVE_AREA_ZMM_BEGIN 1152
+#define XSAVE_AREA_UPPERBANK 1664
 #define DEF_XMM_OFFS(regnum) xmm ## regnum ## _off = xmm_off + (regnum)*16/BytesPerInt, xmm ## regnum ## H_off
+#define DEF_YMM_OFFS(regnum) ymm ## regnum ## _off = ymm_off + (regnum)*16/BytesPerInt, ymm ## regnum ## H_off
+#define DEF_ZMM_OFFS(regnum) zmm ## regnum ## _off = zmm_off + (regnum-16)*64/BytesPerInt, zmm ## regnum ## H_off
   enum layout {
     fpu_state_off = frame::arg_reg_save_area_bytes/BytesPerInt, // fxsave save area
-    xmm_off       = fpu_state_off + 160/BytesPerInt,            // offset in fxsave save area
+    xmm_off       = fpu_state_off + XSAVE_AREA_BEGIN/BytesPerInt,            // offset in fxsave save area
     DEF_XMM_OFFS(0),
     DEF_XMM_OFFS(1),
-    DEF_XMM_OFFS(2),
-    DEF_XMM_OFFS(3),
-    DEF_XMM_OFFS(4),
-    DEF_XMM_OFFS(5),
-    DEF_XMM_OFFS(6),
-    DEF_XMM_OFFS(7),
-    DEF_XMM_OFFS(8),
-    DEF_XMM_OFFS(9),
-    DEF_XMM_OFFS(10),
-    DEF_XMM_OFFS(11),
-    DEF_XMM_OFFS(12),
-    DEF_XMM_OFFS(13),
-    DEF_XMM_OFFS(14),
-    DEF_XMM_OFFS(15),
-    DEF_XMM_OFFS(16),
-    DEF_XMM_OFFS(17),
-    DEF_XMM_OFFS(18),
-    DEF_XMM_OFFS(19),
-    DEF_XMM_OFFS(20),
-    DEF_XMM_OFFS(21),
-    DEF_XMM_OFFS(22),
-    DEF_XMM_OFFS(23),
-    DEF_XMM_OFFS(24),
-    DEF_XMM_OFFS(25),
-    DEF_XMM_OFFS(26),
-    DEF_XMM_OFFS(27),
-    DEF_XMM_OFFS(28),
-    DEF_XMM_OFFS(29),
-    DEF_XMM_OFFS(30),
-    DEF_XMM_OFFS(31),
-    fpu_state_end = fpu_state_off + ((FPUStateSizeInWords - 1)*wordSize / BytesPerInt),
+    // 2..15 are implied in range usage
+    ymm_off = xmm_off + (XSAVE_AREA_YMM_BEGIN - XSAVE_AREA_BEGIN)/BytesPerInt,
+    DEF_YMM_OFFS(0),
+    DEF_YMM_OFFS(1),
+    // 2..15 are implied in range usage
+    zmm_high = xmm_off + (XSAVE_AREA_ZMM_BEGIN - XSAVE_AREA_BEGIN)/BytesPerInt,
+    zmm_off = xmm_off + (XSAVE_AREA_UPPERBANK - XSAVE_AREA_BEGIN)/BytesPerInt,
+    DEF_ZMM_OFFS(16),
+    DEF_ZMM_OFFS(17),
+    // 18..31 are implied in range usage
+    fpu_state_end = fpu_state_off + ((FPUStateSizeInWords-1)*wordSize / BytesPerInt),
     fpu_stateH_end,
     r15_off, r15H_off,
     r14_off, r14H_off,
@@ -154,34 +144,24 @@ class RegisterSaver {
 };
 
 OopMap* RegisterSaver::save_live_registers(MacroAssembler* masm, int additional_frame_words, int* total_frame_words, bool save_vectors) {
-  int vect_words = 0;
-  int num_xmm_regs = 16;
-  if (UseAVX > 2) {
-    num_xmm_regs = 32;
+  int off = 0;
+  int num_xmm_regs = XMMRegisterImpl::number_of_registers;
+  if (UseAVX < 3) {
+    num_xmm_regs = num_xmm_regs/2;
   }
-#ifdef COMPILER2
+#if defined(COMPILER2) || INCLUDE_JVMCI
   if (save_vectors) {
-    assert(UseAVX > 0, "512bit vectors are supported only with EVEX");
-    assert(MaxVectorSize == 64, "only 512bit vectors are supported now");
-    // Save upper half of YMM registers
-    vect_words = 16 * num_xmm_regs / wordSize;
-    additional_frame_words += vect_words;
-    if (UseAVX > 2) {
-      // Save upper half of ZMM registers as well
-      additional_frame_words += vect_words;
-    }
+    assert(UseAVX > 0, "up to 512bit vectors are supported with EVEX");
+    assert(MaxVectorSize <= 64, "up to 512bit vectors are supported now");
   }
 #else
-  assert(!save_vectors, "vectors are generated only by C2");
+  assert(!save_vectors, "vectors are generated only by C2 and JVMCI");
 #endif
 
-  // Always make the frame size 16-byte aligned
-  int frame_size_in_bytes = round_to(additional_frame_words*wordSize +
-                                     reg_save_size*BytesPerInt, num_xmm_regs);
+  // Always make the frame size 16-byte aligned, both vector and non vector stacks are always allocated
+  int frame_size_in_bytes = round_to(reg_save_size*BytesPerInt, num_xmm_regs);
   // OopMap frame size is in compiler stack slots (jint's) not bytes or words
   int frame_size_in_slots = frame_size_in_bytes / BytesPerInt;
-  // The caller will allocate additional_frame_words
-  int additional_frame_slots = additional_frame_words*wordSize / BytesPerInt;
   // CodeBlob frame size is in words.
   int frame_size_in_words = frame_size_in_bytes / wordSize;
   *total_frame_words = frame_size_in_words;
@@ -195,77 +175,35 @@ OopMap* RegisterSaver::save_live_registers(MacroAssembler* masm, int additional_
   __ enter();          // rsp becomes 16-byte aligned here
   __ push_CPU_state(); // Push a multiple of 16 bytes
 
-  if (vect_words > 0) {
-    assert(vect_words*wordSize >= 256, "");
-    __ subptr(rsp, 256); // Save upper half of YMM registes(0..15)
-    __ vextractf128h(Address(rsp, 0), xmm0);
-    __ vextractf128h(Address(rsp, 16), xmm1);
-    __ vextractf128h(Address(rsp, 32), xmm2);
-    __ vextractf128h(Address(rsp, 48), xmm3);
-    __ vextractf128h(Address(rsp, 64), xmm4);
-    __ vextractf128h(Address(rsp, 80), xmm5);
-    __ vextractf128h(Address(rsp, 96), xmm6);
-    __ vextractf128h(Address(rsp, 112), xmm7);
-    __ vextractf128h(Address(rsp, 128), xmm8);
-    __ vextractf128h(Address(rsp, 144), xmm9);
-    __ vextractf128h(Address(rsp, 160), xmm10);
-    __ vextractf128h(Address(rsp, 176), xmm11);
-    __ vextractf128h(Address(rsp, 192), xmm12);
-    __ vextractf128h(Address(rsp, 208), xmm13);
-    __ vextractf128h(Address(rsp, 224), xmm14);
-    __ vextractf128h(Address(rsp, 240), xmm15);
-    if (UseAVX > 2) {
-      __ subptr(rsp, 256); // Save upper half of YMM registes(16..31)
-      __ vextractf128h(Address(rsp, 0), xmm16);
-      __ vextractf128h(Address(rsp, 16), xmm17);
-      __ vextractf128h(Address(rsp, 32), xmm18);
-      __ vextractf128h(Address(rsp, 48), xmm19);
-      __ vextractf128h(Address(rsp, 64), xmm20);
-      __ vextractf128h(Address(rsp, 80), xmm21);
-      __ vextractf128h(Address(rsp, 96), xmm22);
-      __ vextractf128h(Address(rsp, 112), xmm23);
-      __ vextractf128h(Address(rsp, 128), xmm24);
-      __ vextractf128h(Address(rsp, 144), xmm25);
-      __ vextractf128h(Address(rsp, 160), xmm26);
-      __ vextractf128h(Address(rsp, 176), xmm27);
-      __ vextractf128h(Address(rsp, 192), xmm28);
-      __ vextractf128h(Address(rsp, 208), xmm29);
-      __ vextractf128h(Address(rsp, 224), xmm30);
-      __ vextractf128h(Address(rsp, 240), xmm31);
-      // Now handle the ZMM registers (0..31)
-      __ subptr(rsp, 1024); // Save upper half of ZMM registes
-      __ vextractf64x4h(Address(rsp, 0), xmm0);
-      __ vextractf64x4h(Address(rsp, 32), xmm1);
-      __ vextractf64x4h(Address(rsp, 64), xmm2);
-      __ vextractf64x4h(Address(rsp, 96), xmm3);
-      __ vextractf64x4h(Address(rsp, 128), xmm4);
-      __ vextractf64x4h(Address(rsp, 160), xmm5);
-      __ vextractf64x4h(Address(rsp, 192), xmm6);
-      __ vextractf64x4h(Address(rsp, 224), xmm7);
-      __ vextractf64x4h(Address(rsp, 256), xmm8);
-      __ vextractf64x4h(Address(rsp, 288), xmm9);
-      __ vextractf64x4h(Address(rsp, 320), xmm10);
-      __ vextractf64x4h(Address(rsp, 352), xmm11);
-      __ vextractf64x4h(Address(rsp, 384), xmm12);
-      __ vextractf64x4h(Address(rsp, 416), xmm13);
-      __ vextractf64x4h(Address(rsp, 448), xmm14);
-      __ vextractf64x4h(Address(rsp, 480), xmm15);
-      __ vextractf64x4h(Address(rsp, 512), xmm16);
-      __ vextractf64x4h(Address(rsp, 544), xmm17);
-      __ vextractf64x4h(Address(rsp, 576), xmm18);
-      __ vextractf64x4h(Address(rsp, 608), xmm19);
-      __ vextractf64x4h(Address(rsp, 640), xmm20);
-      __ vextractf64x4h(Address(rsp, 672), xmm21);
-      __ vextractf64x4h(Address(rsp, 704), xmm22);
-      __ vextractf64x4h(Address(rsp, 736), xmm23);
-      __ vextractf64x4h(Address(rsp, 768), xmm24);
-      __ vextractf64x4h(Address(rsp, 800), xmm25);
-      __ vextractf64x4h(Address(rsp, 832), xmm26);
-      __ vextractf64x4h(Address(rsp, 864), xmm27);
-      __ vextractf64x4h(Address(rsp, 896), xmm28);
-      __ vextractf64x4h(Address(rsp, 928), xmm29);
-      __ vextractf64x4h(Address(rsp, 960), xmm30);
-      __ vextractf64x4h(Address(rsp, 992), xmm31);
+  // push cpu state handles this on EVEX enabled targets
+  if (save_vectors) {
+    // Save upper half of YMM registers(0..15)
+    int base_addr = XSAVE_AREA_YMM_BEGIN;
+    for (int n = 0; n < 16; n++) {
+      __ vextractf128_high(Address(rsp, base_addr+n*16), as_XMMRegister(n));
+    }
+    if (VM_Version::supports_evex()) {
+      // Save upper half of ZMM registers(0..15)
+      base_addr = XSAVE_AREA_ZMM_BEGIN;
+      for (int n = 0; n < 16; n++) {
+        __ vextractf64x4_high(Address(rsp, base_addr+n*32), as_XMMRegister(n));
+      }
+      // Save full ZMM registers(16..num_xmm_regs)
+      base_addr = XSAVE_AREA_UPPERBANK;
+      off = 0;
+      int vector_len = Assembler::AVX_512bit;
+      for (int n = 16; n < num_xmm_regs; n++) {
+        __ evmovdqul(Address(rsp, base_addr+(off++*64)), as_XMMRegister(n), vector_len);
+      }
+    }
+  } else {
+    if (VM_Version::supports_evex()) {
+      // Save upper bank of ZMM registers(16..31) for double/float usage
+      int base_addr = XSAVE_AREA_UPPERBANK;
+      off = 0;
+      for (int n = 16; n < num_xmm_regs; n++) {
+        __ movsd(Address(rsp, base_addr+(off++*64)), as_XMMRegister(n));
+      }
     }
   }
   if (frame::arg_reg_save_area_bytes != 0) {
@@ -281,7 +219,7 @@ OopMap* RegisterSaver::save_live_registers(MacroAssembler* masm, int additional_
   OopMapSet *oop_maps = new OopMapSet();
   OopMap* map = new OopMap(frame_size_in_slots, 0);
 
-#define STACK_OFFSET(x) VMRegImpl::stack2reg((x) + additional_frame_slots)
+#define STACK_OFFSET(x) VMRegImpl::stack2reg((x))
 
   map->set_callee_saved(STACK_OFFSET( rax_off ), rax->as_VMReg());
   map->set_callee_saved(STACK_OFFSET( rcx_off ), rcx->as_VMReg());
@@ -299,40 +237,37 @@ OopMap* RegisterSaver::save_live_registers(MacroAssembler* masm, int additional_
   map->set_callee_saved(STACK_OFFSET( r13_off ), r13->as_VMReg());
   map->set_callee_saved(STACK_OFFSET( r14_off ), r14->as_VMReg());
   map->set_callee_saved(STACK_OFFSET( r15_off ), r15->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm0_off ), xmm0->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm1_off ), xmm1->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm2_off ), xmm2->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm3_off ), xmm3->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm4_off ), xmm4->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm5_off ), xmm5->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm6_off ), xmm6->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm7_off ), xmm7->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm8_off ), xmm8->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm9_off ), xmm9->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm10_off), xmm10->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm11_off), xmm11->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm12_off), xmm12->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm13_off), xmm13->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm14_off), xmm14->as_VMReg());
-  map->set_callee_saved(STACK_OFFSET(xmm15_off), xmm15->as_VMReg());
-  if (UseAVX > 2) {
-    map->set_callee_saved(STACK_OFFSET(xmm16_off), xmm16->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm17_off), xmm17->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm18_off), xmm18->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm19_off), xmm19->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm20_off), xmm20->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm21_off), xmm21->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm22_off), xmm22->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm23_off), xmm23->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm24_off), xmm24->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm25_off), xmm25->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm26_off), xmm26->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm27_off), xmm27->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm28_off), xmm28->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm29_off), xmm29->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm30_off), xmm30->as_VMReg());
-    map->set_callee_saved(STACK_OFFSET(xmm31_off), xmm31->as_VMReg());
+  // For both AVX and EVEX we will use the legacy FXSAVE area for xmm0..xmm15,
+  // on EVEX enabled targets, we get it included in the xsave area
+  off = xmm0_off;
+  int delta = xmm1_off - off;
+  for (int n = 0; n < 16; n++) {
+    XMMRegister xmm_name = as_XMMRegister(n);
+    map->set_callee_saved(STACK_OFFSET(off), xmm_name->as_VMReg());
+    off += delta;
   }
+  if(UseAVX > 2) {
+    // Obtain xmm16..xmm31 from the XSAVE area on EVEX enabled targets
+    off = zmm16_off;
+    delta = zmm17_off - off;
+    for (int n = 16; n < num_xmm_regs; n++) {
+      XMMRegister zmm_name = as_XMMRegister(n);
+      map->set_callee_saved(STACK_OFFSET(off), zmm_name->as_VMReg());
+      off += delta;
+    }
+  }
+
+#if defined(COMPILER2) || INCLUDE_JVMCI
+  if (save_vectors) {
+    off = ymm0_off;
+    int delta = ymm1_off - off;
+    for (int n = 0; n < 16; n++) {
+      XMMRegister ymm_name = as_XMMRegister(n);
+      map->set_callee_saved(STACK_OFFSET(off), ymm_name->as_VMReg()->next(4));
+      off += delta;
+    }
+  }
+#endif // COMPILER2 || INCLUDE_JVMCI
 
   // %%% These should all be a waste but we'll keep things as they were for now
   if (true) {
@@ -351,39 +286,24 @@ OopMap* RegisterSaver::save_live_registers(MacroAssembler* masm, int additional_
     map->set_callee_saved(STACK_OFFSET( r13H_off ), r13->as_VMReg()->next());
     map->set_callee_saved(STACK_OFFSET( r14H_off ), r14->as_VMReg()->next());
     map->set_callee_saved(STACK_OFFSET( r15H_off ), r15->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm0H_off ), xmm0->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm1H_off ), xmm1->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm2H_off ), xmm2->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm3H_off ), xmm3->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm4H_off ), xmm4->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm5H_off ), xmm5->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm6H_off ), xmm6->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm7H_off ), xmm7->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm8H_off ), xmm8->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm9H_off ), xmm9->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm10H_off), xmm10->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm11H_off), xmm11->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm12H_off), xmm12->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm13H_off), xmm13->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm14H_off), xmm14->as_VMReg()->next());
-    map->set_callee_saved(STACK_OFFSET(xmm15H_off), xmm15->as_VMReg()->next());
+    // For both AVX and EVEX we will use the legacy FXSAVE area for xmm0..xmm15,
+    // on EVEX enabled targets, we get it included in the xsave area
+    off = xmm0H_off;
+    delta = xmm1H_off - off;
+    for (int n = 0; n < 16; n++) {
+      XMMRegister xmm_name = as_XMMRegister(n);
+      map->set_callee_saved(STACK_OFFSET(off), xmm_name->as_VMReg()->next());
+      off += delta;
+    }
     if (UseAVX > 2) {
-      map->set_callee_saved(STACK_OFFSET(xmm16H_off), xmm16->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm17H_off), xmm17->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm18H_off), xmm18->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm19H_off), xmm19->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm20H_off), xmm20->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm21H_off), xmm21->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm22H_off), xmm22->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm23H_off), xmm23->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm24H_off), xmm24->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm25H_off), xmm25->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm26H_off), xmm26->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm27H_off), xmm27->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm28H_off), xmm28->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm29H_off), xmm29->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm30H_off), xmm30->as_VMReg()->next());
-      map->set_callee_saved(STACK_OFFSET(xmm31H_off), xmm31->as_VMReg()->next());
+      // Obtain xmm16..xmm31 from the XSAVE area on EVEX enabled targets
+      off = zmm16H_off;
+      delta = zmm17H_off - off;
+      for (int n = 16; n < num_xmm_regs; n++) {
+        XMMRegister zmm_name = as_XMMRegister(n);
+        map->set_callee_saved(STACK_OFFSET(off), zmm_name->as_VMReg()->next());
+        off += delta;
+      }
     }
   }
 
@@ -391,90 +311,56 @@ OopMap* RegisterSaver::save_live_registers(MacroAssembler* masm, int additional_
 }
 
 void RegisterSaver::restore_live_registers(MacroAssembler* masm, bool restore_vectors) {
+  int num_xmm_regs = XMMRegisterImpl::number_of_registers;
+  if (UseAVX < 3) {
+    num_xmm_regs = num_xmm_regs/2;
+  }
   if (frame::arg_reg_save_area_bytes != 0) {
     // Pop arg register save area
     __ addptr(rsp, frame::arg_reg_save_area_bytes);
   }
-#ifdef COMPILER2
+
+#if defined(COMPILER2) || INCLUDE_JVMCI
   if (restore_vectors) {
-    // Restore upper half of YMM registes (0..15)
-    assert(UseAVX > 0, "512bit vectors are supported only with AVX");
-    assert(MaxVectorSize == 64, "only 512bit vectors are supported now");
-    __ vinsertf128h(xmm0, Address(rsp,  0));
-    __ vinsertf128h(xmm1, Address(rsp, 16));
-    __ vinsertf128h(xmm2, Address(rsp, 32));
-    __ vinsertf128h(xmm3, Address(rsp, 48));
-    __ vinsertf128h(xmm4, Address(rsp, 64));
-    __ vinsertf128h(xmm5, Address(rsp, 80));
-    __ vinsertf128h(xmm6, Address(rsp, 96));
-    __ vinsertf128h(xmm7, Address(rsp,112));
-    __ vinsertf128h(xmm8, Address(rsp,128));
-    __ vinsertf128h(xmm9, Address(rsp,144));
-    __ vinsertf128h(xmm10, Address(rsp,160));
-    __ vinsertf128h(xmm11, Address(rsp,176));
-    __ vinsertf128h(xmm12, Address(rsp,192));
-    __ vinsertf128h(xmm13, Address(rsp,208));
-    __ vinsertf128h(xmm14, Address(rsp,224));
-    __ vinsertf128h(xmm15, Address(rsp,240));
-    __ addptr(rsp, 256);
-    if (UseAVX > 2) {
-      // Restore upper half of YMM registes (16..31)
-      __ vinsertf128h(xmm16, Address(rsp,  0));
-      __ vinsertf128h(xmm17, Address(rsp, 16));
-      __ vinsertf128h(xmm18, Address(rsp, 32));
-      __ vinsertf128h(xmm19, Address(rsp, 48));
-      __ vinsertf128h(xmm20, Address(rsp, 64));
-      __ vinsertf128h(xmm21, Address(rsp, 80));
-      __ vinsertf128h(xmm22, Address(rsp, 96));
-      __ vinsertf128h(xmm23, Address(rsp,112));
-      __ vinsertf128h(xmm24, Address(rsp,128));
-      __ vinsertf128h(xmm25, Address(rsp,144));
-      __ vinsertf128h(xmm26, Address(rsp,160));
-      __ vinsertf128h(xmm27, Address(rsp,176));
-      __ vinsertf128h(xmm28, Address(rsp,192));
-      __ vinsertf128h(xmm29, Address(rsp,208));
-      __ vinsertf128h(xmm30, Address(rsp,224));
-      __ vinsertf128h(xmm31, Address(rsp,240));
-      __ addptr(rsp, 256);
-      // Restore upper half of ZMM registes.
-      __ vinsertf64x4h(xmm0, Address(rsp, 0));
-      __ vinsertf64x4h(xmm1, Address(rsp, 32));
-      __ vinsertf64x4h(xmm2, Address(rsp, 64));
-      __ vinsertf64x4h(xmm3, Address(rsp, 96));
-      __ vinsertf64x4h(xmm4, Address(rsp, 128));
-      __ vinsertf64x4h(xmm5, Address(rsp, 160));
-      __ vinsertf64x4h(xmm6, Address(rsp, 192));
-      __ vinsertf64x4h(xmm7, Address(rsp, 224));
-      __ vinsertf64x4h(xmm8, Address(rsp, 256));
-      __ vinsertf64x4h(xmm9, Address(rsp, 288));
-      __ vinsertf64x4h(xmm10, Address(rsp, 320));
-      __ vinsertf64x4h(xmm11, Address(rsp, 352));
-      __ vinsertf64x4h(xmm12, Address(rsp, 384));
-      __ vinsertf64x4h(xmm13, Address(rsp, 416));
-      __ vinsertf64x4h(xmm14, Address(rsp, 448));
-      __ vinsertf64x4h(xmm15, Address(rsp, 480));
-      __ vinsertf64x4h(xmm16, Address(rsp, 512));
-      __ vinsertf64x4h(xmm17, Address(rsp, 544));
-      __ vinsertf64x4h(xmm18, Address(rsp, 576));
-      __ vinsertf64x4h(xmm19, Address(rsp, 608));
-      __ vinsertf64x4h(xmm20, Address(rsp, 640));
-      __ vinsertf64x4h(xmm21, Address(rsp, 672));
-      __ vinsertf64x4h(xmm22, Address(rsp, 704));
-      __ vinsertf64x4h(xmm23, Address(rsp, 736));
-      __ vinsertf64x4h(xmm24, Address(rsp, 768));
-      __ vinsertf64x4h(xmm25, Address(rsp, 800));
-      __ vinsertf64x4h(xmm26, Address(rsp, 832));
-      __ vinsertf64x4h(xmm27, Address(rsp, 864));
-      __ vinsertf64x4h(xmm28, Address(rsp, 896));
-      __ vinsertf64x4h(xmm29, Address(rsp, 928));
-      __ vinsertf64x4h(xmm30, Address(rsp, 960));
-      __ vinsertf64x4h(xmm31, Address(rsp, 992));
-      __ addptr(rsp, 1024);
-    }
+    assert(UseAVX > 0, "up to 512bit vectors are supported with EVEX");
+    assert(MaxVectorSize <= 64, "up to 512bit vectors are supported now");
   }
 #else
   assert(!restore_vectors, "vectors are generated only by C2");
 #endif
+
+  // On EVEX enabled targets everything is handled in pop fpu state
+  if (restore_vectors) {
+    // Restore upper half of YMM registers (0..15)
+    int base_addr = XSAVE_AREA_YMM_BEGIN;
+    for (int n = 0; n < 16; n++) {
+      __ vinsertf128_high(as_XMMRegister(n), Address(rsp, base_addr+n*16));
+    }
+    if (VM_Version::supports_evex()) {
+      // Restore upper half of ZMM registers (0..15)
+      base_addr = XSAVE_AREA_ZMM_BEGIN;
+      for (int n = 0; n < 16; n++) {
+        __ vinsertf64x4_high(as_XMMRegister(n), Address(rsp, base_addr+n*32));
+      }
+      // Restore full ZMM registers(16..num_xmm_regs)
+      base_addr = XSAVE_AREA_UPPERBANK;
+      int vector_len = Assembler::AVX_512bit;
+      int off = 0;
+      for (int n = 16; n < num_xmm_regs; n++) {
+        __ evmovdqul(as_XMMRegister(n), Address(rsp, base_addr+(off++*64)), vector_len);
+      }
+    }
+  } else {
+    if (VM_Version::supports_evex()) {
+      // Restore upper bank of ZMM registers(16..31) for double/float usage
+      int base_addr = XSAVE_AREA_UPPERBANK;
+      int off = 0;
+      for (int n = 16; n < num_xmm_regs; n++) {
+        __ movsd(as_XMMRegister(n), Address(rsp, base_addr+(off++*64)));
+      }
+    }
+  }
+
   // Recover CPU state
   __ pop_CPU_state();
   // Get the rbp described implicitly by the calling convention (no oopMap)
@@ -503,6 +389,14 @@ void RegisterSaver::restore_result_registers(MacroAssembler* masm) {
 // 16 bytes XMM registers are saved by default using fxsave/fxrstor instructions.
 bool SharedRuntime::is_wide_vector(int size) {
   return size > 16;
+}
+
+size_t SharedRuntime::trampoline_size() {
+  return 16;
+}
+
+void SharedRuntime::generate_trampoline(MacroAssembler *masm, address destination) {
+  __ jump(RuntimeAddress(destination));
 }
 
 // The java_calling_convention describes stack locations as ideal slots on
@@ -580,7 +474,7 @@ int SharedRuntime::java_calling_convention(const BasicType *sig_bt,
       regs[i].set_bad();
       break;
     case T_LONG:
-      assert(sig_bt[i + 1] == T_VOID, "expecting half");
+      assert((i + 1) < total_args_passed && sig_bt[i + 1] == T_VOID, "expecting half");
       // fall through
     case T_OBJECT:
     case T_ARRAY:
@@ -601,7 +495,7 @@ int SharedRuntime::java_calling_convention(const BasicType *sig_bt,
       }
       break;
     case T_DOUBLE:
-      assert(sig_bt[i + 1] == T_VOID, "expecting half");
+      assert((i + 1) < total_args_passed && sig_bt[i + 1] == T_VOID, "expecting half");
       if (fp_args < Argument::n_float_register_parameters_j) {
         regs[i].set2(FP_ArgReg[fp_args++]->as_VMReg());
       } else {
@@ -808,11 +702,11 @@ static void range_check(MacroAssembler* masm, Register pc_reg, Register temp_reg
   __ bind(L_fail);
 }
 
-static void gen_i2c_adapter(MacroAssembler *masm,
-                            int total_args_passed,
-                            int comp_args_on_stack,
-                            const BasicType *sig_bt,
-                            const VMRegPair *regs) {
+void SharedRuntime::gen_i2c_adapter(MacroAssembler *masm,
+                                    int total_args_passed,
+                                    int comp_args_on_stack,
+                                    const BasicType *sig_bt,
+                                    const VMRegPair *regs) {
 
   // Note: r13 contains the senderSP on entry. We must preserve it since
   // we may do a i2c -> c2i transition if we lose a race where compiled
@@ -904,6 +798,18 @@ static void gen_i2c_adapter(MacroAssembler *masm,
   // Will jump to the compiled code just as if compiled code was doing it.
   // Pre-load the register-jump target early, to schedule it better.
   __ movptr(r11, Address(rbx, in_bytes(Method::from_compiled_offset())));
+
+#if INCLUDE_JVMCI
+  if (EnableJVMCI || UseAOT) {
+    // check if this call should be routed towards a specific entry point
+    __ cmpptr(Address(r15_thread, in_bytes(JavaThread::jvmci_alternate_call_target_offset())), 0);
+    Label no_alternative_target;
+    __ jcc(Assembler::equal, no_alternative_target);
+    __ movptr(r11, Address(r15_thread, in_bytes(JavaThread::jvmci_alternate_call_target_offset())));
+    __ movptr(Address(r15_thread, in_bytes(JavaThread::jvmci_alternate_call_target_offset())), 0);
+    __ bind(no_alternative_target);
+  }
+#endif // INCLUDE_JVMCI
 
   // Now generate the shuffle code.  Pick up all register args and move the
   // rest through the floating point stack top.
@@ -1108,7 +1014,7 @@ int SharedRuntime::c_calling_convention(const BasicType *sig_bt,
         }
         break;
       case T_LONG:
-        assert(sig_bt[i + 1] == T_VOID, "expecting half");
+        assert((i + 1) < total_args_passed && sig_bt[i + 1] == T_VOID, "expecting half");
         // fall through
       case T_OBJECT:
       case T_ARRAY:
@@ -1139,7 +1045,7 @@ int SharedRuntime::c_calling_convention(const BasicType *sig_bt,
         }
         break;
       case T_DOUBLE:
-        assert(sig_bt[i + 1] == T_VOID, "expecting half");
+        assert((i + 1) < total_args_passed && sig_bt[i + 1] == T_VOID, "expecting half");
         if (fp_args < Argument::n_float_register_parameters_c) {
           regs[i].set2(FP_ArgReg[fp_args++]->as_VMReg());
 #ifdef _WIN64
@@ -1519,7 +1425,7 @@ static void save_or_restore_arguments(MacroAssembler* masm,
 }
 
 
-// Check GC_locker::needs_gc and enter the runtime if it's true.  This
+// Check GCLocker::needs_gc and enter the runtime if it's true.  This
 // keeps a new JNI critical region from starting until a GC has been
 // forced.  Save down any oops in registers and describe them in an
 // OopMap.
@@ -1531,9 +1437,9 @@ static void check_needs_gc_for_critical_native(MacroAssembler* masm,
                                                OopMapSet* oop_maps,
                                                VMRegPair* in_regs,
                                                BasicType* in_sig_bt) {
-  __ block_comment("check GC_locker::needs_gc");
+  __ block_comment("check GCLocker::needs_gc");
   Label cont;
-  __ cmp8(ExternalAddress((address)GC_locker::needs_gc_address()), false);
+  __ cmp8(ExternalAddress((address)GCLocker::needs_gc_address()), false);
   __ jcc(Assembler::equal, cont);
 
   // Save down any incoming oops and call into the runtime to halt for a GC
@@ -1555,7 +1461,7 @@ static void check_needs_gc_for_critical_native(MacroAssembler* masm,
   __ mov(rsp, r12); // restore sp
   __ reinit_heapbase();
 
-  __ reset_last_Java_frame(false, true);
+  __ reset_last_Java_frame(false);
 
   save_or_restore_arguments(masm, stack_slots, total_in_args,
                             arg_save_area, NULL, in_regs, in_sig_bt);
@@ -1807,7 +1713,7 @@ class ComputeMoveOrder: public StackObj {
 };
 
 static void verify_oop_args(MacroAssembler* masm,
-                            methodHandle method,
+                            const methodHandle& method,
                             const BasicType* sig_bt,
                             const VMRegPair* regs) {
   Register temp_reg = rbx;  // not part of any compiled calling seq
@@ -1848,7 +1754,7 @@ static void gen_special_dispatch(MacroAssembler* masm,
   } else if (iid == vmIntrinsics::_invokeBasic) {
     has_receiver = true;
   } else {
-    fatal(err_msg_res("unexpected intrinsic id %d", iid));
+    fatal("unexpected intrinsic id %d", iid);
   }
 
   if (member_reg != noreg) {
@@ -1898,14 +1804,14 @@ static void gen_special_dispatch(MacroAssembler* masm,
 // GetPrimtiveArrayCritical and disallow the use of any other JNI
 // functions.  The wrapper is expected to unpack the arguments before
 // passing them to the callee and perform checks before and after the
-// native call to ensure that they GC_locker
+// native call to ensure that they GCLocker
 // lock_critical/unlock_critical semantics are followed.  Some other
 // parts of JNI setup are skipped like the tear down of the JNI handle
 // block and the check for pending exceptions it's impossible for them
 // to be thrown.
 //
 // They are roughly structured like this:
-//    if (GC_locker::needs_gc())
+//    if (GCLocker::needs_gc())
 //      SharedRuntime::block_for_jni_critical();
 //    tranistion to thread_in_native
 //    unpack arrray arguments and call native entry point
@@ -1917,7 +1823,7 @@ static void gen_special_dispatch(MacroAssembler* masm,
 //    return to caller
 //
 nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
-                                                methodHandle method,
+                                                const methodHandle& method,
                                                 int compile_id,
                                                 BasicType* in_sig_bt,
                                                 VMRegPair* in_regs,
@@ -2161,6 +2067,13 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
 
   int vep_offset = ((intptr_t)__ pc()) - start;
 
+#ifdef COMPILER1
+  // For Object.hashCode, System.identityHashCode try to pull hashCode from object header if available.
+  if ((InlineObjectHash && method->intrinsic_id() == vmIntrinsics::_hashCode) || (method->intrinsic_id() == vmIntrinsics::_identityHashCode)) {
+    inline_check_hashcode_from_object_header(masm, method, j_rarg0 /*obj_reg*/, rax /*result*/);
+  }
+#endif // COMPILER1
+
   // The instruction at the verified entry point must be 5 bytes or longer
   // because it can be patched on the fly by make_non_entrant. The stack bang
   // instruction fits that requirement.
@@ -2168,7 +2081,7 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
   // Generate stack overflow check
 
   if (UseStackBanging) {
-    __ bang_stack_with_offset(StackShadowPages*os::vm_page_size());
+    __ bang_stack_with_offset((int)JavaThread::stack_shadow_zone_size());
   } else {
     // need a 5 byte instruction to allow MT safe patching to non-entrant
     __ fat_nop();
@@ -2409,7 +2322,7 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
   }
 
   // RedefineClasses() tracing support for obsolete method entry
-  if (RC_TRACE_IN_RANGE(0x00001000, 0x00002000)) {
+  if (log_is_enabled(Trace, redefine, class, obsolete)) {
     // protect the args we've loaded
     save_args(masm, total_c_args, c_arg, out_regs);
     __ mov_metadata(c_rarg1, method());
@@ -2602,7 +2515,7 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
 
   Label reguard;
   Label reguard_done;
-  __ cmpl(Address(r15_thread, JavaThread::stack_guard_state_offset()), JavaThread::stack_guard_yellow_disabled);
+  __ cmpl(Address(r15_thread, JavaThread::stack_guard_state_offset()), JavaThread::stack_guard_yellow_reserved_disabled);
   __ jcc(Assembler::equal, reguard);
   __ bind(reguard_done);
 
@@ -2664,16 +2577,18 @@ nmethod* SharedRuntime::generate_native_wrapper(MacroAssembler* masm,
     restore_native_result(masm, ret_type, stack_slots);
   }
 
-  __ reset_last_Java_frame(false, true);
+  __ reset_last_Java_frame(false);
 
-  // Unpack oop result
+  // Unbox oop result, e.g. JNIHandles::resolve value.
   if (ret_type == T_OBJECT || ret_type == T_ARRAY) {
-      Label L;
-      __ testptr(rax, rax);
-      __ jcc(Assembler::zero, L);
-      __ movptr(rax, Address(rax, 0));
-      __ bind(L);
-      __ verify_oop(rax);
+    __ resolve_jobject(rax /* value */,
+                       r15_thread /* thread */,
+                       rcx /* tmp */);
+  }
+
+  if (CheckJNICalls) {
+    // clear_pending_jni_exception_check
+    __ movptr(Address(r15_thread, JavaThread::pending_jni_exception_check_fn_offset()), NULL_WORD);
   }
 
   if (!is_critical_native) {
@@ -2838,7 +2753,13 @@ void SharedRuntime::generate_deopt_blob() {
   // Allocate space for the code
   ResourceMark rm;
   // Setup code generation tools
-  CodeBuffer buffer("deopt_blob", 2048, 1024);
+  int pad = 0;
+#if INCLUDE_JVMCI
+  if (EnableJVMCI || UseAOT) {
+    pad += 512; // Increase the buffer size when compiling for JVMCI
+  }
+#endif
+  CodeBuffer buffer("deopt_blob", 2048+pad, 1024);
   MacroAssembler* masm = new MacroAssembler(&buffer);
   int frame_size_in_words;
   OopMap* map = NULL;
@@ -2887,6 +2808,12 @@ void SharedRuntime::generate_deopt_blob() {
   __ jmp(cont);
 
   int reexecute_offset = __ pc() - start;
+#if INCLUDE_JVMCI && !defined(COMPILER1)
+  if (EnableJVMCI && UseJVMCICompiler) {
+    // JVMCI does not use this kind of deoptimization
+    __ should_not_reach_here();
+  }
+#endif
 
   // Reexecute case
   // return address is the pc describes what bci to do re-execute at
@@ -2896,6 +2823,39 @@ void SharedRuntime::generate_deopt_blob() {
 
   __ movl(r14, Deoptimization::Unpack_reexecute); // callee-saved
   __ jmp(cont);
+
+#if INCLUDE_JVMCI
+  Label after_fetch_unroll_info_call;
+  int implicit_exception_uncommon_trap_offset = 0;
+  int uncommon_trap_offset = 0;
+
+  if (EnableJVMCI || UseAOT) {
+    implicit_exception_uncommon_trap_offset = __ pc() - start;
+
+    __ pushptr(Address(r15_thread, in_bytes(JavaThread::jvmci_implicit_exception_pc_offset())));
+    __ movptr(Address(r15_thread, in_bytes(JavaThread::jvmci_implicit_exception_pc_offset())), (int32_t)NULL_WORD);
+
+    uncommon_trap_offset = __ pc() - start;
+
+    // Save everything in sight.
+    RegisterSaver::save_live_registers(masm, 0, &frame_size_in_words);
+    // fetch_unroll_info needs to call last_java_frame()
+    __ set_last_Java_frame(noreg, noreg, NULL);
+
+    __ movl(c_rarg1, Address(r15_thread, in_bytes(JavaThread::pending_deoptimization_offset())));
+    __ movl(Address(r15_thread, in_bytes(JavaThread::pending_deoptimization_offset())), -1);
+
+    __ movl(r14, (int32_t)Deoptimization::Unpack_reexecute);
+    __ mov(c_rarg0, r15_thread);
+    __ movl(c_rarg2, r14); // exec mode
+    __ call(RuntimeAddress(CAST_FROM_FN_PTR(address, Deoptimization::uncommon_trap)));
+    oop_maps->add_gc_map( __ pc()-start, map->deep_copy());
+
+    __ reset_last_Java_frame(false);
+
+    __ jmp(after_fetch_unroll_info_call);
+  } // EnableJVMCI
+#endif // INCLUDE_JVMCI
 
   int exception_offset = __ pc() - start;
 
@@ -2974,17 +2934,25 @@ void SharedRuntime::generate_deopt_blob() {
   }
 #endif // ASSERT
   __ mov(c_rarg0, r15_thread);
+  __ movl(c_rarg1, r14); // exec_mode
   __ call(RuntimeAddress(CAST_FROM_FN_PTR(address, Deoptimization::fetch_unroll_info)));
 
   // Need to have an oopmap that tells fetch_unroll_info where to
   // find any register it might need.
   oop_maps->add_gc_map(__ pc() - start, map);
 
-  __ reset_last_Java_frame(false, false);
+  __ reset_last_Java_frame(false);
+
+#if INCLUDE_JVMCI
+  if (EnableJVMCI || UseAOT) {
+    __ bind(after_fetch_unroll_info_call);
+  }
+#endif
 
   // Load UnrollBlock* into rdi
   __ mov(rdi, rax);
 
+  __ movl(r14, Address(rdi, Deoptimization::UnrollBlock::unpack_kind_offset_in_bytes()));
    Label noException;
   __ cmpl(r14, Deoptimization::Unpack_exception);   // Was exception pending?
   __ jcc(Assembler::notEqual, noException);
@@ -3071,29 +3039,13 @@ void SharedRuntime::generate_deopt_blob() {
   Label loop;
   __ bind(loop);
   __ movptr(rbx, Address(rsi, 0));      // Load frame size
-#ifdef CC_INTERP
-  __ subptr(rbx, 4*wordSize);           // we'll push pc and ebp by hand and
-#ifdef ASSERT
-  __ push(0xDEADDEAD);                  // Make a recognizable pattern
-  __ push(0xDEADDEAD);
-#else /* ASSERT */
-  __ subptr(rsp, 2*wordSize);           // skip the "static long no_param"
-#endif /* ASSERT */
-#else
   __ subptr(rbx, 2*wordSize);           // We'll push pc and ebp by hand
-#endif // CC_INTERP
   __ pushptr(Address(rcx, 0));          // Save return address
   __ enter();                           // Save old & set new ebp
   __ subptr(rsp, rbx);                  // Prolog
-#ifdef CC_INTERP
-  __ movptr(Address(rbp,
-                  -(sizeof(BytecodeInterpreter)) + in_bytes(byte_offset_of(BytecodeInterpreter, _sender_sp))),
-            sender_sp); // Make it walkable
-#else /* CC_INTERP */
   // This value is corrected by layout_activation_impl
   __ movptr(Address(rbp, frame::interpreter_frame_last_sp_offset * wordSize), (int32_t)NULL_WORD );
   __ movptr(Address(rbp, frame::interpreter_frame_sender_sp_offset * wordSize), sender_sp); // Make it walkable
-#endif /* CC_INTERP */
   __ mov(sender_sp, rsp);               // Pass sender_sp to next frame
   __ addptr(rsi, wordSize);             // Bump array pointer (sizes)
   __ addptr(rcx, wordSize);             // Bump array pointer (pcs)
@@ -3137,7 +3089,7 @@ void SharedRuntime::generate_deopt_blob() {
                        new OopMap( frame_size_in_words, 0 ));
 
   // Clear fp AND pc
-  __ reset_last_Java_frame(true, true);
+  __ reset_last_Java_frame(true);
 
   // Collect return values
   __ movdbl(xmm0, Address(rsp, RegisterSaver::xmm0_offset_in_bytes()));
@@ -3156,6 +3108,12 @@ void SharedRuntime::generate_deopt_blob() {
 
   _deopt_blob = DeoptimizationBlob::create(&buffer, oop_maps, 0, exception_offset, reexecute_offset, frame_size_in_words);
   _deopt_blob->set_unpack_with_exception_in_tls_offset(exception_in_tls_offset);
+#if INCLUDE_JVMCI
+  if (EnableJVMCI || UseAOT) {
+    _deopt_blob->set_uncommon_trap_offset(uncommon_trap_offset);
+    _deopt_blob->set_implicit_exception_uncommon_trap_offset(implicit_exception_uncommon_trap_offset);
+  }
+#endif
 }
 
 #ifdef COMPILER2
@@ -3197,6 +3155,7 @@ void SharedRuntime::generate_uncommon_trap_blob() {
   // UnrollBlock* uncommon_trap(JavaThread* thread, jint unloaded_class_index);
 
   __ mov(c_rarg0, r15_thread);
+  __ movl(c_rarg2, Deoptimization::Unpack_uncommon_trap);
   __ call(RuntimeAddress(CAST_FROM_FN_PTR(address, Deoptimization::uncommon_trap)));
 
   // Set an oopmap for the call site
@@ -3207,10 +3166,20 @@ void SharedRuntime::generate_uncommon_trap_blob() {
 
   oop_maps->add_gc_map(__ pc() - start, map);
 
-  __ reset_last_Java_frame(false, false);
+  __ reset_last_Java_frame(false);
 
   // Load UnrollBlock* into rdi
   __ mov(rdi, rax);
+
+#ifdef ASSERT
+  { Label L;
+    __ cmpptr(Address(rdi, Deoptimization::UnrollBlock::unpack_kind_offset_in_bytes()),
+            (int32_t)Deoptimization::Unpack_uncommon_trap);
+    __ jcc(Assembler::equal, L);
+    __ stop("SharedRuntime::generate_deopt_blob: expected Unpack_uncommon_trap");
+    __ bind(L);
+  }
+#endif
 
   // Pop all the frames we must move/replace.
   //
@@ -3275,16 +3244,10 @@ void SharedRuntime::generate_uncommon_trap_blob() {
   __ pushptr(Address(rcx, 0));     // Save return address
   __ enter();                      // Save old & set new rbp
   __ subptr(rsp, rbx);             // Prolog
-#ifdef CC_INTERP
-  __ movptr(Address(rbp,
-                  -(sizeof(BytecodeInterpreter)) + in_bytes(byte_offset_of(BytecodeInterpreter, _sender_sp))),
-            sender_sp); // Make it walkable
-#else // CC_INTERP
   __ movptr(Address(rbp, frame::interpreter_frame_sender_sp_offset * wordSize),
             sender_sp);            // Make it walkable
   // This value is corrected by layout_activation_impl
   __ movptr(Address(rbp, frame::interpreter_frame_last_sp_offset * wordSize), (int32_t)NULL_WORD );
-#endif // CC_INTERP
   __ mov(sender_sp, rsp);          // Pass sender_sp to next frame
   __ addptr(rsi, wordSize);        // Bump array pointer (sizes)
   __ addptr(rcx, wordSize);        // Bump array pointer (pcs)
@@ -3320,7 +3283,7 @@ void SharedRuntime::generate_uncommon_trap_blob() {
   oop_maps->add_gc_map(the_pc - start, new OopMap(SimpleRuntimeFrame::framesize, 0));
 
   // Clear fp AND pc
-  __ reset_last_Java_frame(true, true);
+  __ reset_last_Java_frame(true);
 
   // Pop self-frame.
   __ leave();                 // Epilog
@@ -3403,7 +3366,7 @@ SafepointBlob* SharedRuntime::generate_handler_blob(address call_ptr, int poll_t
 
   Label noException;
 
-  __ reset_last_Java_frame(false, false);
+  __ reset_last_Java_frame(false);
 
   __ cmpptr(Address(r15_thread, Thread::pending_exception_offset()), (int32_t)NULL_WORD);
   __ jcc(Assembler::equal, noException);
@@ -3473,7 +3436,7 @@ RuntimeStub* SharedRuntime::generate_resolve_blob(address destination, const cha
   // rax contains the address we are going to jump to assuming no exception got installed
 
   // clear last_Java_sp
-  __ reset_last_Java_frame(false, false);
+  __ reset_last_Java_frame(false);
   // check for pending exceptions
   Label pending;
   __ cmpptr(Address(r15_thread, Thread::pending_exception_offset()), (int32_t)NULL_WORD);
@@ -3848,7 +3811,7 @@ void OptoRuntime::generate_exception_blob() {
 
   oop_maps->add_gc_map(the_pc - start, new OopMap(SimpleRuntimeFrame::framesize, 0));
 
-  __ reset_last_Java_frame(false, true);
+  __ reset_last_Java_frame(false);
 
   // Restore callee-saved registers
 

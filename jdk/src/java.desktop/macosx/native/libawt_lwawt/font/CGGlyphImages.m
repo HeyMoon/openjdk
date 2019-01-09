@@ -562,6 +562,17 @@ CGGI_CreateImageForGlyph
     (CGGI_GlyphCanvas *canvas, const CGGlyph glyph,
      GlyphInfo *info, const CGGI_RenderingMode *mode)
 {
+    if (isnan(info->topLeftX) || isnan(info->topLeftY)) {
+        // Explicitly set glyphInfo width/height to be 0 to ensure
+        // zero length glyph image is copied into GlyphInfo from canvas
+        info->width = 0;
+        info->height = 0;
+
+        // copy the "empty" glyph from the canvas into the info
+        (*mode->glyphDescriptor->copyFxnPtr)(canvas, info);
+        return;
+    }
+
     // clean the canvas
     CGGI_ClearCanvas(canvas, info);
 
@@ -570,7 +581,6 @@ CGGI_CreateImageForGlyph
                                -info->topLeftX,
                                canvas->image->height + info->topLeftY,
                                &glyph, 1);
-
     // copy the glyph from the canvas into the info
     (*mode->glyphDescriptor->copyFxnPtr)(canvas, info);
 }
@@ -581,7 +591,7 @@ CGGI_CreateImageForGlyph
 static inline GlyphInfo *
 CGGI_CreateImageForUnicode
     (CGGI_GlyphCanvas *canvas, const AWTStrike *strike,
-     const CGGI_RenderingMode *mode, const UniChar uniChar)
+     const CGGI_RenderingMode *mode, const UnicodeScalarValue uniChar)
 {
     // save the state of the world
     CGContextSaveGState(canvas->context);
@@ -658,7 +668,7 @@ CGGI_FillImagesForGlyphsWithSizedCanvas(CGGI_GlyphCanvas *canvas,
                                         const AWTStrike *strike,
                                         const CGGI_RenderingMode *mode,
                                         jlong glyphInfos[],
-                                        const UniChar uniChars[],
+                                        const UnicodeScalarValue uniChars[],
                                         const CGGlyph glyphs[],
                                         const CFIndex len)
 {
@@ -710,7 +720,7 @@ static NSString *threadLocalLCDCanvasKey =
 static inline void
 CGGI_FillImagesForGlyphs(jlong *glyphInfos, const AWTStrike *strike,
                          const CGGI_RenderingMode *mode,
-                         const UniChar uniChars[], const CGGlyph glyphs[],
+                         const UnicodeScalarValue uniChars[], const CGGlyph glyphs[],
                          const size_t maxWidth, const size_t maxHeight,
                          const CFIndex len)
 {
@@ -757,7 +767,7 @@ CGGI_FillImagesForGlyphs(jlong *glyphInfos, const AWTStrike *strike,
 static inline void
 CGGI_CreateGlyphInfos(jlong *glyphInfos, const AWTStrike *strike,
                       const CGGI_RenderingMode *mode,
-                      const UniChar uniChars[], const CGGlyph glyphs[],
+                      const UnicodeScalarValue uniChars[], const CGGlyph glyphs[],
                       CGSize advances[], CGRect bboxes[], const CFIndex len)
 {
     AWTFont *font = strike->fAWTFont;
@@ -807,7 +817,7 @@ CGGI_CreateGlyphsAndScanForComplexities(jlong *glyphInfos,
                                         const AWTStrike *strike,
                                         const CGGI_RenderingMode *mode,
                                         jint rawGlyphCodes[],
-                                        UniChar uniChars[], CGGlyph glyphs[],
+                                        UnicodeScalarValue uniChars[], CGGlyph glyphs[],
                                         CGSize advances[], CGRect bboxes[],
                                         const CFIndex len)
 {
@@ -850,7 +860,7 @@ CGGlyphImages_GetGlyphImagePtrs(jlong glyphInfos[],
         CGRect bboxes[len];
         CGSize advances[len];
         CGGlyph glyphs[len];
-        UniChar uniChars[len];
+        UnicodeScalarValue uniChars[len];
 
         CGGI_CreateGlyphsAndScanForComplexities(glyphInfos, strike, &mode,
                                                 rawGlyphCodes, uniChars, glyphs,
@@ -861,7 +871,7 @@ CGGlyphImages_GetGlyphImagePtrs(jlong glyphInfos[],
 
     // just do one malloc, and carve it up for all the buffers
     void *buffer = malloc(sizeof(CGRect) * sizeof(CGSize) *
-                          sizeof(CGGlyph) * sizeof(UniChar) * len);
+                          sizeof(CGGlyph) * sizeof(UnicodeScalarValue) * len);
     if (buffer == NULL) {
         [[NSException exceptionWithName:NSMallocException
             reason:@"Failed to allocate memory for the temporary glyph strike and measurement buffers." userInfo:nil] raise];
@@ -870,7 +880,7 @@ CGGlyphImages_GetGlyphImagePtrs(jlong glyphInfos[],
     CGRect *bboxes = (CGRect *)(buffer);
     CGSize *advances = (CGSize *)(bboxes + sizeof(CGRect) * len);
     CGGlyph *glyphs = (CGGlyph *)(advances + sizeof(CGGlyph) * len);
-    UniChar *uniChars = (UniChar *)(glyphs + sizeof(UniChar) * len);
+    UnicodeScalarValue *uniChars = (UnicodeScalarValue *)(glyphs + sizeof(UnicodeScalarValue) * len);
 
     CGGI_CreateGlyphsAndScanForComplexities(glyphInfos, strike, &mode,
                                             rawGlyphCodes, uniChars, glyphs,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,6 +46,8 @@ import java.util.logging.Logger;
  *       focuses more particularly on potential deadlock in
  *       drainLoggerRefQueueBounded / readConfiguration / reset
  *       todo: add at randomness
+ * @modules java.logging
+ *          java.management
  * @run main/othervm TestConfigurationLock
  * @author danielfuchs
  */
@@ -197,7 +199,7 @@ public class TestConfigurationLock {
         }
     }
 
-    final static class ResetConf extends Thread {
+    static final class ResetConf extends Thread {
 
         public ResetConf() {
             setDaemon(true);
@@ -228,7 +230,7 @@ public class TestConfigurationLock {
         }
     }
 
-    final static class ReadConf extends Thread {
+    static final class ReadConf extends Thread {
 
         public ReadConf() {
             setDaemon(true);
@@ -259,7 +261,7 @@ public class TestConfigurationLock {
         }
     }
 
-    final static class AddLogger extends Thread {
+    static final class AddLogger extends Thread {
 
         public AddLogger() {
             setDaemon(true);
@@ -293,7 +295,7 @@ public class TestConfigurationLock {
         }
     }
 
-    final static class DeadlockDetector extends Thread {
+    static final class DeadlockDetector extends Thread {
 
         @Override
         public void run() {

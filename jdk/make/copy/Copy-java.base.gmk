@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2014, 2017, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,6 @@ $(eval $(call IncludeCustomExtension, jdk, copy/Copy-java.base.gmk))
 #
 TARGETS += \
     $(INCLUDE_DST_DIR)/jni.h \
-    $(INCLUDE_DST_DIR)/jvmti.h \
     $(INCLUDE_DST_DIR)/jvmticmlr.h \
     $(INCLUDE_DST_DIR)/classfile_constants.h \
     $(INCLUDE_DST_OS_DIR)/jni_md.h \
@@ -88,7 +87,7 @@ endif
 #
 # How to install jvm.cfg.
 #
-ifeq ($(JVM_VARIANT_ZERO), true)
+ifeq ($(call check-jvm-variant, zero zeroshark), true)
   JVMCFG_ARCH := zero
 else
   JVMCFG_ARCH := $(OPENJDK_TARGET_CPU_LEGACY)
@@ -99,10 +98,9 @@ ifeq ($(OPENJDK_TARGET_OS), macosx)
 else
   JVMCFG_SRC := $(JDK_TOPDIR)/src/java.base/$(OPENJDK_TARGET_OS_TYPE)/conf/$(JVMCFG_ARCH)/jvm.cfg
   # Allow override by ALT_JVMCFG_SRC if it exists
-  JVMCFG_SRC := $(if $(wildcard $(ALT_JVMCFG_SRC)),$(ALT_JVMCFG_SRC),$(JVMCFG_SRC)) 
+  JVMCFG_SRC := $(if $(wildcard $(ALT_JVMCFG_SRC)),$(ALT_JVMCFG_SRC),$(JVMCFG_SRC))
 endif
-JVMCFG_DIR := $(LIB_DST_DIR)$(OPENJDK_TARGET_CPU_LIBDIR)
-JVMCFG := $(JVMCFG_DIR)/jvm.cfg
+JVMCFG := $(LIB_DST_DIR)/jvm.cfg
 
 # To do: should this also support -zeroshark?
 
@@ -117,12 +115,12 @@ else
   # The main problem is deciding whether to use aliases for the VMs that are not
   # present and the current position is that we add aliases for client and server, but
   # not for minimal.
-  CLIENT_AND_SERVER := $(and $(findstring true, $(JVM_VARIANT_SERVER)), $(findstring true, $(JVM_VARIANT_CLIENT)))
-  ifeq ($(CLIENT_AND_SERVER), true)
+  CLIENT_AND_SERVER := $(call check-jvm-variant, client)+$(call check-jvm-variant, server)
+  ifeq ($(CLIENT_AND_SERVER), true+true)
     COPY_JVM_CFG_FILE := true
   else
     # For zero, the default jvm.cfg file is sufficient
-    ifeq ($(JVM_VARIANT_ZERO), true)
+    ifeq ($(call check-jvm-variant, zero zeroshark), true)
       COPY_JVM_CFG_FILE := true
     endif
   endif
@@ -136,21 +134,21 @@ else
 	$(MKDIR) -p $(@D)
 	$(RM) $(@)
         # Now check for other permutations
-        ifeq ($(JVM_VARIANT_SERVER), true)
+        ifeq ($(call check-jvm-variant, server), true)
 	  $(PRINTF) "-server KNOWN\n">>$(@)
 	  $(PRINTF) "-client ALIASED_TO -server\n">>$(@)
-          ifeq ($(JVM_VARIANT_MINIMAL1), true)
+          ifeq ($(call check-jvm-variant, minimal), true)
 	    $(PRINTF) "-minimal KNOWN\n">>$(@)
           endif
         else
-          ifeq ($(JVM_VARIANT_CLIENT), true)
+          ifeq ($(call check-jvm-variant, client), true)
 	    $(PRINTF) "-client KNOWN\n">>$(@)
 	    $(PRINTF) "-server ALIASED_TO -client\n">>$(@)
-            ifeq ($(JVM_VARIANT_MINIMAL1), true)
+            ifeq ($(call check-jvm-variant, minimal), true)
 	      $(PRINTF) "-minimal KNOWN\n">>$(@)
             endif
           else
-            ifeq ($(JVM_VARIANT_MINIMAL1), true)
+            ifeq ($(call check-jvm-variant, minimal), true)
 	      $(PRINTF) "-minimal KNOWN\n">>$(@)
 	      $(PRINTF) "-server ALIASED_TO -minimal\n">>$(@)
 	      $(PRINTF) "-client ALIASED_TO -minimal\n">>$(@)
@@ -166,13 +164,7 @@ TARGETS += $(JVMCFG)
 POLICY_SRC := $(JDK_TOPDIR)/src/java.base/share/conf/security/java.policy
 POLICY_DST := $(CONF_DST_DIR)/security/java.policy
 
-POLICY_SRC_LIST :=
-
-ifeq ($(OPENJDK_TARGET_OS), windows)
-  POLICY_SRC_LIST += $(JDK_TOPDIR)/src/java.base/$(OPENJDK_TARGET_OS)/conf/security/java.policy
-endif
-
-POLICY_SRC_LIST += $(POLICY_SRC)
+POLICY_SRC_LIST := $(POLICY_SRC)
 
 $(POLICY_DST): $(POLICY_SRC_LIST)
 	$(MKDIR) -p $(@D)
@@ -184,30 +176,74 @@ TARGETS += $(POLICY_DST)
 
 ################################################################################
 
-ifeq ($(CACERTS_FILE), )
-  CACERTS_FILE := $(JDK_TOPDIR)/src/java.base/share/conf/security/cacerts
+DEF_POLICY_SRC := $(JDK_TOPDIR)/src/java.base/share/lib/security/default.policy
+DEF_POLICY_DST := $(LIB_DST_DIR)/security/default.policy
+
+DEF_POLICY_SRC_LIST := $(DEF_POLICY_SRC)
+DEF_POLICY_SRC_LIST += $(CUSTOM_POLICY_SRC_LIST)
+
+ifneq ($(filter $(OPENJDK_TARGET_OS), windows solaris), )
+  DEF_POLICY_SRC_LIST += $(JDK_TOPDIR)/src/java.base/$(OPENJDK_TARGET_OS)/lib/security/default.policy
 endif
+
+# Allow imported modules to modify the java.policy
+ifneq ($(IMPORT_MODULES_CONF), )
+  DEF_POLICY_SRC_LIST += $(wildcard $(IMPORT_MODULES_CONF)/java.base/security/java.policy.extra)
+endif
+
+$(DEF_POLICY_DST): $(DEF_POLICY_SRC_LIST)
+	$(MKDIR) -p $(@D)
+	$(RM) $@ $@.tmp
+	$(foreach f,$(DEF_POLICY_SRC_LIST),$(CAT) $(f) >> $@.tmp;)
+	$(MV) $@.tmp $@
+
+TARGETS += $(DEF_POLICY_DST)
+
+################################################################################
+
+ifeq ($(CACERTS_FILE), )
+  CACERTS_FILE := $(JDK_TOPDIR)/src/java.base/share/lib/security/cacerts
+endif
+
 CACERTS_DST := $(LIB_DST_DIR)/security/cacerts
 
 $(CACERTS_DST): $(CACERTS_FILE)
+	$(call LogInfo, Copying $(patsubst $(OUTPUT_ROOT)/%, %, $@))
 	$(call install-file)
 
 TARGETS += $(CACERTS_DST)
 
 ################################################################################
 
-$(CONF_DST_DIR)/net.properties: $(JDK_TOPDIR)/src/java.base/share/conf/net.properties
-	$(ECHO) $(LOG_INFO) Copying $(@F)
-	$(call install-file)
+$(eval $(call SetupCopyFiles, COPY_NET_PROPERTIES, \
+    FILES := $(JDK_TOPDIR)/src/java.base/share/conf/net.properties, \
+    DEST := $(CONF_DST_DIR), \
+))
 
-TARGETS += $(CONF_DST_DIR)/net.properties
+TARGETS += $(COPY_NET_PROPERTIES)
 
 ifeq ($(OPENJDK_TARGET_OS), solaris)
-  $(CONF_DST_DIR)/sdp/sdp.conf.template: $(JDK_TOPDIR)/src/java.base/$(OPENJDK_TARGET_OS_TYPE)/conf/sdp/sdp.conf.template
-	$(ECHO) $(LOG_INFO) Copying $(@F)
-	$(call install-file)
+  $(eval $(call SetupCopyFiles, COPY_SDP_CONF, \
+      FILES := $(JDK_TOPDIR)/src/java.base/$(OPENJDK_TARGET_OS_TYPE)/conf/sdp/sdp.conf.template, \
+      DEST := $(CONF_DST_DIR)/sdp, \
+  ))
 
-  TARGETS += $(CONF_DST_DIR)/sdp/sdp.conf.template
+  TARGETS += $(COPY_SDP_CONF)
 endif
 
 ################################################################################
+
+# JDK license and assembly exception files to be packaged in JMOD
+
+# The license files may not be present if the source has been obtained using a
+# different license.
+JDK_LICENSE ?= $(wildcard $(TOPDIR)/LICENSE)
+JDK_NOTICE  ?= $(wildcard $(TOPDIR)/ASSEMBLY_EXCEPTION)
+
+$(eval $(call SetupCopyFiles, COPY_JDK_NOTICES, \
+    FILES := $(JDK_LICENSE) $(JDK_NOTICE), \
+    DEST := $(LEGAL_DST_DIR), \
+    FLATTEN := true, \
+))
+
+TARGETS += $(COPY_JDK_NOTICES)

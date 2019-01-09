@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,32 +35,24 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import sun.misc.Unsafe;
-import sun.misc.Contended;
+import jdk.internal.misc.Unsafe;
+import jdk.internal.vm.annotation.Contended;
 
 /*
  * @test
  * @bug     8003985
  * @summary Support Contended Annotation - JEP 142
- * @modules java.base/sun.misc
+ * @modules java.base/jdk.internal.misc
+ * @modules java.base/jdk.internal.vm.annotation
  * @run main/othervm -XX:-RestrictContended Basic
  */
 public class Basic {
 
-    private static final Unsafe U;
+    private static final Unsafe U = Unsafe.getUnsafe();
     private static int ADDRESS_SIZE;
     private static int HEADER_SIZE;
 
     static {
-        // steal Unsafe
-        try {
-            Field unsafe = Unsafe.class.getDeclaredField("theUnsafe");
-            unsafe.setAccessible(true);
-            U = (Unsafe) unsafe.get(null);
-        } catch (NoSuchFieldException | IllegalAccessException e) {
-            throw new IllegalStateException(e);
-        }
-
         // When running with CompressedOops on 64-bit platform, the address size
         // reported by Unsafe is still 8, while the real reference fields are 4 bytes long.
         // Try to guess the reference field size with this naive trick.

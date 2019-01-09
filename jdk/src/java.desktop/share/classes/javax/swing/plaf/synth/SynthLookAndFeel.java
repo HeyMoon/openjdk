@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,6 +52,10 @@ import sun.swing.plaf.synth.*;
  * loading a file, and {@link javax.swing.plaf.synth.SynthStyleFactory} for
  * an example of providing your own <code>SynthStyleFactory</code> to
  * <code>setStyleFactory</code>.
+ * <p>
+ * {@link SynthIcon} interface provides
+ * {@code paintIcon(synthContext, graphics, x, y, width, height)} method that
+ * allows to draw the icon with the given {@code SynthContext}.
  * <p>
  * <strong>Warning:</strong>
  * This class implements {@link Serializable} as a side effect of it
@@ -643,9 +647,12 @@ public class SynthLookAndFeel extends BasicLookAndFeel {
 
         Region.registerUIs(table);
         table.setDefaultLocale(Locale.getDefault());
-        table.addResourceBundle(
-              "com.sun.swing.internal.plaf.basic.resources.basic" );
-        table.addResourceBundle("com.sun.swing.internal.plaf.synth.resources.synth");
+        SwingAccessor.getUIDefaultsAccessor()
+                     .addInternalBundle(table,
+                             "com.sun.swing.internal.plaf.basic.resources.basic");
+        SwingAccessor.getUIDefaultsAccessor()
+                     .addInternalBundle(table,
+                             "com.sun.swing.internal.plaf.synth.resources.synth");
 
         // SynthTabbedPaneUI supports rollover on tabs, GTK does not
         table.put("TabbedPane.isTabRollover", Boolean.TRUE);
@@ -688,8 +695,7 @@ public class SynthLookAndFeel extends BasicLookAndFeel {
 
         // enabled antialiasing depending on desktop settings
         flushUnreferenced();
-        Object aaTextInfo = getAATextInfo();
-        table.put(SwingUtilities2.AA_TEXT_PROPERTY_KEY, aaTextInfo);
+        SwingUtilities2.putAATextInfo(useLAFConditions(), table);
         new AATextListener(this);
 
         if (defaultsMap != null) {
@@ -794,7 +800,7 @@ public class SynthLookAndFeel extends BasicLookAndFeel {
      *
      * @return the text antialiasing information associated to the desktop
      */
-    private static Object getAATextInfo() {
+    private static boolean useLAFConditions() {
         String language = Locale.getDefault().getLanguage();
         String desktop =
             AccessController.doPrivileged(new GetPropertyAction("sun.desktop"));
@@ -805,10 +811,7 @@ public class SynthLookAndFeel extends BasicLookAndFeel {
         boolean isGnome = "gnome".equals(desktop);
         boolean isLocal = SwingUtilities2.isLocalDisplay();
 
-        boolean setAA = isLocal && (!isGnome || !isCjkLocale);
-
-        Object aaTextInfo = SwingUtilities2.AATextInfo.getAATextInfo(setAA);
-        return aaTextInfo;
+        return isLocal && (!isGnome || !isCjkLocale);
     }
 
     private static ReferenceQueue<LookAndFeel> queue = new ReferenceQueue<LookAndFeel>();
@@ -844,8 +847,7 @@ public class SynthLookAndFeel extends BasicLookAndFeel {
                 return;
             }
 
-            Object aaTextInfo = getAATextInfo();
-            defaults.put(SwingUtilities2.AA_TEXT_PROPERTY_KEY, aaTextInfo);
+            SwingUtilities2.putAATextInfo(useLAFConditions(), defaults);
 
             updateUI();
         }
@@ -954,8 +956,7 @@ public class SynthLookAndFeel extends BasicLookAndFeel {
          * @comp the component to check
          */
         private void repaintIfBackgroundsDiffer(JComponent comp) {
-            ComponentUI ui = (ComponentUI)comp.getClientProperty(
-                    SwingUtilities2.COMPONENT_UI_PROPERTY_KEY);
+            ComponentUI ui = comp.getUI();
             if (ui instanceof SynthUI) {
                 SynthUI synthUI = (SynthUI)ui;
                 SynthContext context = synthUI.getContext(comp);
@@ -978,7 +979,6 @@ public class SynthLookAndFeel extends BasicLookAndFeel {
                 if (currBG != null && !currBG.equals(lastBG)) {
                     comp.repaint();
                 }
-                context.dispose();
             }
         }
     }

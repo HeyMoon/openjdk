@@ -99,8 +99,11 @@ public abstract class Property implements Serializable {
     /** Does this property support dual field representation? */
     public static final int DUAL_FIELDS             = 1 << 11;
 
+    /** Is this an accessor property as as defined in ES5 8.6.1? */
+    public static final int IS_ACCESSOR_PROPERTY    = 1 << 12;
+
     /** Property key. */
-    private final String key;
+    private final Object key;
 
     /** Property flags. */
     private int flags;
@@ -127,7 +130,7 @@ public abstract class Property implements Serializable {
      * @param flags property flags
      * @param slot  property field number or spill slot
      */
-    Property(final String key, final int flags, final int slot) {
+    Property(final Object key, final int flags, final int slot) {
         assert key != null;
         this.key   = key;
         this.flags = flags;
@@ -420,7 +423,7 @@ public abstract class Property implements Serializable {
      * Get the key for this property. This key is an ordinary string. The "name".
      * @return key for property
      */
-    public String getKey() {
+    public Object getKey() {
         return key;
     }
 
@@ -441,16 +444,6 @@ public abstract class Property implements Serializable {
      * @return  the property value
      */
     public abstract int getIntValue(final ScriptObject self, final ScriptObject owner);
-
-    /**
-     * get the Object value of this property from {@code owner}. This allows to bypass creation of the
-     * getter MethodHandle for spill and user accessor properties.
-     *
-     * @param self the this object
-     * @param owner the owner of the property
-     * @return  the property value
-     */
-    public abstract long getLongValue(final ScriptObject self, final ScriptObject owner);
 
     /**
      * get the Object value of this property from {@code owner}. This allows to bypass creation of the
@@ -492,17 +485,6 @@ public abstract class Property implements Serializable {
      * @param value the new property value
      * @param strict is this a strict setter?
      */
-    public abstract void setValue(final ScriptObject self, final ScriptObject owner, final long value, final boolean strict);
-
-    /**
-     * Set the value of this property in {@code owner}. This allows to bypass creation of the
-     * setter MethodHandle for spill and user accessor properties.
-     *
-     * @param self the this object
-     * @param owner the owner object
-     * @param value the new property value
-     * @param strict is this a strict setter?
-     */
     public abstract void setValue(final ScriptObject self, final ScriptObject owner, final double value, final boolean strict);
 
     /**
@@ -515,6 +497,16 @@ public abstract class Property implements Serializable {
      * @param strict is this a strict setter?
      */
     public abstract void setValue(final ScriptObject self, final ScriptObject owner, final Object value, final boolean strict);
+
+    /**
+     * Returns true if this property has a low-level setter handle. This can be used to determine whether a
+     * nasgen-generated accessor property should be treated as non-writable. For user-created accessor properties
+     * {@link #hasSetterFunction(ScriptObject)} should be used to find whether a setter function exists in
+     * a given object.
+     *
+     * @return true if a native setter handle exists
+     */
+    public abstract boolean hasNativeSetter();
 
     /**
      * Abstract method for retrieving the setter for the property. We do not know
@@ -593,8 +585,6 @@ public abstract class Property implements Serializable {
             return "undef";
         } else if (type == int.class) {
             return "i";
-        } else if (type == long.class) {
-            return "j";
         } else if (type == double.class) {
             return "d";
         } else {
@@ -627,7 +617,7 @@ public abstract class Property implements Serializable {
         final StringBuilder sb   = new StringBuilder();
         final Class<?>      t = getLocalType();
 
-        sb.append(indent(getKey(), 20)).
+        sb.append(indent(getKey().toString(), 20)).
             append(" id=").
             append(Debug.id(this)).
             append(" (0x").
@@ -715,5 +705,13 @@ public abstract class Property implements Serializable {
      */
     public boolean hasDualFields() {
         return (flags & DUAL_FIELDS) != 0;
+    }
+
+    /**
+     * Is this an accessor property as defined in ES5 8.6.1?
+     * @return true if this is an accessor property
+     */
+    public boolean isAccessorProperty() {
+        return (flags & IS_ACCESSOR_PROPERTY) != 0;
     }
 }

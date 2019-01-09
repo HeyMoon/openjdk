@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -66,11 +66,15 @@ import javax.print.attribute.PrintJobAttribute;
  * specified by the doc's {@link javax.print.DocFlavor DocFlavor}, as
  * shown in the table below.
  *
- * <TABLE BORDER=1 CELLPADDING=2 CELLSPACING=1 SUMMARY="Table showing computation of doc sizes">
+ * <table class="striped">
+ * <caption>Table showing computation of doc sizes</caption>
+ * <thead>
  * <TR>
  * <TH>Representation Class</TH>
  * <TH>Document Size</TH>
  * </TR>
+ * </thead>
+ * <tbody>
  * <TR>
  * <TD>byte[]</TD>
  * <TD>Length of the byte array</TD>
@@ -107,6 +111,7 @@ import javax.print.attribute.PrintJobAttribute;
  * <TD>java.awt.print.Pageable</TD>
  * <TD>Implementation dependent&#42;</TD>
  * </TR>
+ * </tbody>
  * </TABLE>
  * <P>
  * &#42; In these cases the Print Service itself generates the print data sent
@@ -115,7 +120,7 @@ import javax.print.attribute.PrintJobAttribute;
  * data, replacing any JobKOctets value the client specified.
  * <P>
  * <B>IPP Compatibility:</B> The integer value gives the IPP integer value. The
- * category name returned by <CODE>getName()</CODE> gives the IPP attribute
+ * category name returned by {@code getName()} gives the IPP attribute
  * name.
  *
  * @see JobKOctetsSupported
@@ -136,7 +141,7 @@ public final class JobKOctets   extends IntegerSyntax
      * @param  value  Integer value.
      *
      * @exception  IllegalArgumentException
-     *  (Unchecked exception) Thrown if <CODE>value</CODE> is less than 0.
+     *  (Unchecked exception) Thrown if {@code value} is less than 0.
      */
     public JobKOctets(int value) {
         super (value, 0, Integer.MAX_VALUE);
@@ -148,17 +153,17 @@ public final class JobKOctets   extends IntegerSyntax
      * true:
      * <OL TYPE=1>
      * <LI>
-     * <CODE>object</CODE> is not null.
+     * {@code object} is not null.
      * <LI>
-     * <CODE>object</CODE> is an instance of class JobKOctets.
+     * {@code object} is an instance of class JobKOctets.
      * <LI>
-     * This job K octets attribute's value and <CODE>object</CODE>'s value
+     * This job K octets attribute's value and {@code object}'s value
      * are equal.
      * </OL>
      *
      * @param  object  Object to compare to.
      *
-     * @return  True if <CODE>object</CODE> is equivalent to this job K
+     * @return  True if {@code object} is equivalent to this job K
      *          octets attribute, false otherwise.
      */
     public boolean equals(Object object) {
@@ -182,7 +187,7 @@ public final class JobKOctets   extends IntegerSyntax
      * Get the name of the category of which this attribute value is an
      * instance.
      * <P>
-     * For class JobKOctets, the category name is <CODE>"job-k-octets"</CODE>.
+     * For class JobKOctets, the category name is {@code "job-k-octets"}.
      *
      * @return  Attribute category name.
      */

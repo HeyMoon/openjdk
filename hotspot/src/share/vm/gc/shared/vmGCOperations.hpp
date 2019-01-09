@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -70,7 +70,6 @@
 
 class VM_GC_Operation: public VM_Operation {
  protected:
-  BasicLock      _pending_list_basic_lock; // for refs pending list notification (PLL)
   uint           _gc_count_before;         // gc count before acquiring PLL
   uint           _full_gc_count_before;    // full gc count before acquiring PLL
   bool           _full;                    // whether a "full" collection
@@ -79,10 +78,6 @@ class VM_GC_Operation: public VM_Operation {
   bool           _gc_locked;               // will be set if gc was locked
 
   virtual bool skip_operation() const;
-
-  // java.lang.ref.Reference support
-  void acquire_pending_list_lock();
-  void release_and_notify_pending_list_lock();
 
  public:
   VM_GC_Operation(uint gc_count_before,
@@ -166,8 +161,7 @@ class VM_CollectForAllocation : public VM_GC_Operation {
   HeapWord* _result;    // Allocation result (NULL if allocation failed)
 
  public:
-  VM_CollectForAllocation(size_t word_size, uint gc_count_before, GCCause::Cause cause)
-    : VM_GC_Operation(gc_count_before, cause), _result(NULL), _word_size(word_size) {}
+  VM_CollectForAllocation(size_t word_size, uint gc_count_before, GCCause::Cause cause);
 
   HeapWord* result() const {
     return _result;
@@ -213,15 +207,15 @@ class VM_CollectForMetadataAllocation: public VM_GC_Operation {
   size_t                   _size;     // size of object to be allocated
   Metaspace::MetadataType  _mdtype;
   ClassLoaderData*         _loader_data;
+
  public:
   VM_CollectForMetadataAllocation(ClassLoaderData* loader_data,
-                                  size_t size, Metaspace::MetadataType mdtype,
+                                  size_t size,
+                                  Metaspace::MetadataType mdtype,
                                   uint gc_count_before,
                                   uint full_gc_count_before,
-                                  GCCause::Cause gc_cause)
-    : VM_GC_Operation(gc_count_before, gc_cause, full_gc_count_before, true),
-      _loader_data(loader_data), _size(size), _mdtype(mdtype), _result(NULL) {
-  }
+                                  GCCause::Cause gc_cause);
+
   virtual VMOp_Type type() const { return VMOp_CollectForMetadataAllocation; }
   virtual void doit();
   MetaWord* result() const       { return _result; }

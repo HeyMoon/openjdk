@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,21 +22,17 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package com.sun.tools.sjavac.comp;
 
-import java.io.File;
-import java.net.URI;
-import java.util.List;
+import com.sun.tools.javac.main.Main.Result;
+import com.sun.tools.sjavac.Log;
+import com.sun.tools.sjavac.server.Sjavac;
+
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-
-import com.sun.tools.sjavac.Log;
-import com.sun.tools.sjavac.server.CompilationResult;
-import com.sun.tools.sjavac.server.Sjavac;
-import com.sun.tools.sjavac.server.SysInfo;
 
 /**
  * An sjavac implementation that limits the number of concurrent calls by
@@ -59,30 +55,12 @@ public class PooledSjavac implements Sjavac {
     }
 
     @Override
-    public SysInfo getSysInfo() {
-        try {
-            return pool.submit(() -> delegate.getSysInfo()).get();
-        } catch (Exception e) {
-            e.printStackTrace();
-            throw new RuntimeException("Error during getSysInfo", e);
-        }
-    }
-
-    @Override
-    public CompilationResult compile(final String protocolId,
-                                     final String invocationId,
-                                     final String[] args,
-                                     final List<File> explicitSources,
-                                     final Set<URI> sourcesToCompile,
-                                     final Set<URI> visibleSources) {
+    public Result compile(String[] args) {
+        Log log = Log.get();
         try {
             return pool.submit(() -> {
-                return delegate.compile(protocolId,
-                                        invocationId,
-                                        args,
-                                        explicitSources,
-                                        sourcesToCompile,
-                                        visibleSources);
+                Log.setLogForCurrentThread(log);
+                return delegate.compile(args);
             }).get();
         } catch (Exception e) {
             e.printStackTrace();
@@ -112,8 +90,4 @@ public class PooledSjavac implements Sjavac {
         delegate.shutdown();
     }
 
-    @Override
-    public String serverSettings() {
-        return delegate.serverSettings();
-    }
 }

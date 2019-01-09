@@ -29,15 +29,16 @@ import static jdk.nashorn.internal.runtime.ECMAErrors.typeError;
 
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
-import jdk.internal.dynalink.CallSiteDescriptor;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.LinkRequest;
-import jdk.internal.dynalink.linker.LinkerServices;
-import jdk.internal.dynalink.linker.TypeBasedGuardingDynamicLinker;
-import jdk.internal.dynalink.support.CallSiteDescriptorFactory;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.StandardNamespace;
+import jdk.dynalink.StandardOperation;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.LinkRequest;
+import jdk.dynalink.linker.LinkerServices;
+import jdk.dynalink.linker.TypeBasedGuardingDynamicLinker;
 import jdk.nashorn.api.scripting.ClassFilter;
-import jdk.nashorn.internal.runtime.Context;
 import jdk.nashorn.internal.objects.Global;
+import jdk.nashorn.internal.runtime.Context;
 
 /**
  * Check java reflection permission for java reflective and java.lang.invoke access from scripts
@@ -116,7 +117,7 @@ final class ReflectionCheckLinker implements TypeBasedGuardingDynamicLinker{
         }
     }
 
-    private static void checkLinkRequest(final LinkRequest origRequest) {
+    private static void checkLinkRequest(final LinkRequest request) {
         final Global global = Context.getGlobal();
         final ClassFilter cf = global.getClassFilter();
         if (cf != null) {
@@ -125,19 +126,14 @@ final class ReflectionCheckLinker implements TypeBasedGuardingDynamicLinker{
 
         final SecurityManager sm = System.getSecurityManager();
         if (sm != null) {
-            final LinkRequest requestWithoutContext = origRequest.withoutRuntimeContext(); // Nashorn has no runtime context
-            final Object self = requestWithoutContext.getReceiver();
+            final Object self = request.getReceiver();
             // allow 'static' access on Class objects representing public classes of non-restricted packages
             if ((self instanceof Class) && Modifier.isPublic(((Class<?>)self).getModifiers())) {
-                final CallSiteDescriptor desc = requestWithoutContext.getCallSiteDescriptor();
-                if(CallSiteDescriptorFactory.tokenizeOperators(desc).contains("getProp")) {
-                    if (desc.getNameTokenCount() > CallSiteDescriptor.NAME_OPERAND &&
-                        "static".equals(desc.getNameToken(CallSiteDescriptor.NAME_OPERAND))) {
-                        if (Context.isAccessibleClass((Class<?>)self) && !isReflectionClass((Class<?>)self)) {
-
-                            // If "getProp:static" passes access checks, allow access.
-                            return;
-                        }
+                final CallSiteDescriptor desc = request.getCallSiteDescriptor();
+                if ("static".equals(NashornCallSiteDescriptor.getOperand(desc)) && NashornCallSiteDescriptor.contains(desc, StandardOperation.GET, StandardNamespace.PROPERTY)) {
+                    if (Context.isAccessibleClass((Class<?>)self) && !isReflectionClass((Class<?>)self)) {
+                        // If "GET:PROPERTY:static" passes access checks, allow access.
+                        return;
                     }
                 }
             }

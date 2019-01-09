@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,10 @@
 #include "precompiled.hpp"
 #include "classfile/classLoaderStats.hpp"
 #include "classfile/compactHashtable.hpp"
+#include "compiler/compileBroker.hpp"
+#include "compiler/directivesParser.hpp"
 #include "gc/shared/vmGCOperations.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/javaCalls.hpp"
@@ -37,8 +40,22 @@
 #include "services/management.hpp"
 #include "services/writeableFlags.hpp"
 #include "utilities/macros.hpp"
+#include "oops/objArrayOop.inline.hpp"
 
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
+
+static void loadAgentModule(TRAPS) {
+  ResourceMark rm(THREAD);
+  HandleMark hm(THREAD);
+
+  JavaValue result(T_OBJECT);
+  Handle h_module_name = java_lang_String::create_from_str("jdk.management.agent", CHECK);
+  JavaCalls::call_static(&result,
+                         SystemDictionary::module_Modules_klass(),
+                         vmSymbols::loadModule_name(),
+                         vmSymbols::loadModule_signature(),
+                         h_module_name,
+                         THREAD);
+}
 
 void DCmdRegistrant::register_dcmds(){
   // Registration of the diagnostic commands
@@ -55,25 +72,36 @@ void DCmdRegistrant::register_dcmds(){
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<SetVMFlagDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<VMDynamicLibrariesDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<VMUptimeDCmd>(full_export, true, false));
+  DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<VMInfoDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<SystemGCDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<RunFinalizationDCmd>(full_export, true, false));
-#if INCLUDE_SERVICES // Heap dumping/inspection supported
+  DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<HeapInfoDCmd>(full_export, true, false));
+  DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<FinalizerInfoDCmd>(full_export, true, false));
+#if INCLUDE_SERVICES
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<HeapDumpDCmd>(DCmd_Source_Internal | DCmd_Source_AttachAPI, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<ClassHistogramDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<ClassStatsDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<ClassHierarchyDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<SymboltableDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<StringtableDCmd>(full_export, true, false));
+#if INCLUDE_JVMTI // Both JVMTI and SERVICES have to be enabled to have this dcmd
+  DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<JVMTIAgentLoadDCmd>(full_export, true, false));
+#endif // INCLUDE_JVMTI
 #endif // INCLUDE_SERVICES
 #if INCLUDE_JVMTI
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<JVMTIDataDumpDCmd>(full_export, true, false));
 #endif // INCLUDE_JVMTI
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<ThreadDumpDCmd>(full_export, true, false));
-  DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<RotateGCLogDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<ClassLoaderStatsDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<CompileQueueDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<CodeListDCmd>(full_export, true, false));
   DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<CodeCacheDCmd>(full_export, true, false));
+  DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<TouchedMethodsDCmd>(full_export, true, false));
+
+  DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<CompilerDirectivesPrintDCmd>(full_export, true, false));
+  DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<CompilerDirectivesAddDCmd>(full_export, true, false));
+  DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<CompilerDirectivesRemoveDCmd>(full_export, true, false));
+  DCmdFactory::register_DCmdFactory(new DCmdFactoryImpl<CompilerDirectivesClearDCmd>(full_export, true, false));
 
   // Enhanced JMX Agent Support
   // These commands won't be exported via the DiagnosticCommandMBean until an
@@ -170,12 +198,13 @@ void VersionDCmd::execute(DCmdSource source, TRAPS) {
   output()->print_cr("%s version %s", Abstract_VM_Version::vm_name(),
           Abstract_VM_Version::vm_release());
   JDK_Version jdk_version = JDK_Version::current();
-  if (jdk_version.update_version() > 0) {
-    output()->print_cr("JDK %d.%d_%02d", jdk_version.major_version(),
-            jdk_version.minor_version(), jdk_version.update_version());
+  if (jdk_version.patch_version() > 0) {
+    output()->print_cr("JDK %d.%d.%d.%d", jdk_version.major_version(),
+            jdk_version.minor_version(), jdk_version.security_version(),
+            jdk_version.patch_version());
   } else {
-    output()->print_cr("JDK %d.%d", jdk_version.major_version(),
-            jdk_version.minor_version());
+    output()->print_cr("JDK %d.%d.%d", jdk_version.major_version(),
+            jdk_version.minor_version(), jdk_version.security_version());
   }
 }
 
@@ -244,9 +273,71 @@ void JVMTIDataDumpDCmd::execute(DCmdSource source, TRAPS) {
   }
 }
 
+#if INCLUDE_SERVICES
+JVMTIAgentLoadDCmd::JVMTIAgentLoadDCmd(outputStream* output, bool heap) :
+                                       DCmdWithParser(output, heap),
+  _libpath("library path", "Absolute path of the JVMTI agent to load.",
+           "STRING", true),
+  _option("agent option", "Option string to pass the agent.", "STRING", false) {
+  _dcmdparser.add_dcmd_argument(&_libpath);
+  _dcmdparser.add_dcmd_argument(&_option);
+}
+
+void JVMTIAgentLoadDCmd::execute(DCmdSource source, TRAPS) {
+
+  if (_libpath.value() == NULL) {
+    output()->print_cr("JVMTI.agent_load dcmd needs library path.");
+    return;
+  }
+
+  char *suffix = strrchr(_libpath.value(), '.');
+  bool is_java_agent = (suffix != NULL) && (strncmp(".jar", suffix, 4) == 0);
+
+  if (is_java_agent) {
+    if (_option.value() == NULL) {
+      JvmtiExport::load_agent_library("instrument", "false",
+                                      _libpath.value(), output());
+    } else {
+      size_t opt_len = strlen(_libpath.value()) + strlen(_option.value()) + 2;
+      if (opt_len > 4096) {
+        output()->print_cr("JVMTI agent attach failed: Options is too long.");
+        return;
+      }
+
+      char *opt = (char *)os::malloc(opt_len, mtInternal);
+      if (opt == NULL) {
+        output()->print_cr("JVMTI agent attach failed: "
+                           "Could not allocate " SIZE_FORMAT " bytes for argument.",
+                           opt_len);
+        return;
+      }
+
+      jio_snprintf(opt, opt_len, "%s=%s", _libpath.value(), _option.value());
+      JvmtiExport::load_agent_library("instrument", "false", opt, output());
+
+      os::free(opt);
+    }
+  } else {
+    JvmtiExport::load_agent_library(_libpath.value(), "true",
+                                    _option.value(), output());
+  }
+}
+
+int JVMTIAgentLoadDCmd::num_arguments() {
+  ResourceMark rm;
+  JVMTIAgentLoadDCmd* dcmd = new JVMTIAgentLoadDCmd(NULL, false);
+  if (dcmd != NULL) {
+    DCmdMark mark(dcmd);
+    return dcmd->_dcmdparser.num_arguments();
+  } else {
+    return 0;
+  }
+}
+#endif // INCLUDE_SERVICES
+
 void PrintSystemPropertiesDCmd::execute(DCmdSource source, TRAPS) {
-  // load sun.misc.VMSupport
-  Symbol* klass = vmSymbols::sun_misc_VMSupport();
+  // load VMSupport
+  Symbol* klass = vmSymbols::jdk_internal_vm_VMSupport();
   Klass* k = SystemDictionary::resolve_or_fail(klass, true, CHECK);
   instanceKlassHandle ik (THREAD, k);
   if (ik->should_be_initialized()) {
@@ -314,6 +405,10 @@ int VMUptimeDCmd::num_arguments() {
   }
 }
 
+void VMInfoDCmd::execute(DCmdSource source, TRAPS) {
+  VMError::print_vm_info(_output);
+}
+
 void SystemGCDCmd::execute(DCmdSource source, TRAPS) {
   if (!DisableExplicitGC) {
     Universe::heap()->collect(GCCause::_dcmd_gc_run);
@@ -330,6 +425,61 @@ void RunFinalizationDCmd::execute(DCmdSource source, TRAPS) {
   JavaCalls::call_static(&result, klass,
                          vmSymbols::run_finalization_name(),
                          vmSymbols::void_method_signature(), CHECK);
+}
+
+void HeapInfoDCmd::execute(DCmdSource source, TRAPS) {
+  MutexLocker hl(Heap_lock);
+  Universe::heap()->print_on(output());
+}
+
+void FinalizerInfoDCmd::execute(DCmdSource source, TRAPS) {
+  ResourceMark rm;
+
+
+  Klass* k = SystemDictionary::resolve_or_null(
+    vmSymbols::finalizer_histogram_klass(), THREAD);
+  assert(k != NULL, "FinalizerHistogram class is not accessible");
+
+  instanceKlassHandle klass(THREAD, k);
+  JavaValue result(T_ARRAY);
+
+  // We are calling lang.ref.FinalizerHistogram.getFinalizerHistogram() method
+  // and expect it to return array of FinalizerHistogramEntry as Object[]
+
+  JavaCalls::call_static(&result, klass,
+                         vmSymbols::get_finalizer_histogram_name(),
+                         vmSymbols::void_finalizer_histogram_entry_array_signature(), CHECK);
+
+  objArrayOop result_oop = (objArrayOop) result.get_jobject();
+  if (result_oop->length() == 0) {
+    output()->print_cr("No instances waiting for finalization found");
+    return;
+  }
+
+  oop foop = result_oop->obj_at(0);
+  InstanceKlass* ik = InstanceKlass::cast(foop->klass());
+
+  fieldDescriptor count_fd, name_fd;
+
+  Klass* count_res = ik->find_field(
+    vmSymbols::finalizer_histogram_entry_count_field(), vmSymbols::int_signature(), &count_fd);
+
+  Klass* name_res = ik->find_field(
+    vmSymbols::finalizer_histogram_entry_name_field(), vmSymbols::string_signature(), &name_fd);
+
+  assert(count_res != NULL && name_res != NULL, "Unexpected layout of FinalizerHistogramEntry");
+
+  output()->print_cr("Unreachable instances waiting for finalization");
+  output()->print_cr("#instances  class name");
+  output()->print_cr("-----------------------");
+
+  for (int i = 0; i < result_oop->length(); ++i) {
+    oop element_oop = result_oop->obj_at(i);
+    oop str_oop = element_oop->obj_field(name_fd.offset());
+    char *name = java_lang_String::as_utf8_string(str_oop);
+    int count = element_oop->int_field(count_fd.offset());
+    output()->print_cr("%10d  %s", count, name);
+  }
 }
 
 #if INCLUDE_SERVICES // Heap dumping/inspection supported
@@ -416,11 +566,6 @@ ClassStatsDCmd::ClassStatsDCmd(outputStream* output, bool heap) :
 }
 
 void ClassStatsDCmd::execute(DCmdSource source, TRAPS) {
-  if (!UnlockDiagnosticVMOptions) {
-    output()->print_cr("GC.class_stats command requires -XX:+UnlockDiagnosticVMOptions");
-    return;
-  }
-
   VM_GC_HeapInspection heapop(output(),
                               true /* request_full_gc */);
   heapop.set_csv_format(_csv.value());
@@ -495,6 +640,10 @@ JMXStartRemoteDCmd::JMXStartRemoteDCmd(outputStream *output, bool heap_allocated
   _config_file
   ("config.file",
    "set com.sun.management.config.file", "STRING", false),
+
+  _jmxremote_host
+  ("jmxremote.host",
+   "set com.sun.management.jmxremote.host", "STRING", false),
 
   _jmxremote_port
   ("jmxremote.port",
@@ -575,6 +724,7 @@ JMXStartRemoteDCmd::JMXStartRemoteDCmd(outputStream *output, bool heap_allocated
 
   {
     _dcmdparser.add_dcmd_option(&_config_file);
+    _dcmdparser.add_dcmd_option(&_jmxremote_host);
     _dcmdparser.add_dcmd_option(&_jmxremote_port);
     _dcmdparser.add_dcmd_option(&_jmxremote_rmi_port);
     _dcmdparser.add_dcmd_option(&_jmxremote_ssl);
@@ -613,13 +763,14 @@ void JMXStartRemoteDCmd::execute(DCmdSource source, TRAPS) {
     ResourceMark rm(THREAD);
     HandleMark hm(THREAD);
 
-    // Load and initialize the sun.management.Agent class
+    // Load and initialize the jdk.internal.agent.Agent class
     // invoke startRemoteManagementAgent(string) method to start
     // the remote management server.
     // throw java.lang.NoSuchMethodError if the method doesn't exist
 
+    loadAgentModule(CHECK);
     Handle loader = Handle(THREAD, SystemDictionary::java_system_loader());
-    Klass* k = SystemDictionary::resolve_or_fail(vmSymbols::sun_management_Agent(), loader, Handle(), true, CHECK);
+    Klass* k = SystemDictionary::resolve_or_fail(vmSymbols::jdk_internal_agent_Agent(), loader, Handle(), true, CHECK);
     instanceKlassHandle ik (THREAD, k);
 
     JavaValue result(T_VOID);
@@ -637,14 +788,20 @@ void JMXStartRemoteDCmd::execute(DCmdSource source, TRAPS) {
     // command line with -D or by managmenent.properties
     // file.
 #define PUT_OPTION(a) \
-    if ( (a).is_set() ){ \
-        options.print(\
-               ( *((a).type()) == 'I' ) ? "%scom.sun.management.%s=%d" : "%scom.sun.management.%s=%s",\
-                comma, (a).name(), (a).value()); \
-        comma[0] = ','; \
-    }
+    do { \
+        if ( (a).is_set() ){ \
+            if ( *((a).type()) == 'I' ) { \
+                options.print("%scom.sun.management.%s=" JLONG_FORMAT, comma, (a).name(), (jlong)((a).value())); \
+            } else { \
+                options.print("%scom.sun.management.%s=%s", comma, (a).name(), (char*)((a).value())); \
+            } \
+            comma[0] = ','; \
+        }\
+    } while(0);
+
 
     PUT_OPTION(_config_file);
+    PUT_OPTION(_jmxremote_host);
     PUT_OPTION(_jmxremote_port);
     PUT_OPTION(_jmxremote_rmi_port);
     PUT_OPTION(_jmxremote_ssl);
@@ -680,13 +837,14 @@ void JMXStartLocalDCmd::execute(DCmdSource source, TRAPS) {
     ResourceMark rm(THREAD);
     HandleMark hm(THREAD);
 
-    // Load and initialize the sun.management.Agent class
+    // Load and initialize the jdk.internal.agent.Agent class
     // invoke startLocalManagementAgent(void) method to start
     // the local management server
     // throw java.lang.NoSuchMethodError if method doesn't exist
 
+    loadAgentModule(CHECK);
     Handle loader = Handle(THREAD, SystemDictionary::java_system_loader());
-    Klass* k = SystemDictionary::resolve_or_fail(vmSymbols::sun_management_Agent(), loader, Handle(), true, CHECK);
+    Klass* k = SystemDictionary::resolve_or_fail(vmSymbols::jdk_internal_agent_Agent(), loader, Handle(), true, CHECK);
     instanceKlassHandle ik (THREAD, k);
 
     JavaValue result(T_VOID);
@@ -697,13 +855,14 @@ void JMXStopRemoteDCmd::execute(DCmdSource source, TRAPS) {
     ResourceMark rm(THREAD);
     HandleMark hm(THREAD);
 
-    // Load and initialize the sun.management.Agent class
+    // Load and initialize the jdk.internal.agent.Agent class
     // invoke stopRemoteManagementAgent method to stop the
     // management server
     // throw java.lang.NoSuchMethodError if method doesn't exist
 
+    loadAgentModule(CHECK);
     Handle loader = Handle(THREAD, SystemDictionary::java_system_loader());
-    Klass* k = SystemDictionary::resolve_or_fail(vmSymbols::sun_management_Agent(), loader, Handle(), true, CHECK);
+    Klass* k = SystemDictionary::resolve_or_fail(vmSymbols::jdk_internal_agent_Agent(), loader, Handle(), true, CHECK);
     instanceKlassHandle ik (THREAD, k);
 
     JavaValue result(T_VOID);
@@ -719,12 +878,13 @@ void JMXStatusDCmd::execute(DCmdSource source, TRAPS) {
   ResourceMark rm(THREAD);
   HandleMark hm(THREAD);
 
-  // Load and initialize the sun.management.Agent class
+  // Load and initialize the jdk.internal.agent.Agent class
   // invoke getManagementAgentStatus() method to generate the status info
   // throw java.lang.NoSuchMethodError if method doesn't exist
 
+  loadAgentModule(CHECK);
   Handle loader = Handle(THREAD, SystemDictionary::java_system_loader());
-  Klass* k = SystemDictionary::resolve_or_fail(vmSymbols::sun_management_Agent(), loader, Handle(), true, CHECK);
+  Klass* k = SystemDictionary::resolve_or_fail(vmSymbols::jdk_internal_agent_Agent(), loader, Handle(), true, CHECK);
   instanceKlassHandle ik (THREAD, k);
 
   JavaValue result(T_OBJECT);
@@ -752,30 +912,51 @@ void VMDynamicLibrariesDCmd::execute(DCmdSource source, TRAPS) {
   output()->cr();
 }
 
-void RotateGCLogDCmd::execute(DCmdSource source, TRAPS) {
-  if (UseGCLogFileRotation) {
-    VM_RotateGCLog rotateop(output());
-    VMThread::execute(&rotateop);
-  } else {
-    output()->print_cr("Target VM does not support GC log file rotation.");
-  }
-}
-
 void CompileQueueDCmd::execute(DCmdSource source, TRAPS) {
   VM_PrintCompileQueue printCompileQueueOp(output());
   VMThread::execute(&printCompileQueueOp);
 }
 
 void CodeListDCmd::execute(DCmdSource source, TRAPS) {
-  VM_PrintCodeList printCodeListOp(output());
-  VMThread::execute(&printCodeListOp);
+  CodeCache::print_codelist(output());
 }
 
 void CodeCacheDCmd::execute(DCmdSource source, TRAPS) {
-  VM_PrintCodeCache printCodeCacheOp(output());
-  VMThread::execute(&printCodeCacheOp);
+  CodeCache::print_layout(output());
 }
 
+void CompilerDirectivesPrintDCmd::execute(DCmdSource source, TRAPS) {
+  DirectivesStack::print(output());
+}
+
+CompilerDirectivesAddDCmd::CompilerDirectivesAddDCmd(outputStream* output, bool heap) :
+                           DCmdWithParser(output, heap),
+  _filename("filename","Name of the directives file", "STRING",true) {
+  _dcmdparser.add_dcmd_argument(&_filename);
+}
+
+void CompilerDirectivesAddDCmd::execute(DCmdSource source, TRAPS) {
+  DirectivesParser::parse_from_file(_filename.value(), output());
+}
+
+int CompilerDirectivesAddDCmd::num_arguments() {
+  ResourceMark rm;
+  CompilerDirectivesAddDCmd* dcmd = new CompilerDirectivesAddDCmd(NULL, false);
+  if (dcmd != NULL) {
+    DCmdMark mark(dcmd);
+    return dcmd->_dcmdparser.num_arguments();
+  } else {
+    return 0;
+  }
+}
+
+void CompilerDirectivesRemoveDCmd::execute(DCmdSource source, TRAPS) {
+  DirectivesStack::pop(1);
+}
+
+void CompilerDirectivesClearDCmd::execute(DCmdSource source, TRAPS) {
+  DirectivesStack::clear();
+}
 #if INCLUDE_SERVICES
 ClassHierarchyDCmd::ClassHierarchyDCmd(outputStream* output, bool heap) :
                                        DCmdWithParser(output, heap),
@@ -808,3 +989,35 @@ int ClassHierarchyDCmd::num_arguments() {
 }
 
 #endif
+
+class VM_DumpTouchedMethods : public VM_Operation {
+private:
+  outputStream* _out;
+public:
+  VM_DumpTouchedMethods(outputStream* out) {
+    _out = out;
+  }
+
+  virtual VMOp_Type type() const { return VMOp_DumpTouchedMethods; }
+
+  virtual void doit() {
+    Method::print_touched_methods(_out);
+  }
+};
+
+TouchedMethodsDCmd::TouchedMethodsDCmd(outputStream* output, bool heap) :
+                                       DCmdWithParser(output, heap)
+{}
+
+void TouchedMethodsDCmd::execute(DCmdSource source, TRAPS) {
+  if (!LogTouchedMethods) {
+    output()->print_cr("VM.print_touched_methods command requires -XX:+LogTouchedMethods");
+    return;
+  }
+  VM_DumpTouchedMethods dumper(output());
+  VMThread::execute(&dumper);
+}
+
+int TouchedMethodsDCmd::num_arguments() {
+  return 0;
+}

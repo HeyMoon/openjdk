@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -124,9 +124,17 @@ private:
   // Instance variable
   BasicHashtableEntry<F>*       _entry;
 
+#ifdef ASSERT
+private:
+  unsigned _hits;
+public:
+  unsigned hits()   { return _hits; }
+  void count_hit()  { _hits++; }
+#endif
+
 public:
   // Accessing
-  void clear()                        { _entry = NULL; }
+  void clear()                        { _entry = NULL; DEBUG_ONLY(_hits = 0); }
 
   // The following methods use order access methods to avoid race
   // conditions in multiprocessor systems.
@@ -135,6 +143,7 @@ public:
 
   // The following method is not MT-safe and must be done under lock.
   BasicHashtableEntry<F>** entry_addr()  { return &_entry; }
+
 };
 
 
@@ -151,7 +160,7 @@ public:
   void copy_table(char** top, char* end);
 
   // Bucket handling
-  int hash_to_index(unsigned int full_hash) {
+  int hash_to_index(unsigned int full_hash) const {
     int h = full_hash % _table_size;
     assert(h >= 0 && h < _table_size, "Illegal hash value");
     return h;
@@ -164,18 +173,19 @@ private:
   // Instance variables
   int               _table_size;
   HashtableBucket<F>*     _buckets;
-  BasicHashtableEntry<F>* _free_list;
+  BasicHashtableEntry<F>* volatile _free_list;
   char*             _first_free_entry;
   char*             _end_block;
   int               _entry_size;
-  int               _number_of_entries;
+  volatile int      _number_of_entries;
 
 protected:
 
 #ifdef ASSERT
-  int               _lookup_count;
-  int               _lookup_length;
-  void verify_lookup_length(double load);
+  bool              _lookup_warning;
+  mutable int       _lookup_count;
+  mutable int       _lookup_length;
+  bool verify_lookup_length(double load, const char *table_name);
 #endif
 
   void initialize(int table_size, int entry_size, int number_of_entries);
@@ -184,7 +194,7 @@ protected:
   int entry_size() const { return _entry_size; }
 
   // The following method is MT-safe and may be used with caution.
-  BasicHashtableEntry<F>* bucket(int i);
+  BasicHashtableEntry<F>* bucket(int i) const;
 
   // The following method is not MT-safe and must be done under lock.
   BasicHashtableEntry<F>** bucket_addr(int i) { return _buckets[i].entry_addr(); }
@@ -215,6 +225,24 @@ protected:
   // Free the buckets in this hashtable
   void free_buckets();
 
+  // Helper data structure containing context for the bucket entry unlink process,
+  // storing the unlinked buckets in a linked list.
+  // Also avoids the need to pass around these four members as parameters everywhere.
+  struct BucketUnlinkContext {
+    int _num_processed;
+    int _num_removed;
+    // Head and tail pointers for the linked list of removed entries.
+    BasicHashtableEntry<F>* _removed_head;
+    BasicHashtableEntry<F>* _removed_tail;
+
+    BucketUnlinkContext() : _num_processed(0), _num_removed(0), _removed_head(NULL), _removed_tail(NULL) {
+    }
+
+    void free_entry(BasicHashtableEntry<F>* entry);
+  };
+  // Add of bucket entries linked together in the given context to the global free list. This method
+  // is mt-safe wrt. to other calls of this method.
+  void bulk_free_entries(BucketUnlinkContext* context);
 public:
   int table_size() { return _table_size; }
   void set_entry(int index, BasicHashtableEntry<F>* entry);
@@ -226,6 +254,15 @@ public:
   int number_of_entries() { return _number_of_entries; }
 
   void verify() PRODUCT_RETURN;
+
+#ifdef ASSERT
+  void bucket_count_hit(int i) const {
+    _buckets[i].count_hit();
+  }
+  unsigned bucket_hits(int i) const {
+    return _buckets[i].hits();
+  }
+#endif
 };
 
 
@@ -263,7 +300,7 @@ protected:
   HashtableEntry<T, F>* new_entry(unsigned int hashValue, T obj);
 
   // The following method is MT-safe and may be used with caution.
-  HashtableEntry<T, F>* bucket(int i) {
+  HashtableEntry<T, F>* bucket(int i) const {
     return (HashtableEntry<T, F>*)BasicHashtable<F>::bucket(i);
   }
 
@@ -329,7 +366,7 @@ protected:
     : Hashtable<T, F>(table_size, entry_size, t, number_of_entries) {}
 
 public:
-  unsigned int compute_hash(Symbol* name, ClassLoaderData* loader_data) {
+  unsigned int compute_hash(const Symbol* name, const ClassLoaderData* loader_data) const {
     unsigned int name_hash = name->identity_hash();
     // loader is null with CDS
     assert(loader_data != NULL || UseSharedSpaces || DumpSharedSpaces,

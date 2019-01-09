@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,22 +23,30 @@
  */
 
 #include "precompiled.hpp"
+#include "classfile/classLoaderData.inline.hpp"
+#include "classfile/sharedClassUtil.hpp"
 #include "classfile/dictionary.hpp"
 #include "classfile/systemDictionary.hpp"
+#include "classfile/systemDictionaryShared.hpp"
 #include "memory/iterator.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
-#include "prims/jvmtiRedefineClassesTrace.hpp"
 #include "runtime/orderAccess.inline.hpp"
 #include "utilities/hashtable.inline.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 DictionaryEntry*  Dictionary::_current_class_entry = NULL;
 int               Dictionary::_current_class_index =    0;
 
+size_t Dictionary::entry_size() {
+  if (DumpSharedSpaces) {
+    return SystemDictionaryShared::dictionary_entry_size();
+  } else {
+    return sizeof(DictionaryEntry);
+  }
+}
 
 Dictionary::Dictionary(int table_size)
-  : TwoOopHashtable<Klass*, mtClass>(table_size, sizeof(DictionaryEntry)) {
+  : TwoOopHashtable<Klass*, mtClass>(table_size, (int)entry_size()) {
   _current_class_index = 0;
   _current_class_entry = NULL;
   _pd_cache_table = new ProtectionDomainCacheTable(defaultProtectionDomainCacheSize);
@@ -47,7 +55,7 @@ Dictionary::Dictionary(int table_size)
 
 Dictionary::Dictionary(int table_size, HashtableBucket<mtClass>* t,
                        int number_of_entries)
-  : TwoOopHashtable<Klass*, mtClass>(table_size, sizeof(DictionaryEntry), t, number_of_entries) {
+  : TwoOopHashtable<Klass*, mtClass>(table_size, (int)entry_size(), t, number_of_entries) {
   _current_class_index = 0;
   _current_class_entry = NULL;
   _pd_cache_table = new ProtectionDomainCacheTable(defaultProtectionDomainCacheSize);
@@ -62,7 +70,10 @@ DictionaryEntry* Dictionary::new_entry(unsigned int hash, Klass* klass,
   DictionaryEntry* entry = (DictionaryEntry*)Hashtable<Klass*, mtClass>::new_entry(hash, klass);
   entry->set_loader_data(loader_data);
   entry->set_pd_set(NULL);
-  assert(klass->oop_is_instance(), "Must be");
+  assert(klass->is_instance_klass(), "Must be");
+  if (DumpSharedSpaces) {
+    SystemDictionaryShared::init_shared_dictionary_entry(klass, entry);
+  }
   return entry;
 }
 
@@ -80,7 +91,7 @@ void Dictionary::free_entry(DictionaryEntry* entry) {
 
 bool DictionaryEntry::contains_protection_domain(oop protection_domain) const {
 #ifdef ASSERT
-  if (protection_domain == InstanceKlass::cast(klass())->protection_domain()) {
+  if (protection_domain == klass()->protection_domain()) {
     // Ensure this doesn't show up in the pd_set (invariant)
     bool in_pd_set = false;
     for (ProtectionDomainEntry* current = _pd_set;
@@ -98,7 +109,7 @@ bool DictionaryEntry::contains_protection_domain(oop protection_domain) const {
   }
 #endif /* ASSERT */
 
-  if (protection_domain == InstanceKlass::cast(klass())->protection_domain()) {
+  if (protection_domain == klass()->protection_domain()) {
     // Succeeds trivially
     return true;
   }
@@ -124,8 +135,10 @@ void DictionaryEntry::add_protection_domain(Dictionary* dict, oop protection_dom
     //          via a store to _pd_set.
     OrderAccess::release_store_ptr(&_pd_set, new_head);
   }
-  if (TraceProtectionDomainVerification && WizardMode) {
-    print();
+  if (log_is_enabled(Trace, protectiondomain)) {
+    ResourceMark rm;
+    outputStream* log = Log(protectiondomain)::trace_stream();
+    print_count(log);
   }
 }
 
@@ -277,7 +290,7 @@ void Dictionary::classes_do(void f(Klass*)) {
                           probe != NULL;
                           probe = probe->next()) {
       Klass* k = probe->klass();
-      if (probe->loader_data() == InstanceKlass::cast(k)->class_loader_data()) {
+      if (probe->loader_data() == k->class_loader_data()) {
         f(k);
       }
     }
@@ -292,7 +305,7 @@ void Dictionary::classes_do(void f(Klass*, TRAPS), TRAPS) {
                           probe != NULL;
                           probe = probe->next()) {
       Klass* k = probe->klass();
-      if (probe->loader_data() == InstanceKlass::cast(k)->class_loader_data()) {
+      if (probe->loader_data() == k->class_loader_data()) {
         f(k, CHECK);
       }
     }
@@ -324,7 +337,7 @@ void Dictionary::methods_do(void f(Method*)) {
                           probe != NULL;
                           probe = probe->next()) {
       Klass* k = probe->klass();
-      if (probe->loader_data() == InstanceKlass::cast(k)->class_loader_data()) {
+      if (probe->loader_data() == k->class_loader_data()) {
         // only take klass is we have the entry with the defining class loader
         InstanceKlass::cast(k)->methods_do(f);
       }
@@ -383,14 +396,15 @@ void Dictionary::add_klass(Symbol* class_name, ClassLoaderData* loader_data,
 DictionaryEntry* Dictionary::get_entry(int index, unsigned int hash,
                                        Symbol* class_name,
                                        ClassLoaderData* loader_data) {
-  debug_only(_lookup_count++);
+  DEBUG_ONLY(_lookup_count++);
   for (DictionaryEntry* entry = bucket(index);
                         entry != NULL;
                         entry = entry->next()) {
     if (entry->hash() == hash && entry->equals(class_name, loader_data)) {
+      DEBUG_ONLY(bucket_count_hit(index));
       return entry;
     }
-    debug_only(_lookup_length++);
+    DEBUG_ONLY(_lookup_length++);
   }
   return NULL;
 }
@@ -478,7 +492,7 @@ void Dictionary::reorder_dictionary() {
     DictionaryEntry* p = master_list;
     master_list = master_list->next();
     p->set_next(NULL);
-    Symbol* class_name = InstanceKlass::cast((Klass*)(p->klass()))->name();
+    Symbol* class_name = p->klass()->name();
     // Since the null class loader data isn't copied to the CDS archive,
     // compute the hash with NULL for loader data.
     unsigned int hash = compute_hash(class_name, NULL);
@@ -488,6 +502,15 @@ void Dictionary::reorder_dictionary() {
     p->set_next(bucket(index));
     set_entry(index, p);
   }
+}
+
+
+unsigned int ProtectionDomainCacheTable::compute_hash(oop protection_domain) {
+  return (unsigned int)(protection_domain->identity_hash());
+}
+
+int ProtectionDomainCacheTable::index_for(oop protection_domain) {
+  return hash_to_index(compute_hash(protection_domain));
 }
 
 ProtectionDomainCacheTable::ProtectionDomainCacheTable(int table_size)
@@ -558,7 +581,7 @@ void ProtectionDomainCacheTable::print() {
 
 void ProtectionDomainCacheEntry::print() {
   tty->print_cr("entry " PTR_FORMAT " value " PTR_FORMAT " strongly_reachable %d next " PTR_FORMAT,
-                this, (void*)literal(), _strongly_reachable, next());
+                p2i(this), p2i(literal()), _strongly_reachable, p2i(next()));
 }
 #endif
 
@@ -574,7 +597,7 @@ void ProtectionDomainCacheTable::verify() {
   }
   guarantee(number_of_entries() == element_count,
             "Verify of protection domain cache table failed");
-  debug_only(verify_lookup_length((double)number_of_entries() / table_size()));
+  DEBUG_ONLY(verify_lookup_length((double)number_of_entries() / table_size(), "Domain Cache Table"));
 }
 
 void ProtectionDomainCacheEntry::verify() {
@@ -721,13 +744,15 @@ void Dictionary::print(bool details) {
     for (DictionaryEntry* probe = bucket(index);
                           probe != NULL;
                           probe = probe->next()) {
-      if (Verbose) tty->print("%4d: ", index);
       Klass* e = probe->klass();
       ClassLoaderData* loader_data =  probe->loader_data();
       bool is_defining_class =
-         (loader_data == InstanceKlass::cast(e)->class_loader_data());
+         (loader_data == e->class_loader_data());
+      if (details) {
+        tty->print("%4d: ", index);
+      }
       tty->print("%s%s", ((!details) || is_defining_class) ? " " : "^",
-                   e->external_name());
+                 e->external_name());
 
       if (details) {
         tty->print(", loader ");
@@ -748,6 +773,84 @@ void Dictionary::print(bool details) {
   tty->cr();
 }
 
+#ifdef ASSERT
+void Dictionary::printPerformanceInfoDetails() {
+  if (log_is_enabled(Info, hashtables)) {
+    ResourceMark rm;
+    HandleMark   hm;
+
+    log_info(hashtables)(" ");
+    log_info(hashtables)("Java system dictionary (table_size=%d, classes=%d)",
+                            table_size(), number_of_entries());
+    log_info(hashtables)("1st number: the bucket index");
+    log_info(hashtables)("2nd number: the hit percentage for this bucket");
+    log_info(hashtables)("3rd number: the entry's index within this bucket");
+    log_info(hashtables)("4th number: the hash index of this entry");
+    log_info(hashtables)(" ");
+
+    // find top buckets with highest lookup count
+#define TOP_COUNT 16
+    int topItemsIndicies[TOP_COUNT];
+    for (int i = 0; i < TOP_COUNT; i++) {
+      topItemsIndicies[i] = i;
+    }
+    double total = 0.0;
+    for (int i = 0; i < table_size(); i++) {
+      // find the total count number, so later on we can
+      // express bucket lookup count as a percentage of all lookups
+      unsigned value = bucket_hits(i);
+      total += value;
+
+      // find the top entry with min value
+      int min_index = 0;
+      unsigned min_value = bucket_hits(topItemsIndicies[min_index]);
+      for (int j = 1; j < TOP_COUNT; j++) {
+        unsigned top_value = bucket_hits(topItemsIndicies[j]);
+        if (top_value < min_value) {
+          min_value = top_value;
+          min_index = j;
+        }
+      }
+      // if the bucket loookup value is bigger than the top buckets min
+      // move that bucket index into the top list
+      if (value > min_value) {
+        topItemsIndicies[min_index] = i;
+      }
+    }
+
+    for (int index = 0; index < table_size(); index++) {
+      double percentage = 100.0 * (double)bucket_hits(index)/total;
+      int chain = 0;
+      for (DictionaryEntry* probe = bucket(index);
+           probe != NULL;
+           probe = probe->next()) {
+        Klass* e = probe->klass();
+        ClassLoaderData* loader_data =  probe->loader_data();
+        bool is_defining_class =
+        (loader_data == e->class_loader_data());
+        log_info(hashtables)("%4d: %5.2f%%: %3d: %10u: %s, loader %s",
+                                index, percentage, chain, probe->hash(), e->external_name(),
+                                (loader_data != NULL) ? loader_data->loader_name() : "NULL");
+
+        chain++;
+      }
+      if (chain == 0) {
+        log_info(hashtables)("%4d:", index+1);
+      }
+    }
+    log_info(hashtables)(" ");
+
+    // print out the TOP_COUNT of buckets with highest lookup count (unsorted)
+    log_info(hashtables)("Top %d buckets:", TOP_COUNT);
+    for (int i = 0; i < TOP_COUNT; i++) {
+      log_info(hashtables)("%4d: hits %5.2f%%",
+                              topItemsIndicies[i],
+                                100.0*(double)bucket_hits(topItemsIndicies[i])/total);
+    }
+  }
+}
+#endif // ASSERT
+
 void Dictionary::verify() {
   guarantee(number_of_entries() >= 0, "Verify of system dictionary failed");
 
@@ -758,7 +861,7 @@ void Dictionary::verify() {
                           probe = probe->next()) {
       Klass* e = probe->klass();
       ClassLoaderData* loader_data = probe->loader_data();
-      guarantee(e->oop_is_instance(),
+      guarantee(e->is_instance_klass(),
                               "Verify of system dictionary failed");
       // class loader must be present;  a null class loader is the
       // boostrap loader
@@ -773,7 +876,11 @@ void Dictionary::verify() {
   }
   guarantee(number_of_entries() == element_count,
             "Verify of system dictionary failed");
-  debug_only(verify_lookup_length((double)number_of_entries() / table_size()));
+#ifdef ASSERT
+  if (!verify_lookup_length((double)number_of_entries() / table_size(), "System Dictionary")) {
+    this->printPerformanceInfoDetails();
+  }
+#endif // ASSERT
 
   _pd_cache_table->verify();
 }

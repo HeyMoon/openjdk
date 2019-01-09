@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -79,8 +79,6 @@ class PSScavenge: AllStatic {
   static HeapWord*            _young_generation_boundary;
   // Used to optimize compressed oops young gen boundary checking.
   static uintptr_t            _young_generation_boundary_compressed;
-  static Stack<markOop, mtGC> _preserved_mark_stack; // List of marks to be restored after failed promotion
-  static Stack<oop, mtGC>     _preserved_oop_stack;  // List of oops that need their mark restored.
   static CollectorCounters*   _counters;             // collector performance counters
 
   static void clean_up_failed_promotion();
@@ -117,12 +115,7 @@ class PSScavenge: AllStatic {
   }
   // Adaptive size policy support.  When the young generation/old generation
   // boundary moves, _young_generation_boundary must be reset
-  static void set_young_generation_boundary(HeapWord* v) {
-    _young_generation_boundary = v;
-    if (UseCompressedOops) {
-      _young_generation_boundary_compressed = (uintptr_t)oopDesc::encode_heap_oop((oop)v);
-    }
-  }
+  static void set_young_generation_boundary(HeapWord* v);
 
   // Called by parallelScavengeHeap to init the tenuring threshold
   static void initialize();
@@ -131,9 +124,6 @@ class PSScavenge: AllStatic {
   static bool invoke();
   // Return true if a collection was done; false otherwise.
   static bool invoke_no_policy();
-
-  // If an attempt to promote fails, this method is invoked
-  static void oop_promotion_failed(oop obj, markOop obj_mark);
 
   template <class T> static inline bool should_scavenge(T* p);
 

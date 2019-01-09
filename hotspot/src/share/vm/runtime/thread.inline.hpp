@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,24 +27,9 @@
 
 #define SHARE_VM_RUNTIME_THREAD_INLINE_HPP_SCOPE
 
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/os.inline.hpp"
 #include "runtime/thread.hpp"
-#ifdef TARGET_OS_FAMILY_linux
-# include "thread_linux.inline.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_solaris
-# include "thread_solaris.inline.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_windows
-# include "thread_windows.inline.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_aix
-# include "thread_aix.inline.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_bsd
-# include "thread_bsd.inline.hpp"
-#endif
 
 #undef SHARE_VM_RUNTIME_THREAD_INLINE_HPP_SCOPE
 
@@ -86,9 +71,12 @@ inline jlong Thread::cooked_allocated_bytes() {
   jlong allocated_bytes = OrderAccess::load_acquire(&_allocated_bytes);
   if (UseTLAB) {
     size_t used_bytes = tlab().used_bytes();
-    if ((ssize_t)used_bytes > 0) {
-      // More-or-less valid tlab. The load_acquire above should ensure
-      // that the result of the add is <= the instantaneous value.
+    if (used_bytes <= ThreadLocalAllocBuffer::max_size_in_bytes()) {
+      // Comparing used_bytes with the maximum allowed size will ensure
+      // that we don't add the used bytes from a semi-initialized TLAB
+      // ending up with incorrect values. There is still a race between
+      // incrementing _allocated_bytes and clearing the TLAB, that might
+      // cause double counting in rare cases.
       return allocated_bytes + used_bytes;
     }
   }
@@ -141,22 +129,26 @@ inline bool JavaThread::stack_guard_zone_unused() {
   return _stack_guard_state == stack_guard_unused;
 }
 
-inline bool JavaThread::stack_yellow_zone_disabled() {
-  return _stack_guard_state == stack_guard_yellow_disabled;
+inline bool JavaThread::stack_yellow_reserved_zone_disabled() {
+  return _stack_guard_state == stack_guard_yellow_reserved_disabled;
+}
+
+inline bool JavaThread::stack_reserved_zone_disabled() {
+  return _stack_guard_state == stack_guard_reserved_disabled;
 }
 
 inline size_t JavaThread::stack_available(address cur_sp) {
   // This code assumes java stacks grow down
   address low_addr; // Limit on the address for deepest stack depth
   if (_stack_guard_state == stack_guard_unused) {
-    low_addr =  stack_base() - stack_size();
+    low_addr = stack_end();
   } else {
-    low_addr = stack_yellow_zone_base();
+    low_addr = stack_reserved_zone_base();
   }
   return cur_sp > low_addr ? cur_sp - low_addr : 0;
 }
 
-inline bool JavaThread::stack_yellow_zone_enabled() {
+inline bool JavaThread::stack_guards_enabled() {
 #ifdef ASSERT
   if (os::uses_stack_guard_pages()) {
     assert(_stack_guard_state != stack_guard_unused, "guard pages must be in use");

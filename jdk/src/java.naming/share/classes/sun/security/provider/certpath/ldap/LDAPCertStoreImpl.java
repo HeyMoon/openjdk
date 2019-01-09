@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,17 +44,16 @@ import javax.naming.ldap.InitialLdapContext;
 import javax.naming.ldap.LdapContext;
 import javax.security.auth.x500.X500Principal;
 
-import sun.misc.HexDumpEncoder;
+import sun.security.util.HexDumpEncoder;
 import sun.security.provider.certpath.X509CertificatePair;
 import sun.security.util.Cache;
 import sun.security.util.Debug;
-import sun.security.x509.X500Name;
 
 /**
  * Core implementation of a LDAP Cert Store.
  * @see java.security.cert.CertStore
  *
- * @since       1.9
+ * @since       9
  */
 final class LDAPCertStoreImpl {
 
@@ -187,7 +186,7 @@ final class LDAPCertStoreImpl {
              */
             Hashtable<?,?> currentEnv = ctx.getEnvironment();
             if (currentEnv.get(Context.REFERRAL) == null) {
-                ctx.addToEnvironment(Context.REFERRAL, "follow");
+                ctx.addToEnvironment(Context.REFERRAL, "follow-scheme");
             }
         } catch (NamingException e) {
             if (debug != null) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,7 @@
 // PcDescs map a physical PC (given as offset from start of nmethod) to
 // the corresponding source scope and byte code index.
 
-class nmethod;
+class CompiledMethod;
 
 class PcDesc VALUE_OBJ_CLASS_SPEC {
   friend class VMStructs;
@@ -42,7 +42,8 @@ class PcDesc VALUE_OBJ_CLASS_SPEC {
   enum {
     PCDESC_reexecute               = 1 << 0,
     PCDESC_is_method_handle_invoke = 1 << 1,
-    PCDESC_return_oop              = 1 << 2
+    PCDESC_return_oop              = 1 << 2,
+    PCDESC_rethrow_exception       = 1 << 3
   };
 
   int _flags;
@@ -71,6 +72,8 @@ class PcDesc VALUE_OBJ_CLASS_SPEC {
   };
 
   // Flags
+  bool     rethrow_exception()              const { return (_flags & PCDESC_rethrow_exception) != 0; }
+  void set_rethrow_exception(bool z)              { set_flag(PCDESC_rethrow_exception, z); }
   bool     should_reexecute()              const { return (_flags & PCDESC_reexecute) != 0; }
   void set_should_reexecute(bool z)              { set_flag(PCDESC_reexecute, z); }
 
@@ -88,10 +91,10 @@ class PcDesc VALUE_OBJ_CLASS_SPEC {
   void set_return_oop(bool z)                    { set_flag(PCDESC_return_oop, z); }
 
   // Returns the real pc
-  address real_pc(const nmethod* code) const;
+  address real_pc(const CompiledMethod* code) const;
 
-  void print(nmethod* code);
-  bool verify(nmethod* code);
+  void print(CompiledMethod* code);
+  bool verify(CompiledMethod* code);
 };
 
 #endif // SHARE_VM_CODE_PCDESC_HPP

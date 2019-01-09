@@ -28,10 +28,10 @@ package jdk.nashorn.internal.objects;
 import static jdk.nashorn.internal.runtime.ECMAErrors.typeError;
 import static jdk.nashorn.internal.runtime.UnwarrantedOptimismException.isValid;
 
-import jdk.internal.dynalink.CallSiteDescriptor;
-import jdk.internal.dynalink.beans.StaticClass;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.LinkRequest;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.beans.StaticClass;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.LinkRequest;
 import jdk.nashorn.internal.objects.annotations.Attribute;
 import jdk.nashorn.internal.objects.annotations.Constructor;
 import jdk.nashorn.internal.objects.annotations.Function;
@@ -43,6 +43,7 @@ import jdk.nashorn.internal.runtime.PropertyMap;
 import jdk.nashorn.internal.runtime.ScriptObject;
 import jdk.nashorn.internal.runtime.ScriptRuntime;
 import jdk.nashorn.internal.runtime.UnwarrantedOptimismException;
+import jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor;
 
 /**
  * This is "JavaImporter" constructor. This constructor allows you to use Java types omitting explicit package names.
@@ -134,8 +135,11 @@ public final class NativeJavaImporter extends ScriptObject {
     }
 
     @Override
-    protected Object invokeNoSuchProperty(final String name, final int programPoint) {
-        final Object retval = createProperty(name);
+    protected Object invokeNoSuchProperty(final Object key, final boolean isScope, final int programPoint) {
+        if (!(key instanceof String)) {
+            return super.invokeNoSuchProperty(key, isScope, programPoint);
+        }
+        final Object retval = createProperty((String) key);
         if (isValid(programPoint)) {
             throw new UnwarrantedOptimismException(retval, programPoint);
         }
@@ -143,7 +147,7 @@ public final class NativeJavaImporter extends ScriptObject {
     }
 
     private boolean createAndSetProperty(final CallSiteDescriptor desc) {
-        final String name = desc.getNameToken(CallSiteDescriptor.NAME_OPERAND);
+        final String name = NashornCallSiteDescriptor.getOperand(desc);
         final Object value = createProperty(name);
         if(value != null) {
             set(name, value, 0);

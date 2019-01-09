@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,10 +25,12 @@
 #include "precompiled.hpp"
 #include "opto/arraycopynode.hpp"
 #include "opto/graphKit.hpp"
+#include "runtime/sharedRuntime.hpp"
 
-ArrayCopyNode::ArrayCopyNode(Compile* C, bool alloc_tightly_coupled)
+ArrayCopyNode::ArrayCopyNode(Compile* C, bool alloc_tightly_coupled, bool has_negative_length_guard)
   : CallNode(arraycopy_type(), NULL, TypeRawPtr::BOTTOM),
     _alloc_tightly_coupled(alloc_tightly_coupled),
+    _has_negative_length_guard(has_negative_length_guard),
     _kind(None),
     _arguments_validated(false),
     _src_type(TypeOopPtr::BOTTOM),
@@ -45,10 +47,11 @@ ArrayCopyNode* ArrayCopyNode::make(GraphKit* kit, bool may_throw,
                                    Node* dest, Node* dest_offset,
                                    Node* length,
                                    bool alloc_tightly_coupled,
+                                   bool has_negative_length_guard,
                                    Node* src_klass, Node* dest_klass,
                                    Node* src_length, Node* dest_length) {
 
-  ArrayCopyNode* ac = new ArrayCopyNode(kit->C, alloc_tightly_coupled);
+  ArrayCopyNode* ac = new ArrayCopyNode(kit->C, alloc_tightly_coupled, has_negative_length_guard);
   Node* prev_mem = kit->set_predefined_input_for_runtime_call(ac);
 
   ac->init_req(ArrayCopyNode::Src, src);
@@ -79,9 +82,14 @@ void ArrayCopyNode::connect_outputs(GraphKit* kit) {
 
 #ifndef PRODUCT
 const char* ArrayCopyNode::_kind_names[] = {"arraycopy", "arraycopy, validated arguments", "clone", "oop array clone", "CopyOf", "CopyOfRange"};
+
 void ArrayCopyNode::dump_spec(outputStream *st) const {
   CallNode::dump_spec(st);
   st->print(" (%s%s)", _kind_names[_kind], _alloc_tightly_coupled ? ", tightly coupled allocation" : "");
+}
+
+void ArrayCopyNode::dump_compact_spec(outputStream* st) const {
+  st->print("%s%s", _kind_names[_kind], _alloc_tightly_coupled ? ",tight" : "");
 }
 #endif
 
@@ -199,7 +207,8 @@ Node* ArrayCopyNode::try_clone_instance(PhaseGVN *phase, bool can_reshape, int c
   }
 
   if (!finish_transform(phase, can_reshape, ctl, mem)) {
-    return NULL;
+    // Return NodeSentinel to indicate that the transform failed
+    return NodeSentinel;
   }
 
   return mem;
@@ -277,7 +286,8 @@ bool ArrayCopyNode::prepare_array_copy(PhaseGVN *phase, bool can_reshape,
 
     copy_type = dest_elem;
   } else {
-    assert (is_clonebasic(), "should be");
+    assert(ary_src != NULL, "should be a clone");
+    assert(is_clonebasic(), "should be");
 
     disjoint_bases = true;
     assert(src->is_AddP(), "should be base + off");
@@ -515,7 +525,7 @@ Node *ArrayCopyNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
   Node* mem = try_clone_instance(phase, can_reshape, count);
   if (mem != NULL) {
-    return mem;
+    return (mem == NodeSentinel) ? NULL : mem;
   }
 
   Node* adr_src = NULL;
@@ -621,3 +631,120 @@ bool ArrayCopyNode::may_modify(const TypeOopPtr *t_oop, PhaseTransform *phase) {
 
   return CallNode::may_modify_arraycopy_helper(dest_t, t_oop, phase);
 }
+
+bool ArrayCopyNode::may_modify_helper(const TypeOopPtr *t_oop, Node* n, PhaseTransform *phase, CallNode*& call) {
+  if (n != NULL &&
+      n->is_Call() &&
+      n->as_Call()->may_modify(t_oop, phase) &&
+      (n->as_Call()->is_ArrayCopy() || n->as_Call()->is_call_to_arraycopystub())) {
+    call = n->as_Call();
+    return true;
+  }
+  return false;
+}
+
+static Node* step_over_gc_barrier(Node* c) {
+  if (UseG1GC && !GraphKit::use_ReduceInitialCardMarks() &&
+      c != NULL && c->is_Region() && c->req() == 3) {
+    for (uint i = 1; i < c->req(); i++) {
+      if (c->in(i) != NULL && c->in(i)->is_Region() &&
+          c->in(i)->req() == 3) {
+        Node* r = c->in(i);
+        for (uint j = 1; j < r->req(); j++) {
+          if (r->in(j) != NULL && r->in(j)->is_Proj() &&
+              r->in(j)->in(0) != NULL &&
+              r->in(j)->in(0)->Opcode() == Op_CallLeaf &&
+              r->in(j)->in(0)->as_Call()->entry_point() == CAST_FROM_FN_PTR(address, SharedRuntime::g1_wb_post)) {
+            Node* call = r->in(j)->in(0);
+            c = c->in(i == 1 ? 2 : 1);
+            if (c != NULL) {
+              c = c->in(0);
+              if (c != NULL) {
+                c = c->in(0);
+                assert(call->in(0) == NULL ||
+                       call->in(0)->in(0) == NULL ||
+                       call->in(0)->in(0)->in(0) == NULL ||
+                       call->in(0)->in(0)->in(0)->in(0) == NULL ||
+                       call->in(0)->in(0)->in(0)->in(0)->in(0) == NULL ||
+                       c == call->in(0)->in(0)->in(0)->in(0)->in(0), "bad barrier shape");
+                return c;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return c;
+}
+
+bool ArrayCopyNode::may_modify(const TypeOopPtr *t_oop, MemBarNode* mb, PhaseTransform *phase, ArrayCopyNode*& ac) {
+
+  Node* c = mb->in(0);
+
+  // step over g1 gc barrier if we're at a clone with ReduceInitialCardMarks off
+  c = step_over_gc_barrier(c);
+
+  CallNode* call = NULL;
+  if (c != NULL && c->is_Region()) {
+    for (uint i = 1; i < c->req(); i++) {
+      if (c->in(i) != NULL) {
+        Node* n = c->in(i)->in(0);
+        if (may_modify_helper(t_oop, n, phase, call)) {
+          ac = call->isa_ArrayCopy();
+          assert(c == mb->in(0), "only for clone");
+          return true;
+        }
+      }
+    }
+  } else if (may_modify_helper(t_oop, c->in(0), phase, call)) {
+    ac = call->isa_ArrayCopy();
+    assert(c == mb->in(0) || (ac != NULL && ac->is_clonebasic() && !GraphKit::use_ReduceInitialCardMarks()), "only for clone");
+    return true;
+  }
+
+  return false;
+}
+
+// Does this array copy modify offsets between offset_lo and offset_hi
+// in the destination array
+// if must_modify is false, return true if the copy could write
+// between offset_lo and offset_hi
+// if must_modify is true, return true if the copy is guaranteed to
+// write between offset_lo and offset_hi
+bool ArrayCopyNode::modifies(intptr_t offset_lo, intptr_t offset_hi, PhaseTransform* phase, bool must_modify) const {
+  assert(_kind == ArrayCopy || _kind == CopyOf || _kind == CopyOfRange, "only for real array copies");
+
+  Node* dest = in(Dest);
+  Node* dest_pos = in(DestPos);
+  Node* len = in(Length);
+
+  const TypeInt *dest_pos_t = phase->type(dest_pos)->isa_int();
+  const TypeInt *len_t = phase->type(len)->isa_int();
+  const TypeAryPtr* ary_t = phase->type(dest)->isa_aryptr();
+
+  if (dest_pos_t == NULL || len_t == NULL || ary_t == NULL) {
+    return !must_modify;
+  }
+
+  BasicType ary_elem = ary_t->klass()->as_array_klass()->element_type()->basic_type();
+  uint header = arrayOopDesc::base_offset_in_bytes(ary_elem);
+  uint elemsize = type2aelembytes(ary_elem);
+
+  jlong dest_pos_plus_len_lo = (((jlong)dest_pos_t->_lo) + len_t->_lo) * elemsize + header;
+  jlong dest_pos_plus_len_hi = (((jlong)dest_pos_t->_hi) + len_t->_hi) * elemsize + header;
+  jlong dest_pos_lo = ((jlong)dest_pos_t->_lo) * elemsize + header;
+  jlong dest_pos_hi = ((jlong)dest_pos_t->_hi) * elemsize + header;
+
+  if (must_modify) {
+    if (offset_lo >= dest_pos_hi && offset_hi < dest_pos_plus_len_lo) {
+      return true;
+    }
+  } else {
+    if (offset_hi >= dest_pos_lo && offset_lo < dest_pos_plus_len_hi) {
+      return true;
+    }
+  }
+  return false;
+}
+

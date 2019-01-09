@@ -32,17 +32,20 @@ import static jdk.nashorn.internal.runtime.ScriptRuntime.UNDEFINED;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.io.StreamTokenizer;
-import java.io.StringReader;
+import java.io.OutputStream;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.Function;
 import jdk.nashorn.internal.objects.NativeArray;
+import static jdk.nashorn.internal.runtime.ECMAErrors.rangeError;
 
 /**
  * Global functions supported only in scripting mode.
@@ -71,7 +74,7 @@ public final class ScriptingFunctions {
     public static final String EXIT_NAME = "$EXIT";
 
     /** Names of special properties used by $ENV API. */
-    public  static final String ENV_NAME  = "$ENV";
+    public static final String ENV_NAME  = "$ENV";
 
     /** Name of the environment variable for the current working directory. */
     public static final String PWD_NAME  = "PWD";
@@ -91,11 +94,7 @@ public final class ScriptingFunctions {
      * @throws IOException if an exception occurs
      */
     public static Object readLine(final Object self, final Object prompt) throws IOException {
-        if (prompt != UNDEFINED) {
-            System.out.print(JSType.toString(prompt));
-        }
-        final BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
-        return reader.readLine();
+        return readLine(prompt);
     }
 
     /**
@@ -128,168 +127,121 @@ public final class ScriptingFunctions {
      * Nashorn extension: exec a string in a separate process.
      *
      * @param self   self reference
-     * @param args   string to execute, input and additional arguments, to be appended to {@code string}. Additional
-     *               arguments can be passed as either one JavaScript array, whose elements will be converted to
-     *               strings; or as a sequence of varargs, each of which will be converted to a string.
+     * @param args   In one of four forms
+     *               1. String script, String input
+     *               2. String script, InputStream input, OutputStream output, OutputStream error
+     *               3. Array scriptTokens, String input
+     *               4. Array scriptTokens, InputStream input, OutputStream output, OutputStream error
      *
-     * @return output string from the request
-     *
-     * @throws IOException           if any stream access fails
-     * @throws InterruptedException  if execution is interrupted
+     * @return output string from the request if in form of 1. or 3., empty string otherwise
      */
-    public static Object exec(final Object self, final Object... args) throws IOException, InterruptedException {
-        // Current global is need to fetch additional inputs and for additional results.
-        final ScriptObject global = Context.getGlobal();
-        final Object string = args.length > 0? args[0] : UNDEFINED;
-        final Object input = args.length > 1? args[1] : UNDEFINED;
-        final Object[] argv = (args.length > 2)? Arrays.copyOfRange(args, 2, args.length) : ScriptRuntime.EMPTY_ARRAY;
-        // Assemble command line, process additional arguments.
-        final List<String> cmdLine = tokenizeString(JSType.toString(string));
-        final Object[] additionalArgs = argv.length == 1 && argv[0] instanceof NativeArray ?
-                ((NativeArray) argv[0]).asObjectArray() :
-                argv;
-        for (Object arg : additionalArgs) {
-            cmdLine.add(JSType.toString(arg));
+    public static Object exec(final Object self, final Object... args) {
+        final Object arg0 = args.length > 0 ? args[0] : UNDEFINED;
+        final Object arg1 = args.length > 1 ? args[1] : UNDEFINED;
+        final Object arg2 = args.length > 2 ? args[2] : UNDEFINED;
+        final Object arg3 = args.length > 3 ? args[3] : UNDEFINED;
+
+        InputStream inputStream = null;
+        OutputStream outputStream = null;
+        OutputStream errorStream = null;
+        String script = null;
+        List<String> tokens = null;
+        String inputString = null;
+
+        if (arg0 instanceof NativeArray) {
+            final String[] array = (String[])JSType.toJavaArray(arg0, String.class);
+            tokens = new ArrayList<>();
+            tokens.addAll(Arrays.asList(array));
+        } else {
+            script = JSType.toString(arg0);
         }
 
-        // Set up initial process.
-        final ProcessBuilder processBuilder = new ProcessBuilder(cmdLine);
+        if (arg1 instanceof InputStream) {
+            inputStream = (InputStream)arg1;
+        } else {
+            inputString = JSType.toString(arg1);
+        }
 
-        // Current ENV property state.
+        if (arg2 instanceof OutputStream) {
+            outputStream = (OutputStream)arg2;
+        }
+
+        if (arg3 instanceof OutputStream) {
+            errorStream = (OutputStream)arg3;
+        }
+
+        // Current global is need to fetch additional inputs and for additional results.
+        final ScriptObject global = Context.getGlobal();
+
+        // Capture ENV property state.
+        final Map<String, String> environment = new HashMap<>();
         final Object env = global.get(ENV_NAME);
+
         if (env instanceof ScriptObject) {
             final ScriptObject envProperties = (ScriptObject)env;
 
-            // If a working directory is present, use it.
-            final Object pwd = envProperties.get(PWD_NAME);
-            if (pwd != UNDEFINED) {
-                final File pwdFile = new File(JSType.toString(pwd));
-                if (pwdFile.exists()) {
-                    processBuilder.directory(pwdFile);
-                }
-            }
-
-            // Set up ENV variables.
-            final Map<String, String> environment = processBuilder.environment();
-            environment.clear();
-            for (final Map.Entry<Object, Object> entry : envProperties.entrySet()) {
+            // Copy ENV variables.
+            envProperties.entrySet().stream().forEach((entry) -> {
                 environment.put(JSType.toString(entry.getKey()), JSType.toString(entry.getValue()));
-            }
+            });
         }
 
-        // Start the process.
-        final Process process = processBuilder.start();
-        final IOException exception[] = new IOException[2];
+        // get the $EXEC function object from the global object
+        final Object exec = global.get(EXEC_NAME);
+        assert exec instanceof ScriptObject : EXEC_NAME + " is not a script object!";
 
-        // Collect output.
-        final StringBuilder outBuffer = new StringBuilder();
-        final Thread outThread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                final char buffer[] = new char[1024];
-                try (final InputStreamReader inputStream = new InputStreamReader(process.getInputStream())) {
-                    for (int length; (length = inputStream.read(buffer, 0, buffer.length)) != -1; ) {
-                        outBuffer.append(buffer, 0, length);
-                    }
-                } catch (final IOException ex) {
-                    exception[0] = ex;
-                }
-            }
-        }, "$EXEC output");
+        // Execute the commands
+        final CommandExecutor executor = new CommandExecutor();
+        executor.setInputString(inputString);
+        executor.setInputStream(inputStream);
+        executor.setOutputStream(outputStream);
+        executor.setErrorStream(errorStream);
+        executor.setEnvironment(environment);
 
-        // Collect errors.
-        final StringBuilder errBuffer = new StringBuilder();
-        final Thread errThread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                final char buffer[] = new char[1024];
-                try (final InputStreamReader inputStream = new InputStreamReader(process.getErrorStream())) {
-                    for (int length; (length = inputStream.read(buffer, 0, buffer.length)) != -1; ) {
-                        errBuffer.append(buffer, 0, length);
-                    }
-                } catch (final IOException ex) {
-                    exception[1] = ex;
-                }
-            }
-        }, "$EXEC error");
-
-        // Start gathering output.
-        outThread.start();
-        errThread.start();
-
-        // If input is present, pass on to process.
-        if (!JSType.nullOrUndefined(input)) {
-            try (OutputStreamWriter outputStream = new OutputStreamWriter(process.getOutputStream())) {
-                final String in = JSType.toString(input);
-                outputStream.write(in, 0, in.length());
-            } catch (final IOException ex) {
-                // Process was not expecting input.  May be normal state of affairs.
-            }
+        if (tokens != null) {
+            executor.process(tokens);
+        } else {
+            executor.process(script);
         }
 
-        // Wait for the process to complete.
-        final int exit = process.waitFor();
-        outThread.join();
-        errThread.join();
-
-        final String out = outBuffer.toString();
-        final String err = errBuffer.toString();
+        final String outString = executor.getOutputString();
+        final String errString = executor.getErrorString();
+        final int exitCode = executor.getExitCode();
 
         // Set globals for secondary results.
-        global.set(OUT_NAME, out, 0);
-        global.set(ERR_NAME, err, 0);
-        global.set(EXIT_NAME, exit, 0);
-
-        // Propagate exception if present.
-        for (final IOException element : exception) {
-            if (element != null) {
-                throw element;
-            }
-        }
+        global.set(OUT_NAME, outString, 0);
+        global.set(ERR_NAME, errString, 0);
+        global.set(EXIT_NAME, exitCode, 0);
 
         // Return the result from stdout.
-        return out;
+        return outString;
+    }
+
+    // Implementation for pluggable "readLine" functionality
+    // Used by jjs interactive mode
+
+    private static Function<String, String> readLineHelper;
+
+    public static void setReadLineHelper(final Function<String, String> func) {
+        readLineHelper = Objects.requireNonNull(func);
+    }
+
+    public static Function<String, String> getReadLineHelper() {
+        return readLineHelper;
+    }
+
+    public static String readLine(final Object prompt) throws IOException {
+        final String p = (prompt != UNDEFINED)? JSType.toString(prompt) : "";
+        if (readLineHelper != null) {
+            return readLineHelper.apply(p);
+        } else {
+            System.out.print(p);
+            final BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+            return reader.readLine();
+        }
     }
 
     private static MethodHandle findOwnMH(final String name, final Class<?> rtype, final Class<?>... types) {
         return MH.findStatic(MethodHandles.lookup(), ScriptingFunctions.class, name, MH.type(rtype, types));
-    }
-
-    /**
-     * Break a string into tokens, honoring quoted arguments and escaped spaces.
-     *
-     * @param str a {@link String} to tokenize.
-     * @return a {@link List} of {@link String}s representing the tokens that
-     * constitute the string.
-     * @throws IOException in case {@link StreamTokenizer#nextToken()} raises it.
-     */
-    public static List<String> tokenizeString(final String str) throws IOException {
-        final StreamTokenizer tokenizer = new StreamTokenizer(new StringReader(str));
-        tokenizer.resetSyntax();
-        tokenizer.wordChars(0, 255);
-        tokenizer.whitespaceChars(0, ' ');
-        tokenizer.commentChar('#');
-        tokenizer.quoteChar('"');
-        tokenizer.quoteChar('\'');
-        final List<String> tokenList = new ArrayList<>();
-        final StringBuilder toAppend = new StringBuilder();
-        while (tokenizer.nextToken() != StreamTokenizer.TT_EOF) {
-            final String s = tokenizer.sval;
-            // The tokenizer understands about honoring quoted strings and recognizes
-            // them as one token that possibly contains multiple space-separated words.
-            // It does not recognize quoted spaces, though, and will split after the
-            // escaping \ character. This is handled here.
-            if (s.endsWith("\\")) {
-                // omit trailing \, append space instead
-                toAppend.append(s.substring(0, s.length() - 1)).append(' ');
-            } else {
-                tokenList.add(toAppend.append(s).toString());
-                toAppend.setLength(0);
-            }
-        }
-        if (toAppend.length() != 0) {
-            tokenList.add(toAppend.toString());
-        }
-        return tokenList;
     }
 }

@@ -19,17 +19,28 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
 /**
  * @test
  * @bug 8073184
  * @summary CastII that guards counted loops confuses range check elimination with LoopLimitCheck off
- * @run main/othervm -XX:+IgnoreUnrecognizedVMOptions -XX:-LoopLimitCheck -XX:CompileOnly=TestCastIINoLoopLimitCheck.m -Xcomp  TestCastIINoLoopLimitCheck
  *
+ * @run main/othervm -XX:+IgnoreUnrecognizedVMOptions -Xcomp
+ *      -XX:CompileCommand=compileonly,compiler.loopopts.TestCastIINoLoopLimitCheck::m
+ *      compiler.loopopts.TestCastIINoLoopLimitCheck
  */
 
+package compiler.loopopts;
+/*
+ * The test was originally run with
+ *
+ * -XX:+UnlockDiagnosticVMOptions -XX:-LoopLimitCheck
+ *
+ * to trigger a problem with code guarded with !LoopLimitCheck.
+ * JDK-8072422 has removed that code but kept the test because the
+ * test generates an interesting graph shape.
+ */
 public class TestCastIINoLoopLimitCheck {
 
     static void m(int i, int index, char[] buf) {

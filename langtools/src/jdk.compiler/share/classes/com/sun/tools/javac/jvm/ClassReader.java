@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,40 +29,50 @@ import java.io.*;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.CharBuffer;
-import java.nio.file.Path;
+import java.nio.file.ClosedFileSystemException;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.NestingKind;
 import javax.tools.JavaFileManager;
 import javax.tools.JavaFileObject;
+
 import com.sun.tools.javac.comp.Annotate;
 import com.sun.tools.javac.comp.Annotate.AnnotationTypeCompleter;
 import com.sun.tools.javac.code.*;
+import com.sun.tools.javac.code.Directive.*;
 import com.sun.tools.javac.code.Lint.LintCategory;
 import com.sun.tools.javac.code.Scope.WriteableScope;
 import com.sun.tools.javac.code.Symbol.*;
 import com.sun.tools.javac.code.Symtab;
 import com.sun.tools.javac.code.Type.*;
 import com.sun.tools.javac.comp.Annotate.AnnotationTypeMetadata;
-import com.sun.tools.javac.file.BaseFileObject;
+import com.sun.tools.javac.file.BaseFileManager;
+import com.sun.tools.javac.file.PathFileObject;
 import com.sun.tools.javac.jvm.ClassFile.NameAndType;
 import com.sun.tools.javac.jvm.ClassFile.Version;
+import com.sun.tools.javac.main.Option;
 import com.sun.tools.javac.util.*;
 import com.sun.tools.javac.util.DefinedBy.Api;
 import com.sun.tools.javac.util.JCDiagnostic.DiagnosticPosition;
 
 import static com.sun.tools.javac.code.Flags.*;
 import static com.sun.tools.javac.code.Kinds.Kind.*;
+
+import com.sun.tools.javac.code.Scope.LookupKind;
+
 import static com.sun.tools.javac.code.TypeTag.ARRAY;
 import static com.sun.tools.javac.code.TypeTag.CLASS;
 import static com.sun.tools.javac.code.TypeTag.TYPEVAR;
 import static com.sun.tools.javac.jvm.ClassFile.*;
 import static com.sun.tools.javac.jvm.ClassFile.Version.*;
 
-import static com.sun.tools.javac.main.Option.*;
+import static com.sun.tools.javac.main.Option.PARAMETERS;
 
 /** This class provides operations to read a classfile into an internal
  *  representation. The internal representation is anchored in a
@@ -87,11 +97,6 @@ public class ClassReader {
      */
     boolean verbose;
 
-    /** Switch: check class file for correct minor version, unrecognized
-     *  attributes.
-     */
-    boolean checkClassFile;
-
     /** Switch: read constant pool and code sections. This switch is initially
      *  set to false but can be turned on from outside.
      */
@@ -100,6 +105,10 @@ public class ClassReader {
     /** Switch: allow simplified varargs.
      */
     boolean allowSimplifiedVarargs;
+
+    /** Switch: allow modules.
+     */
+    boolean allowModules;
 
    /** Lint option: warn about classfile issues
      */
@@ -138,6 +147,9 @@ public class ClassReader {
      */
     protected WriteableScope typevars;
 
+    private List<InterimUsesDirective> interimUses = List.nil();
+    private List<InterimProvidesDirective> interimProvides = List.nil();
+
     /** The path name of the class file currently being read.
      */
     protected JavaFileObject currentClassFile = null;
@@ -145,6 +157,10 @@ public class ClassReader {
     /** The class or method currently being read.
      */
     protected Symbol currentOwner = null;
+
+    /** The module containing the class currently being read.
+     */
+    protected ModuleSymbol currentModule = null;
 
     /** The buffer containing the currently read class file.
      */
@@ -225,13 +241,13 @@ public class ClassReader {
         log = Log.instance(context);
 
         Options options = Options.instance(context);
-        verbose         = options.isSet(VERBOSE);
-        checkClassFile  = options.isSet("-checkclassfile");
+        verbose         = options.isSet(Option.VERBOSE);
 
         Source source = Source.instance(context);
         allowSimplifiedVarargs = source.allowSimplifiedVarargs();
+        allowModules     = source.allowModules();
 
-        saveParameterNames = options.isSet("save-parameter-names");
+        saveParameterNames = options.isSet(PARAMETERS);
 
         profile = Profile.instance(context);
 
@@ -260,6 +276,14 @@ public class ClassReader {
             currentOwner.enclClass(),
             currentClassFile,
             diagFactory.fragment(key, args),
+            diagFactory);
+    }
+
+    public ClassFinder.BadEnclosingMethodAttr badEnclosingMethod(Object... args) {
+        return new ClassFinder.BadEnclosingMethodAttr (
+            currentOwner.enclClass(),
+            currentClassFile,
+            diagFactory.fragment("bad.enclosing.method", args),
             diagFactory);
     }
 
@@ -366,6 +390,8 @@ public class ClassReader {
             case CONSTANT_Class:
             case CONSTANT_String:
             case CONSTANT_MethodType:
+            case CONSTANT_Module:
+            case CONSTANT_Package:
                 bp = bp + 2;
                 break;
             case CONSTANT_MethodHandle:
@@ -438,13 +464,13 @@ public class ClassReader {
             poolObj[i] = getInt(index + 1);
             break;
         case CONSTANT_Float:
-            poolObj[i] = new Float(getFloat(index + 1));
+            poolObj[i] = Float.valueOf(getFloat(index + 1));
             break;
         case CONSTANT_Long:
-            poolObj[i] = new Long(getLong(index + 1));
+            poolObj[i] = Long.valueOf(getLong(index + 1));
             break;
         case CONSTANT_Double:
-            poolObj[i] = new Double(getDouble(index + 1));
+            poolObj[i] = Double.valueOf(getDouble(index + 1));
             break;
         case CONSTANT_MethodHandle:
             skipBytes(4);
@@ -454,6 +480,11 @@ public class ClassReader {
             break;
         case CONSTANT_InvokeDynamic:
             skipBytes(5);
+            break;
+        case CONSTANT_Module:
+        case CONSTANT_Package:
+            // this is temporary for now: treat as a simple reference to the underlying Utf8.
+            poolObj[i] = readName(getChar(index + 1));
             break;
         default:
             throw badClassFile("bad.const.pool.tag", Byte.toString(tag));
@@ -480,7 +511,7 @@ public class ClassReader {
         // simplified to (buf[start] == '[')
         return (buf[start] == '[' || buf[start + len - 1] == ';')
             ? (Object)sigToType(buf, start, len)
-            : (Object)syms.enterClass(names.fromUtf(internalize(buf, start,
+            : (Object)enterClass(names.fromUtf(internalize(buf, start,
                                                            len)));
     }
 
@@ -500,6 +531,23 @@ public class ClassReader {
                                currentClassFile.toString(),
                                "CONSTANT_Class_info", i);
         return (ClassSymbol)obj;
+    }
+
+    Name readClassName(int i) {
+        int index = poolIdx[i];
+        if (index == 0) return null;
+        byte tag = buf[index];
+        if (tag != CONSTANT_Class) {
+            throw badClassFile("bad.const.pool.entry",
+                               currentClassFile.toString(),
+                               "CONSTANT_Class_info", i);
+        }
+        int nameIndex =  poolIdx[getChar(index + 1)];
+        int len = getChar(nameIndex + 1);
+        int start = nameIndex + 3;
+        if (buf[start] == '[' || buf[start + len - 1] == ';')
+            throw badClassFile("wrong class name"); //TODO: proper diagnostics
+        return names.fromUtf(internalize(buf, start, len));
     }
 
     /** Read name.
@@ -522,6 +570,69 @@ public class ClassReader {
                                currentClassFile.toString(),
                                "CONSTANT_NameAndType_info", i);
         return (NameAndType)obj;
+    }
+
+    /** Read the name of a module.
+     * The name is stored in a CONSTANT_Module entry, in
+     * JVMS 4.2 binary form (using ".", not "/")
+     */
+    Name readModuleName(int i) {
+        return readName(i);
+    }
+
+    /** Read module_flags.
+     */
+    Set<ModuleFlags> readModuleFlags(int flags) {
+        Set<ModuleFlags> set = EnumSet.noneOf(ModuleFlags.class);
+        for (ModuleFlags f : ModuleFlags.values()) {
+            if ((flags & f.value) != 0)
+                set.add(f);
+        }
+        return set;
+    }
+
+    /** Read resolution_flags.
+     */
+    Set<ModuleResolutionFlags> readModuleResolutionFlags(int flags) {
+        Set<ModuleResolutionFlags> set = EnumSet.noneOf(ModuleResolutionFlags.class);
+        for (ModuleResolutionFlags f : ModuleResolutionFlags.values()) {
+            if ((flags & f.value) != 0)
+                set.add(f);
+        }
+        return set;
+    }
+
+    /** Read exports_flags.
+     */
+    Set<ExportsFlag> readExportsFlags(int flags) {
+        Set<ExportsFlag> set = EnumSet.noneOf(ExportsFlag.class);
+        for (ExportsFlag f: ExportsFlag.values()) {
+            if ((flags & f.value) != 0)
+                set.add(f);
+        }
+        return set;
+    }
+
+    /** Read opens_flags.
+     */
+    Set<OpensFlag> readOpensFlags(int flags) {
+        Set<OpensFlag> set = EnumSet.noneOf(OpensFlag.class);
+        for (OpensFlag f: OpensFlag.values()) {
+            if ((flags & f.value) != 0)
+                set.add(f);
+        }
+        return set;
+    }
+
+    /** Read requires_flags.
+     */
+    Set<RequiresFlag> readRequiresFlags(int flags) {
+        Set<RequiresFlag> set = EnumSet.noneOf(RequiresFlag.class);
+        for (RequiresFlag f: RequiresFlag.values()) {
+            if ((flags & f.value) != 0)
+                set.add(f);
+        }
+        return set;
     }
 
 /************************************************************************
@@ -662,21 +773,21 @@ public class ClassReader {
             switch (c) {
 
             case ';': {         // end
-                ClassSymbol t = syms.enterClass(names.fromUtf(signatureBuffer,
+                ClassSymbol t = enterClass(names.fromUtf(signatureBuffer,
                                                          startSbp,
                                                          sbp - startSbp));
 
                 try {
                     return (outer == Type.noType) ?
                             t.erasure(types) :
-                        new ClassType(outer, List.<Type>nil(), t);
+                        new ClassType(outer, List.nil(), t);
                 } finally {
                     sbp = startSbp;
                 }
             }
 
             case '<':           // generic arguments
-                ClassSymbol t = syms.enterClass(names.fromUtf(signatureBuffer,
+                ClassSymbol t = enterClass(names.fromUtf(signatureBuffer,
                                                          startSbp,
                                                          sbp - startSbp));
                 outer = new ClassType(outer, sigToTypes('>'), t) {
@@ -739,10 +850,10 @@ public class ClassReader {
             case '.':
                 //we have seen an enclosing non-generic class
                 if (outer != Type.noType) {
-                    t = syms.enterClass(names.fromUtf(signatureBuffer,
+                    t = enterClass(names.fromUtf(signatureBuffer,
                                                  startSbp,
                                                  sbp - startSbp));
-                    outer = new ClassType(outer, List.<Type>nil(), t);
+                    outer = new ClassType(outer, List.nil(), t);
                 }
                 signatureBuffer[sbp++] = (byte)'$';
                 continue;
@@ -918,14 +1029,53 @@ public class ClassReader {
                 protected void read(Symbol sym, int attrLen) {
                     Object v = readPool(nextChar());
                     // Ignore ConstantValue attribute if field not final.
-                    if ((sym.flags() & FINAL) != 0)
-                        ((VarSymbol) sym).setData(v);
+                    if ((sym.flags() & FINAL) == 0) {
+                        return;
+                    }
+                    VarSymbol var = (VarSymbol) sym;
+                    switch (var.type.getTag()) {
+                       case BOOLEAN:
+                       case BYTE:
+                       case CHAR:
+                       case SHORT:
+                       case INT:
+                           checkType(var, Integer.class, v);
+                           break;
+                       case LONG:
+                           checkType(var, Long.class, v);
+                           break;
+                       case FLOAT:
+                           checkType(var, Float.class, v);
+                           break;
+                       case DOUBLE:
+                           checkType(var, Double.class, v);
+                           break;
+                       case CLASS:
+                           Assert.check(var.type.tsym == syms.stringType.tsym);
+                           checkType(var, String.class, v);
+                           break;
+                       default:
+                           // ignore ConstantValue attribute if type is not primitive or String
+                           return;
+                    }
+                    if (v instanceof Integer && !var.type.getTag().checkRange((Integer) v)) {
+                        throw badClassFile("bad.constant.range", v, var, var.type);
+                    }
+                    var.setData(v);
+                }
+
+                void checkType(Symbol var, Class<?> clazz, Object value) {
+                    if (!clazz.isInstance(value)) {
+                        throw badClassFile("bad.constant.value", value, var, clazz.getSimpleName());
+                    }
                 }
             },
 
             new AttributeReader(names.Deprecated, V45_3, CLASS_OR_MEMBER_ATTRIBUTE) {
                 protected void read(Symbol sym, int attrLen) {
-                    sym.flags_field |= DEPRECATED;
+                    Symbol s = sym.owner.kind == MDL ? sym.owner : sym;
+
+                    s.flags_field |= DEPRECATED;
                 }
             },
 
@@ -943,7 +1093,12 @@ public class ClassReader {
             new AttributeReader(names.InnerClasses, V45_3, CLASS_ATTRIBUTE) {
                 protected void read(Symbol sym, int attrLen) {
                     ClassSymbol c = (ClassSymbol) sym;
-                    readInnerClasses(c);
+                    if (currentModule.module_info == c) {
+                        //prevent entering the classes too soon:
+                        skipInnerClasses();
+                    } else {
+                        readInnerClasses(c);
+                    }
                 }
             },
 
@@ -970,7 +1125,8 @@ public class ClassReader {
                             if (start_pc == 0) {
                                 // ensure array large enough
                                 if (register >= parameterNameIndices.length) {
-                                    int newSize = Math.max(register, parameterNameIndices.length + 8);
+                                    int newSize =
+                                            Math.max(register + 1, parameterNameIndices.length + 8);
                                     parameterNameIndices =
                                             Arrays.copyOf(parameterNameIndices, newSize);
                                 }
@@ -982,25 +1138,6 @@ public class ClassReader {
                     bp = newbp;
                 }
             },
-
-            new AttributeReader(names.MethodParameters, V52, MEMBER_ATTRIBUTE) {
-                protected void read(Symbol sym, int attrlen) {
-                    int newbp = bp + attrlen;
-                    if (saveParameterNames) {
-                        sawMethodParameters = true;
-                        int numEntries = nextByte();
-                        parameterNameIndices = new int[numEntries];
-                        haveParameterNameIndices = true;
-                        for (int i = 0; i < numEntries; i++) {
-                            int nameIndex = nextChar();
-                            int flags = nextChar();
-                            parameterNameIndices[i] = nameIndex;
-                        }
-                    }
-                    bp = newbp;
-                }
-            },
-
 
             new AttributeReader(names.SourceFile, V45_3, CLASS_ATTRIBUTE) {
                 protected void read(Symbol sym, int attrLen) {
@@ -1132,26 +1269,150 @@ public class ClassReader {
                 }
             },
 
-
             // The following attributes for a Code attribute are not currently handled
             // StackMapTable
             // SourceDebugExtension
             // LineNumberTable
             // LocalVariableTypeTable
+
+            // standard v52 attributes
+
+            new AttributeReader(names.MethodParameters, V52, MEMBER_ATTRIBUTE) {
+                protected void read(Symbol sym, int attrlen) {
+                    int newbp = bp + attrlen;
+                    if (saveParameterNames) {
+                        sawMethodParameters = true;
+                        int numEntries = nextByte();
+                        parameterNameIndices = new int[numEntries];
+                        haveParameterNameIndices = true;
+                        for (int i = 0; i < numEntries; i++) {
+                            int nameIndex = nextChar();
+                            int flags = nextChar();
+                            parameterNameIndices[i] = nameIndex;
+                        }
+                    }
+                    bp = newbp;
+                }
+            },
+
+            // standard v53 attributes
+
+            new AttributeReader(names.Module, V53, CLASS_ATTRIBUTE) {
+                @Override
+                protected boolean accepts(AttributeKind kind) {
+                    return super.accepts(kind) && allowModules;
+                }
+                protected void read(Symbol sym, int attrLen) {
+                    if (sym.kind == TYP && sym.owner.kind == MDL) {
+                        ModuleSymbol msym = (ModuleSymbol) sym.owner;
+                        ListBuffer<Directive> directives = new ListBuffer<>();
+
+                        Name moduleName = readModuleName(nextChar());
+                        if (currentModule.name != moduleName) {
+                            throw badClassFile("module.name.mismatch", moduleName, currentModule.name);
+                        }
+
+                        msym.flags.addAll(readModuleFlags(nextChar()));
+                        msym.version = readName(nextChar());
+
+                        ListBuffer<RequiresDirective> requires = new ListBuffer<>();
+                        int nrequires = nextChar();
+                        for (int i = 0; i < nrequires; i++) {
+                            ModuleSymbol rsym = syms.enterModule(readModuleName(nextChar()));
+                            Set<RequiresFlag> flags = readRequiresFlags(nextChar());
+                            nextChar(); // skip compiled version
+                            requires.add(new RequiresDirective(rsym, flags));
+                        }
+                        msym.requires = requires.toList();
+                        directives.addAll(msym.requires);
+
+                        ListBuffer<ExportsDirective> exports = new ListBuffer<>();
+                        int nexports = nextChar();
+                        for (int i = 0; i < nexports; i++) {
+                            Name n = readName(nextChar());
+                            PackageSymbol p = syms.enterPackage(currentModule, names.fromUtf(internalize(n)));
+                            Set<ExportsFlag> flags = readExportsFlags(nextChar());
+                            int nto = nextChar();
+                            List<ModuleSymbol> to;
+                            if (nto == 0) {
+                                to = null;
+                            } else {
+                                ListBuffer<ModuleSymbol> lb = new ListBuffer<>();
+                                for (int t = 0; t < nto; t++)
+                                    lb.append(syms.enterModule(readModuleName(nextChar())));
+                                to = lb.toList();
+                            }
+                            exports.add(new ExportsDirective(p, to, flags));
+                        }
+                        msym.exports = exports.toList();
+                        directives.addAll(msym.exports);
+                        ListBuffer<OpensDirective> opens = new ListBuffer<>();
+                        int nopens = nextChar();
+                        if (nopens != 0 && msym.flags.contains(ModuleFlags.OPEN)) {
+                            throw badClassFile("module.non.zero.opens", currentModule.name);
+                        }
+                        for (int i = 0; i < nopens; i++) {
+                            Name n = readName(nextChar());
+                            PackageSymbol p = syms.enterPackage(currentModule, names.fromUtf(internalize(n)));
+                            Set<OpensFlag> flags = readOpensFlags(nextChar());
+                            int nto = nextChar();
+                            List<ModuleSymbol> to;
+                            if (nto == 0) {
+                                to = null;
+                            } else {
+                                ListBuffer<ModuleSymbol> lb = new ListBuffer<>();
+                                for (int t = 0; t < nto; t++)
+                                    lb.append(syms.enterModule(readModuleName(nextChar())));
+                                to = lb.toList();
+                            }
+                            opens.add(new OpensDirective(p, to, flags));
+                        }
+                        msym.opens = opens.toList();
+                        directives.addAll(msym.opens);
+
+                        msym.directives = directives.toList();
+
+                        ListBuffer<InterimUsesDirective> uses = new ListBuffer<>();
+                        int nuses = nextChar();
+                        for (int i = 0; i < nuses; i++) {
+                            Name srvc = readClassName(nextChar());
+                            uses.add(new InterimUsesDirective(srvc));
+                        }
+                        interimUses = uses.toList();
+
+                        ListBuffer<InterimProvidesDirective> provides = new ListBuffer<>();
+                        int nprovides = nextChar();
+                        for (int p = 0; p < nprovides; p++) {
+                            Name srvc = readClassName(nextChar());
+                            int nimpls = nextChar();
+                            ListBuffer<Name> impls = new ListBuffer<>();
+                            for (int i = 0; i < nimpls; i++) {
+                                impls.append(readClassName(nextChar()));
+                            provides.add(new InterimProvidesDirective(srvc, impls.toList()));
+                            }
+                        }
+                        interimProvides = provides.toList();
+                    }
+                }
+            },
+
+            new AttributeReader(names.ModuleResolution, V53, CLASS_ATTRIBUTE) {
+                @Override
+                protected boolean accepts(AttributeKind kind) {
+                    return super.accepts(kind) && allowModules;
+                }
+                protected void read(Symbol sym, int attrLen) {
+                    if (sym.kind == TYP && sym.owner.kind == MDL) {
+                        ModuleSymbol msym = (ModuleSymbol) sym.owner;
+                        msym.resolutionFlags.addAll(readModuleResolutionFlags(nextChar()));
+                    }
+                }
+            },
         };
 
         for (AttributeReader r: readers)
             attributeReaders.put(r.name, r);
     }
-
-    /** Report unrecognized attribute.
-     */
-    void unrecognized(Name attrName) {
-        if (checkClassFile)
-            printCCF("ccf.unrecognized.attribute", attrName);
-    }
-
-
 
     protected void readEnclosingMethodAttr(Symbol sym) {
         // sym is a nested class with an "Enclosing Method" attribute
@@ -1167,7 +1428,7 @@ public class ClassReader {
 
         MethodSymbol m = findMethod(nt, c.members_field, self.flags());
         if (nt != null && m == null)
-            throw badClassFile("bad.enclosing.method", self);
+            throw badEnclosingMethod(self);
 
         self.name = simpleBinaryName(self.flatname, c.flatname) ;
         self.owner = m != null ? m : c;
@@ -1183,7 +1444,7 @@ public class ClassReader {
         } else {
             ((ClassType)sym.type).setEnclosingType(Type.noType);
         }
-        enterTypevars(self);
+        enterTypevars(self, self.type);
         if (!missingTypeVariables.isEmpty()) {
             ListBuffer<Type> typeVars =  new ListBuffer<>();
             for (Type typevar : missingTypeVariables) {
@@ -1275,7 +1536,6 @@ public class ClassReader {
             if (r != null && r.accepts(kind))
                 r.read(sym, attrLen);
             else  {
-                unrecognized(attrName);
                 bp = bp + attrLen;
             }
         }
@@ -1316,7 +1576,6 @@ public class ClassReader {
             ListBuffer<CompoundAnnotationProxy> proxies = new ListBuffer<>();
             for (int i = 0; i<numAttributes; i++) {
                 CompoundAnnotationProxy proxy = readCompoundAnnotation();
-
                 if (proxy.type.tsym == syms.proprietaryType.tsym)
                     sym.flags_field |= PROPRIETARY;
                 else if (proxy.type.tsym == syms.profileType.tsym) {
@@ -1335,6 +1594,16 @@ public class ClassReader {
                         target = proxy;
                     } else if (proxy.type.tsym == syms.repeatableType.tsym) {
                         repeatable = proxy;
+                    } else if (proxy.type.tsym == syms.deprecatedType.tsym) {
+                        sym.flags_field |= (DEPRECATED | DEPRECATED_ANNOTATION);
+                        for (Pair<Name, Attribute> v : proxy.values) {
+                            if (v.fst == names.forRemoval && v.snd instanceof Attribute.Constant) {
+                                Attribute.Constant c = (Attribute.Constant) v.snd;
+                                if (c.type == syms.booleanType && ((Integer) c.value) != 0) {
+                                    sym.flags_field |= DEPRECATED_REMOVAL;
+                                }
+                            }
+                        }
                     }
 
                     proxies.append(proxy);
@@ -1393,19 +1662,33 @@ public class ClassReader {
         // support preliminary jsr175-format class files
         if (buf[poolIdx[i]] == CONSTANT_Class)
             return readClassSymbol(i).type;
-        return readType(i);
+        return readTypeToProxy(i);
     }
     Type readEnumType(int i) {
         // support preliminary jsr175-format class files
         int index = poolIdx[i];
         int length = getChar(index + 1);
         if (buf[index + length + 2] != ';')
-            return syms.enterClass(readName(i)).type;
-        return readType(i);
+            return enterClass(readName(i)).type;
+        return readTypeToProxy(i);
+    }
+    Type readTypeToProxy(int i) {
+        if (currentModule.module_info == currentOwner) {
+            int index = poolIdx[i];
+            return new ProxyType(Arrays.copyOfRange(buf, index + 3, index + 3 + getChar(index + 1)));
+        } else {
+            return readType(i);
+        }
     }
 
     CompoundAnnotationProxy readCompoundAnnotation() {
-        Type t = readTypeOrClassSymbol(nextChar());
+        Type t;
+        if (currentModule.module_info == currentOwner) {
+            int index = poolIdx[nextChar()];
+            t = new ProxyType(Arrays.copyOfRange(buf, index + 3, index + 3 + getChar(index + 1)));
+        } else {
+            t = readTypeOrClassSymbol(nextChar());
+        }
         int numFields = nextChar();
         ListBuffer<Pair<Name,Attribute>> pairs = new ListBuffer<>();
         for (int i=0; i<numFields; i++) {
@@ -1646,7 +1929,7 @@ public class ClassReader {
         case 'e':
             return new EnumAttributeProxy(readEnumType(nextChar()), readName(nextChar()));
         case 'c':
-            return new Attribute.Class(types, readTypeOrClassSymbol(nextChar()));
+            return new ClassAttributeProxy(readTypeOrClassSymbol(nextChar()));
         case '[': {
             int n = nextChar();
             ListBuffer<Attribute> l = new ListBuffer<>();
@@ -1663,6 +1946,7 @@ public class ClassReader {
 
     interface ProxyVisitor extends Attribute.Visitor {
         void visitEnumAttributeProxy(EnumAttributeProxy proxy);
+        void visitClassAttributeProxy(ClassAttributeProxy proxy);
         void visitArrayAttributeProxy(ArrayAttributeProxy proxy);
         void visitCompoundAnnotationProxy(CompoundAnnotationProxy proxy);
     }
@@ -1679,6 +1963,19 @@ public class ClassReader {
         @Override @DefinedBy(Api.LANGUAGE_MODEL)
         public String toString() {
             return "/*proxy enum*/" + enumType + "." + enumerator;
+        }
+    }
+
+    static class ClassAttributeProxy extends Attribute {
+        Type classType;
+        public ClassAttributeProxy(Type classType) {
+            super(null);
+            this.classType = classType;
+        }
+        public void accept(Visitor v) { ((ProxyVisitor)v).visitClassAttributeProxy(this); }
+        @Override @DefinedBy(Api.LANGUAGE_MODEL)
+        public String toString() {
+            return "/*proxy class*/" + classType + ".class";
         }
     }
 
@@ -1755,14 +2052,15 @@ public class ClassReader {
         }
 
         Attribute.Compound deproxyCompound(CompoundAnnotationProxy a) {
+            Type annotationType = resolvePossibleProxyType(a.type);
             ListBuffer<Pair<Symbol.MethodSymbol,Attribute>> buf = new ListBuffer<>();
             for (List<Pair<Name,Attribute>> l = a.values;
                  l.nonEmpty();
                  l = l.tail) {
-                MethodSymbol meth = findAccessMethod(a.type, l.head.fst);
+                MethodSymbol meth = findAccessMethod(annotationType, l.head.fst);
                 buf.append(new Pair<>(meth, deproxy(meth.type.getReturnType(), l.head.snd)));
             }
-            return new Attribute.Compound(a.type, buf.toList());
+            return new Attribute.Compound(annotationType, buf.toList());
         }
 
         MethodSymbol findAccessMethod(Type container, Name name) {
@@ -1797,9 +2095,9 @@ public class ClassReader {
             // type (typeof null) as return type because this type is
             // a subtype of all reference types and can be converted
             // to primitive types by unboxing.
-            MethodType mt = new MethodType(List.<Type>nil(),
+            MethodType mt = new MethodType(List.nil(),
                                            syms.botType,
-                                           List.<Type>nil(),
+                                           List.nil(),
                                            syms.methodClass);
             return new MethodSymbol(PUBLIC | ABSTRACT, name, mt, container.tsym);
         }
@@ -1846,7 +2144,8 @@ public class ClassReader {
 
         public void visitEnumAttributeProxy(EnumAttributeProxy proxy) {
             // type.tsym.flatName() should == proxy.enumFlatName
-            TypeSymbol enumTypeSym = proxy.enumType.tsym;
+            Type enumType = resolvePossibleProxyType(proxy.enumType);
+            TypeSymbol enumTypeSym = enumType.tsym;
             VarSymbol enumerator = null;
             CompletionFailure failure = null;
             try {
@@ -1876,6 +2175,12 @@ public class ClassReader {
             }
         }
 
+        @Override
+        public void visitClassAttributeProxy(ClassAttributeProxy proxy) {
+            Type classType = resolvePossibleProxyType(proxy.classType);
+            result = new Attribute.Class(types, classType);
+        }
+
         public void visitArrayAttributeProxy(ArrayAttributeProxy proxy) {
             int length = proxy.values.length();
             Attribute[] ats = new Attribute[length];
@@ -1889,6 +2194,21 @@ public class ClassReader {
 
         public void visitCompoundAnnotationProxy(CompoundAnnotationProxy proxy) {
             result = deproxyCompound(proxy);
+        }
+
+        Type resolvePossibleProxyType(Type t) {
+            if (t instanceof ProxyType) {
+                Assert.check(requestingOwner.owner.kind == MDL);
+                ModuleSymbol prevCurrentModule = currentModule;
+                currentModule = (ModuleSymbol) requestingOwner.owner;
+                try {
+                    return ((ProxyType) t).resolve();
+                } finally {
+                    currentModule = prevCurrentModule;
+                }
+            } else {
+                return t;
+            }
         }
     }
 
@@ -1932,7 +2252,11 @@ public class ClassReader {
         AnnotationCompleter(Symbol sym, List<CompoundAnnotationProxy> l) {
             super(currentOwner.kind == MTH
                     ? currentOwner.enclClass() : (ClassSymbol)currentOwner);
-            this.sym = sym;
+            if (sym.kind == TYP && sym.owner.kind == MDL) {
+                this.sym = sym.owner;
+            } else {
+                this.sym = sym;
+            }
             this.l = l;
             this.classFile = currentClassFile;
         }
@@ -1943,6 +2267,18 @@ public class ClassReader {
             try {
                 currentClassFile = classFile;
                 List<Attribute.Compound> newList = deproxyCompoundList(l);
+                for (Attribute.Compound attr : newList) {
+                    if (attr.type.tsym == syms.deprecatedType.tsym) {
+                        sym.flags_field |= (DEPRECATED | DEPRECATED_ANNOTATION);
+                        Attribute forRemoval = attr.member(names.forRemoval);
+                        if (forRemoval instanceof Attribute.Constant) {
+                            Attribute.Constant c = (Attribute.Constant) forRemoval;
+                            if (c.type == syms.booleanType && ((Integer) c.value) != 0) {
+                                sym.flags_field |= DEPRECATED_REMOVAL;
+                            }
+                        }
+                    }
+                }
                 if (sym.annotationsPendingCompletion()) {
                     sym.setDeclarationAttributes(newList);
                 } else {
@@ -1965,7 +2301,7 @@ public class ClassReader {
 
         TypeAnnotationCompleter(Symbol sym,
                 List<TypeAnnotationProxy> proxies) {
-            super(sym, List.<CompoundAnnotationProxy>nil());
+            super(sym, List.nil());
             this.proxies = proxies;
         }
 
@@ -2018,7 +2354,7 @@ public class ClassReader {
                 (flags & ABSTRACT) == 0 && !name.equals(names.clinit)) {
             if (majorVersion > Version.V52.major ||
                     (majorVersion == Version.V52.major && minorVersion >= Version.V52.minor)) {
-                if ((flags & STATIC) == 0) {
+                if ((flags & (STATIC | PRIVATE)) == 0) {
                     currentOwner.flags_field |= DEFAULT;
                     flags |= DEFAULT | ABSTRACT;
                 }
@@ -2033,7 +2369,11 @@ public class ClassReader {
             // Sometimes anonymous classes don't have an outer
             // instance, however, there is no reliable way to tell so
             // we never strip this$n
-            if (!currentOwner.name.isEmpty())
+            // ditto for local classes. Local classes that have an enclosing method set
+            // won't pass the "hasOuterInstance" check above, but those that don't have an
+            // enclosing method (i.e. from initializers) will pass that check.
+            boolean local = !currentOwner.owner.members().includes(currentOwner, LookupKind.NON_RECURSIVE);
+            if (!currentOwner.name.isEmpty() && !local)
                 type = new MethodType(adjustMethodParams(flags, type.getParameterTypes()),
                                       type.getReturnType(),
                                       type.getThrownTypes(),
@@ -2163,7 +2503,7 @@ public class ClassReader {
                     ? parameterNameIndices[index] : 0);
             Name name = nameIdx == 0 ? names.empty : readName(nameIdx);
             paramNames = paramNames.prepend(name);
-            index += Code.width(t);
+            index += sawMethodParameters ? 1 : Code.width(t);
         }
         sym.savedParameterNames = paramNames.reverse();
     }
@@ -2187,22 +2527,38 @@ public class ClassReader {
         }
     }
 
+    void skipInnerClasses() {
+        int n = nextChar();
+        for (int i = 0; i < n; i++) {
+            nextChar();
+            nextChar();
+            nextChar();
+            nextChar();
+        }
+    }
+
     /** Enter type variables of this classtype and all enclosing ones in
      *  `typevars'.
      */
-    protected void enterTypevars(Type t) {
-        if (t.getEnclosingType() != null && t.getEnclosingType().hasTag(CLASS))
-            enterTypevars(t.getEnclosingType());
-        for (List<Type> xs = t.getTypeArguments(); xs.nonEmpty(); xs = xs.tail)
+    protected void enterTypevars(Symbol sym, Type t) {
+        if (t.getEnclosingType() != null) {
+            if (!t.getEnclosingType().hasTag(TypeTag.NONE)) {
+                enterTypevars(sym.owner, t.getEnclosingType());
+            }
+        } else if (sym.kind == MTH && !sym.isStatic()) {
+            enterTypevars(sym.owner, sym.owner.type);
+        }
+        for (List<Type> xs = t.getTypeArguments(); xs.nonEmpty(); xs = xs.tail) {
             typevars.enter(xs.head.tsym);
+        }
     }
 
-    protected void enterTypevars(Symbol sym) {
-        if (sym.owner.kind == MTH) {
-            enterTypevars(sym.owner);
-            enterTypevars(sym.owner.owner);
-        }
-        enterTypevars(sym.type);
+    protected ClassSymbol enterClass(Name name) {
+        return syms.enterClass(currentModule, name);
+    }
+
+    protected ClassSymbol enterClass(Name name, TypeSymbol owner) {
+        return syms.enterClass(currentModule, name, owner);
     }
 
     /** Read contents of a given class symbol `c'. Both external and internal
@@ -2217,17 +2573,31 @@ public class ClassReader {
         // prepare type variable table
         typevars = typevars.dup(currentOwner);
         if (ct.getEnclosingType().hasTag(CLASS))
-            enterTypevars(ct.getEnclosingType());
+            enterTypevars(c.owner, ct.getEnclosingType());
 
         // read flags, or skip if this is an inner class
-        long flags = adjustClassFlags(nextChar());
-        if (c.owner.kind == PCK) c.flags_field = flags;
-
-        // read own class name and check that it matches
-        ClassSymbol self = readClassSymbol(nextChar());
-        if (c != self)
-            throw badClassFile("class.file.wrong.class",
-                               self.flatname);
+        long f = nextChar();
+        long flags = adjustClassFlags(f);
+        if ((flags & MODULE) == 0) {
+            if (c.owner.kind == PCK) c.flags_field = flags;
+            // read own class name and check that it matches
+            currentModule = c.packge().modle;
+            ClassSymbol self = readClassSymbol(nextChar());
+            if (c != self) {
+                throw badClassFile("class.file.wrong.class",
+                                   self.flatname);
+            }
+        } else {
+            if (majorVersion < Version.V53.major) {
+                throw badClassFile("anachronistic.module.info",
+                        Integer.toString(majorVersion),
+                        Integer.toString(minorVersion));
+            }
+            c.flags_field = flags;
+            currentModule = (ModuleSymbol) c.owner;
+            int this_class = nextChar();
+            // temp, no check on this_class
+        }
 
         // class attributes must be read before class
         // skip ahead to read class attributes
@@ -2249,6 +2619,9 @@ public class ClassReader {
         // reset and read rest of classinfo
         bp = startbp;
         int n = nextChar();
+        if ((flags & MODULE) != 0 && n > 0) {
+            throw badClassFile("module.info.invalid.super.class");
+        }
         if (ct.supertype_field == null)
             ct.supertype_field = (n == 0)
                 ? Type.noType
@@ -2284,7 +2657,7 @@ public class ClassReader {
             if (outer != null) { // we have a member class
                 if (name == names.empty)
                     name = names.one;
-                ClassSymbol member = syms.enterClass(name, outer);
+                ClassSymbol member = enterClass(name, outer);
                 if ((flags & STATIC) == 0) {
                     ((ClassType)member.type).setEnclosingType(outer.type);
                     if (member.erasure_field != null)
@@ -2307,12 +2680,11 @@ public class ClassReader {
 
         minorVersion = nextChar();
         majorVersion = nextChar();
-        int maxMajor = Version.MAX().major;
+        int maxMajor = 53; // Version.MAX().major;  //******* TEMPORARY *******
         int maxMinor = Version.MAX().minor;
         if (majorVersion > maxMajor ||
             majorVersion * 1000 + minorVersion <
-            Version.MIN().major * 1000 + Version.MIN().minor)
-        {
+            Version.MIN().major * 1000 + Version.MIN().minor) {
             if (majorVersion == (maxMajor + 1))
                 log.warning("big.major.version",
                             currentClassFile,
@@ -2325,13 +2697,7 @@ public class ClassReader {
                                    Integer.toString(maxMajor),
                                    Integer.toString(maxMinor));
         }
-        else if (checkClassFile &&
-                 majorVersion == maxMajor &&
-                 minorVersion > maxMinor)
-        {
-            printCCF("found.later.version",
-                     Integer.toString(minorVersion));
-        }
+
         indexPool();
         if (signatureBuffer.length < bp) {
             int ns = Integer.highestOneBit(bp) << 1;
@@ -2356,12 +2722,19 @@ public class ClassReader {
                 List<Type> found = foundTypeVariables;
                 missingTypeVariables = List.nil();
                 foundTypeVariables = List.nil();
+                interimUses = List.nil();
+                interimProvides = List.nil();
                 filling = false;
                 ClassType ct = (ClassType)currentOwner.type;
                 ct.supertype_field =
                     types.subst(ct.supertype_field, missing, found);
                 ct.interfaces_field =
                     types.subst(ct.interfaces_field, missing, found);
+                ct.typarams_field =
+                    types.substBounds(ct.typarams_field, missing, found);
+                for (List<Type> types = ct.typarams_field; types.nonEmpty(); types = types.tail) {
+                    types.head.tsym.type = types.head;
+                }
             } else if (missingTypeVariables.isEmpty() !=
                        foundTypeVariables.isEmpty()) {
                 Name name = missingTypeVariables.head.tsym.name;
@@ -2373,11 +2746,24 @@ public class ClassReader {
             } else {
                 c.setAnnotationTypeMetadata(AnnotationTypeMetadata.notAnAnnotationType());
             }
-        } catch (IOException ex) {
-            throw badClassFile("unable.to.access.file", ex.getMessage());
+
+            if (c == currentModule.module_info) {
+                if (interimUses.nonEmpty() || interimProvides.nonEmpty()) {
+                    Assert.check(currentModule.isCompleted());
+                    currentModule.usesProvidesCompleter =
+                            new UsesProvidesCompleter(currentModule, interimUses, interimProvides);
+                } else {
+                    currentModule.uses = List.nil();
+                    currentModule.provides = List.nil();
+                }
+            }
+        } catch (IOException | ClosedFileSystemException ex) {
+            throw badClassFile("unable.to.access.file", ex.toString());
         } catch (ArrayIndexOutOfBoundsException ex) {
             throw badClassFile("bad.class.file", c.flatname);
         } finally {
+            interimUses = List.nil();
+            interimProvides = List.nil();
             missingTypeVariables = List.nil();
             foundTypeVariables = List.nil();
             filling = false;
@@ -2448,15 +2834,11 @@ public class ClassReader {
     }
 
     long adjustClassFlags(long flags) {
+        if ((flags & ACC_MODULE) != 0) {
+            flags &= ~ACC_MODULE;
+            flags |= MODULE;
+        }
         return flags & ~ACC_SUPER; // SUPER and SYNCHRONIZED bits overloaded
-    }
-
-    /** Output for "-checkclassfile" option.
-     *  @param key The key to look up the correct internationalized string.
-     *  @param arg An argument for substitution into the output string.
-     */
-    private void printCCF(String key, Object arg) {
-        log.printLines(key, arg);
     }
 
     /**
@@ -2465,15 +2847,14 @@ public class ClassReader {
      * to be valid as is, so operations other than those to access the name throw
      * UnsupportedOperationException
      */
-    private static class SourceFileObject extends BaseFileObject {
+    private static class SourceFileObject implements JavaFileObject {
 
         /** The file's name.
          */
-        private Name name;
-        private Name flatname;
+        private final Name name;
+        private final Name flatname;
 
         public SourceFileObject(Name name, Name flatname) {
-            super(null); // no file manager; never referenced for this file object
             this.name = name;
             this.flatname = flatname;
         }
@@ -2483,7 +2864,7 @@ public class ClassReader {
             try {
                 return new URI(null, name.toString(), null);
             } catch (URISyntaxException e) {
-                throw new CannotCreateUriError(name.toString(), e);
+                throw new PathFileObject.CannotCreateUriError(name.toString(), e);
             }
         }
 
@@ -2492,14 +2873,9 @@ public class ClassReader {
             return name.toString();
         }
 
-        @Override
-        public String getShortName() {
-            return getName();
-        }
-
         @Override @DefinedBy(Api.COMPILER)
         public JavaFileObject.Kind getKind() {
-            return getKind(getName());
+            return BaseFileManager.getKind(getName());
         }
 
         @Override @DefinedBy(Api.COMPILER)
@@ -2537,14 +2913,19 @@ public class ClassReader {
             throw new UnsupportedOperationException();
         }
 
-        @Override
-        protected String inferBinaryName(Iterable<? extends Path> path) {
-            return flatname.toString();
-        }
-
         @Override @DefinedBy(Api.COMPILER)
         public boolean isNameCompatible(String simpleName, JavaFileObject.Kind kind) {
             return true; // fail-safe mode
+        }
+
+        @Override @DefinedBy(Api.COMPILER)
+        public NestingKind getNestingKind() {
+            return null;
+        }
+
+        @Override @DefinedBy(Api.COMPILER)
+        public Modifier getAccessLevel() {
+            return null;
         }
 
         /**
@@ -2606,6 +2987,94 @@ public class ClassReader {
 
             sym.getAnnotationTypeMetadata().setTarget(theTarget);
             sym.getAnnotationTypeMetadata().setRepeatable(theRepeatable);
+        }
+    }
+
+    private class ProxyType extends Type {
+
+        private final byte[] content;
+
+        public ProxyType(byte[] content) {
+            super(syms.noSymbol, TypeMetadata.EMPTY);
+            this.content = content;
+        }
+
+        @Override
+        public TypeTag getTag() {
+            return TypeTag.NONE;
+        }
+
+        @Override
+        public Type cloneWithMetadata(TypeMetadata metadata) {
+            throw new UnsupportedOperationException();
+        }
+
+        public Type resolve() {
+            return sigToType(content, 0, content.length);
+        }
+
+        @Override @DefinedBy(Api.LANGUAGE_MODEL)
+        public String toString() {
+            return "<ProxyType>";
+        }
+
+    }
+
+    private static final class InterimUsesDirective {
+        public final Name service;
+
+        public InterimUsesDirective(Name service) {
+            this.service = service;
+        }
+
+    }
+
+    private static final class InterimProvidesDirective {
+        public final Name service;
+        public final List<Name> impls;
+
+        public InterimProvidesDirective(Name service, List<Name> impls) {
+            this.service = service;
+            this.impls = impls;
+        }
+
+    }
+
+    private final class UsesProvidesCompleter implements Completer {
+        private final ModuleSymbol currentModule;
+        private final List<InterimUsesDirective> interimUsesCopy;
+        private final List<InterimProvidesDirective> interimProvidesCopy;
+
+        public UsesProvidesCompleter(ModuleSymbol currentModule, List<InterimUsesDirective> interimUsesCopy, List<InterimProvidesDirective> interimProvidesCopy) {
+            this.currentModule = currentModule;
+            this.interimUsesCopy = interimUsesCopy;
+            this.interimProvidesCopy = interimProvidesCopy;
+        }
+
+        @Override
+        public void complete(Symbol sym) throws CompletionFailure {
+            ListBuffer<Directive> directives = new ListBuffer<>();
+            directives.addAll(currentModule.directives);
+            ListBuffer<UsesDirective> uses = new ListBuffer<>();
+            for (InterimUsesDirective interim : interimUsesCopy) {
+                UsesDirective d = new UsesDirective(syms.enterClass(currentModule, interim.service));
+                uses.add(d);
+                directives.add(d);
+            }
+            currentModule.uses = uses.toList();
+            ListBuffer<ProvidesDirective> provides = new ListBuffer<>();
+            for (InterimProvidesDirective interim : interimProvidesCopy) {
+                ListBuffer<ClassSymbol> impls = new ListBuffer<>();
+                for (Name impl : interim.impls) {
+                    impls.append(syms.enterClass(currentModule, impl));
+                }
+                ProvidesDirective d = new ProvidesDirective(syms.enterClass(currentModule, interim.service),
+                                                            impls.toList());
+                provides.add(d);
+                directives.add(d);
+            }
+            currentModule.provides = provides.toList();
+            currentModule.directives = directives.toList();
         }
     }
 }

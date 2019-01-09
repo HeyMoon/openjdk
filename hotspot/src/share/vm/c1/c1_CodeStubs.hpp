@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -58,6 +58,7 @@ class CodeStub: public CompilationResourceObj {
   virtual bool is_exception_throw_stub() const   { return false; }
   virtual bool is_range_check_stub() const       { return false; }
   virtual bool is_divbyzero_stub() const         { return false; }
+  virtual bool is_simple_exception_stub() const  { return false; }
 #ifndef PRODUCT
   virtual void print_name(outputStream* out) const = 0;
 #endif
@@ -77,17 +78,13 @@ class CodeStub: public CompilationResourceObj {
   }
 };
 
-
-define_array(CodeStubArray, CodeStub*)
-define_stack(_CodeStubList, CodeStubArray)
-
-class CodeStubList: public _CodeStubList {
+class CodeStubList: public GrowableArray<CodeStub*> {
  public:
-  CodeStubList(): _CodeStubList() {}
+  CodeStubList(): GrowableArray<CodeStub*>() {}
 
   void append(CodeStub* stub) {
     if (!contains(stub)) {
-      _CodeStubList::append(stub);
+      GrowableArray<CodeStub*>::append(stub);
     }
   }
 };
@@ -487,6 +484,7 @@ class SimpleExceptionStub: public CodeStub {
   virtual void emit_code(LIR_Assembler* e);
   virtual CodeEmitInfo* info() const             { return _info; }
   virtual bool is_exception_throw_stub() const   { return true; }
+  virtual bool is_simple_exception_stub() const  { return true; }
   virtual void visit(LIR_OpVisitState* visitor) {
     if (_obj->is_valid()) visitor->do_input(_obj);
     visitor->do_slow_case(_info);

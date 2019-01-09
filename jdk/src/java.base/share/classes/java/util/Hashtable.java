@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1994, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1994, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,13 +32,13 @@ import java.util.function.BiFunction;
 
 /**
  * This class implements a hash table, which maps keys to values. Any
- * non-<code>null</code> object can be used as a key or as a value. <p>
+ * non-{@code null} object can be used as a key or as a value. <p>
  *
  * To successfully store and retrieve objects from a hashtable, the
- * objects used as keys must implement the <code>hashCode</code>
- * method and the <code>equals</code> method. <p>
+ * objects used as keys must implement the {@code hashCode}
+ * method and the {@code equals} method. <p>
  *
- * An instance of <code>Hashtable</code> has two parameters that affect its
+ * An instance of {@code Hashtable} has two parameters that affect its
  * performance: <i>initial capacity</i> and <i>load factor</i>.  The
  * <i>capacity</i> is the number of <i>buckets</i> in the hash table, and the
  * <i>initial capacity</i> is simply the capacity at the time the hash table
@@ -53,16 +53,16 @@ import java.util.function.BiFunction;
  * Generally, the default load factor (.75) offers a good tradeoff between
  * time and space costs.  Higher values decrease the space overhead but
  * increase the time cost to look up an entry (which is reflected in most
- * <tt>Hashtable</tt> operations, including <tt>get</tt> and <tt>put</tt>).<p>
+ * {@code Hashtable} operations, including {@code get} and {@code put}).<p>
  *
  * The initial capacity controls a tradeoff between wasted space and the
- * need for <code>rehash</code> operations, which are time-consuming.
- * No <code>rehash</code> operations will <i>ever</i> occur if the initial
+ * need for {@code rehash} operations, which are time-consuming.
+ * No {@code rehash} operations will <i>ever</i> occur if the initial
  * capacity is greater than the maximum number of entries the
- * <tt>Hashtable</tt> will contain divided by its load factor.  However,
+ * {@code Hashtable} will contain divided by its load factor.  However,
  * setting the initial capacity too high can waste space.<p>
  *
- * If many entries are to be made into a <code>Hashtable</code>,
+ * If many entries are to be made into a {@code Hashtable},
  * creating it with a sufficiently large capacity may allow the
  * entries to be inserted more efficiently than letting it perform
  * automatic rehashing as needed to grow the table. <p>
@@ -83,11 +83,11 @@ import java.util.function.BiFunction;
  *     System.out.println("two = " + n);
  *   }}</pre>
  *
- * <p>The iterators returned by the <tt>iterator</tt> method of the collections
+ * <p>The iterators returned by the {@code iterator} method of the collections
  * returned by all of this class's "collection view methods" are
  * <em>fail-fast</em>: if the Hashtable is structurally modified at any time
  * after the iterator is created, in any way except through the iterator's own
- * <tt>remove</tt> method, the iterator will throw a {@link
+ * {@code remove} method, the iterator will throw a {@link
  * ConcurrentModificationException}.  Thus, in the face of concurrent
  * modification, the iterator fails quickly and cleanly, rather than risking
  * arbitrary, non-deterministic behavior at an undetermined time in the future.
@@ -99,14 +99,14 @@ import java.util.function.BiFunction;
  * <p>Note that the fail-fast behavior of an iterator cannot be guaranteed
  * as it is, generally speaking, impossible to make any hard guarantees in the
  * presence of unsynchronized concurrent modification.  Fail-fast iterators
- * throw <tt>ConcurrentModificationException</tt> on a best-effort basis.
+ * throw {@code ConcurrentModificationException} on a best-effort basis.
  * Therefore, it would be wrong to write a program that depended on this
  * exception for its correctness: <i>the fail-fast behavior of iterators
  * should be used only to detect bugs.</i>
  *
  * <p>As of the Java 2 platform v1.2, this class was retrofitted to
  * implement the {@link Map} interface, making it a member of the
- * <a href="{@docRoot}/../technotes/guides/collections/index.html">
+ * <a href="{@docRoot}/java/util/package-summary.html#CollectionsFramework">
  *
  * Java Collections Framework</a>.  Unlike the new collection
  * implementations, {@code Hashtable} is synchronized.  If a
@@ -230,6 +230,14 @@ public class Hashtable<K,V>
     }
 
     /**
+     * A constructor chained from {@link Properties} keeps Hashtable fields
+     * uninitialized since they are not used.
+     *
+     * @param dummy a dummy parameter
+     */
+    Hashtable(Void dummy) {}
+
+    /**
      * Returns the number of keys in this hashtable.
      *
      * @return  the number of keys in this hashtable.
@@ -241,8 +249,8 @@ public class Hashtable<K,V>
     /**
      * Tests if this hashtable maps no keys to values.
      *
-     * @return  <code>true</code> if this hashtable maps no keys to values;
-     *          <code>false</code> otherwise.
+     * @return  {@code true} if this hashtable maps no keys to values;
+     *          {@code false} otherwise.
      */
     public synchronized boolean isEmpty() {
         return count == 0;
@@ -290,11 +298,11 @@ public class Hashtable<K,V>
      * {@link Map} interface in the collections framework).
      *
      * @param      value   a value to search for
-     * @return     <code>true</code> if and only if some key maps to the
-     *             <code>value</code> argument in this hashtable as
-     *             determined by the <tt>equals</tt> method;
-     *             <code>false</code> otherwise.
-     * @exception  NullPointerException  if the value is <code>null</code>
+     * @return     {@code true} if and only if some key maps to the
+     *             {@code value} argument in this hashtable as
+     *             determined by the {@code equals} method;
+     *             {@code false} otherwise.
+     * @exception  NullPointerException  if the value is {@code null}
      */
     public synchronized boolean contains(Object value) {
         if (value == null) {
@@ -319,9 +327,9 @@ public class Hashtable<K,V>
      * #contains contains} (which predates the {@link Map} interface).
      *
      * @param value value whose presence in this hashtable is to be tested
-     * @return <tt>true</tt> if this map maps one or more keys to the
+     * @return {@code true} if this map maps one or more keys to the
      *         specified value
-     * @throws NullPointerException  if the value is <code>null</code>
+     * @throws NullPointerException  if the value is {@code null}
      * @since 1.2
      */
     public boolean containsValue(Object value) {
@@ -332,10 +340,10 @@ public class Hashtable<K,V>
      * Tests if the specified object is a key in this hashtable.
      *
      * @param   key   possible key
-     * @return  <code>true</code> if and only if the specified object
+     * @return  {@code true} if and only if the specified object
      *          is a key in this hashtable, as determined by the
-     *          <tt>equals</tt> method; <code>false</code> otherwise.
-     * @throws  NullPointerException  if the key is <code>null</code>
+     *          {@code equals} method; {@code false} otherwise.
+     * @throws  NullPointerException  if the key is {@code null}
      * @see     #contains(Object)
      */
     public synchronized boolean containsKey(Object key) {
@@ -444,19 +452,19 @@ public class Hashtable<K,V>
     }
 
     /**
-     * Maps the specified <code>key</code> to the specified
-     * <code>value</code> in this hashtable. Neither the key nor the
-     * value can be <code>null</code>. <p>
+     * Maps the specified {@code key} to the specified
+     * {@code value} in this hashtable. Neither the key nor the
+     * value can be {@code null}. <p>
      *
-     * The value can be retrieved by calling the <code>get</code> method
+     * The value can be retrieved by calling the {@code get} method
      * with a key that is equal to the original key.
      *
      * @param      key     the hashtable key
      * @param      value   the value
      * @return     the previous value of the specified key in this hashtable,
-     *             or <code>null</code> if it did not have one
+     *             or {@code null} if it did not have one
      * @exception  NullPointerException  if the key or value is
-     *               <code>null</code>
+     *               {@code null}
      * @see     Object#equals(Object)
      * @see     #get(Object)
      */
@@ -490,8 +498,8 @@ public class Hashtable<K,V>
      *
      * @param   key   the key that needs to be removed
      * @return  the value to which the key had been mapped in this hashtable,
-     *          or <code>null</code> if the key did not have a mapping
-     * @throws  NullPointerException  if the key is <code>null</code>
+     *          or {@code null} if the key did not have a mapping
+     * @throws  NullPointerException  if the key is {@code null}
      */
     public synchronized V remove(Object key) {
         Entry<?,?> tab[] = table;
@@ -549,18 +557,23 @@ public class Hashtable<K,V>
      * @return  a clone of the hashtable
      */
     public synchronized Object clone() {
+        Hashtable<?,?> t = cloneHashtable();
+        t.table = new Entry<?,?>[table.length];
+        for (int i = table.length ; i-- > 0 ; ) {
+            t.table[i] = (table[i] != null)
+                ? (Entry<?,?>) table[i].clone() : null;
+        }
+        t.keySet = null;
+        t.entrySet = null;
+        t.values = null;
+        t.modCount = 0;
+        return t;
+    }
+
+    /** Calls super.clone() */
+    final Hashtable<?,?> cloneHashtable() {
         try {
-            Hashtable<?,?> t = (Hashtable<?,?>)super.clone();
-            t.table = new Entry<?,?>[table.length];
-            for (int i = table.length ; i-- > 0 ; ) {
-                t.table[i] = (table[i] != null)
-                    ? (Entry<?,?>) table[i].clone() : null;
-            }
-            t.keySet = null;
-            t.entrySet = null;
-            t.values = null;
-            t.modCount = 0;
-            return t;
+            return (Hashtable<?,?>)super.clone();
         } catch (CloneNotSupportedException e) {
             // this shouldn't happen, since we are Cloneable
             throw new InternalError(e);
@@ -568,11 +581,11 @@ public class Hashtable<K,V>
     }
 
     /**
-     * Returns a string representation of this <tt>Hashtable</tt> object
+     * Returns a string representation of this {@code Hashtable} object
      * in the form of a set of entries, enclosed in braces and separated
-     * by the ASCII characters "<tt>,&nbsp;</tt>" (comma and space). Each
-     * entry is rendered as the key, an equals sign <tt>=</tt>, and the
-     * associated element, where the <tt>toString</tt> method is used to
+     * by the ASCII characters "<code> ,&nbsp;</code>" (comma and space). Each
+     * entry is rendered as the key, an equals sign {@code =}, and the
+     * associated element, where the {@code toString} method is used to
      * convert the key and element to strings.
      *
      * @return  a string representation of this hashtable
@@ -633,12 +646,12 @@ public class Hashtable<K,V>
      * The set is backed by the map, so changes to the map are
      * reflected in the set, and vice-versa.  If the map is modified
      * while an iteration over the set is in progress (except through
-     * the iterator's own <tt>remove</tt> operation), the results of
+     * the iterator's own {@code remove} operation), the results of
      * the iteration are undefined.  The set supports element removal,
      * which removes the corresponding mapping from the map, via the
-     * <tt>Iterator.remove</tt>, <tt>Set.remove</tt>,
-     * <tt>removeAll</tt>, <tt>retainAll</tt>, and <tt>clear</tt>
-     * operations.  It does not support the <tt>add</tt> or <tt>addAll</tt>
+     * {@code Iterator.remove}, {@code Set.remove},
+     * {@code removeAll}, {@code retainAll}, and {@code clear}
+     * operations.  It does not support the {@code add} or {@code addAll}
      * operations.
      *
      * @since 1.2
@@ -672,14 +685,14 @@ public class Hashtable<K,V>
      * The set is backed by the map, so changes to the map are
      * reflected in the set, and vice-versa.  If the map is modified
      * while an iteration over the set is in progress (except through
-     * the iterator's own <tt>remove</tt> operation, or through the
-     * <tt>setValue</tt> operation on a map entry returned by the
+     * the iterator's own {@code remove} operation, or through the
+     * {@code setValue} operation on a map entry returned by the
      * iterator) the results of the iteration are undefined.  The set
      * supports element removal, which removes the corresponding
-     * mapping from the map, via the <tt>Iterator.remove</tt>,
-     * <tt>Set.remove</tt>, <tt>removeAll</tt>, <tt>retainAll</tt> and
-     * <tt>clear</tt> operations.  It does not support the
-     * <tt>add</tt> or <tt>addAll</tt> operations.
+     * mapping from the map, via the {@code Iterator.remove},
+     * {@code Set.remove}, {@code removeAll}, {@code retainAll} and
+     * {@code clear} operations.  It does not support the
+     * {@code add} or {@code addAll} operations.
      *
      * @since 1.2
      */
@@ -754,13 +767,13 @@ public class Hashtable<K,V>
      * The collection is backed by the map, so changes to the map are
      * reflected in the collection, and vice-versa.  If the map is
      * modified while an iteration over the collection is in progress
-     * (except through the iterator's own <tt>remove</tt> operation),
+     * (except through the iterator's own {@code remove} operation),
      * the results of the iteration are undefined.  The collection
      * supports element removal, which removes the corresponding
-     * mapping from the map, via the <tt>Iterator.remove</tt>,
-     * <tt>Collection.remove</tt>, <tt>removeAll</tt>,
-     * <tt>retainAll</tt> and <tt>clear</tt> operations.  It does not
-     * support the <tt>add</tt> or <tt>addAll</tt> operations.
+     * mapping from the map, via the {@code Iterator.remove},
+     * {@code Collection.remove}, {@code removeAll},
+     * {@code retainAll} and {@code clear} operations.  It does not
+     * support the {@code add} or {@code addAll} operations.
      *
      * @since 1.2
      */
@@ -1189,6 +1202,15 @@ public class Hashtable<K,V>
      */
     private void writeObject(java.io.ObjectOutputStream s)
             throws IOException {
+        writeHashtable(s);
+    }
+
+    /**
+     * Perform serialization of the Hashtable to an ObjectOutputStream.
+     * The Properties class overrides this method.
+     */
+    void writeHashtable(java.io.ObjectOutputStream s)
+            throws IOException {
         Entry<Object, Object> entryStack = null;
 
         synchronized (this) {
@@ -1219,11 +1241,29 @@ public class Hashtable<K,V>
     }
 
     /**
+     * Called by Properties to write out a simulated threshold and loadfactor.
+     */
+    final void defaultWriteHashtable(java.io.ObjectOutputStream s, int length,
+            float loadFactor) throws IOException {
+        this.threshold = (int)Math.min(length * loadFactor, MAX_ARRAY_SIZE + 1);
+        this.loadFactor = loadFactor;
+        s.defaultWriteObject();
+    }
+
+    /**
      * Reconstitute the Hashtable from a stream (i.e., deserialize it).
      */
     private void readObject(java.io.ObjectInputStream s)
-         throws IOException, ClassNotFoundException
-    {
+            throws IOException, ClassNotFoundException {
+        readHashtable(s);
+    }
+
+    /**
+     * Perform deserialization of the Hashtable from an ObjectInputStream.
+     * The Properties class overrides this method.
+     */
+    void readHashtable(java.io.ObjectInputStream s)
+            throws IOException, ClassNotFoundException {
         // Read in the threshold and loadFactor
         s.defaultReadObject();
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,13 +32,18 @@
  * @summary Basic Test for MemoryPool.resetPeakUsage()
  * @author  Mandy Chung
  *
+ * @requires vm.opt.ExplicitGCInvokesConcurrent != "true"
+ * @requires vm.opt.ExplicitGCInvokesConcurrentAndUnloadsClasses != "true"
+ * @requires vm.opt.DisableExplicitGC != "true"
  * @library /lib/testlibrary/
- * @modules java.management
+ * @modules jdk.management
+ *
  * @build jdk.testlibrary.* ResetPeakMemoryUsage MemoryUtil RunUtil
  * @run main ResetPeakMemoryUsage
  */
 
 import java.lang.management.*;
+import java.lang.ref.WeakReference;
 import java.util.*;
 
 public class ResetPeakMemoryUsage {
@@ -100,6 +105,7 @@ public class ResetPeakMemoryUsage {
         printMemoryUsage(usage0, peak0);
 
         obj = new Object[largeArraySize];
+        WeakReference<Object> weakRef = new WeakReference<>(obj);
 
         MemoryUsage usage1 = mpool.getUsage();
         MemoryUsage peak1 = mpool.getPeakUsage();
@@ -124,7 +130,11 @@ public class ResetPeakMemoryUsage {
         // The object is now garbage and do a GC
         // memory usage should drop
         obj = null;
-        mbean.gc();
+
+        //This will cause sure shot GC unlike Runtime.gc() invoked by mbean.gc()
+        while(weakRef.get() != null) {
+            mbean.gc();
+        }
 
         MemoryUsage usage2 = mpool.getUsage();
         MemoryUsage peak2 = mpool.getPeakUsage();

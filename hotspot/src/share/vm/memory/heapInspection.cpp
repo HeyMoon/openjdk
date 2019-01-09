@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
 
 #include "precompiled.hpp"
 #include "classfile/classLoaderData.hpp"
+#include "classfile/moduleEntry.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "gc/shared/collectedHeap.hpp"
 #include "gc/shared/genCollectedHeap.hpp"
@@ -39,6 +40,14 @@
 #endif // INCLUDE_ALL_GCS
 
 // HeapInspection
+
+int KlassSizeStats::count(oop x) {
+  return (HeapWordSize * (((x) != NULL) ? (x)->size() : 0));
+}
+
+int KlassSizeStats::count_array(objArrayOop x) {
+  return (HeapWordSize * (((x) != NULL) ? (x)->size() : 0));
+}
 
 inline KlassInfoEntry::~KlassInfoEntry() {
   if (_subclasses != NULL) {
@@ -97,10 +106,20 @@ void KlassInfoEntry::print_on(outputStream* st) const {
   ResourceMark rm;
 
   // simplify the formatting (ILP32 vs LP64) - always cast the numbers to 64-bit
-  st->print_cr(INT64_FORMAT_W(13) "  " UINT64_FORMAT_W(13) "  %s",
-               (int64_t)_instance_count,
-               (uint64_t)_instance_words * HeapWordSize,
-               name());
+  ModuleEntry* module = _klass->module();
+  if (module->is_named()) {
+    st->print_cr(INT64_FORMAT_W(13) "  " UINT64_FORMAT_W(13) "  %s (%s@%s)",
+                 (int64_t)_instance_count,
+                 (uint64_t)_instance_words * HeapWordSize,
+                 name(),
+                 module->name()->as_C_string(),
+                 module->version() != NULL ? module->version()->as_C_string() : "");
+  } else {
+    st->print_cr(INT64_FORMAT_W(13) "  " UINT64_FORMAT_W(13) "  %s",
+                 (int64_t)_instance_count,
+                 (uint64_t)_instance_words * HeapWordSize,
+                 name());
+  }
 }
 
 KlassInfoEntry* KlassInfoBucket::lookup(Klass* const k) {
@@ -218,9 +237,8 @@ int KlassInfoHisto::sort_helper(KlassInfoEntry** e1, KlassInfoEntry** e2) {
   return (*e1)->compare(*e1,*e2);
 }
 
-KlassInfoHisto::KlassInfoHisto(KlassInfoTable* cit, const char* title) :
-  _cit(cit),
-  _title(title) {
+KlassInfoHisto::KlassInfoHisto(KlassInfoTable* cit) :
+  _cit(cit) {
   _elements = new (ResourceObj::C_HEAP, mtInternal) GrowableArray<KlassInfoEntry*>(_histo_initial_size, true);
 }
 
@@ -286,7 +304,6 @@ bool KlassInfoHisto::is_selected(const char *col_name) {
   return true;
 }
 
-PRAGMA_FORMAT_NONLITERAL_IGNORED_EXTERNAL
 void KlassInfoHisto::print_title(outputStream* st, bool csv_format,
                                  bool selected[], int width_table[],
                                  const char *name_table[]) {
@@ -298,11 +315,10 @@ void KlassInfoHisto::print_title(outputStream* st, bool csv_format,
     st->print(",ClassName");
   } else {
     st->print("Index Super");
-    for (int c=0; c<KlassSizeStats::_num_columns; c++) {
-PRAGMA_DIAG_PUSH
-PRAGMA_FORMAT_NONLITERAL_IGNORED_INTERNAL
-      if (selected[c]) {st->print(str_fmt(width_table[c]), name_table[c]);}
-PRAGMA_DIAG_POP
+    for (int c = 0; c < KlassSizeStats::_num_columns; c++) {
+      if (selected[c]) {
+        st->print("%*s", width_table[c], name_table[c]);
+      }
     }
     st->print(" ClassName");
   }
@@ -321,7 +337,7 @@ public:
 
   void do_cinfo(KlassInfoEntry* cie) {
     // ignore array classes
-    if (cie->klass()->oop_is_instance()) {
+    if (cie->klass()->is_instance_klass()) {
       _elements->append(cie);
     }
   }
@@ -348,8 +364,7 @@ void KlassHierarchy::print_class_hierarchy(outputStream* st, bool print_interfac
 
   for(int i = 0; i < elements.length(); i++) {
     KlassInfoEntry* cie = elements.at(i);
-    const InstanceKlass* k = (InstanceKlass*)cie->klass();
-    Klass* super = ((InstanceKlass*)k)->java_super();
+    Klass* super = cie->klass()->super();
 
     // Set the index for the class.
     cie->set_index(i + 1);
@@ -544,8 +559,8 @@ void KlassInfoHisto::print_class_stats(outputStream* st,
       } else {
         int super_index = -1;
         // Print the stats for this class.
-        if (k->oop_is_instance()) {
-          Klass* super = ((InstanceKlass*)k)->java_super();
+        if (k->is_instance_klass()) {
+          Klass* super = k->super();
           if (super) {
             KlassInfoEntry* super_e = _cit->lookup(super);
             if (super_e) {
@@ -608,18 +623,12 @@ void KlassInfoHisto::print_class_stats(outputStream* st,
           case KlassSizeStats::_index_inst_size:
           case KlassSizeStats::_index_inst_count:
           case KlassSizeStats::_index_method_count:
-PRAGMA_DIAG_PUSH
-PRAGMA_FORMAT_NONLITERAL_IGNORED_INTERNAL
-            st->print(str_fmt(width_table[c]), "-");
-PRAGMA_DIAG_POP
+            st->print("%*s", width_table[c], "-");
             break;
           default:
             {
               double perc = (double)(100) * (double)(colsum_table[c]) / (double)sz_sum._total_bytes;
-PRAGMA_DIAG_PUSH
-PRAGMA_FORMAT_NONLITERAL_IGNORED_INTERNAL
-              st->print(perc_fmt(width_table[c]), perc);
-PRAGMA_DIAG_POP
+              st->print("%*.1f%%", width_table[c]-1, perc);
             }
           }
         }
@@ -649,7 +658,8 @@ void KlassInfoHisto::print_histo_on(outputStream* st, bool print_stats,
   if (print_stats) {
     print_class_stats(st, csv_format, columns);
   } else {
-    st->print_cr("%s",title());
+    st->print_cr(" num     #instances         #bytes  class name (module)");
+    st->print_cr("-------------------------------------------------------");
     print_elements(st);
   }
 }
@@ -730,10 +740,7 @@ void HeapInspection::heap_inspection(outputStream* st) {
     }
 
     // Sort and print klass instance info
-    const char *title = "\n"
-              " num     #instances         #bytes  class name\n"
-              "----------------------------------------------";
-    KlassInfoHisto histo(&cit, title);
+    KlassInfoHisto histo(&cit);
     HistoClosure hc(&histo);
 
     cit.iterate(&hc);

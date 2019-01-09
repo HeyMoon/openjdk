@@ -25,8 +25,13 @@
 
 package java.net;
 
+import jdk.internal.misc.JavaNetSocketAccess;
+import jdk.internal.misc.SharedSecrets;
+
 import java.io.FileDescriptor;
 import java.io.IOException;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.nio.channels.ServerSocketChannel;
 import java.security.AccessController;
 import java.security.PrivilegedExceptionAction;
@@ -946,7 +951,7 @@ class ServerSocket implements java.io.Closeable {
      *         {@link java.net.StandardSocketOptions StandardSocketOptions}
      *         do not require any security permission.
      *
-     * @since 1.9
+     * @since 9
      */
     public <T> ServerSocket setOption(SocketOption<T> name, T value)
         throws IOException
@@ -976,7 +981,7 @@ class ServerSocket implements java.io.Closeable {
      *         {@link java.net.StandardSocketOptions StandardSocketOptions}
      *         do not require any security permission.
      *
-     * @since 1.9
+     * @since 9
      */
     public <T> T getOption(SocketOption<T> name) throws IOException {
         return getImpl().getOption(name);
@@ -994,7 +999,7 @@ class ServerSocket implements java.io.Closeable {
      * @return A set of the socket options supported by this socket. This set
      *         may be empty if the socket's SocketImpl cannot be created.
      *
-     * @since 1.9
+     * @since 9
      */
     public Set<SocketOption<?>> supportedOptions() {
         synchronized (ServerSocket.class) {
@@ -1010,5 +1015,28 @@ class ServerSocket implements java.io.Closeable {
             optionsSet = true;
             return options;
         }
+    }
+
+    static {
+        SharedSecrets.setJavaNetSocketAccess(
+            new JavaNetSocketAccess() {
+                @Override
+                public ServerSocket newServerSocket(SocketImpl impl) {
+                    return new ServerSocket(impl);
+                }
+
+                @Override
+                public SocketImpl newSocketImpl(Class<? extends SocketImpl> implClass) {
+                    try {
+                        Constructor<? extends SocketImpl> ctor =
+                            implClass.getDeclaredConstructor();
+                        return ctor.newInstance();
+                    } catch (NoSuchMethodException | InstantiationException |
+                             IllegalAccessException | InvocationTargetException e) {
+                        throw new AssertionError(e);
+                    }
+                }
+            }
+        );
     }
 }

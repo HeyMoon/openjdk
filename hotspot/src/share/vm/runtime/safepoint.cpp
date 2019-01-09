@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
 
 #include "precompiled.hpp"
 #include "classfile/stringTable.hpp"
+#include "classfile/symbolTable.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "code/codeCache.hpp"
 #include "code/icBuffer.hpp"
@@ -33,11 +34,12 @@
 #include "gc/shared/collectedHeap.hpp"
 #include "gc/shared/gcLocker.inline.hpp"
 #include "interpreter/interpreter.hpp"
+#include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/symbol.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/compilationPolicy.hpp"
 #include "runtime/deoptimization.hpp"
 #include "runtime/frame.inline.hpp"
@@ -52,7 +54,10 @@
 #include "runtime/sweeper.hpp"
 #include "runtime/synchronizer.hpp"
 #include "runtime/thread.inline.hpp"
+#include "runtime/timerTrace.hpp"
 #include "services/runtimeService.hpp"
+#include "trace/tracing.hpp"
+#include "trace/traceMacros.hpp"
 #include "utilities/events.hpp"
 #include "utilities/macros.hpp"
 #if INCLUDE_ALL_GCS
@@ -62,8 +67,6 @@
 #ifdef COMPILER1
 #include "c1/c1_globals.hpp"
 #endif
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 // --------------------------------------------------------------------------------------------------
 // Implementation of Safepoint begin/end
@@ -79,7 +82,7 @@ static bool timeout_error_printed = false;
 
 // Roll all threads forward to a safepoint and suspend them all
 void SafepointSynchronize::begin() {
-
+  EventSafepointBegin begin_event;
   Thread* myThread = Thread::current();
   assert(myThread->is_VM_thread(), "Only VM thread may execute a safepoint");
 
@@ -106,9 +109,7 @@ void SafepointSynchronize::begin() {
 
   int nof_threads = Threads::number_of_threads();
 
-  if (TraceSafepoint) {
-    tty->print_cr("Safepoint synchronization initiated. (%d)", nof_threads);
-  }
+  log_debug(safepoint)("Safepoint synchronization initiated. (%d)", nof_threads);
 
   RuntimeService::record_safepoint_begin();
 
@@ -124,7 +125,7 @@ void SafepointSynchronize::begin() {
 
   // Save the starting time, so that it can be compared to see if this has taken
   // too long to complete.
-  jlong safepoint_limit_time;
+  jlong safepoint_limit_time = 0;
   timeout_error_printed = false;
 
   // PrintSafepointStatisticsTimeout can be specified separately. When
@@ -171,188 +172,218 @@ void SafepointSynchronize::begin() {
   //     between states, the safepointing code will wait for the thread to
   //     block itself when it attempts transitions to a new state.
   //
-  _state            = _synchronizing;
-  OrderAccess::fence();
+  {
+    EventSafepointStateSynchronization sync_event;
+    int initial_running = 0;
 
-  // Flush all thread states to memory
-  if (!UseMembar) {
-    os::serialize_thread_states();
-  }
+    _state            = _synchronizing;
+    OrderAccess::fence();
 
-  // Make interpreter safepoint aware
-  Interpreter::notice_safepoints();
+    // Flush all thread states to memory
+    if (!UseMembar) {
+      os::serialize_thread_states();
+    }
 
-  if (DeferPollingPageLoopCount < 0) {
-    // Make polling safepoint aware
-    guarantee (PageArmed == 0, "invariant") ;
-    PageArmed = 1 ;
-    os::make_polling_page_unreadable();
-  }
+    // Make interpreter safepoint aware
+    Interpreter::notice_safepoints();
 
-  // Consider using active_processor_count() ... but that call is expensive.
-  int ncpus = os::processor_count() ;
+    if (DeferPollingPageLoopCount < 0) {
+      // Make polling safepoint aware
+      guarantee (PageArmed == 0, "invariant") ;
+      PageArmed = 1 ;
+      os::make_polling_page_unreadable();
+    }
+
+    // Consider using active_processor_count() ... but that call is expensive.
+    int ncpus = os::processor_count() ;
 
 #ifdef ASSERT
-  for (JavaThread *cur = Threads::first(); cur != NULL; cur = cur->next()) {
-    assert(cur->safepoint_state()->is_running(), "Illegal initial state");
-    // Clear the visited flag to ensure that the critical counts are collected properly.
-    cur->set_visited_for_critical_count(false);
-  }
+    for (JavaThread *cur = Threads::first(); cur != NULL; cur = cur->next()) {
+      assert(cur->safepoint_state()->is_running(), "Illegal initial state");
+      // Clear the visited flag to ensure that the critical counts are collected properly.
+      cur->set_visited_for_critical_count(false);
+    }
 #endif // ASSERT
 
-  if (SafepointTimeout)
-    safepoint_limit_time = os::javaTimeNanos() + (jlong)SafepointTimeoutDelay * MICROUNITS;
+    if (SafepointTimeout)
+      safepoint_limit_time = os::javaTimeNanos() + (jlong)SafepointTimeoutDelay * MICROUNITS;
 
-  // Iterate through all threads until it have been determined how to stop them all at a safepoint
-  unsigned int iterations = 0;
-  int steps = 0 ;
-  while(still_running > 0) {
-    for (JavaThread *cur = Threads::first(); cur != NULL; cur = cur->next()) {
-      assert(!cur->is_ConcurrentGC_thread(), "A concurrent GC thread is unexpectly being suspended");
-      ThreadSafepointState *cur_state = cur->safepoint_state();
-      if (cur_state->is_running()) {
-        cur_state->examine_state_of_thread();
-        if (!cur_state->is_running()) {
-           still_running--;
-           // consider adjusting steps downward:
-           //   steps = 0
-           //   steps -= NNN
-           //   steps >>= 1
-           //   steps = MIN(steps, 2000-100)
-           //   if (iterations != 0) steps -= NNN
+    // Iterate through all threads until it have been determined how to stop them all at a safepoint
+    unsigned int iterations = 0;
+    int steps = 0 ;
+    while(still_running > 0) {
+      for (JavaThread *cur = Threads::first(); cur != NULL; cur = cur->next()) {
+        assert(!cur->is_ConcurrentGC_thread(), "A concurrent GC thread is unexpectly being suspended");
+        ThreadSafepointState *cur_state = cur->safepoint_state();
+        if (cur_state->is_running()) {
+          cur_state->examine_state_of_thread();
+          if (!cur_state->is_running()) {
+            still_running--;
+            // consider adjusting steps downward:
+            //   steps = 0
+            //   steps -= NNN
+            //   steps >>= 1
+            //   steps = MIN(steps, 2000-100)
+            //   if (iterations != 0) steps -= NNN
+          }
+          if (log_is_enabled(Trace, safepoint)) {
+            ResourceMark rm;
+            cur_state->print_on(Log(safepoint)::trace_stream());
+          }
         }
-        if (TraceSafepoint && Verbose) cur_state->print();
       }
+
+      if (iterations == 0) {
+        initial_running = still_running;
+        if (PrintSafepointStatistics) {
+          begin_statistics(nof_threads, still_running);
+        }
+      }
+
+      if (still_running > 0) {
+        // Check for if it takes to long
+        if (SafepointTimeout && safepoint_limit_time < os::javaTimeNanos()) {
+          print_safepoint_timeout(_spinning_timeout);
+        }
+
+        // Spin to avoid context switching.
+        // There's a tension between allowing the mutators to run (and rendezvous)
+        // vs spinning.  As the VM thread spins, wasting cycles, it consumes CPU that
+        // a mutator might otherwise use profitably to reach a safepoint.  Excessive
+        // spinning by the VM thread on a saturated system can increase rendezvous latency.
+        // Blocking or yielding incur their own penalties in the form of context switching
+        // and the resultant loss of $ residency.
+        //
+        // Further complicating matters is that yield() does not work as naively expected
+        // on many platforms -- yield() does not guarantee that any other ready threads
+        // will run.   As such we revert to naked_short_sleep() after some number of iterations.
+        // nakes_short_sleep() is implemented as a short unconditional sleep.
+        // Typical operating systems round a "short" sleep period up to 10 msecs, so sleeping
+        // can actually increase the time it takes the VM thread to detect that a system-wide
+        // stop-the-world safepoint has been reached.  In a pathological scenario such as that
+        // described in CR6415670 the VMthread may sleep just before the mutator(s) become safe.
+        // In that case the mutators will be stalled waiting for the safepoint to complete and the
+        // the VMthread will be sleeping, waiting for the mutators to rendezvous.  The VMthread
+        // will eventually wake up and detect that all mutators are safe, at which point
+        // we'll again make progress.
+        //
+        // Beware too that that the VMThread typically runs at elevated priority.
+        // Its default priority is higher than the default mutator priority.
+        // Obviously, this complicates spinning.
+        //
+        // Note too that on Windows XP SwitchThreadTo() has quite different behavior than Sleep(0).
+        // Sleep(0) will _not yield to lower priority threads, while SwitchThreadTo() will.
+        //
+        // See the comments in synchronizer.cpp for additional remarks on spinning.
+        //
+        // In the future we might:
+        // 1. Modify the safepoint scheme to avoid potentially unbounded spinning.
+        //    This is tricky as the path used by a thread exiting the JVM (say on
+        //    on JNI call-out) simply stores into its state field.  The burden
+        //    is placed on the VM thread, which must poll (spin).
+        // 2. Find something useful to do while spinning.  If the safepoint is GC-related
+        //    we might aggressively scan the stacks of threads that are already safe.
+        // 3. Use Solaris schedctl to examine the state of the still-running mutators.
+        //    If all the mutators are ONPROC there's no reason to sleep or yield.
+        // 4. YieldTo() any still-running mutators that are ready but OFFPROC.
+        // 5. Check system saturation.  If the system is not fully saturated then
+        //    simply spin and avoid sleep/yield.
+        // 6. As still-running mutators rendezvous they could unpark the sleeping
+        //    VMthread.  This works well for still-running mutators that become
+        //    safe.  The VMthread must still poll for mutators that call-out.
+        // 7. Drive the policy on time-since-begin instead of iterations.
+        // 8. Consider making the spin duration a function of the # of CPUs:
+        //    Spin = (((ncpus-1) * M) + K) + F(still_running)
+        //    Alternately, instead of counting iterations of the outer loop
+        //    we could count the # of threads visited in the inner loop, above.
+        // 9. On windows consider using the return value from SwitchThreadTo()
+        //    to drive subsequent spin/SwitchThreadTo()/Sleep(N) decisions.
+
+        if (int(iterations) == DeferPollingPageLoopCount) {
+          guarantee (PageArmed == 0, "invariant") ;
+          PageArmed = 1 ;
+          os::make_polling_page_unreadable();
+        }
+
+        // Instead of (ncpus > 1) consider either (still_running < (ncpus + EPSILON)) or
+        // ((still_running + _waiting_to_block - TryingToBlock)) < ncpus)
+        ++steps ;
+        if (ncpus > 1 && steps < SafepointSpinBeforeYield) {
+          SpinPause() ;     // MP-Polite spin
+        } else
+          if (steps < DeferThrSuspendLoopCount) {
+            os::naked_yield() ;
+          } else {
+            os::naked_short_sleep(1);
+          }
+
+        iterations ++ ;
+      }
+      assert(iterations < (uint)max_jint, "We have been iterating in the safepoint loop too long");
+    }
+    assert(still_running == 0, "sanity check");
+
+    if (PrintSafepointStatistics) {
+      update_statistics_on_spin_end();
     }
 
-    if (PrintSafepointStatistics && iterations == 0) {
-      begin_statistics(nof_threads, still_running);
+    if (sync_event.should_commit()) {
+      sync_event.set_safepointId(safepoint_counter());
+      sync_event.set_initialThreadCount(initial_running);
+      sync_event.set_runningThreadCount(_waiting_to_block);
+      sync_event.set_iterations(iterations);
+      sync_event.commit();
     }
-
-    if (still_running > 0) {
-      // Check for if it takes to long
-      if (SafepointTimeout && safepoint_limit_time < os::javaTimeNanos()) {
-        print_safepoint_timeout(_spinning_timeout);
-      }
-
-      // Spin to avoid context switching.
-      // There's a tension between allowing the mutators to run (and rendezvous)
-      // vs spinning.  As the VM thread spins, wasting cycles, it consumes CPU that
-      // a mutator might otherwise use profitably to reach a safepoint.  Excessive
-      // spinning by the VM thread on a saturated system can increase rendezvous latency.
-      // Blocking or yielding incur their own penalties in the form of context switching
-      // and the resultant loss of $ residency.
-      //
-      // Further complicating matters is that yield() does not work as naively expected
-      // on many platforms -- yield() does not guarantee that any other ready threads
-      // will run.   As such we revert to naked_short_sleep() after some number of iterations.
-      // nakes_short_sleep() is implemented as a short unconditional sleep.
-      // Typical operating systems round a "short" sleep period up to 10 msecs, so sleeping
-      // can actually increase the time it takes the VM thread to detect that a system-wide
-      // stop-the-world safepoint has been reached.  In a pathological scenario such as that
-      // described in CR6415670 the VMthread may sleep just before the mutator(s) become safe.
-      // In that case the mutators will be stalled waiting for the safepoint to complete and the
-      // the VMthread will be sleeping, waiting for the mutators to rendezvous.  The VMthread
-      // will eventually wake up and detect that all mutators are safe, at which point
-      // we'll again make progress.
-      //
-      // Beware too that that the VMThread typically runs at elevated priority.
-      // Its default priority is higher than the default mutator priority.
-      // Obviously, this complicates spinning.
-      //
-      // Note too that on Windows XP SwitchThreadTo() has quite different behavior than Sleep(0).
-      // Sleep(0) will _not yield to lower priority threads, while SwitchThreadTo() will.
-      //
-      // See the comments in synchronizer.cpp for additional remarks on spinning.
-      //
-      // In the future we might:
-      // 1. Modify the safepoint scheme to avoid potentially unbounded spinning.
-      //    This is tricky as the path used by a thread exiting the JVM (say on
-      //    on JNI call-out) simply stores into its state field.  The burden
-      //    is placed on the VM thread, which must poll (spin).
-      // 2. Find something useful to do while spinning.  If the safepoint is GC-related
-      //    we might aggressively scan the stacks of threads that are already safe.
-      // 3. Use Solaris schedctl to examine the state of the still-running mutators.
-      //    If all the mutators are ONPROC there's no reason to sleep or yield.
-      // 4. YieldTo() any still-running mutators that are ready but OFFPROC.
-      // 5. Check system saturation.  If the system is not fully saturated then
-      //    simply spin and avoid sleep/yield.
-      // 6. As still-running mutators rendezvous they could unpark the sleeping
-      //    VMthread.  This works well for still-running mutators that become
-      //    safe.  The VMthread must still poll for mutators that call-out.
-      // 7. Drive the policy on time-since-begin instead of iterations.
-      // 8. Consider making the spin duration a function of the # of CPUs:
-      //    Spin = (((ncpus-1) * M) + K) + F(still_running)
-      //    Alternately, instead of counting iterations of the outer loop
-      //    we could count the # of threads visited in the inner loop, above.
-      // 9. On windows consider using the return value from SwitchThreadTo()
-      //    to drive subsequent spin/SwitchThreadTo()/Sleep(N) decisions.
-
-      if (int(iterations) == DeferPollingPageLoopCount) {
-         guarantee (PageArmed == 0, "invariant") ;
-         PageArmed = 1 ;
-         os::make_polling_page_unreadable();
-      }
-
-      // Instead of (ncpus > 1) consider either (still_running < (ncpus + EPSILON)) or
-      // ((still_running + _waiting_to_block - TryingToBlock)) < ncpus)
-      ++steps ;
-      if (ncpus > 1 && steps < SafepointSpinBeforeYield) {
-        SpinPause() ;     // MP-Polite spin
-      } else
-      if (steps < DeferThrSuspendLoopCount) {
-        os::naked_yield() ;
-      } else {
-        os::naked_short_sleep(1);
-      }
-
-      iterations ++ ;
-    }
-    assert(iterations < (uint)max_jint, "We have been iterating in the safepoint loop too long");
-  }
-  assert(still_running == 0, "sanity check");
-
-  if (PrintSafepointStatistics) {
-    update_statistics_on_spin_end();
-  }
+  } //EventSafepointStateSync
 
   // wait until all threads are stopped
-  while (_waiting_to_block > 0) {
-    if (TraceSafepoint) tty->print_cr("Waiting for %d thread(s) to block", _waiting_to_block);
-    if (!SafepointTimeout || timeout_error_printed) {
-      Safepoint_lock->wait(true);  // true, means with no safepoint checks
-    } else {
-      // Compute remaining time
-      jlong remaining_time = safepoint_limit_time - os::javaTimeNanos();
+  {
+    EventSafepointWaitBlocked wait_blocked_event;
+    int initial_waiting_to_block = _waiting_to_block;
 
-      // If there is no remaining time, then there is an error
-      if (remaining_time < 0 || Safepoint_lock->wait(true, remaining_time / MICROUNITS)) {
-        print_safepoint_timeout(_blocking_timeout);
+    while (_waiting_to_block > 0) {
+      log_debug(safepoint)("Waiting for %d thread(s) to block", _waiting_to_block);
+      if (!SafepointTimeout || timeout_error_printed) {
+        Safepoint_lock->wait(true);  // true, means with no safepoint checks
+      } else {
+        // Compute remaining time
+        jlong remaining_time = safepoint_limit_time - os::javaTimeNanos();
+
+        // If there is no remaining time, then there is an error
+        if (remaining_time < 0 || Safepoint_lock->wait(true, remaining_time / MICROUNITS)) {
+          print_safepoint_timeout(_blocking_timeout);
+        }
       }
     }
-  }
-  assert(_waiting_to_block == 0, "sanity check");
+    assert(_waiting_to_block == 0, "sanity check");
 
 #ifndef PRODUCT
-  if (SafepointTimeout) {
-    jlong current_time = os::javaTimeNanos();
-    if (safepoint_limit_time < current_time) {
-      tty->print_cr("# SafepointSynchronize: Finished after "
-                    INT64_FORMAT_W(6) " ms",
-                    ((current_time - safepoint_limit_time) / MICROUNITS +
-                     SafepointTimeoutDelay));
+    if (SafepointTimeout) {
+      jlong current_time = os::javaTimeNanos();
+      if (safepoint_limit_time < current_time) {
+        tty->print_cr("# SafepointSynchronize: Finished after "
+                      INT64_FORMAT_W(6) " ms",
+                      ((current_time - safepoint_limit_time) / MICROUNITS +
+                       (jlong)SafepointTimeoutDelay));
+      }
     }
-  }
 #endif
 
-  assert((_safepoint_counter & 0x1) == 0, "must be even");
-  assert(Threads_lock->owned_by_self(), "must hold Threads_lock");
-  _safepoint_counter ++;
+    assert((_safepoint_counter & 0x1) == 0, "must be even");
+    assert(Threads_lock->owned_by_self(), "must hold Threads_lock");
+    _safepoint_counter ++;
 
-  // Record state
-  _state = _synchronized;
+    // Record state
+    _state = _synchronized;
 
-  OrderAccess::fence();
+    OrderAccess::fence();
+
+    if (wait_blocked_event.should_commit()) {
+      wait_blocked_event.set_safepointId(safepoint_counter());
+      wait_blocked_event.set_runningThreadCount(initial_waiting_to_block);
+      wait_blocked_event.commit();
+    }
+  } // EventSafepointWaitBlocked
 
 #ifdef ASSERT
   for (JavaThread *cur = Threads::first(); cur != NULL; cur = cur->next()) {
@@ -362,11 +393,12 @@ void SafepointSynchronize::begin() {
 #endif // ASSERT
 
   // Update the count of active JNI critical regions
-  GC_locker::set_jni_lock_count(_current_jni_active_count);
+  GCLocker::set_jni_lock_count(_current_jni_active_count);
 
-  if (TraceSafepoint) {
+  if (log_is_enabled(Debug, safepoint)) {
     VM_Operation *op = VMThread::vm_operation();
-    tty->print_cr("Entering safepoint region: %s", (op != NULL) ? op->name() : "no vm operation");
+    log_debug(safepoint)("Entering safepoint region: %s",
+                         (op != NULL) ? op->name() : "no vm operation");
   }
 
   RuntimeService::record_safepoint_synchronized();
@@ -375,17 +407,32 @@ void SafepointSynchronize::begin() {
   }
 
   // Call stuff that needs to be run when a safepoint is just about to be completed
-  do_cleanup_tasks();
+  {
+    EventSafepointCleanup cleanup_event;
+    do_cleanup_tasks();
+    if (cleanup_event.should_commit()) {
+      cleanup_event.set_safepointId(safepoint_counter());
+      cleanup_event.commit();
+    }
+  }
 
   if (PrintSafepointStatistics) {
     // Record how much time spend on the above cleanup tasks
     update_statistics_on_cleanup_end(os::javaTimeNanos());
+  }
+  if (begin_event.should_commit()) {
+    begin_event.set_safepointId(safepoint_counter());
+    begin_event.set_totalThreadCount(nof_threads);
+    begin_event.set_jniCriticalThreadCount(_current_jni_active_count);
+    begin_event.commit();
   }
 }
 
 // Wake up all threads, so they are ready to resume execution after the safepoint
 // operation has been carried out
 void SafepointSynchronize::end() {
+  EventSafepointEnd event;
+  int safepoint_id = safepoint_counter(); // Keep the odd counter as "id"
 
   assert(Threads_lock->owned_by_self(), "must hold Threads_lock");
   assert((_safepoint_counter & 0x1) == 1, "must be odd");
@@ -430,9 +477,7 @@ void SafepointSynchronize::end() {
     _state = _not_synchronized;
     OrderAccess::fence();
 
-    if (TraceSafepoint) {
-       tty->print_cr("Leaving safepoint region");
-    }
+    log_debug(safepoint)("Leaving safepoint region");
 
     // Start suspended threads
     for(JavaThread *current = Threads::first(); current; current = current->next()) {
@@ -474,6 +519,11 @@ void SafepointSynchronize::end() {
   // record this time so VMThread can keep track how much time has elapsed
   // since last safepoint.
   _end_of_last_safepoint = os::javaTimeMillis();
+
+  if (event.should_commit()) {
+    event.set_safepointId(safepoint_id);
+    event.commit();
+  }
 }
 
 bool SafepointSynchronize::is_cleanup_needed() {
@@ -482,49 +532,71 @@ bool SafepointSynchronize::is_cleanup_needed() {
   return false;
 }
 
-
+static void event_safepoint_cleanup_task_commit(EventSafepointCleanupTask& event, const char* name) {
+  if (event.should_commit()) {
+    event.set_safepointId(SafepointSynchronize::safepoint_counter());
+    event.set_name(name);
+    event.commit();
+  }
+}
 
 // Various cleaning tasks that should be done periodically at safepoints
 void SafepointSynchronize::do_cleanup_tasks() {
   {
-    TraceTime t1("deflating idle monitors", TraceSafepointCleanupTime);
+    const char* name = "deflating idle monitors";
+    EventSafepointCleanupTask event;
+    TraceTime timer(name, TRACETIME_LOG(Info, safepoint, cleanup));
     ObjectSynchronizer::deflate_idle_monitors();
+    event_safepoint_cleanup_task_commit(event, name);
   }
 
   {
-    TraceTime t2("updating inline caches", TraceSafepointCleanupTime);
+    const char* name = "updating inline caches";
+    EventSafepointCleanupTask event;
+    TraceTime timer(name, TRACETIME_LOG(Info, safepoint, cleanup));
     InlineCacheBuffer::update_inline_caches();
+    event_safepoint_cleanup_task_commit(event, name);
   }
   {
-    TraceTime t3("compilation policy safepoint handler", TraceSafepointCleanupTime);
+    const char* name = "compilation policy safepoint handler";
+    EventSafepointCleanupTask event;
+    TraceTime timer("compilation policy safepoint handler", TRACETIME_LOG(Info, safepoint, cleanup));
     CompilationPolicy::policy()->do_safepoint_work();
+    event_safepoint_cleanup_task_commit(event, name);
   }
 
   {
-    TraceTime t4("mark nmethods", TraceSafepointCleanupTime);
+    const char* name = "mark nmethods";
+    EventSafepointCleanupTask event;
+    TraceTime timer(name, TRACETIME_LOG(Info, safepoint, cleanup));
     NMethodSweeper::mark_active_nmethods();
+    event_safepoint_cleanup_task_commit(event, name);
   }
 
   if (SymbolTable::needs_rehashing()) {
-    TraceTime t5("rehashing symbol table", TraceSafepointCleanupTime);
+    const char* name = "rehashing symbol table";
+    EventSafepointCleanupTask event;
+    TraceTime timer(name, TRACETIME_LOG(Info, safepoint, cleanup));
     SymbolTable::rehash_table();
+    event_safepoint_cleanup_task_commit(event, name);
   }
 
   if (StringTable::needs_rehashing()) {
-    TraceTime t6("rehashing string table", TraceSafepointCleanupTime);
+    const char* name = "rehashing string table";
+    EventSafepointCleanupTask event;
+    TraceTime timer(name, TRACETIME_LOG(Info, safepoint, cleanup));
     StringTable::rehash_table();
-  }
-
-  // rotate log files?
-  if (UseGCLogFileRotation) {
-    gclog_or_tty->rotate_log(false);
+    event_safepoint_cleanup_task_commit(event, name);
   }
 
   {
     // CMS delays purging the CLDG until the beginning of the next safepoint and to
     // make sure concurrent sweep is done
-    TraceTime t7("purging class loader data graph", TraceSafepointCleanupTime);
+    const char* name = "purging class loader data graph";
+    EventSafepointCleanupTask event;
+    TraceTime timer(name, TRACETIME_LOG(Info, safepoint, cleanup));
     ClassLoaderDataGraph::purge_if_needed();
+    event_safepoint_cleanup_task_commit(event, name);
   }
 }
 
@@ -568,7 +640,7 @@ void SafepointSynchronize::check_for_lazy_critical_native(JavaThread *thread, Ja
       if (!thread->do_critical_native_unlock()) {
 #ifdef ASSERT
         if (!thread->in_critical()) {
-          GC_locker::increment_debug_jni_lock_count();
+          GCLocker::increment_debug_jni_lock_count();
         }
 #endif
         thread->enter_critical();
@@ -689,7 +761,7 @@ void SafepointSynchronize::block(JavaThread *thread) {
       break;
 
     default:
-     fatal(err_msg("Illegal threadstate encountered: %d", state));
+     fatal("Illegal threadstate encountered: %d", state);
   }
 
   // Check for pending. async. exceptions or suspends - except if the
@@ -773,12 +845,10 @@ void SafepointSynchronize::print_safepoint_timeout(SafepointTimeoutReason reason
   // To debug the long safepoint, specify both DieOnSafepointTimeout &
   // ShowMessageBoxOnError.
   if (DieOnSafepointTimeout) {
-    char msg[1024];
     VM_Operation *op = VMThread::vm_operation();
-    sprintf(msg, "Safepoint sync time longer than " INTX_FORMAT "ms detected when executing %s.",
-            SafepointTimeoutDelay,
-            op != NULL ? op->name() : "no vm operation");
-    fatal(msg);
+    fatal("Safepoint sync time longer than " INTX_FORMAT "ms detected when executing %s.",
+          SafepointTimeoutDelay,
+          op != NULL ? op->name() : "no vm operation");
   }
 }
 
@@ -895,7 +965,7 @@ void ThreadSafepointState::restart() {
     case _running:
     default:
        tty->print_cr("restart thread " INTPTR_FORMAT " with state %d",
-                      _thread, _type);
+                     p2i(_thread), _type);
        _thread->print();
       ShouldNotReachHere();
   }
@@ -905,7 +975,7 @@ void ThreadSafepointState::restart() {
 
 
 void ThreadSafepointState::print_on(outputStream *st) const {
-  const char *s;
+  const char *s = NULL;
 
   switch(_type) {
     case _running                : s = "_running";              break;
@@ -917,12 +987,11 @@ void ThreadSafepointState::print_on(outputStream *st) const {
 
   st->print_cr("Thread: " INTPTR_FORMAT
               "  [0x%2x] State: %s _has_called_back %d _at_poll_safepoint %d",
-               _thread, _thread->osthread()->thread_id(), s, _has_called_back,
+               p2i(_thread), _thread->osthread()->thread_id(), s, _has_called_back,
                _at_poll_safepoint);
 
   _thread->print_thread_state_on(st);
 }
-
 
 // ---------------------------------------------------------------------------------------------------------------------
 
@@ -936,13 +1005,13 @@ void ThreadSafepointState::handle_polling_page_exception() {
 
   // Step 1: Find the nmethod from the return address
   if (ShowSafepointMsgs && Verbose) {
-    tty->print_cr("Polling page exception at " INTPTR_FORMAT, thread()->saved_exception_pc());
+    tty->print_cr("Polling page exception at " INTPTR_FORMAT, p2i(thread()->saved_exception_pc()));
   }
   address real_return_addr = thread()->saved_exception_pc();
 
   CodeBlob *cb = CodeCache::find_blob(real_return_addr);
-  assert(cb != NULL && cb->is_nmethod(), "return address should be in nmethod");
-  nmethod* nm = (nmethod*)cb;
+  assert(cb != NULL && cb->is_compiled(), "return address should be in nmethod");
+  CompiledMethod* nm = (CompiledMethod*)cb;
 
   // Find frame of caller
   frame stub_fr = thread()->last_frame();
@@ -1054,10 +1123,6 @@ static void print_header() {
 void SafepointSynchronize::deferred_initialize_stat() {
   if (init_done) return;
 
-  if (PrintSafepointStatisticsCount <= 0) {
-    fatal("Wrong PrintSafepointStatisticsCount");
-  }
-
   // If PrintSafepointStatisticsTimeout is specified, the statistics data will
   // be printed right away, in which case, _safepoint_stats will regress to
   // a single element array. Otherwise, it is a circular ring buffer with default
@@ -1168,7 +1233,7 @@ void SafepointSynchronize::end_statistics(jlong vmop_end_time) {
   // PrintSafepointStatisticsTimeout will be printed out right away.
   // By default, it is -1 meaning all samples will be put into the list.
   if ( PrintSafepointStatisticsTimeout > 0) {
-    if (spstat->_time_to_sync > PrintSafepointStatisticsTimeout * MICROUNITS) {
+    if (spstat->_time_to_sync > (jlong)PrintSafepointStatisticsTimeout * MICROUNITS) {
       print_statistics();
     }
   } else {
@@ -1234,7 +1299,7 @@ void SafepointSynchronize::print_stat_on_exit() {
     os::javaTimeNanos() - cleanup_end_time;
 
   if ( PrintSafepointStatisticsTimeout < 0 ||
-       spstat->_time_to_sync > PrintSafepointStatisticsTimeout * MICROUNITS) {
+       spstat->_time_to_sync > (jlong)PrintSafepointStatisticsTimeout * MICROUNITS) {
     print_statistics();
   }
   tty->cr();
@@ -1243,8 +1308,8 @@ void SafepointSynchronize::print_stat_on_exit() {
   if (!need_to_track_page_armed_status) {
     tty->print_cr("Polling page always armed");
   } else {
-    tty->print_cr("Defer polling page loop count = %d\n",
-                 DeferPollingPageLoopCount);
+    tty->print_cr("Defer polling page loop count = " INTX_FORMAT "\n",
+                  DeferPollingPageLoopCount);
   }
 
   for (int index = 0; index < VM_Operation::VMOp_Terminating; index++) {

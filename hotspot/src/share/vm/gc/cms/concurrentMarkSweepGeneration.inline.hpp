@@ -295,7 +295,7 @@ inline void CMSStats::record_gc0_end(size_t cms_gen_bytes_used) {
     promoted_bytes = _cms_used_at_gc0_end - _cms_used_at_gc0_begin;
   }
 
-  // If the younger gen collections were skipped, then the
+  // If the young gen collection was skipped, then the
   // number of promoted bytes will be 0 and adding it to the
   // average will incorrectly lessen the average.  It is, however,
   // also possible that no promotion was needed.
@@ -381,7 +381,7 @@ inline void MarkFromRootsClosure::do_yield_check() {
   }
 }
 
-inline void Par_MarkFromRootsClosure::do_yield_check() {
+inline void ParMarkFromRootsClosure::do_yield_check() {
   if (ConcurrentMarkSweepThread::should_yield() &&
       !_collector->foregroundGCIsActive()) {
     do_yield_work();
@@ -392,7 +392,7 @@ inline void PushOrMarkClosure::do_yield_check() {
   _parent->do_yield_check();
 }
 
-inline void Par_PushOrMarkClosure::do_yield_check() {
+inline void ParPushOrMarkClosure::do_yield_check() {
   _parent->do_yield_check();
 }
 

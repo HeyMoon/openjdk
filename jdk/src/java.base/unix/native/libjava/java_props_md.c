@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -68,11 +68,6 @@
 #endif
 #endif /* !_ALLBSD_SOURCE */
 
-#ifdef JAVASE_EMBEDDED
-#include <dlfcn.h>
-#include <sys/stat.h>
-#endif
-
 /* Take an array of string pairs (map of key->value) and a string (key).
  * Examine each pair in the map to see if the first string (key) matches the
  * string.  If so, store the second string of the pair (value) in the value and
@@ -89,46 +84,6 @@ mapLookup(char* map[], const char* key, char** value) {
         }
     }
     return 0;
-}
-
-/* This function sets an environment variable using envstring.
- * The format of envstring is "name=value".
- * If the name has already existed, it will append value to the name.
- */
-static void
-setPathEnvironment(char *envstring)
-{
-    char name[20], *value, *current;
-
-    value = strchr(envstring, '='); /* locate name and value separator */
-
-    if (! value)
-        return; /* not a valid environment setting */
-
-    /* copy first part as environment name */
-    strncpy(name, envstring, value - envstring);
-    name[value-envstring] = '\0';
-
-    value++; /* set value point to value of the envstring */
-
-    current = getenv(name);
-    if (current) {
-        if (! strstr(current, value)) {
-            /* value is not found in current environment, append it */
-            char *temp = malloc(strlen(envstring) + strlen(current) + 2);
-        strcpy(temp, name);
-        strcat(temp, "=");
-        strcat(temp, current);
-        strcat(temp, ":");
-        strcat(temp, value);
-        putenv(temp);
-        }
-        /* else the value has already been set, do nothing */
-    }
-    else {
-        /* environment variable is not found */
-        putenv(envstring);
-    }
 }
 
 #ifndef P_tmpdir
@@ -390,36 +345,6 @@ static int ParseLocale(JNIEnv* env, int cat, char ** std_language, char ** std_s
     return 1;
 }
 
-#ifdef JAVASE_EMBEDDED
-/* Determine the default embedded toolkit based on whether libawt_xawt
- * exists in the JRE. This can still be overridden by -Dawt.toolkit=XXX
- */
-static char* getEmbeddedToolkit() {
-    Dl_info dlinfo;
-    char buf[MAXPATHLEN];
-    int32_t len;
-    char *p;
-    struct stat statbuf;
-
-    /* Get address of this library and the directory containing it. */
-    dladdr((void *)getEmbeddedToolkit, &dlinfo);
-    realpath((char *)dlinfo.dli_fname, buf);
-    len = strlen(buf);
-    p = strrchr(buf, '/');
-    /* Default AWT Toolkit on Linux and Solaris is XAWT (libawt_xawt.so). */
-    strncpy(p, "/libawt_xawt.so", MAXPATHLEN-len-1);
-    /* Check if it exists */
-    if (stat(buf, &statbuf) == -1 && errno == ENOENT) {
-        /* No - this is a reduced-headless-jre so use special HToolkit */
-        return "sun.awt.HToolkit";
-    }
-    else {
-        /* Yes - this is a headful JRE so fallback to SE defaults */
-        return NULL;
-    }
-}
-#endif
-
 /* This function gets called very early, before VM_CALLS are setup.
  * Do not use any of the VM_CALLS entries!!!
  */
@@ -464,10 +389,6 @@ GetJavaProperties(JNIEnv *env)
     sprops.awt_headless = isInAquaSession() ? NULL : "true";
 #else
     sprops.graphics_env = "sun.awt.X11GraphicsEnvironment";
-#ifdef JAVASE_EMBEDDED
-    sprops.awt_toolkit = getEmbeddedToolkit();
-    if (sprops.awt_toolkit == NULL) // default as below
-#endif
     sprops.awt_toolkit = "sun.awt.X11.XToolkit";
 #endif
 
@@ -503,8 +424,21 @@ GetJavaProperties(JNIEnv *env)
         struct utsname name;
         uname(&name);
         sprops.os_name = strdup(name.sysname);
+#ifdef _AIX
+        {
+            char *os_version = malloc(strlen(name.version) +
+                                      strlen(name.release) + 2);
+            if (os_version != NULL) {
+                strcpy(os_version, name.version);
+                strcat(os_version, ".");
+                strcat(os_version, name.release);
+            }
+            sprops.os_version = os_version;
+        }
+#else
         sprops.os_version = strdup(name.release);
-#endif
+#endif /* _AIX   */
+#endif /* MACOSX */
 
         sprops.os_arch = ARCHPROPNAME;
 
@@ -614,16 +548,6 @@ GetJavaProperties(JNIEnv *env)
     sprops.file_separator = "/";
     sprops.path_separator = ":";
     sprops.line_separator = "\n";
-
-#if !defined(_ALLBSD_SOURCE)
-    /* Append CDE message and resource search path to NLSPATH and
-     * XFILESEARCHPATH, in order to pick localized message for
-     * FileSelectionDialog window (Bug 4173641).
-     */
-    setPathEnvironment("NLSPATH=/usr/dt/lib/nls/msg/%L/%N.cat");
-    setPathEnvironment("XFILESEARCHPATH=/usr/dt/app-defaults/%L/Dt");
-#endif
-
 
 #ifdef MACOSX
     setProxyProperties(&sprops);

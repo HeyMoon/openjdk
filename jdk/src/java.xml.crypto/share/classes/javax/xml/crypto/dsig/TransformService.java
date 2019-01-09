@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,8 +39,6 @@ import javax.xml.crypto.XMLStructure;
 import javax.xml.crypto.XMLCryptoContext;
 import javax.xml.crypto.dsig.spec.TransformParameterSpec;
 
-import sun.security.jca.*;
-import sun.security.jca.GetInstance.Instance;
 
 /**
  * A Service Provider Interface for transform and canonicalization algorithms.
@@ -71,11 +69,10 @@ import sun.security.jca.GetInstance.Instance;
  * <code>TransformService</code> implementations that support the DOM
  * mechanism type must abide by the DOM interoperability requirements defined
  * in the
- * <a href="../../../../../technotes/guides/security/xmldsig/overview.html#DOM%20Mechanism%20Requirements">
- * DOM Mechanism Requirements</a> section of the API overview. See the
- * <a href="../../../../../technotes/guides/security/xmldsig/overview.html#Service%20Provider">
- * Service Providers</a> section of the API overview for a list of standard
- * mechanism types.
+ * {@extLink security_guide_xmldsig_rqmts DOM Mechanism Requirements} section
+ * of the API overview. See the
+ * {@extLink security_guide_xmldsig_provider Service Providers} section of
+ * the API overview for a list of standard mechanism types.
  * <p>
  * Once a <code>TransformService</code> has been created, it can be used
  * to process <code>Transform</code> or <code>CanonicalizationMethod</code>
@@ -136,6 +133,14 @@ public abstract class TransformService implements Transform {
      * <p> Note that the list of registered providers may be retrieved via
      * the {@link Security#getProviders() Security.getProviders()} method.
      *
+     * @implNote
+     * The JDK Reference Implementation additionally uses the
+     * {@code jdk.security.provider.preferred}
+     * {@link Security#getProperty(String) Security} property to determine
+     * the preferred provider order for the specified algorithm. This
+     * may be different than the order of providers returned by
+     * {@link Security#getProviders() Security.getProviders()}.
+     *
      * @param algorithm the URI of the algorithm
      * @param mechanismType the type of the XML processing mechanism and
      *   representation
@@ -157,18 +162,23 @@ public abstract class TransformService implements Transform {
         if (mechanismType.equals("DOM")) {
             dom = true;
         }
-        List<Service> services = GetInstance.getServices("TransformService", algorithm);
-        for (Iterator<Service> t = services.iterator(); t.hasNext(); ) {
-            Service s = t.next();
-            String value = s.getAttribute("MechanismType");
-            if ((value == null && dom) ||
-                (value != null && value.equals(mechanismType))) {
-                Instance instance = GetInstance.getInstance(s, null);
-                TransformService ts = (TransformService) instance.impl;
-                ts.algorithm = algorithm;
-                ts.mechanism = mechanismType;
-                ts.provider = instance.provider;
-                return ts;
+
+        Provider[] provs = Security.getProviders();
+        for (Provider p : provs) {
+            Service s = p.getService("TransformService", algorithm);
+            if (s != null) {
+                String value = s.getAttribute("MechanismType");
+                if ((value == null && dom) ||
+                    (value != null && value.equals(mechanismType))) {
+                    Object obj = s.newInstance(null);
+                    if (obj instanceof TransformService) {
+                        TransformService ts = (TransformService) obj;
+                        ts.algorithm = algorithm;
+                        ts.mechanism = mechanismType;
+                        ts.provider = p;
+                        return ts;
+                    }
+                }
             }
         }
         throw new NoSuchAlgorithmException
@@ -207,21 +217,24 @@ public abstract class TransformService implements Transform {
         if (mechanismType.equals("DOM")) {
             dom = true;
         }
-        Service s = GetInstance.getService
-            ("TransformService", algorithm, provider);
-        String value = s.getAttribute("MechanismType");
-        if ((value == null && dom) ||
-            (value != null && value.equals(mechanismType))) {
-            Instance instance = GetInstance.getInstance(s, null);
-            TransformService ts = (TransformService) instance.impl;
-            ts.algorithm = algorithm;
-            ts.mechanism = mechanismType;
-            ts.provider = instance.provider;
-            return ts;
+        Service s = provider.getService("TransformService", algorithm);
+        if (s != null) {
+            String value = s.getAttribute("MechanismType");
+            if ((value == null && dom) ||
+                (value != null && value.equals(mechanismType))) {
+                Object obj = s.newInstance(null);
+                if (obj instanceof TransformService) {
+                    TransformService ts = (TransformService) obj;
+                    ts.algorithm = algorithm;
+                    ts.mechanism = mechanismType;
+                    ts.provider = provider;
+                    return ts;
+                }
+            }
         }
         throw new NoSuchAlgorithmException
             (algorithm + " algorithm and " + mechanismType
-                 + " mechanism not available");
+                 + " mechanism not available from " + provider.getName());
     }
 
     /**
@@ -260,21 +273,29 @@ public abstract class TransformService implements Transform {
         if (mechanismType.equals("DOM")) {
             dom = true;
         }
-        Service s = GetInstance.getService
-            ("TransformService", algorithm, provider);
-        String value = s.getAttribute("MechanismType");
-        if ((value == null && dom) ||
-            (value != null && value.equals(mechanismType))) {
-            Instance instance = GetInstance.getInstance(s, null);
-            TransformService ts = (TransformService) instance.impl;
-            ts.algorithm = algorithm;
-            ts.mechanism = mechanismType;
-            ts.provider = instance.provider;
-            return ts;
+        Provider p = Security.getProvider(provider);
+        if (p == null) {
+            throw new NoSuchProviderException("No such provider: " +
+                                              provider);
+        }
+        Service s = p.getService("TransformService", algorithm);
+        if (s != null) {
+            String value = s.getAttribute("MechanismType");
+            if ((value == null && dom) ||
+                (value != null && value.equals(mechanismType))) {
+                Object obj = s.newInstance(null);
+                if (obj instanceof TransformService) {
+                    TransformService ts = (TransformService) obj;
+                    ts.algorithm = algorithm;
+                    ts.mechanism = mechanismType;
+                    ts.provider = p;
+                    return ts;
+                }
+            }
         }
         throw new NoSuchAlgorithmException
             (algorithm + " algorithm and " + mechanismType
-                 + " mechanism not available");
+                 + " mechanism not available from " + provider);
     }
 
     private static class MechanismMapEntry implements Map.Entry<String,String> {

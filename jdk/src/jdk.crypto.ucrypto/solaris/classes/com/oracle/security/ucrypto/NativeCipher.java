@@ -38,6 +38,8 @@ import javax.crypto.*;
 import javax.crypto.spec.SecretKeySpec;
 import javax.crypto.spec.IvParameterSpec;
 
+import sun.security.jca.JCAUtil;
+
 /**
  * Cipher wrapper class utilizing ucrypto APIs. This class currently supports
  * - AES/ECB/NOPADDING
@@ -46,7 +48,7 @@ import javax.crypto.spec.IvParameterSpec;
  * - AES/CFB128/NOPADDING
  * (Support for GCM mode is inside the child class NativeGCMCipher)
  *
- * @since 1.9
+ * @since 9
  */
 class NativeCipher extends CipherSpi {
 
@@ -274,20 +276,24 @@ class NativeCipher extends CipherSpi {
             if (params != null) {
                 if (!(params instanceof IvParameterSpec)) {
                     throw new InvalidAlgorithmParameterException
-                            ("IvParameterSpec required");
+                            ("IvParameterSpec required. Received: " +
+                            params.getClass().getName());
                 } else {
                     ivBytes = ((IvParameterSpec) params).getIV();
                     if (ivBytes.length != blockSize) {
                         throw new InvalidAlgorithmParameterException
                              ("Wrong IV length: must be " + blockSize +
-                              " bytes long");
+                              " bytes long. Received length:" + ivBytes.length);
                     }
                 }
             } else {
                 if (encrypt) {
                     // generate IV if none supplied for encryption
                     ivBytes = new byte[blockSize];
-                    new SecureRandom().nextBytes(ivBytes);
+                    if (random == null) {
+                        random = JCAUtil.getSecureRandom();
+                    }
+                    random.nextBytes(ivBytes);
                 } else {
                     throw new InvalidAlgorithmParameterException
                             ("Parameters required for decryption");
@@ -442,12 +448,13 @@ class NativeCipher extends CipherSpi {
             if (fixedKeySize == -1) {
                 // all 3 AES key lengths are allowed
                 if (keyLen != 16 && keyLen != 24 && keyLen != 32) {
-                    throw new InvalidKeyException("Key size is not valid");
+                    throw new InvalidKeyException("Key size is not valid." +
+                        " Got key length of: " + keyLen);
                 }
             } else {
                 if (keyLen != fixedKeySize) {
                     throw new InvalidKeyException("Only " + fixedKeySize +
-                        "-byte keys are accepted");
+                        "-byte keys are accepted. Got: " + keyLen);
                 }
             }
             // return the validated key length in bytes
@@ -474,7 +481,7 @@ class NativeCipher extends CipherSpi {
 
     /**
      * calls ucrypto_encrypt_update(...) or ucrypto_decrypt_update(...)
-     * @returns the length of output or if negative, an error status code
+     * @return the length of output or if negative, an error status code
      */
     private native static int nativeUpdate(long pContext, boolean encrypt,
                                            byte[] in, int inOfs, int inLen,
@@ -482,7 +489,7 @@ class NativeCipher extends CipherSpi {
 
     /**
      * calls ucrypto_encrypt_final(...) or ucrypto_decrypt_final(...)
-     * @returns the length of output or if negative, an error status code
+     * @return the length of output or if negative, an error status code
      */
     native static int nativeFinal(long pContext, boolean encrypt,
                                           byte[] out, int outOfs);

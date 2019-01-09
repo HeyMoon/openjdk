@@ -33,69 +33,63 @@
 
 /*
  * @test
- * @bug 4486658
- * @run main/timeout=2800 CancelledLockLoops
- * @summary tests lockInterruptibly.
- * Checks for responsiveness of locks to interrupts. Runs under that
- * assumption that ITERS_VALUE computations require more than TIMEOUT
- * msecs to complete.
+ * @bug 4486658 8040928 8140468
+ * @summary tests ReentrantLock.lockInterruptibly.
+ * Checks for responsiveness of locks to interrupts.
  */
 
-import java.util.concurrent.*;
-import java.util.concurrent.locks.*;
-import java.util.*;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
+
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.locks.ReentrantLock;
 
 public final class CancelledLockLoops {
-    static final Random rng = new Random();
-    static boolean print = false;
-    static final int ITERS = 5000000;
-    static final long TIMEOUT = 100;
-
     public static void main(String[] args) throws Exception {
-        int maxThreads = (args.length > 0) ? Integer.parseInt(args[0]) : 5;
-        print = true;
+        final int maxThreads = (args.length > 0) ? Integer.parseInt(args[0]) : 5;
+        final int reps = 1;     // increase for stress testing
 
-        for (int i = 2; i <= maxThreads; i += (i+1) >>> 1) {
-            System.out.print("Threads: " + i);
-            try {
-                new ReentrantLockLoop(i).test();
+        for (int j = 0; j < reps; j++) {
+            for (int i = 2; i <= maxThreads; i += (i+1) >>> 1) {
+                new Loops(i).test();
             }
-            catch (BrokenBarrierException bb) {
-                // OK, ignore
-            }
-            Thread.sleep(TIMEOUT);
         }
     }
 
-    static final class ReentrantLockLoop implements Runnable {
-        private int v = rng.nextInt();
-        private int completed;
+    static final class Loops implements Runnable {
+        private final boolean print = false;
+        private volatile boolean done = false;
+        private int v = ThreadLocalRandom.current().nextInt();
+        private int completed = 0;
         private volatile int result = 17;
         private final ReentrantLock lock = new ReentrantLock();
         private final LoopHelpers.BarrierTimer timer = new LoopHelpers.BarrierTimer();
         private final CyclicBarrier barrier;
         private final int nthreads;
-        ReentrantLockLoop(int nthreads) {
+        private volatile Throwable fail = null;
+        Loops(int nthreads) {
             this.nthreads = nthreads;
+            if (print) System.out.print("Threads: " + nthreads);
             barrier = new CyclicBarrier(nthreads+1, timer);
         }
 
         final void test() throws Exception {
+            final ThreadLocalRandom rnd = ThreadLocalRandom.current();
             Thread[] threads = new Thread[nthreads];
             for (int i = 0; i < threads.length; ++i)
                 threads[i] = new Thread(this);
             for (int i = 0; i < threads.length; ++i)
                 threads[i].start();
             Thread[] cancels = threads.clone();
-            Collections.shuffle(Arrays.asList(cancels), rng);
             barrier.await();
-            Thread.sleep(TIMEOUT);
+            Thread.sleep(rnd.nextInt(5));
             for (int i = 0; i < cancels.length-2; ++i) {
                 cancels[i].interrupt();
                 // make sure all OK even when cancellations spaced out
                 if ( (i & 3) == 0)
-                    Thread.sleep(1 + rng.nextInt(10));
+                    Thread.sleep(1 + rnd.nextInt(5));
             }
+            done = true;
             barrier.await();
             if (print) {
                 long time = timer.getTime();
@@ -112,24 +106,29 @@ public final class CancelledLockLoops {
                 lock.unlock();
             }
             if (c != 2)
-                throw new Error("Completed != 2");
+                throw new Error("Completed == " + c + "; expected 2");
             int r = result;
             if (r == 0) // avoid overoptimization
                 System.out.println("useless result: " + r);
+            if (fail != null) throw new RuntimeException(fail);
         }
 
         public final void run() {
             try {
                 barrier.await();
+                boolean interrupted = false;
+                long startTime = System.nanoTime();
                 int sum = v;
                 int x = 0;
-                int n = ITERS;
-                boolean done = false;
-                do {
+                while (!done || Thread.currentThread().isInterrupted()) {
                     try {
                         lock.lockInterruptibly();
                     }
                     catch (InterruptedException ie) {
+                        interrupted = true;
+                        if (print)
+                            System.out.printf("interrupted after %d millis%n",
+                                              NANOSECONDS.toMillis(System.nanoTime() - startTime));
                         break;
                     }
                     try {
@@ -139,8 +138,11 @@ public final class CancelledLockLoops {
                         lock.unlock();
                     }
                     sum += LoopHelpers.compute2(x);
-                } while (n-- > 0);
-                if (n <= 0) {
+                }
+                if (!interrupted) {
+                    if (print)
+                        System.out.printf("completed after %d millis%n",
+                                          NANOSECONDS.toMillis(System.nanoTime() - startTime));
                     lock.lock();
                     try {
                         ++completed;
@@ -152,9 +154,9 @@ public final class CancelledLockLoops {
                 barrier.await();
                 result += sum;
             }
-            catch (Exception ex) {
-                ex.printStackTrace();
-                return;
+            catch (Throwable ex) {
+                fail = ex;
+                throw new RuntimeException(ex);
             }
         }
     }

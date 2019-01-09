@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -80,6 +80,16 @@ extern jfieldID jawtPDataID;
 extern jfieldID jawtSDataID;
 extern jfieldID jawtSMgrID;
 
+jobject reasonUnspecified;
+jobject reasonConsole;
+jobject reasonRemote;
+jobject reasonLock;
+
+extern jobject GetStaticObject(JNIEnv *env, jclass wfClass, const char *fieldName,
+                        const char *signature);
+
+extern BOOL isSuddenTerminationEnabled;
+
 extern void DWMResetCompositionEnabled();
 
 /************************************************************************
@@ -91,7 +101,7 @@ extern void DWMResetCompositionEnabled();
 JavaVM *jvm = NULL;
 
 JNIEXPORT jint JNICALL
-JNI_OnLoad(JavaVM *vm, void *reserved)
+DEF_JNI_OnLoad(JavaVM *vm, void *reserved)
 {
     TRY;
 
@@ -269,6 +279,9 @@ AwtToolkit AwtToolkit::theInstance;
 /* ids for WToolkit fields accessed from native code */
 jmethodID AwtToolkit::windowsSettingChangeMID;
 jmethodID AwtToolkit::displayChangeMID;
+
+jmethodID AwtToolkit::userSessionMID;
+jmethodID AwtToolkit::systemSleepMID;
 /* ids for Toolkit methods */
 jmethodID AwtToolkit::getDefaultToolkitMID;
 jmethodID AwtToolkit::getFontMetricsMID;
@@ -321,6 +334,7 @@ AwtToolkit::AwtToolkit() {
     ::GetKeyboardState(m_lastKeyboardState);
 
     m_waitEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+    isInDoDragDropLoop = FALSE;
     eventNumber = 0;
 }
 
@@ -1046,6 +1060,9 @@ LRESULT CALLBACK AwtToolkit::WndProc(HWND hWnd, UINT message,
       /* Session management */
       case WM_QUERYENDSESSION: {
           /* Shut down cleanly */
+          if (!isSuddenTerminationEnabled) {
+              return FALSE;
+          }
           if (JVM_RaiseSignal(SIGTERM)) {
               AwtToolkit::GetInstance().m_vmSignalled = TRUE;
           }
@@ -1073,6 +1090,69 @@ LRESULT CALLBACK AwtToolkit::WndProc(HWND hWnd, UINT message,
 
           // Should never get here.
           DASSERT(FALSE);
+          break;
+      }
+#ifndef WM_WTSSESSION_CHANGE
+#define WM_WTSSESSION_CHANGE        0x02B1
+#define WTS_CONSOLE_CONNECT 0x1
+#define WTS_CONSOLE_DISCONNECT 0x2
+#define WTS_REMOTE_CONNECT 0x3
+#define WTS_REMOTE_DISCONNECT 0x4
+#define WTS_SESSION_LOGON 0x5
+#define WTS_SESSION_LOGOFF 0x6
+#define WTS_SESSION_LOCK 0x7
+#define WTS_SESSION_UNLOCK 0x8
+#define WTS_SESSION_REMOTE_CONTROL 0x9
+#endif // WM_WTSSESSION_CHANGE
+      case WM_WTSSESSION_CHANGE: {
+          jclass clzz = env->FindClass("sun/awt/windows/WDesktopPeer");
+          DASSERT(clzz != NULL);
+          if (!clzz) throw std::bad_alloc();
+
+          if (wParam == WTS_CONSOLE_CONNECT
+                || wParam == WTS_CONSOLE_DISCONNECT
+                || wParam == WTS_REMOTE_CONNECT
+                || wParam == WTS_REMOTE_DISCONNECT
+                || wParam == WTS_SESSION_UNLOCK
+                || wParam == WTS_SESSION_LOCK) {
+
+              BOOL activate = wParam == WTS_CONSOLE_CONNECT
+                                || wParam == WTS_REMOTE_CONNECT
+                                || wParam == WTS_SESSION_UNLOCK;
+              jobject reason = reasonUnspecified;
+
+              switch (wParam) {
+                  case WTS_CONSOLE_CONNECT:
+                  case WTS_CONSOLE_DISCONNECT:
+                      reason = reasonConsole;
+                      break;
+                  case WTS_REMOTE_CONNECT:
+                  case WTS_REMOTE_DISCONNECT:
+                      reason = reasonRemote;
+                      break;
+                  case WTS_SESSION_UNLOCK:
+                  case WTS_SESSION_LOCK:
+                      reason = reasonLock;
+              }
+
+              env->CallStaticVoidMethod(clzz, AwtToolkit::userSessionMID,
+                                              activate
+                                              ? JNI_TRUE
+                                              : JNI_FALSE, reason);
+          }
+          break;
+      }
+      case WM_POWERBROADCAST: {
+          jclass clzz = env->FindClass("sun/awt/windows/WDesktopPeer");
+          DASSERT(clzz != NULL);
+          if (!clzz) throw std::bad_alloc();
+
+          if (wParam == PBT_APMSUSPEND || wParam == PBT_APMRESUMEAUTOMATIC) {
+              env->CallStaticVoidMethod(clzz, AwtToolkit::systemSleepMID,
+                                            wParam == PBT_APMRESUMEAUTOMATIC
+                                                ? JNI_TRUE
+                                                : JNI_FALSE);
+          }
           break;
       }
       case WM_SYNC_WAIT:
@@ -1510,7 +1590,7 @@ BOOL AwtToolkit::PreProcessMouseMsg(AwtComponent* p, MSG& msg)
      * the mouse, not the Component with the input focus.
      */
 
-    if (msg.message == WM_MOUSEWHEEL) {
+    if (msg.message == WM_MOUSEWHEEL || msg.message == WM_MOUSEHWHEEL) {
             //i.e. mouse is over client area for this window
             DWORD hWndForWheelProcess;
             DWORD hWndForWheelThread = ::GetWindowThreadProcessId(hWndForWheel, &hWndForWheelProcess);
@@ -2133,6 +2213,45 @@ Java_sun_awt_windows_WToolkit_initIDs(JNIEnv *env, jclass cls)
     CHECK_NULL(jawtVImgClass);
     jawtComponentClass = (jclass)env->NewGlobalRef(componentClassLocal);
 
+    jclass dPeerClassLocal = env->FindClass("sun/awt/windows/WDesktopPeer");
+    DASSERT(dPeerClassLocal != 0);
+    CHECK_NULL(dPeerClassLocal);
+
+    jclass reasonClassLocal    = env->FindClass("java/awt/desktop/UserSessionEvent$Reason");
+    CHECK_NULL(reasonClassLocal);
+
+    reasonUnspecified = GetStaticObject(env, reasonClassLocal, "UNSPECIFIED",
+                                         "Ljava/awt/desktop/UserSessionEvent$Reason;");
+    CHECK_NULL (reasonUnspecified);
+    reasonUnspecified = env->NewGlobalRef(reasonUnspecified);
+
+    reasonConsole = GetStaticObject(env, reasonClassLocal, "CONSOLE",
+                                         "Ljava/awt/desktop/UserSessionEvent$Reason;");
+    CHECK_NULL (reasonConsole);
+    reasonConsole = env->NewGlobalRef(reasonConsole);
+
+    reasonRemote = GetStaticObject(env, reasonClassLocal, "REMOTE",
+                                         "Ljava/awt/desktop/UserSessionEvent$Reason;");
+    CHECK_NULL (reasonRemote);
+    reasonRemote = env->NewGlobalRef(reasonRemote);
+
+    reasonLock = GetStaticObject(env, reasonClassLocal, "LOCK",
+                                         "Ljava/awt/desktop/UserSessionEvent$Reason;");
+    CHECK_NULL (reasonLock);
+    reasonLock = env->NewGlobalRef(reasonLock);
+
+
+    AwtToolkit::userSessionMID =
+    env->GetStaticMethodID(dPeerClassLocal, "userSessionCallback",
+                            "(ZLjava/awt/desktop/UserSessionEvent$Reason;)V");
+    DASSERT(AwtToolkit::userSessionMID != 0);
+    CHECK_NULL(AwtToolkit::userSessionMID);
+
+    AwtToolkit::systemSleepMID =
+    env->GetStaticMethodID(dPeerClassLocal, "systemSleepCallback", "(Z)V");
+    DASSERT(AwtToolkit::systemSleepMID != 0);
+    CHECK_NULL(AwtToolkit::systemSleepMID);
+
     CATCH_BAD_ALLOC;
 }
 
@@ -2341,36 +2460,6 @@ Java_sun_awt_windows_WToolkit_getMaximumCursorColors(JNIEnv *env, jobject self)
     }
     ::DeleteDC(hIC);
     return nColor;
-
-    CATCH_BAD_ALLOC_RET(0);
-}
-
-/*
- * Class:     sun_awt_windows_WToolkit
- * Method:    getScreenWidth
- * Signature: ()I
- */
-JNIEXPORT jint JNICALL
-Java_sun_awt_windows_WToolkit_getScreenWidth(JNIEnv *env, jobject self)
-{
-    TRY;
-
-    return ::GetSystemMetrics(SM_CXSCREEN);
-
-    CATCH_BAD_ALLOC_RET(0);
-}
-
-/*
- * Class:     sun_awt_windows_WToolkit
- * Method:    getScreenHeight
- * Signature: ()I
- */
-JNIEXPORT jint JNICALL
-Java_sun_awt_windows_WToolkit_getScreenHeight(JNIEnv *env, jobject self)
-{
-    TRY;
-
-    return ::GetSystemMetrics(SM_CYSCREEN);
 
     CATCH_BAD_ALLOC_RET(0);
 }
@@ -2664,7 +2753,12 @@ Java_sun_awt_windows_WToolkit_syncNativeQueue(JNIEnv *env, jobject self, jlong t
     AwtToolkit & tk = AwtToolkit::GetInstance();
     DWORD eventNumber = tk.eventNumber;
     tk.PostMessage(WM_SYNC_WAIT, 0, 0);
-    ::WaitForSingleObject(tk.m_waitEvent, INFINITE);
+    for(long t = 2; t < timeout &&
+               WAIT_TIMEOUT == ::WaitForSingleObject(tk.m_waitEvent, 2); t+=2) {
+        if (tk.isInDoDragDropLoop) {
+            break;
+        }
+    }
     DWORD newEventNumber = tk.eventNumber;
     return (newEventNumber - eventNumber) > 2;
 }

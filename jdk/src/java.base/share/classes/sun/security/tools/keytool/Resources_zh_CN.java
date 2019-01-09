@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,7 @@
 package sun.security.tools.keytool;
 
 /**
- * This class represents the <code>ResourceBundle</code>
+ * <p> This class represents the <code>ResourceBundle</code>
  * for the keytool.
  *
  */
@@ -48,7 +48,7 @@ public class Resources_zh_CN extends java.util.ListResourceBundle {
                  "\u5BC6\u94A5\u548C\u8BC1\u4E66\u7BA1\u7406\u5DE5\u5177"},
         {"Commands.", "\u547D\u4EE4:"},
         {"Use.keytool.command.name.help.for.usage.of.command.name",
-                "\u4F7F\u7528 \"keytool -command_name -help\" \u83B7\u53D6 command_name \u7684\u7528\u6CD5"},
+                "\u4F7F\u7528 \"keytool -command_name -help\" \u53EF\u83B7\u53D6 command_name \u7684\u7528\u6CD5\u3002\n\u4F7F\u7528 -conf <url> \u9009\u9879\u53EF\u6307\u5B9A\u9884\u914D\u7F6E\u7684\u9009\u9879\u6587\u4EF6\u3002"},
         // keytool: help: commands
         {"Generates.a.certificate.request",
                 "\u751F\u6210\u8BC1\u4E66\u8BF7\u6C42"}, //-certreq
@@ -126,16 +126,24 @@ public class Resources_zh_CN extends java.util.ListResourceBundle {
                 "\u5BC6\u94A5\u4F4D\u5927\u5C0F"}, //-keysize
         {"keystore.name",
                 "\u5BC6\u94A5\u5E93\u540D\u79F0"}, //-keystore
+        {"access.the.cacerts.keystore",
+                "\u8BBF\u95EE cacerts \u5BC6\u94A5\u5E93"}, // -cacerts
+        {"warning.cacerts.option",
+                "\u8B66\u544A: \u4F7F\u7528 -cacerts \u9009\u9879\u8BBF\u95EE cacerts \u5BC6\u94A5\u5E93"},
         {"new.password",
                 "\u65B0\u53E3\u4EE4"}, //-new
         {"do.not.prompt",
                 "\u4E0D\u63D0\u793A"}, //-noprompt
         {"password.through.protected.mechanism",
                 "\u901A\u8FC7\u53D7\u4FDD\u62A4\u7684\u673A\u5236\u7684\u53E3\u4EE4"}, //-protected
-        {"provider.argument",
-                "\u63D0\u4F9B\u65B9\u53C2\u6570"}, //-providerarg
-        {"provider.class.name",
-                "\u63D0\u4F9B\u65B9\u7C7B\u540D"}, //-providerclass
+
+        // The following 2 values should span 2 lines, the first for the
+        // option itself, the second for its -providerArg value.
+        {"addprovider.option",
+                "\u6309\u540D\u79F0 (\u4F8B\u5982 SunPKCS11) \u6DFB\u52A0\u5B89\u5168\u63D0\u4F9B\u65B9\n\u914D\u7F6E -addprovider \u7684\u53C2\u6570"}, //-addprovider
+        {"provider.class.option",
+                "\u6309\u5168\u9650\u5B9A\u7C7B\u540D\u6DFB\u52A0\u5B89\u5168\u63D0\u4F9B\u65B9\n\u914D\u7F6E -providerclass \u7684\u53C2\u6570"}, //-providerclass
+
         {"provider.name",
                 "\u63D0\u4F9B\u65B9\u540D\u79F0"}, //-providername
         {"provider.classpath",
@@ -187,6 +195,8 @@ public class Resources_zh_CN extends java.util.ListResourceBundle {
         {"Command.option.flag.needs.an.argument.", "\u547D\u4EE4\u9009\u9879{0}\u9700\u8981\u4E00\u4E2A\u53C2\u6570\u3002"},
         {"Warning.Different.store.and.key.passwords.not.supported.for.PKCS12.KeyStores.Ignoring.user.specified.command.value.",
                 "\u8B66\u544A: PKCS12 \u5BC6\u94A5\u5E93\u4E0D\u652F\u6301\u5176\u4ED6\u5B58\u50A8\u548C\u5BC6\u94A5\u53E3\u4EE4\u3002\u6B63\u5728\u5FFD\u7565\u7528\u6237\u6307\u5B9A\u7684{0}\u503C\u3002"},
+        {"the.keystore.or.storetype.option.cannot.be.used.with.the.cacerts.option",
+            "-keystore \u6216 -storetype \u9009\u9879\u4E0D\u80FD\u4E0E -cacerts \u9009\u9879\u4E00\u8D77\u4F7F\u7528"},
         {".keystore.must.be.NONE.if.storetype.is.{0}",
                 "\u5982\u679C -storetype \u4E3A {0}, \u5219 -keystore \u5FC5\u987B\u4E3A NONE"},
         {"Too.many.retries.program.terminated",
@@ -208,7 +218,9 @@ public class Resources_zh_CN extends java.util.ListResourceBundle {
         {"Illegal.startdate.value", "\u975E\u6CD5\u5F00\u59CB\u65E5\u671F\u503C"},
         {"Validity.must.be.greater.than.zero",
                 "\u6709\u6548\u6027\u5FC5\u987B\u5927\u4E8E\u96F6"},
-        {"provName.not.a.provider", "{0}\u4E0D\u662F\u63D0\u4F9B\u65B9"},
+        {"provclass.not.a.provider", "%s\u4E0D\u662F\u63D0\u4F9B\u65B9"},
+        {"provider.name.not.found", "\u672A\u627E\u5230\u540D\u4E3A \"%s\" \u7684\u63D0\u4F9B\u65B9"},
+        {"provider.class.not.found", "\u672A\u627E\u5230\u63D0\u4F9B\u65B9 \"%s\""},
         {"Usage.error.no.command.provided", "\u7528\u6CD5\u9519\u8BEF: \u6CA1\u6709\u63D0\u4F9B\u547D\u4EE4"},
         {"Source.keystore.file.exists.but.is.empty.", "\u6E90\u5BC6\u94A5\u5E93\u6587\u4EF6\u5B58\u5728, \u4F46\u4E3A\u7A7A: "},
         {"Please.specify.srckeystore", "\u8BF7\u6307\u5B9A -srckeystore"},
@@ -306,7 +318,7 @@ public class Resources_zh_CN extends java.util.ListResourceBundle {
         {"Entry.type.type.", "\u6761\u76EE\u7C7B\u578B: {0}"},
         {"Certificate.chain.length.", "\u8BC1\u4E66\u94FE\u957F\u5EA6: "},
         {"Certificate.i.1.", "\u8BC1\u4E66[{0,number,integer}]:"},
-        {"Certificate.fingerprint.SHA1.", "\u8BC1\u4E66\u6307\u7EB9 (SHA1): "},
+        {"Certificate.fingerprint.SHA.256.", "\u8BC1\u4E66\u6307\u7EB9 (SHA-256): "},
         {"Keystore.type.", "\u5BC6\u94A5\u5E93\u7C7B\u578B: "},
         {"Keystore.provider.", "\u5BC6\u94A5\u5E93\u63D0\u4F9B\u65B9: "},
         {"Your.keystore.contains.keyStore.size.entry",
@@ -345,8 +357,6 @@ public class Resources_zh_CN extends java.util.ListResourceBundle {
         {"Enter.alias.name.", "\u8F93\u5165\u522B\u540D:  "},
         {".RETURN.if.same.as.for.otherAlias.",
                 "\t(\u5982\u679C\u548C <{0}> \u76F8\u540C, \u5219\u6309\u56DE\u8F66)"},
-        {".PATTERN.printX509Cert",
-                "\u6240\u6709\u8005: {0}\n\u53D1\u5E03\u8005: {1}\n\u5E8F\u5217\u53F7: {2}\n\u6709\u6548\u671F\u5F00\u59CB\u65E5\u671F: {3}, \u622A\u6B62\u65E5\u671F: {4}\n\u8BC1\u4E66\u6307\u7EB9:\n\t MD5: {5}\n\t SHA1: {6}\n\t SHA256: {7}\n\t \u7B7E\u540D\u7B97\u6CD5\u540D\u79F0: {8}\n\t \u7248\u672C: {9}"},
         {"What.is.your.first.and.last.name.",
                 "\u60A8\u7684\u540D\u5B57\u4E0E\u59D3\u6C0F\u662F\u4EC0\u4E48?"},
         {"What.is.the.name.of.your.organizational.unit.",
@@ -409,15 +419,12 @@ public class Resources_zh_CN extends java.util.ListResourceBundle {
         {"Please.provide.keysize.for.secret.key.generation",
                 "\u8BF7\u63D0\u4F9B -keysize \u4EE5\u751F\u6210\u5BC6\u94A5"},
 
-        {"verified.by.s.in.s", "\u7531 %s \u9A8C\u8BC1(\u5728 %s \u4E2D)"},
         {"warning.not.verified.make.sure.keystore.is.correct",
             "\u8B66\u544A: \u672A\u9A8C\u8BC1\u3002\u8BF7\u786E\u4FDD\u5BC6\u94A5\u5E93\u662F\u6B63\u786E\u7684\u3002"},
 
         {"Extensions.", "\u6269\u5C55: "},
         {".Empty.value.", "(\u7A7A\u503C)"},
         {"Extension.Request.", "\u6269\u5C55\u8BF7\u6C42:"},
-        {"PKCS.10.Certificate.Request.Version.1.0.Subject.s.Public.Key.s.format.s.key.",
-                "PKCS #10 \u8BC1\u4E66\u8BF7\u6C42 (\u7248\u672C 1.0)\n\u4E3B\u9898: %s\n\u516C\u5171\u5BC6\u94A5: %s \u683C\u5F0F %s \u5BC6\u94A5\n"},
         {"Unknown.keyUsage.type.", "\u672A\u77E5 keyUsage \u7C7B\u578B: "},
         {"Unknown.extendedkeyUsage.type.", "\u672A\u77E5 extendedkeyUsage \u7C7B\u578B: "},
         {"Unknown.AccessDescription.type.", "\u672A\u77E5 AccessDescription \u7C7B\u578B: "},
@@ -426,12 +433,40 @@ public class Resources_zh_CN extends java.util.ListResourceBundle {
                  "\u65E0\u6CD5\u5C06\u6B64\u6269\u5C55\u6807\u8BB0\u4E3A\u201C\u4E25\u91CD\u201D\u3002"},
         {"Odd.number.of.hex.digits.found.", "\u627E\u5230\u5947\u6570\u4E2A\u5341\u516D\u8FDB\u5236\u6570\u5B57: "},
         {"Unknown.extension.type.", "\u672A\u77E5\u6269\u5C55\u7C7B\u578B: "},
-        {"command.{0}.is.ambiguous.", "\u547D\u4EE4{0}\u4E0D\u660E\u786E:"}
+        {"command.{0}.is.ambiguous.", "\u547D\u4EE4{0}\u4E0D\u660E\u786E:"},
+
+        // 8171319: keytool should print out warnings when reading or
+        // generating cert/cert req using weak algorithms
+        {"the.certificate.request", "\u8BC1\u4E66\u8BF7\u6C42"},
+        {"the.issuer", "\u53D1\u5E03\u8005"},
+        {"the.generated.certificate", "\u751F\u6210\u7684\u8BC1\u4E66"},
+        {"the.generated.crl", "\u751F\u6210\u7684 CRL"},
+        {"the.generated.certificate.request", "\u751F\u6210\u7684\u8BC1\u4E66\u8BF7\u6C42"},
+        {"the.certificate", "\u8BC1\u4E66"},
+        {"the.crl", "CRL"},
+        {"the.tsa.certificate", "TSA \u8BC1\u4E66"},
+        {"the.input", "\u8F93\u5165"},
+        {"reply", "\u56DE\u590D"},
+        {"one.in.many", "%s #%d/%d"},
+        {"alias.in.cacerts", "cacerts \u4E2D\u7684\u53D1\u5E03\u8005 <%s>"},
+        {"alias.in.keystore", "\u53D1\u5E03\u8005 <%s>"},
+        {"with.weak", "%s (\u5F31)"},
+        {"key.bit", "%d \u4F4D %s \u5BC6\u94A5"},
+        {"key.bit.weak", "%d \u4F4D %s \u5BC6\u94A5 (\u5F31)"},
+        {".PATTERN.printX509Cert.with.weak",
+                "\u6240\u6709\u8005: {0}\n\u53D1\u5E03\u8005: {1}\n\u5E8F\u5217\u53F7: {2}\n\u751F\u6548\u65F6\u95F4: {3}, \u5931\u6548\u65F6\u95F4: {4}\n\u8BC1\u4E66\u6307\u7EB9:\n\t SHA1: {5}\n\t SHA256: {6}\n\u7B7E\u540D\u7B97\u6CD5\u540D\u79F0: {7}\n\u4E3B\u4F53\u516C\u5171\u5BC6\u94A5\u7B97\u6CD5: {8}\n\u7248\u672C: {9}"},
+        {"PKCS.10.with.weak",
+                "PKCS #10 \u8BC1\u4E66\u8BF7\u6C42 (\u7248\u672C 1.0)\n\u4E3B\u4F53: %s\n\u683C\u5F0F: %s\n\u516C\u5171\u5BC6\u94A5: %s\n\u7B7E\u540D\u7B97\u6CD5: %s\n"},
+        {"verified.by.s.in.s.weak", "\u7531 %2$s \u4E2D\u7684 %1$s \u4EE5 %3$s \u9A8C\u8BC1"},
+        {"whose.sigalg.risk", "%s \u4F7F\u7528\u7684 %s \u7B7E\u540D\u7B97\u6CD5\u5B58\u5728\u5B89\u5168\u98CE\u9669\u3002"},
+        {"whose.key.risk", "%s \u4F7F\u7528\u7684 %s \u5B58\u5728\u5B89\u5168\u98CE\u9669\u3002"},
     };
 
 
     /**
      * Returns the contents of this <code>ResourceBundle</code>.
+     *
+     * <p>
      *
      * @return the contents of this <code>ResourceBundle</code>.
      */

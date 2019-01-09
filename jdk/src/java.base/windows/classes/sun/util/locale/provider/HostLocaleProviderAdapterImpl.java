@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,6 +38,7 @@ import java.text.spi.NumberFormatProvider;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Currency;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
@@ -48,8 +49,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.spi.CalendarDataProvider;
+import java.util.spi.CalendarNameProvider;
 import java.util.spi.CurrencyNameProvider;
 import java.util.spi.LocaleNameProvider;
+import sun.text.spi.JavaTimeDateTimePatternProvider;
 import sun.util.spi.CalendarProvider;
 
 /**
@@ -82,6 +85,9 @@ public class HostLocaleProviderAdapterImpl {
     private static final int DN_LOCALE_REGION   = 4;
     private static final int DN_LOCALE_VARIANT  = 5;
 
+    // Windows Calendar IDs
+    private static final int CAL_JAPAN  = 3;
+
     // Native Calendar ID to LDML calendar type map
     private static final String[] calIDToLDML = {
         "",
@@ -96,14 +102,15 @@ public class HostLocaleProviderAdapterImpl {
         "gregory_fr",
         "gregory_ar",
         "gregory_en",
-        "gregory_fr",
+        "gregory_fr", "", "", "", "", "", "", "", "", "", "",
+        "islamic-umalqura",
     };
 
     // Caches
-    private static ConcurrentMap<Locale, SoftReference<AtomicReferenceArray<String>>> dateFormatCache = new ConcurrentHashMap<>();
-    private static ConcurrentMap<Locale, SoftReference<DateFormatSymbols>> dateFormatSymbolsCache = new ConcurrentHashMap<>();
-    private static ConcurrentMap<Locale, SoftReference<AtomicReferenceArray<String>>> numberFormatCache = new ConcurrentHashMap<>();
-    private static ConcurrentMap<Locale, SoftReference<DecimalFormatSymbols>> decimalFormatSymbolsCache = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<Locale, SoftReference<AtomicReferenceArray<String>>> dateFormatCache = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<Locale, SoftReference<DateFormatSymbols>> dateFormatSymbolsCache = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<Locale, SoftReference<AtomicReferenceArray<String>>> numberFormatCache = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<Locale, SoftReference<DecimalFormatSymbols>> decimalFormatSymbolsCache = new ConcurrentHashMap<>();
 
     private static final Set<Locale> supportedLocaleSet;
     private static final String nativeDisplayLanguage;
@@ -128,7 +135,7 @@ public class HostLocaleProviderAdapterImpl {
         }
         supportedLocaleSet = Collections.unmodifiableSet(tmpSet);
     }
-    private final static Locale[] supportedLocale = supportedLocaleSet.toArray(new Locale[0]);
+    private static final Locale[] supportedLocale = supportedLocaleSet.toArray(new Locale[0]);
 
     public static DateFormatProvider getDateFormatProvider() {
         return new DateFormatProvider() {
@@ -363,6 +370,50 @@ public class HostLocaleProviderAdapterImpl {
         };
     }
 
+    public static CalendarNameProvider getCalendarNameProvider() {
+        return new CalendarNameProvider() {
+            @Override
+            public Locale[] getAvailableLocales() {
+                return getSupportedCalendarLocales();
+            }
+
+            @Override
+            public boolean isSupportedLocale(Locale locale) {
+                return isSupportedCalendarLocale(locale);
+            }
+
+            @Override
+            public String getDisplayName(String calendarType, int field,
+                int value, int style, Locale locale) {
+                String[] names = getCalendarDisplayStrings(removeExtensions(locale).toLanguageTag(),
+                            getCalendarIDFromLDMLType(calendarType), field, style);
+                if (names != null && value >= 0 && value < names.length) {
+                    return names[value];
+                } else {
+                    return null;
+                }
+            }
+
+            @Override
+            public Map<String, Integer> getDisplayNames(String calendarType,
+                int field, int style, Locale locale) {
+                Map<String, Integer> map = null;
+                String[] names = getCalendarDisplayStrings(removeExtensions(locale).toLanguageTag(),
+                            getCalendarIDFromLDMLType(calendarType), field, style);
+                if (names != null) {
+                    map = new HashMap<>();
+                    for (int value = 0; value < names.length; value++) {
+                        if (names[value] != null) {
+                            map.put(names[value], value);
+                        }
+                    }
+                    map = map.isEmpty() ? null : map;
+                }
+                return map;
+            }
+        };
+    }
+
     public static CalendarProvider getCalendarProvider() {
         return new CalendarProvider() {
             @Override
@@ -475,6 +526,167 @@ public class HostLocaleProviderAdapterImpl {
         };
     }
 
+    public static JavaTimeDateTimePatternProvider getJavaTimeDateTimePatternProvider() {
+        return new JavaTimeDateTimePatternProvider() {
+            @Override
+            public Locale[] getAvailableLocales() {
+                return getSupportedCalendarLocales();
+            }
+
+            @Override
+            public boolean isSupportedLocale(Locale locale) {
+                return isSupportedCalendarLocale(locale);
+            }
+
+            @Override
+            public String getJavaTimeDateTimePattern(int timeStyle, int dateStyle, String calType, Locale locale) {
+                AtomicReferenceArray<String> patterns = getDateTimePatterns(locale);
+                String pattern = new StringBuilder(patterns.get(dateStyle / 2))
+                        .append(" ")
+                        .append(patterns.get(timeStyle / 2 + 2))
+                        .toString();
+                return toJavaTimeDateTimePattern(calType, pattern);
+
+            }
+
+            private AtomicReferenceArray<String> getDateTimePatterns(Locale locale) {
+                AtomicReferenceArray<String> patterns;
+                SoftReference<AtomicReferenceArray<String>> ref = dateFormatCache.get(locale);
+
+                if (ref == null || (patterns = ref.get()) == null) {
+                    String langtag = removeExtensions(locale).toLanguageTag();
+                    patterns = new AtomicReferenceArray<>(4);
+                    patterns.compareAndSet(0, null, convertDateTimePattern(
+                            getDateTimePattern(DateFormat.LONG, -1, langtag)));
+                    patterns.compareAndSet(1, null, convertDateTimePattern(
+                            getDateTimePattern(DateFormat.SHORT, -1, langtag)));
+                    patterns.compareAndSet(2, null, convertDateTimePattern(
+                            getDateTimePattern(-1, DateFormat.LONG, langtag)));
+                    patterns.compareAndSet(3, null, convertDateTimePattern(
+                            getDateTimePattern(-1, DateFormat.SHORT, langtag)));
+                    ref = new SoftReference<>(patterns);
+                    dateFormatCache.put(locale, ref);
+                }
+                return patterns;
+            }
+            /**
+             * This method will convert JRE Date/time Pattern String to JSR310
+             * type Date/Time Pattern
+             */
+            private String toJavaTimeDateTimePattern(String calendarType, String jrePattern) {
+                int length = jrePattern.length();
+                StringBuilder sb = new StringBuilder(length);
+                boolean inQuote = false;
+                int count = 0;
+                char lastLetter = 0;
+                for (int i = 0; i < length; i++) {
+                    char c = jrePattern.charAt(i);
+                    if (c == '\'') {
+                        // '' is treated as a single quote regardless of being
+                        // in a quoted section.
+                        if ((i + 1) < length) {
+                            char nextc = jrePattern.charAt(i + 1);
+                            if (nextc == '\'') {
+                                i++;
+                                if (count != 0) {
+                                    convert(calendarType, lastLetter, count, sb);
+                                    lastLetter = 0;
+                                    count = 0;
+                                }
+                                sb.append("''");
+                                continue;
+                            }
+                        }
+                        if (!inQuote) {
+                            if (count != 0) {
+                                convert(calendarType, lastLetter, count, sb);
+                                lastLetter = 0;
+                                count = 0;
+                            }
+                            inQuote = true;
+                        } else {
+                            inQuote = false;
+                        }
+                        sb.append(c);
+                        continue;
+                    }
+                    if (inQuote) {
+                        sb.append(c);
+                        continue;
+                    }
+                    if (!(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z')) {
+                        if (count != 0) {
+                            convert(calendarType, lastLetter, count, sb);
+                            lastLetter = 0;
+                            count = 0;
+                        }
+                        sb.append(c);
+                        continue;
+                    }
+                    if (lastLetter == 0 || lastLetter == c) {
+                        lastLetter = c;
+                        count++;
+                        continue;
+                    }
+                    convert(calendarType, lastLetter, count, sb);
+                    lastLetter = c;
+                    count = 1;
+                }
+                if (inQuote) {
+                    // should not come here.
+                    // returning null so that FALLBACK provider will kick in.
+                    return null;
+                }
+                if (count != 0) {
+                    convert(calendarType, lastLetter, count, sb);
+                }
+                return sb.toString();
+            }
+
+            private void convert(String calendarType, char letter, int count, StringBuilder sb) {
+                switch (letter) {
+                    case 'G':
+                        if (calendarType.equals("japanese")) {
+                            if (count >= 4) {
+                                count = 1;
+                            } else {
+                                count = 5;
+                            }
+                        } else if (!calendarType.equals("iso8601")) {
+                            // Adjust the number of 'G's
+                            // Gregorian calendar is iso8601 for java.time
+                            if (count >= 4) {
+                                // JRE full -> JavaTime full
+                                count = 4;
+                            } else {
+                                // JRE short -> JavaTime short
+                                count = 1;
+                            }
+                        }
+                        break;
+                    case 'y':
+                        if (calendarType.equals("japanese") && count >= 4) {
+                            // JRE specific "gan-nen" support
+                            count = 1;
+                        }
+                        break;
+                    default:
+                        // JSR 310 and CLDR define 5-letter patterns for narrow text.
+                        if (count > 4) {
+                            count = 4;
+                        }
+                        break;
+                }
+                appendN(letter, count, sb);
+            }
+
+            private void appendN(char c, int n, StringBuilder sb) {
+                for (int i = 0; i < n; i++) {
+                    sb.append(c);
+                }
+            }
+        };
+    }
 
     private static String convertDateTimePattern(String winPattern) {
         String ret = winPattern.replaceAll("dddd", "EEEE");
@@ -497,15 +709,7 @@ public class HostLocaleProviderAdapterImpl {
     }
 
     private static boolean isSupportedCalendarLocale(Locale locale) {
-        Locale base = locale;
-
-        if (base.hasExtensions() || base.getVariant() != "") {
-            // strip off extensions and variant.
-            base = new Locale.Builder()
-                            .setLocale(locale)
-                            .clearExtensions()
-                            .build();
-        }
+        Locale base = stripVariantAndExtensions(locale);
 
         if (!supportedLocaleSet.contains(base)) {
             return false;
@@ -570,11 +774,23 @@ public class HostLocaleProviderAdapterImpl {
     }
 
     private static boolean isJapaneseCalendar() {
-        return getCalendarID("ja-JP") == 3; // 3: CAL_JAPAN
+        return getCalendarID("ja-JP") == CAL_JAPAN;
+    }
+
+    private static Locale stripVariantAndExtensions(Locale locale) {
+        if (locale.hasExtensions() || locale.getVariant() != "") {
+            // strip off extensions and variant.
+            locale = new Locale.Builder()
+                            .setLocale(locale)
+                            .clearExtensions()
+                            .build();
+        }
+
+        return locale;
     }
 
     private static Locale getCalendarLocale(Locale locale) {
-        int calid = getCalendarID(locale.toLanguageTag());
+        int calid = getCalendarID(stripVariantAndExtensions(locale).toLanguageTag());
         if (calid > 0 && calid < calIDToLDML.length) {
             Locale.Builder lb = new Locale.Builder();
             String[] caltype = calIDToLDML[calid].split("_");
@@ -588,6 +804,15 @@ public class HostLocaleProviderAdapterImpl {
         }
 
         return locale;
+    }
+
+    private static int getCalendarIDFromLDMLType(String ldmlType) {
+        for (int i = 0; i < calIDToLDML.length; i++) {
+            if (calIDToLDML[i].startsWith(ldmlType)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static Locale getNumberLocale(Locale src) {
@@ -639,6 +864,9 @@ public class HostLocaleProviderAdapterImpl {
 
     // For CalendarDataProvider
     private static native int getCalendarDataValue(String langTag, int type);
+
+    // For CalendarNameProvider
+    private static native String[] getCalendarDisplayStrings(String langTag, int calid, int field, int style);
 
     // For Locale/CurrencyNameProvider
     private static native String getDisplayString(String langTag, int key, String value);

@@ -1,12 +1,10 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -29,12 +27,14 @@
  * @summary Make sure extraction of non-private APIs work as expected.
  * @library /tools/lib
  * @modules jdk.compiler/com.sun.tools.javac.api
- *          jdk.compiler/com.sun.tools.javac.file
  *          jdk.compiler/com.sun.tools.javac.main
  *          jdk.compiler/com.sun.tools.sjavac
- * @build Wrapper ToolBox
+ *          jdk.compiler/com.sun.tools.sjavac.options
+ *          jdk.compiler/com.sun.tools.sjavac.pubapi
+ * @build Wrapper toolbox.ToolBox toolbox.JavacTask
  * @run main Wrapper ApiExtraction
  */
+
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static javax.lang.model.element.Modifier.FINAL;
@@ -58,6 +58,8 @@ import com.sun.tools.sjavac.pubapi.PubType;
 import com.sun.tools.sjavac.pubapi.PubVar;
 import com.sun.tools.sjavac.pubapi.ReferenceTypeDesc;
 
+import toolbox.JavacTask;
+import toolbox.ToolBox;
 
 public class ApiExtraction {
     public static void main(String[] args) throws IOException {
@@ -88,12 +90,13 @@ public class ApiExtraction {
                 "}");
 
         // Create class file to extract API from
-        new ToolBox().new JavacTask().sources(testSrc).run();
+        new JavacTask(new ToolBox()).sources(testSrc).run();
 
         // Extract PubApi
-        Options options = Options.parseArgs("-d", "bin", "-cp", ".");
+        Options options = Options.parseArgs("-d", "bin", "--state-dir=bin", "-cp", ".");
         PubApiExtractor pubApiExtr = new PubApiExtractor(options);
         PubApi actualApi = pubApiExtr.getPubApi("TestClass");
+        pubApiExtr.close();
 
         // Validate result
         PubApi expectedApi = getExpectedPubApi();

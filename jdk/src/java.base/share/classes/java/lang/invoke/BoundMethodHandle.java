@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,23 +25,25 @@
 
 package java.lang.invoke;
 
-import static jdk.internal.org.objectweb.asm.Opcodes.*;
-import static java.lang.invoke.LambdaForm.*;
-import static java.lang.invoke.LambdaForm.BasicType.*;
-import static java.lang.invoke.MethodHandleStatics.*;
+import jdk.internal.loader.BootLoader;
+import jdk.internal.org.objectweb.asm.ClassWriter;
+import jdk.internal.org.objectweb.asm.FieldVisitor;
+import jdk.internal.org.objectweb.asm.MethodVisitor;
+import jdk.internal.vm.annotation.Stable;
+import sun.invoke.util.ValueConversions;
+import sun.invoke.util.Wrapper;
 
 import java.lang.invoke.LambdaForm.NamedFunction;
 import java.lang.invoke.MethodHandles.Lookup;
 import java.lang.reflect.Field;
-import java.util.Arrays;
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.Function;
 
-import sun.invoke.util.ValueConversions;
-import sun.invoke.util.Wrapper;
-
-import jdk.internal.org.objectweb.asm.ClassWriter;
-import jdk.internal.org.objectweb.asm.MethodVisitor;
-import jdk.internal.org.objectweb.asm.Type;
+import static java.lang.invoke.LambdaForm.BasicType;
+import static java.lang.invoke.LambdaForm.BasicType.*;
+import static java.lang.invoke.MethodHandleStatics.*;
+import static jdk.internal.org.objectweb.asm.Opcodes.*;
 
 /**
  * The flavor of method handle which emulates an invoke instruction
@@ -78,7 +80,7 @@ import jdk.internal.org.objectweb.asm.Type;
             default : throw newInternalError("unexpected xtype: " + xtype);
             }
         } catch (Throwable t) {
-            throw newInternalError(t);
+            throw uncaughtException(t);
         }
     }
 
@@ -164,12 +166,16 @@ import jdk.internal.org.objectweb.asm.Type;
     }
 
     @Override
-    final Object internalValues() {
-        Object[] boundValues = new Object[speciesData().fieldCount()];
-        for (int i = 0; i < boundValues.length; ++i) {
-            boundValues[i] = arg(i);
+    final String internalValues() {
+        int count = speciesData().fieldCount();
+        if (count == 1) {
+            return "[" + arg(0) + "]";
         }
-        return Arrays.asList(boundValues);
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < count; ++i) {
+            sb.append("\n  ").append(i).append(": ( ").append(arg(i)).append(" )");
+        }
+        return sb.append("\n]").toString();
     }
 
     /*non-public*/ final Object arg(int i) {
@@ -182,7 +188,7 @@ import jdk.internal.org.objectweb.asm.Type;
             case D_TYPE: return (double) speciesData().getters[i].invokeBasic(this);
             }
         } catch (Throwable ex) {
-            throw newInternalError(ex);
+            throw uncaughtException(ex);
         }
         throw new InternalError("unexpected type: " + speciesData().typeChars+"."+i);
     }
@@ -217,7 +223,7 @@ import jdk.internal.org.objectweb.asm.Type;
         /*non-public*/ int fieldCount() {
             return 1;
         }
-        /*non-public*/ static final SpeciesData SPECIES_DATA = SpeciesData.getForClass("L", Species_L.class);
+        /*non-public*/ static final SpeciesData SPECIES_DATA = new SpeciesData("L", Species_L.class);
         /*non-public*/ static BoundMethodHandle make(MethodType mt, LambdaForm lf, Object argL0) {
             return new Species_L(mt, lf, argL0);
         }
@@ -301,7 +307,7 @@ import jdk.internal.org.objectweb.asm.Type;
         /*non-public*/ char fieldTypeChar(int i) {
             return typeChars.charAt(i);
         }
-        Object fieldSignature() {
+        String fieldSignature() {
             return typeChars;
         }
         public Class<? extends BoundMethodHandle> fieldHolder() {
@@ -335,7 +341,7 @@ import jdk.internal.org.objectweb.asm.Type;
 
         static final SpeciesData EMPTY = new SpeciesData("", BoundMethodHandle.class);
 
-        private SpeciesData(String types, Class<? extends BoundMethodHandle> clazz) {
+        SpeciesData(String types, Class<? extends BoundMethodHandle> clazz) {
             this.typeChars = types;
             this.typeCodes = basicTypes(types);
             this.clazz = clazz;
@@ -355,26 +361,14 @@ import jdk.internal.org.objectweb.asm.Type;
             assert(!INIT_DONE);
             if (constructor() == null) {
                 String types = typeChars;
+                CACHE.put(types, this);
                 Factory.makeCtors(clazz, types, this.constructor);
                 Factory.makeGetters(clazz, types, this.getters);
                 Factory.makeNominalGetters(types, this.nominalGetters, this.getters);
             }
         }
 
-        private SpeciesData(String typeChars) {
-            // Placeholder only.
-            this.typeChars = typeChars;
-            this.typeCodes = basicTypes(typeChars);
-            this.clazz = null;
-            this.constructor = null;
-            this.getters = null;
-            this.nominalGetters = null;
-            this.extensions = null;
-        }
-        private boolean isPlaceholder() { return clazz == null; }
-
-        private static final HashMap<String, SpeciesData> CACHE = new HashMap<>();
-        static { CACHE.put("", EMPTY); }  // make bootstrap predictable
+        private static final ConcurrentMap<String, SpeciesData> CACHE = new ConcurrentHashMap<>();
         private static final boolean INIT_DONE;  // set after <clinit> finishes...
 
         SpeciesData extendWith(byte type) {
@@ -390,62 +384,48 @@ import jdk.internal.org.objectweb.asm.Type;
         }
 
         private static SpeciesData get(String types) {
-            // Acquire cache lock for query.
-            SpeciesData d = lookupCache(types);
-            if (!d.isPlaceholder())
-                return d;
-            synchronized (d) {
-                // Use synch. on the placeholder to prevent multiple instantiation of one species.
-                // Creating this class forces a recursive call to getForClass.
-                if (lookupCache(types).isPlaceholder())
-                    Factory.generateConcreteBMHClass(types);
+            return CACHE.computeIfAbsent(types, new Function<String, SpeciesData>() {
+                @Override
+                public SpeciesData apply(String types) {
+                    Class<? extends BoundMethodHandle> bmhcl = Factory.getConcreteBMHClass(types);
+                    // SpeciesData instantiation may throw VirtualMachineError because of
+                    // code cache overflow...
+                    SpeciesData speciesData = new SpeciesData(types, bmhcl);
+                    // CHM.computeIfAbsent ensures only one SpeciesData will be set
+                    // successfully on the concrete BMH class if ever
+                    Factory.setSpeciesDataToConcreteBMHClass(bmhcl, speciesData);
+                    // the concrete BMH class is published via SpeciesData instance
+                    // returned here only after it's SPECIES_DATA field is set
+                    return speciesData;
+                }
+            });
+        }
+
+        /**
+         * This is to be called when assertions are enabled. It checks whether SpeciesData for all of the statically
+         * defined species subclasses of BoundMethodHandle has been added to the SpeciesData cache. See below in the
+         * static initializer for
+         */
+        static boolean speciesDataCachePopulated() {
+            Class<BoundMethodHandle> rootCls = BoundMethodHandle.class;
+            for (Class<?> c : rootCls.getDeclaredClasses()) {
+                if (rootCls.isAssignableFrom(c)) {
+                    final Class<? extends BoundMethodHandle> cbmh = c.asSubclass(BoundMethodHandle.class);
+                    SpeciesData d = Factory.getSpeciesDataFromConcreteBMHClass(cbmh);
+                    assert(d != null) : cbmh.getName();
+                    assert(d.clazz == cbmh);
+                    assert(CACHE.get(d.typeChars) == d);
+                }
             }
-            // Reacquire cache lock.
-            d = lookupCache(types);
-            // Class loading must have upgraded the cache.
-            assert(d != null && !d.isPlaceholder());
-            return d;
-        }
-        static SpeciesData getForClass(String types, Class<? extends BoundMethodHandle> clazz) {
-            // clazz is a new class which is initializing its SPECIES_DATA field
-            return updateCache(types, new SpeciesData(types, clazz));
-        }
-        private static synchronized SpeciesData lookupCache(String types) {
-            SpeciesData d = CACHE.get(types);
-            if (d != null)  return d;
-            d = new SpeciesData(types);
-            assert(d.isPlaceholder());
-            CACHE.put(types, d);
-            return d;
-        }
-        private static synchronized SpeciesData updateCache(String types, SpeciesData d) {
-            SpeciesData d2;
-            assert((d2 = CACHE.get(types)) == null || d2.isPlaceholder());
-            assert(!d.isPlaceholder());
-            CACHE.put(types, d);
-            return d;
+            return true;
         }
 
         static {
-            // pre-fill the BMH speciesdata cache with BMH's inner classes
-            final Class<BoundMethodHandle> rootCls = BoundMethodHandle.class;
-            try {
-                for (Class<?> c : rootCls.getDeclaredClasses()) {
-                    if (rootCls.isAssignableFrom(c)) {
-                        final Class<? extends BoundMethodHandle> cbmh = c.asSubclass(BoundMethodHandle.class);
-                        SpeciesData d = Factory.speciesDataFromConcreteBMHClass(cbmh);
-                        assert(d != null) : cbmh.getName();
-                        assert(d.clazz == cbmh);
-                        assert(d == lookupCache(d.typeChars));
-                    }
-                }
-            } catch (Throwable e) {
-                throw newInternalError(e);
-            }
-
-            for (SpeciesData d : CACHE.values()) {
-                d.initForBootstrap();
-            }
+            // Pre-fill the BMH species-data cache with EMPTY and all BMH's inner subclasses.
+            EMPTY.initForBootstrap();
+            Species_L.SPECIES_DATA.initForBootstrap();
+            // check that all static SpeciesData instances have been initialized
+            assert speciesDataCachePopulated();
             // Note:  Do not simplify this, because INIT_DONE must not be
             // a compile-time constant during bootstrapping.
             INIT_DONE = Boolean.TRUE;
@@ -479,9 +459,11 @@ import jdk.internal.org.objectweb.asm.Type;
         static final String BMH_SIG  = "L"+BMH+";";
         static final String SPECIES_DATA     = "java/lang/invoke/BoundMethodHandle$SpeciesData";
         static final String SPECIES_DATA_SIG = "L"+SPECIES_DATA+";";
+        static final String STABLE_SIG       = "Ljdk/internal/vm/annotation/Stable;";
 
         static final String SPECIES_PREFIX_NAME = "Species_";
         static final String SPECIES_PREFIX_PATH = BMH + "$" + SPECIES_PREFIX_NAME;
+        static final String SPECIES_CLASS_PREFIX = SPECIES_PREFIX_PATH.replace('/', '.');
 
         static final String BMHSPECIES_DATA_EWI_SIG = "(B)" + SPECIES_DATA_SIG;
         static final String BMHSPECIES_DATA_GFC_SIG = "(" + JLS_SIG + JLC_SIG + ")" + SPECIES_DATA_SIG;
@@ -492,6 +474,38 @@ import jdk.internal.org.objectweb.asm.Type;
         static final String SIG_INCIPIT = "(Ljava/lang/invoke/MethodType;Ljava/lang/invoke/LambdaForm;";
 
         static final String[] E_THROWABLE = new String[] { "java/lang/Throwable" };
+
+        static final ConcurrentMap<String, Class<? extends BoundMethodHandle>> CLASS_CACHE = new ConcurrentHashMap<>();
+
+        /**
+         * Get a concrete subclass of BMH for a given combination of bound types.
+         *
+         * @param types the type signature, wherein reference types are erased to 'L'
+         * @return the concrete BMH class
+         */
+        static Class<? extends BoundMethodHandle> getConcreteBMHClass(String types) {
+            // CHM.computeIfAbsent ensures generateConcreteBMHClass is called
+            // only once per key.
+            return CLASS_CACHE.computeIfAbsent(
+                types, new Function<String, Class<? extends BoundMethodHandle>>() {
+                    @Override
+                    public Class<? extends BoundMethodHandle> apply(String types) {
+                        String shortTypes = LambdaForm.shortenSignature(types);
+                        String className = SPECIES_CLASS_PREFIX + shortTypes;
+                        Class<?> c = BootLoader.loadClassOrNull(className);
+                        if (TRACE_RESOLVE) {
+                            System.out.println("[BMH_RESOLVE] " + shortTypes +
+                                    (c != null ? " (success)" : " (fail)") );
+                        }
+                        if (c != null) {
+                            return c.asSubclass(BoundMethodHandle.class);
+                        } else {
+                            // Not pregenerated, generate the class
+                            return generateConcreteBMHClass(shortTypes, types);
+                        }
+                    }
+                });
+        }
 
         /**
          * Generate a concrete subclass of BMH for a given combination of bound types.
@@ -529,7 +543,7 @@ import jdk.internal.org.objectweb.asm.Type;
          *     }
          *     final SpeciesData speciesData() { return SPECIES_DATA; }
          *     final int fieldCount() { return 3; }
-         *     static final SpeciesData SPECIES_DATA = SpeciesData.getForClass("LLI", Species_LLI.class);
+         *     &#64;Stable static SpeciesData SPECIES_DATA; // injected afterwards
          *     static BoundMethodHandle make(MethodType mt, LambdaForm lf, Object argL0, Object argL1, int argI2) {
          *         return new Species_LLI(mt, lf, argL0, argL1, argI2);
          *     }
@@ -557,18 +571,38 @@ import jdk.internal.org.objectweb.asm.Type;
          * @param types the type signature, wherein reference types are erased to 'L'
          * @return the generated concrete BMH class
          */
-        static Class<? extends BoundMethodHandle> generateConcreteBMHClass(String types) {
-            final ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS + ClassWriter.COMPUTE_FRAMES);
+        static Class<? extends BoundMethodHandle> generateConcreteBMHClass(String shortTypes,
+                String types) {
+            final String className  = speciesInternalClassName(shortTypes);
+            byte[] classFile = generateConcreteBMHClassBytes(shortTypes, types, className);
 
-            String shortTypes = LambdaForm.shortenSignature(types);
-            final String className  = SPECIES_PREFIX_PATH + shortTypes;
+            // load class
+            InvokerBytecodeGenerator.maybeDump(className, classFile);
+            Class<? extends BoundMethodHandle> bmhClass =
+                UNSAFE.defineClass(className, classFile, 0, classFile.length,
+                                   BoundMethodHandle.class.getClassLoader(), null)
+                    .asSubclass(BoundMethodHandle.class);
+
+            return bmhClass;
+        }
+
+        static String speciesInternalClassName(String shortTypes) {
+            return SPECIES_PREFIX_PATH + shortTypes;
+        }
+
+        static byte[] generateConcreteBMHClassBytes(final String shortTypes,
+                final String types, final String className) {
             final String sourceFile = SPECIES_PREFIX_NAME + shortTypes;
+
+            final ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS + ClassWriter.COMPUTE_FRAMES);
             final int NOT_ACC_PUBLIC = 0;  // not ACC_PUBLIC
             cw.visit(V1_6, NOT_ACC_PUBLIC + ACC_FINAL + ACC_SUPER, className, null, BMH, null);
             cw.visitSource(sourceFile, null);
 
             // emit static types and SPECIES_DATA fields
-            cw.visitField(NOT_ACC_PUBLIC + ACC_STATIC, "SPECIES_DATA", SPECIES_DATA_SIG, null, null).visitEnd();
+            FieldVisitor fw = cw.visitField(NOT_ACC_PUBLIC + ACC_STATIC, "SPECIES_DATA", SPECIES_DATA_SIG, null, null);
+            fw.visitAnnotation(STABLE_SIG, true);
+            fw.visitEnd();
 
             // emit bound argument fields
             for (int i = 0; i < types.length(); ++i) {
@@ -694,30 +728,9 @@ import jdk.internal.org.objectweb.asm.Type;
                 mv.visitEnd();
             }
 
-            // emit class initializer
-            mv = cw.visitMethod(NOT_ACC_PUBLIC | ACC_STATIC, "<clinit>", VOID_SIG, null, null);
-            mv.visitCode();
-            mv.visitLdcInsn(types);
-            mv.visitLdcInsn(Type.getObjectType(className));
-            mv.visitMethodInsn(INVOKESTATIC, SPECIES_DATA, "getForClass", BMHSPECIES_DATA_GFC_SIG, false);
-            mv.visitFieldInsn(PUTSTATIC, className, "SPECIES_DATA", SPECIES_DATA_SIG);
-            mv.visitInsn(RETURN);
-            mv.visitMaxs(0, 0);
-            mv.visitEnd();
-
             cw.visitEnd();
 
-            // load class
-            final byte[] classFile = cw.toByteArray();
-            InvokerBytecodeGenerator.maybeDump(className, classFile);
-            Class<? extends BoundMethodHandle> bmhClass =
-                //UNSAFE.defineAnonymousClass(BoundMethodHandle.class, classFile, null).asSubclass(BoundMethodHandle.class);
-                UNSAFE.defineClass(className, classFile, 0, classFile.length,
-                                   BoundMethodHandle.class.getClassLoader(), null)
-                    .asSubclass(BoundMethodHandle.class);
-            UNSAFE.ensureClassInitialized(bmhClass);
-
-            return bmhClass;
+            return cw.toByteArray();
         }
 
         private static int typeLoadOp(char t) {
@@ -785,10 +798,21 @@ import jdk.internal.org.objectweb.asm.Type;
         // Auxiliary methods.
         //
 
-        static SpeciesData speciesDataFromConcreteBMHClass(Class<? extends BoundMethodHandle> cbmh) {
+        static SpeciesData getSpeciesDataFromConcreteBMHClass(Class<? extends BoundMethodHandle> cbmh) {
             try {
                 Field F_SPECIES_DATA = cbmh.getDeclaredField("SPECIES_DATA");
                 return (SpeciesData) F_SPECIES_DATA.get(null);
+            } catch (ReflectiveOperationException ex) {
+                throw newInternalError(ex);
+            }
+        }
+
+        static void setSpeciesDataToConcreteBMHClass(Class<? extends BoundMethodHandle> cbmh, SpeciesData speciesData) {
+            try {
+                Field F_SPECIES_DATA = cbmh.getDeclaredField("SPECIES_DATA");
+                // ## FIXME: annotation parser can't create proxy classes until module system is fully initialzed
+                // assert F_SPECIES_DATA.getDeclaredAnnotation(Stable.class) != null;
+                F_SPECIES_DATA.set(null, speciesData);
             } catch (ReflectiveOperationException ex) {
                 throw newInternalError(ex);
             }
@@ -814,21 +838,21 @@ import jdk.internal.org.objectweb.asm.Type;
 
         static MethodHandle makeCbmhCtor(Class<? extends BoundMethodHandle> cbmh, String types) {
             try {
-                return LOOKUP.findStatic(cbmh, "make", MethodType.fromMethodDescriptorString(makeSignature(types, false), null));
+                return LOOKUP.findStatic(cbmh, "make", MethodType.fromDescriptor(makeSignature(types, false), null));
             } catch (NoSuchMethodException | IllegalAccessException | IllegalArgumentException | TypeNotPresentException e) {
                 throw newInternalError(e);
             }
         }
     }
 
-    private static final Lookup LOOKUP = Lookup.IMPL_LOOKUP;
+    static final Lookup LOOKUP = Lookup.IMPL_LOOKUP;
 
     /**
      * All subclasses must provide such a value describing their type signature.
      */
     static final SpeciesData SPECIES_DATA = SpeciesData.EMPTY;
 
-    private static final SpeciesData[] SPECIES_DATA_CACHE = new SpeciesData[5];
+    private static final SpeciesData[] SPECIES_DATA_CACHE = new SpeciesData[6];
     private static SpeciesData checkCache(int size, String types) {
         int idx = size - 1;
         SpeciesData data = SPECIES_DATA_CACHE[idx];
@@ -836,9 +860,9 @@ import jdk.internal.org.objectweb.asm.Type;
         SPECIES_DATA_CACHE[idx] = data = getSpeciesData(types);
         return data;
     }
-    static SpeciesData speciesData_L()     { return checkCache(1, "L"); }
-    static SpeciesData speciesData_LL()    { return checkCache(2, "LL"); }
-    static SpeciesData speciesData_LLL()   { return checkCache(3, "LLL"); }
-    static SpeciesData speciesData_LLLL()  { return checkCache(4, "LLLL"); }
-    static SpeciesData speciesData_LLLLL() { return checkCache(5, "LLLLL"); }
+    static SpeciesData speciesData_L()      { return checkCache(1, "L"); }
+    static SpeciesData speciesData_LL()     { return checkCache(2, "LL"); }
+    static SpeciesData speciesData_LLL()    { return checkCache(3, "LLL"); }
+    static SpeciesData speciesData_LLLL()   { return checkCache(4, "LLLL"); }
+    static SpeciesData speciesData_LLLLL()  { return checkCache(5, "LLLLL"); }
 }

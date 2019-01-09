@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -49,9 +49,9 @@ public abstract class AudioFileReader {
      * must point to valid audio file data. In general, audio file readers may
      * need to read some data from the stream before determining whether they
      * support it. These parsers must be able to mark the stream, read enough
-     * data to determine whether they support the stream, and, if not, reset the
-     * stream's read pointer to its original position. If the input stream does
-     * not support this, this method may fail with an {@code IOException}.
+     * data to determine whether they support the stream, and reset the stream's
+     * read pointer to its original position. If the input stream does not
+     * support this, this method may fail with an {@code IOException}.
      *
      * @param  stream the input stream from which file format information should
      *         be extracted
@@ -60,6 +60,7 @@ public abstract class AudioFileReader {
      * @throws UnsupportedAudioFileException if the stream does not point to
      *         valid audio file data recognized by the system
      * @throws IOException if an I/O exception occurs
+     * @throws NullPointerException if {@code stream} is {@code null}
      * @see InputStream#markSupported
      * @see InputStream#mark
      */
@@ -77,6 +78,7 @@ public abstract class AudioFileReader {
      * @throws UnsupportedAudioFileException if the URL does not point to valid
      *         audio file data recognized by the system
      * @throws IOException if an I/O exception occurs
+     * @throws NullPointerException if {@code url} is {@code null}
      */
     public abstract AudioFileFormat getAudioFileFormat(URL url)
             throws UnsupportedAudioFileException, IOException;
@@ -92,6 +94,7 @@ public abstract class AudioFileReader {
      * @throws UnsupportedAudioFileException if the {@code File} does not point
      *         to valid audio file data recognized by the system
      * @throws IOException if an I/O exception occurs
+     * @throws NullPointerException if {@code file} is {@code null}
      */
     public abstract AudioFileFormat getAudioFileFormat(File file)
             throws UnsupportedAudioFileException, IOException;
@@ -101,9 +104,9 @@ public abstract class AudioFileReader {
      * must point to valid audio file data. In general, audio file readers may
      * need to read some data from the stream before determining whether they
      * support it. These parsers must be able to mark the stream, read enough
-     * data to determine whether they support the stream, and, if not, reset the
-     * stream's read pointer to its original position. If the input stream does
-     * not support this, this method may fail with an {@code IOException}.
+     * data to determine whether they support the stream, and reset the stream's
+     * read pointer to its original position. If the input stream does not
+     * support this, this method may fail with an {@code IOException}.
      *
      * @param  stream the input stream from which the {@code AudioInputStream}
      *         should be constructed
@@ -112,6 +115,7 @@ public abstract class AudioFileReader {
      * @throws UnsupportedAudioFileException if the stream does not point to
      *         valid audio file data recognized by the system
      * @throws IOException if an I/O exception occurs
+     * @throws NullPointerException if {@code stream} is {@code null}
      * @see InputStream#markSupported
      * @see InputStream#mark
      */
@@ -129,6 +133,7 @@ public abstract class AudioFileReader {
      * @throws UnsupportedAudioFileException if the URL does not point to valid
      *         audio file data recognized by the system
      * @throws IOException if an I/O exception occurs
+     * @throws NullPointerException if {@code url} is {@code null}
      */
     public abstract AudioInputStream getAudioInputStream(URL url)
             throws UnsupportedAudioFileException, IOException;
@@ -144,6 +149,7 @@ public abstract class AudioFileReader {
      * @throws UnsupportedAudioFileException if the {@code File} does not point
      *         to valid audio file data recognized by the system
      * @throws IOException if an I/O exception occurs
+     * @throws NullPointerException if {@code file} is {@code null}
      */
     public abstract AudioInputStream getAudioInputStream(File file)
             throws UnsupportedAudioFileException, IOException;

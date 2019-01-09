@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@ package javax.swing.text;
 import java.util.Arrays;
 import java.awt.*;
 import java.awt.font.TextAttribute;
+import java.awt.geom.Rectangle2D;
 import javax.swing.event.*;
 import javax.swing.SizeRequirements;
 
@@ -61,20 +62,8 @@ public class ParagraphView extends FlowView implements TabExpander {
         Object i18nFlag = doc.getProperty(AbstractDocument.I18NProperty);
         if ((i18nFlag != null) && i18nFlag.equals(Boolean.TRUE)) {
             try {
-                if (i18nStrategy == null) {
-                    // the classname should probably come from a property file.
-                    String classname = "javax.swing.text.TextLayoutStrategy";
-                    ClassLoader loader = getClass().getClassLoader();
-                    if (loader != null) {
-                        i18nStrategy = loader.loadClass(classname);
-                    } else {
-                        i18nStrategy = Class.forName(classname);
-                    }
-                }
-                Object o = i18nStrategy.newInstance();
-                if (o instanceof FlowStrategy) {
-                    strategy = (FlowStrategy) o;
-                }
+                // the classname should probably come from a property file.
+                strategy = new TextLayoutStrategy();
             } catch (Throwable e) {
                 throw new StateInvariantError("ParagraphView: Can't create i18n strategy: "
                                               + e.getMessage());
@@ -189,6 +178,7 @@ public class ParagraphView extends FlowView implements TabExpander {
      * @return the location in the model that represents the
      *  next location visual position
      */
+    @SuppressWarnings("deprecation")
     protected int getNextNorthSouthVisualPositionFrom(int pos, Position.Bias b,
                                                       Shape a, int direction,
                                                       Position.Bias[] biasRet)
@@ -263,6 +253,7 @@ public class ParagraphView extends FlowView implements TabExpander {
     // NOTE: This will not properly work if ParagraphView contains
     // other ParagraphViews. It won't raise, but this does not message
     // the children views with getNextVisualPositionFrom.
+    @SuppressWarnings("deprecation")
     protected int getClosestPositionTo(int pos, Position.Bias b, Shape a,
                                        int direction, Position.Bias[] biasRet,
                                        int rowIndex, int x)
@@ -900,16 +891,14 @@ public class ParagraphView extends FlowView implements TabExpander {
             int height = r.height;
             int y = r.y;
             Shape loc = super.modelToView(pos, a, b);
-            r = loc.getBounds();
-            r.height = height;
-            r.y = y;
-            return r;
+            Rectangle2D bounds = loc.getBounds2D();
+            bounds.setRect(bounds.getX(), y, bounds.getWidth(), height);
+            return bounds;
         }
 
         /**
          * Range represented by a row in the paragraph is only
          * a subset of the total range of the paragraph element.
-         * @see View#getRange
          */
         public int getStartOffset() {
             int offs = Integer.MAX_VALUE;
@@ -1184,11 +1173,11 @@ public class ParagraphView extends FlowView implements TabExpander {
                            lineSpacing);
         }
 
-        final static int SPACE_ADDON = 0;
-        final static int SPACE_ADDON_LEFTOVER_END = 1;
-        final static int START_JUSTIFIABLE = 2;
+        static final int SPACE_ADDON = 0;
+        static final int SPACE_ADDON_LEFTOVER_END = 1;
+        static final int START_JUSTIFIABLE = 2;
         //this should be the last index in justificationData
-        final static int END_JUSTIFIABLE = 3;
+        static final int END_JUSTIFIABLE = 3;
 
         int justificationData[] = null;
     }

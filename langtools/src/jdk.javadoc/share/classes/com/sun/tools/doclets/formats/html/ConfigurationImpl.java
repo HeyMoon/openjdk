@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,8 @@ import java.net.*;
 import java.util.*;
 
 import javax.tools.JavaFileManager;
+import javax.tools.JavaFileManager.Location;
+import javax.tools.StandardLocation;
 
 import com.sun.javadoc.*;
 import com.sun.tools.doclets.formats.html.markup.*;
@@ -38,7 +40,8 @@ import com.sun.tools.doclint.DocLint;
 import com.sun.tools.javac.file.JavacFileManager;
 import com.sun.tools.javac.util.Context;
 import com.sun.tools.javac.util.StringUtils;
-import com.sun.tools.javadoc.RootDocImpl;
+import com.sun.tools.javadoc.main.JavaScriptScanner;
+import com.sun.tools.javadoc.main.RootDocImpl;
 
 /**
  * Configure the output based on the command line options.
@@ -63,6 +66,7 @@ import com.sun.tools.javadoc.RootDocImpl;
  * @author Jamie Ho
  * @author Bhavesh Patel (Modified)
  */
+@Deprecated
 public class ConfigurationImpl extends Configuration {
 
     /**
@@ -186,6 +190,11 @@ public class ConfigurationImpl extends Configuration {
     public Set<String> doclintOpts = new LinkedHashSet<>();
 
     /**
+     * Whether or not to check for JavaScript in doc comments.
+     */
+    private boolean allowScriptInComments;
+
+    /**
      * Unique Resource Handler for this package.
      */
     public final MessageRetriever standardmessage;
@@ -200,6 +209,18 @@ public class ConfigurationImpl extends Configuration {
      * The classdoc for the class file getting generated.
      */
     public ClassDoc currentcd = null;  // Set this classdoc in the ClassWriter.
+
+    protected List<SearchIndexItem> memberSearchIndex = new ArrayList<>();
+
+    protected List<SearchIndexItem> packageSearchIndex = new ArrayList<>();
+
+    protected List<SearchIndexItem> tagSearchIndex = new ArrayList<>();
+
+    protected List<SearchIndexItem> typeSearchIndex = new ArrayList<>();
+
+    protected Map<Character,List<SearchIndexItem>> tagSearchIndexMap = new HashMap<>();
+
+    protected Set<Character> tagSearchIndexKeys;
 
     /**
      * Constructor. Initializes resource for the
@@ -294,8 +315,11 @@ public class ConfigurationImpl extends Configuration {
                 doclintOpts.add(DocLint.XMSGS_CUSTOM_PREFIX + opt.substring(opt.indexOf(":") + 1));
             } else if (opt.startsWith("-xdoclint/package:")) {
                 doclintOpts.add(DocLint.XCHECK_PACKAGE + opt.substring(opt.indexOf(":") + 1));
+            } else if (opt.equals("--allow-script-in-comments")) {
+                allowScriptInComments = true;
             }
         }
+
         if (root.specifiedClasses().length > 0) {
             Map<String,PackageDoc> map = new HashMap<>();
             PackageDoc pd;
@@ -307,13 +331,35 @@ public class ConfigurationImpl extends Configuration {
                 }
             }
         }
+
         setCreateOverview();
         setTopFile(root);
 
         if (root instanceof RootDocImpl) {
             ((RootDocImpl) root).initDocLint(doclintOpts, tagletManager.getCustomTagNames(),
                     StringUtils.toLowerCase(htmlVersion.name()));
+            JavaScriptScanner jss = ((RootDocImpl) root).initJavaScriptScanner(isAllowScriptInComments());
+            if (jss != null) {
+                // In a more object-oriented world, this would be done by methods on the Option objects.
+                // Note that -windowtitle silently removes any and all HTML elements, and so does not need
+                // to be handled here.
+                checkJavaScript(jss, "-header", header);
+                checkJavaScript(jss, "-footer", footer);
+                checkJavaScript(jss, "-top", top);
+                checkJavaScript(jss, "-bottom", bottom);
+                checkJavaScript(jss, "-doctitle", doctitle);
+                checkJavaScript(jss, "-packagesheader", packagesheader);
+            }
         }
+    }
+
+    private void checkJavaScript(JavaScriptScanner jss, final String opt, String value) {
+        jss.parse(value, new JavaScriptScanner.Reporter() {
+            public void report() {
+                root.printError(getText("doclet.JavaScript_in_option", opt));
+                throw new FatalError();
+            }
+        });
     }
 
     /**
@@ -351,7 +397,8 @@ public class ConfigurationImpl extends Configuration {
             option.equals("-html5") ||
             option.equals("-xdoclint") ||
             option.startsWith("-xdoclint:") ||
-            option.startsWith("-xdoclint/package:")) {
+            option.startsWith("-xdoclint/package:") ||
+            option.startsWith("--allow-script-in-comments")) {
             return 1;
         } else if (option.equals("-help")) {
             // Uugh: first, this should not be hidden inside optionLength,
@@ -627,5 +674,37 @@ public class ConfigurationImpl extends Configuration {
     @Override
     public Content newContent() {
         return new ContentBuilder();
+    }
+
+    @Override
+    public Location getLocationForPackage(PackageDoc pd) {
+        JavaFileManager fm = getFileManager();
+        return StandardLocation.SOURCE_PATH;
+    }
+
+    protected void buildSearchTagIndex() {
+        for (SearchIndexItem sii : tagSearchIndex) {
+            String tagLabel = sii.getLabel();
+            char ch = (tagLabel.length() == 0)
+                    ? '*'
+                    : Character.toUpperCase(tagLabel.charAt(0));
+            Character unicode = ch;
+            List<SearchIndexItem> list = tagSearchIndexMap.get(unicode);
+            if (list == null) {
+                list = new ArrayList<>();
+                tagSearchIndexMap.put(unicode, list);
+            }
+            list.add(sii);
+        }
+        tagSearchIndexKeys = tagSearchIndexMap.keySet();
+    }
+
+    /**
+     * Returns whether or not to allow JavaScript in comments.
+     * Default is off; can be set true from a command line option.
+     * @return the allowScriptInComments
+     */
+    public boolean isAllowScriptInComments() {
+        return allowScriptInComments;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,25 +31,40 @@ import java.util.Hashtable;
 import java.util.StringTokenizer;
 
 /**
- * This class is for security permissions.
- * A SecurityPermission contains a name (also referred to as a "target name")
- * but no actions list; you either have the named permission
- * or you don't.
- * <P>
- * The target name is the name of a security configuration parameter (see below).
- * Currently the SecurityPermission object is used to guard access
- * to the Policy, Security, Provider, Signer, and Identity
+ * This class is for security permissions. A {@code SecurityPermission}
+ * contains a name (also referred to as a "target name") but no actions list;
+ * you either have the named permission or you don't.
+ * <p>
+ * The target name is the name of a security configuration parameter
+ * (see below). Currently the {@code SecurityPermission} object is used to
+ * guard access to the {@link AccessControlContext}, {@link Policy},
+ * {@link Provider}, {@link Security}, {@link Signer}, and {@link Identity}
  * objects.
- * <P>
- * The following table lists all the possible SecurityPermission target names,
- * and for each provides a description of what the permission allows
- * and a discussion of the risks of granting code the permission.
+ * <p>
+ * The following table lists the standard {@code SecurityPermission}
+ * target names, and for each provides a description of what the permission
+ * allows and a discussion of the risks of granting code the permission.
  *
- * <table border=1 cellpadding=5 summary="target name,what the permission allows, and associated risks">
+ * <table class="striped">
+ * <caption style="display:none">target name, what the permission allows, and associated risks</caption>
+ * <thead>
  * <tr>
  * <th>Permission Target Name</th>
  * <th>What the Permission Allows</th>
  * <th>Risks of Allowing this Permission</th>
+ * </tr>
+ * </thead>
+ * <tbody>
+ *
+ * <tr>
+ *   <td>authProvider.{provider name}</td>
+ *   <td>Allow the named provider to be an AuthProvider for login and
+ * logout operations. </td>
+ *   <td>This allows the named provider to perform login and logout
+ * operations. The named provider must extend {@code AuthProvider}
+ * and care must be taken to grant to a trusted provider since
+ * login operations involve sensitive authentication information
+ * such as PINs and passwords. </td>
  * </tr>
  *
  * <tr>
@@ -185,6 +200,7 @@ import java.util.StringTokenizer;
  * described under the "removeProvider.{provider name}" permission.</td>
  * </tr>
  *
+ * </tbody>
  * </table>
  *
  * <P>
@@ -193,13 +209,17 @@ import java.util.StringTokenizer;
  * {@link IdentityScope}, {@link Signer}. Use of them is discouraged. See the
  * applicable classes for more information.
  *
- * <table border=1 cellpadding=5 summary="target name,what the permission allows, and associated risks">
+ * <table class="striped">
+ * <caption style="display:none">target name, what the permission allows, and associated risks</caption>
+ * <thead>
  * <tr>
  * <th>Permission Target Name</th>
  * <th>What the Permission Allows</th>
  * <th>Risks of Allowing this Permission</th>
  * </tr>
+ * </thead>
  *
+ * <tbody>
  * <tr>
  *   <td>insertProvider.{provider name}</td>
  *   <td>Addition of a new provider, with the specified name</td>
@@ -297,7 +317,12 @@ import java.util.StringTokenizer;
  * data encrypted under that session key.</td>
  * </tr>
  *
+ * </tbody>
  * </table>
+ *
+ * @implNote
+ * Implementations may define additional target names, but should use naming
+ * conventions such as reverse domain name notation to avoid name clashes.
  *
  * @see java.security.BasicPermission
  * @see java.security.Permission
@@ -308,6 +333,7 @@ import java.util.StringTokenizer;
  *
  * @author Marianne Mueller
  * @author Roland Schemers
+ * @since 1.2
  */
 
 public final class SecurityPermission extends BasicPermission {

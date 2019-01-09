@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@ import java.lang.reflect.Constructor;
 import java.util.Map.Entry;
 
 import com.sun.beans.introspect.PropertyInfo;
+import sun.reflect.misc.ReflectUtil;
 
 /**
  * A PropertyDescriptor describes one property that a Java Bean
@@ -149,7 +150,7 @@ public class PropertyDescriptor extends FeatureDescriptor {
      *               and the {@code value} is the automatically generated property info
      * @param bound  the flag indicating whether it is possible to treat this property as a bound property
      *
-     * @since 1.9
+     * @since 9
      */
     PropertyDescriptor(Entry<String,PropertyInfo> entry, boolean bound) {
         String base = entry.getKey();
@@ -160,29 +161,32 @@ public class PropertyDescriptor extends FeatureDescriptor {
         setPropertyType(info.getPropertyType());
         setConstrained(info.isConstrained());
         setBound(bound && info.is(PropertyInfo.Name.bound));
-        if (info.is(PropertyInfo.Name.expert)) {
-            setValue(PropertyInfo.Name.expert.name(), Boolean.TRUE); // compatibility
-            setExpert(true);
-        }
-        if (info.is(PropertyInfo.Name.hidden)) {
-            setValue(PropertyInfo.Name.hidden.name(), Boolean.TRUE); // compatibility
-            setHidden(true);
-        }
-        if (info.is(PropertyInfo.Name.preferred)) {
-            setPreferred(true);
-        }
-        Object visual = info.get(PropertyInfo.Name.visualUpdate);
-        if (visual != null) {
-            setValue(PropertyInfo.Name.visualUpdate.name(), visual);
-        }
+
+        boolean isExpert = info.is(PropertyInfo.Name.expert);
+        setValue(PropertyInfo.Name.expert.name(), isExpert); // compatibility
+        setExpert(isExpert);
+
+        boolean isHidden = info.is(PropertyInfo.Name.hidden);
+        setValue(PropertyInfo.Name.hidden.name(), isHidden); // compatibility
+        setHidden(isHidden);
+
+        setPreferred(info.is(PropertyInfo.Name.preferred));
+
+        boolean isRequired = info.is(PropertyInfo.Name.required);
+        setValue(PropertyInfo.Name.required.name(), isRequired);
+
+        boolean visual = info.is(PropertyInfo.Name.visualUpdate);
+        setValue(PropertyInfo.Name.visualUpdate.name(), visual);
+
         Object description = info.get(PropertyInfo.Name.description);
         if (description != null) {
             setShortDescription(description.toString());
         }
         Object values = info.get(PropertyInfo.Name.enumerationValues);
-        if (values != null) {
-            setValue(PropertyInfo.Name.enumerationValues.name(), values);
+        if (values == null) {
+            values = new Object[0];
         }
+        setValue(PropertyInfo.Name.enumerationValues.name(), values);
         this.baseName = base;
     }
 
@@ -458,11 +462,13 @@ public class PropertyDescriptor extends FeatureDescriptor {
      *         not been defined or cannot be created
      * @since 1.5
      */
+    @SuppressWarnings("deprecation")
     public PropertyEditor createPropertyEditor(Object bean) {
         Object editor = null;
 
-        Class<?> cls = getPropertyEditorClass();
-        if (cls != null) {
+        final Class<?> cls = getPropertyEditorClass();
+        if (cls != null && PropertyEditor.class.isAssignableFrom(cls)
+                && ReflectUtil.isPackageAccessible(cls)) {
             Constructor<?> ctor = null;
             if (bean != null) {
                 try {
@@ -486,8 +492,8 @@ public class PropertyDescriptor extends FeatureDescriptor {
 
 
     /**
-     * Compares this <code>PropertyDescriptor</code> against the specified object.
-     * Returns true if the objects are the same. Two <code>PropertyDescriptor</code>s
+     * Compares this {@code PropertyDescriptor} against the specified object.
+     * Returns true if the objects are the same. Two {@code PropertyDescriptor}s
      * are the same if the read, write, property types, property editor and
      * flags  are equivalent.
      *

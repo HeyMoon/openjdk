@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -50,6 +50,70 @@ TOOLCHAIN_DESCRIPTION_microsoft="Microsoft Visual Studio"
 TOOLCHAIN_DESCRIPTION_solstudio="Oracle Solaris Studio"
 TOOLCHAIN_DESCRIPTION_xlc="IBM XL C/C++"
 
+# Minimum supported versions, empty means unspecified
+TOOLCHAIN_MINIMUM_VERSION_clang="3.2"
+TOOLCHAIN_MINIMUM_VERSION_gcc="4.3"
+TOOLCHAIN_MINIMUM_VERSION_microsoft="16.00.30319.01" # VS2010
+TOOLCHAIN_MINIMUM_VERSION_solstudio="5.13"
+TOOLCHAIN_MINIMUM_VERSION_xlc=""
+
+# Prepare the system so that TOOLCHAIN_CHECK_COMPILER_VERSION can be called.
+# Must have CC_VERSION_NUMBER and CXX_VERSION_NUMBER.
+# $1 - optional variable prefix for compiler and version variables (BUILD_)
+# $2 - optional variable prefix for comparable variable (OPENJDK_BUILD_)
+AC_DEFUN([TOOLCHAIN_PREPARE_FOR_VERSION_COMPARISONS],
+[
+  if test "x[$]$1CC_VERSION_NUMBER" != "x[$]$1CXX_VERSION_NUMBER"; then
+    AC_MSG_WARN([C and C++ compiler have different version numbers, [$]$1CC_VERSION_NUMBER vs [$]$1CXX_VERSION_NUMBER.])
+    AC_MSG_WARN([This typically indicates a broken setup, and is not supported])
+  fi
+
+  # We only check CC_VERSION_NUMBER since we assume CXX_VERSION_NUMBER is equal.
+  if [ [[ "[$]$1CC_VERSION_NUMBER" =~ (.*\.){4} ]] ]; then
+    AC_MSG_WARN([C compiler version number has more than four parts (W.X.Y.Z): [$]$1CC_VERSION_NUMBER. Comparisons might be wrong.])
+  fi
+
+  if [ [[  "[$]$1CC_VERSION_NUMBER" =~ [0-9]{6} ]] ]; then
+    AC_MSG_WARN([C compiler version number has a part larger than 99999: [$]$1CC_VERSION_NUMBER. Comparisons might be wrong.])
+  fi
+
+  $2COMPARABLE_ACTUAL_VERSION=`$AWK -F. '{ printf("%05d%05d%05d%05d\n", [$]1, [$]2, [$]3, [$]4) }' <<< "[$]$1CC_VERSION_NUMBER"`
+])
+
+# Check if the configured compiler (C and C++) is of a specific version or
+# newer. TOOLCHAIN_PREPARE_FOR_VERSION_COMPARISONS must have been called before.
+#
+# Arguments:
+#   VERSION:   The version string to check against the found version
+#   IF_AT_LEAST:   block to run if the compiler is at least this version (>=)
+#   IF_OLDER_THAN:   block to run if the compiler is older than this version (<)
+#   PREFIX:   Optional variable prefix for compiler to compare version for (OPENJDK_BUILD_)
+BASIC_DEFUN_NAMED([TOOLCHAIN_CHECK_COMPILER_VERSION],
+    [*VERSION PREFIX IF_AT_LEAST IF_OLDER_THAN], [$@],
+[
+  # Need to assign to a variable since m4 is blocked from modifying parts in [].
+  REFERENCE_VERSION=ARG_VERSION
+
+  if [ [[ "$REFERENCE_VERSION" =~ (.*\.){4} ]] ]; then
+    AC_MSG_ERROR([Internal error: Cannot compare to ARG_VERSION, only four parts (W.X.Y.Z) is supported])
+  fi
+
+  if [ [[ "$REFERENCE_VERSION" =~ [0-9]{6} ]] ]; then
+    AC_MSG_ERROR([Internal error: Cannot compare to ARG_VERSION, only parts < 99999 is supported])
+  fi
+
+  # Version comparison method inspired by http://stackoverflow.com/a/24067243
+  COMPARABLE_REFERENCE_VERSION=`$AWK -F. '{ printf("%05d%05d%05d%05d\n", [$]1, [$]2, [$]3, [$]4) }' <<< "$REFERENCE_VERSION"`
+
+  if test [$]ARG_PREFIX[COMPARABLE_ACTUAL_VERSION] -ge $COMPARABLE_REFERENCE_VERSION ; then
+    :
+    ARG_IF_AT_LEAST
+  else
+    :
+    ARG_IF_OLDER_THAN
+  fi
+])
+
 # Setup a number of variables describing how native output files are
 # named on this platform/toolchain.
 AC_DEFUN([TOOLCHAIN_SETUP_FILENAME_PATTERNS],
@@ -72,8 +136,19 @@ AC_DEFUN([TOOLCHAIN_SETUP_FILENAME_PATTERNS],
     OBJ_SUFFIX='.o'
     EXE_SUFFIX=''
     if test "x$OPENJDK_TARGET_OS" = xmacosx; then
-      SHARED_LIBRARY='lib[$]1.dylib'
-      SHARED_LIBRARY_SUFFIX='.dylib'
+      # For full static builds, we're overloading the SHARED_LIBRARY
+      # variables in order to limit the amount of changes required.
+      # It would be better to remove SHARED and just use LIBRARY and
+      # LIBRARY_SUFFIX for libraries that can be built either
+      # shared or static and use STATIC_* for libraries that are
+      # always built statically.
+      if test "x$STATIC_BUILD" = xtrue; then
+        SHARED_LIBRARY='lib[$]1.a'
+        SHARED_LIBRARY_SUFFIX='.a'
+      else
+        SHARED_LIBRARY='lib[$]1.dylib'
+        SHARED_LIBRARY_SUFFIX='.dylib'
+      fi
     fi
   fi
 
@@ -164,6 +239,8 @@ AC_DEFUN_ONCE([TOOLCHAIN_DETERMINE_TOOLCHAIN_TYPE],
   # Use indirect variable referencing
   toolchain_var_name=TOOLCHAIN_DESCRIPTION_$TOOLCHAIN_TYPE
   TOOLCHAIN_DESCRIPTION=${!toolchain_var_name}
+  toolchain_var_name=TOOLCHAIN_MINIMUM_VERSION_$TOOLCHAIN_TYPE
+  TOOLCHAIN_MINIMUM_VERSION=${!toolchain_var_name}
   toolchain_var_name=TOOLCHAIN_CC_BINARY_$TOOLCHAIN_TYPE
   TOOLCHAIN_CC_BINARY=${!toolchain_var_name}
   toolchain_var_name=TOOLCHAIN_CXX_BINARY_$TOOLCHAIN_TYPE
@@ -205,15 +282,17 @@ AC_DEFUN_ONCE([TOOLCHAIN_PRE_DETECTION],
     # The microsoft toolchain also requires INCLUDE and LIB to be set.
     export INCLUDE="$VS_INCLUDE"
     export LIB="$VS_LIB"
+  else
+    if test "x$XCODE_VERSION_OUTPUT" != x; then
+      # For Xcode, we set the Xcode version as TOOLCHAIN_VERSION
+      TOOLCHAIN_VERSION=`$ECHO $XCODE_VERSION_OUTPUT | $CUT -f 2 -d ' '`
+      TOOLCHAIN_DESCRIPTION="$TOOLCHAIN_DESCRIPTION from Xcode"
+    else
+      # Currently we do not define this for other toolchains. This might change as the need arise.
+      TOOLCHAIN_VERSION=
+    fi
   fi
-
-  # For solaris we really need solaris tools, and not the GNU equivalent.
-  # The build tools on Solaris reside in /usr/ccs (C Compilation System),
-  # so add that to path before starting to probe.
-  # FIXME: This was originally only done for AS,NM,GNM,STRIP,OBJCOPY,OBJDUMP.
-  if test "x$OPENJDK_BUILD_OS" = xsolaris; then
-    PATH="/usr/ccs/bin:$PATH"
-  fi
+  AC_SUBST(TOOLCHAIN_VERSION)
 
   # Finally add TOOLCHAIN_PATH at the beginning, to allow --with-tools-dir to
   # override all other locations.
@@ -225,8 +304,12 @@ AC_DEFUN_ONCE([TOOLCHAIN_PRE_DETECTION],
 # Restore path, etc
 AC_DEFUN_ONCE([TOOLCHAIN_POST_DETECTION],
 [
-  # Restore old path.
-  PATH="$OLD_PATH"
+  # Restore old path, except for the microsoft toolchain, which requires VS_PATH
+  # to remain in place. Otherwise the compiler will not work in some siutations
+  # in later configure checks.
+  if test "x$TOOLCHAIN_TYPE" != "xmicrosoft"; then
+    PATH="$OLD_PATH"
+  fi
 
   # Restore the flags to the user specified values.
   # This is necessary since AC_PROG_CC defaults CFLAGS to "-g -O2"
@@ -242,7 +325,7 @@ AC_DEFUN_ONCE([TOOLCHAIN_POST_DETECTION],
 #
 # $1 = compiler to test (CC or CXX)
 # $2 = human readable name of compiler (C or C++)
-AC_DEFUN([TOOLCHAIN_CHECK_COMPILER_VERSION],
+AC_DEFUN([TOOLCHAIN_EXTRACT_COMPILER_VERSION],
 [
   COMPILER=[$]$1
   COMPILER_NAME=$2
@@ -250,9 +333,11 @@ AC_DEFUN([TOOLCHAIN_CHECK_COMPILER_VERSION],
   if test "x$TOOLCHAIN_TYPE" = xsolstudio; then
     # cc -V output typically looks like
     #     cc: Sun C 5.12 Linux_i386 2011/11/16
+    # or
+    #     cc: Studio 12.5 Sun C 5.14 SunOS_sparc 2016/05/31
     COMPILER_VERSION_OUTPUT=`$COMPILER -V 2>&1`
     # Check that this is likely to be the Solaris Studio cc.
-    $ECHO "$COMPILER_VERSION_OUTPUT" | $GREP "^.*: Sun $COMPILER_NAME" > /dev/null
+    $ECHO "$COMPILER_VERSION_OUTPUT" | $GREP "^.* Sun $COMPILER_NAME" > /dev/null
     if test $? -ne 0; then
       ALT_VERSION_OUTPUT=`$COMPILER --version 2>&1`
       AC_MSG_NOTICE([The $COMPILER_NAME compiler (located as $COMPILER) does not seem to be the required $TOOLCHAIN_TYPE compiler.])
@@ -319,7 +404,7 @@ AC_DEFUN([TOOLCHAIN_CHECK_COMPILER_VERSION],
     COMPILER_VERSION_STRING=`$ECHO $COMPILER_VERSION_OUTPUT | \
         $SED -e 's/ *Copyright .*//'`
     COMPILER_VERSION_NUMBER=`$ECHO $COMPILER_VERSION_OUTPUT | \
-        $SED -e 's/^.* \(@<:@1-9@:>@\.@<:@0-9.@:>@*\) .*$/\1/'`
+        $SED -e 's/^.* \(@<:@1-9@:>@\.@<:@0-9.@:>@*\)@<:@^0-9.@:>@.*$/\1/'`
   elif test  "x$TOOLCHAIN_TYPE" = xclang; then
     # clang --version output typically looks like
     #    Apple LLVM version 5.0 (clang-500.2.79) (based on LLVM 3.3svn)
@@ -339,7 +424,7 @@ AC_DEFUN([TOOLCHAIN_CHECK_COMPILER_VERSION],
     # Collapse compiler output into a single line
     COMPILER_VERSION_STRING=`$ECHO $COMPILER_VERSION_OUTPUT`
     COMPILER_VERSION_NUMBER=`$ECHO $COMPILER_VERSION_OUTPUT | \
-        $SED -e 's/^.*clang version \(@<:@1-9@:>@@<:@0-9.@:>@*\).*$/\1/'`
+        $SED -e 's/^.* version \(@<:@1-9@:>@@<:@0-9.@:>@*\).*$/\1/'`
   else
       AC_MSG_ERROR([Unknown toolchain type $TOOLCHAIN_TYPE.])
   fi
@@ -355,7 +440,7 @@ AC_DEFUN([TOOLCHAIN_CHECK_COMPILER_VERSION],
 #
 # $1 = compiler to test (CC or CXX)
 # $2 = human readable name of compiler (C or C++)
-# $3 = list of compiler names to search for
+# $3 = compiler name to search for
 AC_DEFUN([TOOLCHAIN_FIND_COMPILER],
 [
   COMPILER_NAME=$2
@@ -397,15 +482,15 @@ AC_DEFUN([TOOLCHAIN_FIND_COMPILER],
     if test -n "$TOOLCHAIN_PATH"; then
       PATH_save="$PATH"
       PATH="$TOOLCHAIN_PATH"
-      AC_PATH_PROGS(TOOLCHAIN_PATH_$1, $SEARCH_LIST)
+      AC_PATH_TOOL(TOOLCHAIN_PATH_$1, $SEARCH_LIST)
       $1=$TOOLCHAIN_PATH_$1
       PATH="$PATH_save"
     fi
 
-    # AC_PATH_PROGS can't be run multiple times with the same variable,
+    # AC_PATH_TOOL can't be run multiple times with the same variable,
     # so create a new name for this run.
     if test "x[$]$1" = x; then
-      AC_PATH_PROGS(POTENTIAL_$1, $SEARCH_LIST)
+      AC_PATH_TOOL(POTENTIAL_$1, $SEARCH_LIST)
       $1=$POTENTIAL_$1
     fi
 
@@ -418,42 +503,25 @@ AC_DEFUN([TOOLCHAIN_FIND_COMPILER],
   # Now we have a compiler binary in $1. Make sure it's okay.
   BASIC_FIXUP_EXECUTABLE($1)
   TEST_COMPILER="[$]$1"
-  # Don't remove symbolic links on AIX because 'xlc_r' and 'xlC_r' may all be links
-  # to 'xlc' but it is crucial that we invoke the compiler with the right name!
-  if test "x$OPENJDK_BUILD_OS" != xaix; then
-    # FIXME: This test should not be needed anymore; we don't do that for any platform.
-    AC_MSG_CHECKING([resolved symbolic links for $1])
-    BASIC_REMOVE_SYMBOLIC_LINKS(TEST_COMPILER)
-    AC_MSG_RESULT([$TEST_COMPILER])
-  fi
-  AC_MSG_CHECKING([if $1 is disguised ccache])
 
-  COMPILER_BASENAME=`$BASENAME "$TEST_COMPILER"`
-  if test "x$COMPILER_BASENAME" = "xccache"; then
-    AC_MSG_RESULT([yes, trying to find proper $COMPILER_NAME compiler])
-    # We /usr/lib/ccache in the path, so cc is a symlink to /usr/bin/ccache.
-    # We want to control ccache invocation ourselves, so ignore this cc and try
-    # searching again.
-
-    # Remove the path to the fake ccache cc from the PATH
-    RETRY_COMPILER_SAVED_PATH="$PATH"
-    COMPILER_DIRNAME=`$DIRNAME [$]$1`
-    PATH="`$ECHO $PATH | $SED -e "s,$COMPILER_DIRNAME,,g" -e "s,::,:,g" -e "s,^:,,g"`"
-
-    # Try again looking for our compiler
-    AC_CHECK_TOOLS(PROPER_COMPILER_$1, $3)
-    BASIC_FIXUP_EXECUTABLE(PROPER_COMPILER_$1)
-    PATH="$RETRY_COMPILER_SAVED_PATH"
-
-    AC_MSG_CHECKING([for resolved symbolic links for $1])
-    BASIC_REMOVE_SYMBOLIC_LINKS(PROPER_COMPILER_$1)
-    AC_MSG_RESULT([$PROPER_COMPILER_$1])
-    $1="$PROPER_COMPILER_$1"
+  AC_MSG_CHECKING([resolved symbolic links for $1])
+  SYMLINK_ORIGINAL="$TEST_COMPILER"
+  BASIC_REMOVE_SYMBOLIC_LINKS(SYMLINK_ORIGINAL)
+  if test "x$TEST_COMPILER" = "x$SYMLINK_ORIGINAL"; then
+    AC_MSG_RESULT([no symlink])
   else
-    AC_MSG_RESULT([no, keeping $1])
+    AC_MSG_RESULT([$SYMLINK_ORIGINAL])
+
+    # We can't handle ccache by gcc wrappers, since we need to know if we're
+    # using ccache. Instead ccache usage must be controlled by a configure option.
+    COMPILER_BASENAME=`$BASENAME "$SYMLINK_ORIGINAL"`
+    if test "x$COMPILER_BASENAME" = "xccache"; then
+      AC_MSG_NOTICE([Please use --enable-ccache instead of providing a wrapped compiler.])
+      AC_MSG_ERROR([$TEST_COMPILER is a symbolic link to ccache. This is not supported.])
+    fi
   fi
 
-  TOOLCHAIN_CHECK_COMPILER_VERSION([$1], [$COMPILER_NAME])
+  TOOLCHAIN_EXTRACT_COMPILER_VERSION([$1], [$COMPILER_NAME])
 ])
 
 # Detect the core components of the toolchain, i.e. the compilers (CC and CXX),
@@ -472,6 +540,20 @@ AC_DEFUN_ONCE([TOOLCHAIN_DETECT_TOOLCHAIN_CORE],
   TOOLCHAIN_FIND_COMPILER([CXX], [C++], $TOOLCHAIN_CXX_BINARY)
   # Now that we have resolved CXX ourself, let autoconf have its go at it
   AC_PROG_CXX([$CXX])
+
+  # This is the compiler version number on the form X.Y[.Z]
+  AC_SUBST(CC_VERSION_NUMBER)
+  AC_SUBST(CXX_VERSION_NUMBER)
+
+  TOOLCHAIN_PREPARE_FOR_VERSION_COMPARISONS
+
+  if test "x$TOOLCHAIN_MINIMUM_VERSION" != x; then
+    TOOLCHAIN_CHECK_COMPILER_VERSION(VERSION: $TOOLCHAIN_MINIMUM_VERSION,
+        IF_OLDER_THAN: [
+          AC_MSG_WARN([You are using $TOOLCHAIN_TYPE older than $TOOLCHAIN_MINIMUM_VERSION. This is not a supported configuration.])
+        ]
+    )
+  fi
 
   #
   # Setup the preprocessor (CPP and CXXCPP)
@@ -513,9 +595,11 @@ AC_DEFUN_ONCE([TOOLCHAIN_DETECT_TOOLCHAIN_CORE],
   # Setup the assembler (AS)
   #
   if test "x$OPENJDK_TARGET_OS" = xsolaris; then
-    # FIXME: should this really be solaris, or solstudio?
     BASIC_PATH_PROGS(AS, as)
     BASIC_FIXUP_EXECUTABLE(AS)
+    if test "x$AS" = x; then
+      AC_MSG_ERROR([Solaris assembler (as) is required. Please install via "pkg install pkg:/developer/assembler".])
+    fi
   else
     # FIXME: is this correct for microsoft?
     AS="$CC -c"
@@ -528,6 +612,8 @@ AC_DEFUN_ONCE([TOOLCHAIN_DETECT_TOOLCHAIN_CORE],
   if test "x$TOOLCHAIN_TYPE" = xmicrosoft; then
     # The corresponding ar tool is lib.exe (used to create static libraries)
     AC_CHECK_PROG([AR], [lib],[lib],,,)
+  elif test "x$TOOLCHAIN_TYPE" = xgcc; then
+    BASIC_CHECK_TOOLS(AR, ar gcc-ar)
   else
     BASIC_CHECK_TOOLS(AR, ar)
   fi
@@ -573,7 +659,11 @@ AC_DEFUN_ONCE([TOOLCHAIN_DETECT_TOOLCHAIN_EXTRA],
     # FIXME: we should unify this with the solaris case above.
     BASIC_CHECK_TOOLS(STRIP, strip)
     BASIC_FIXUP_EXECUTABLE(STRIP)
-    BASIC_CHECK_TOOLS(NM, nm)
+    if test "x$TOOLCHAIN_TYPE" = xgcc; then
+      BASIC_CHECK_TOOLS(NM, nm gcc-nm)
+    else
+      BASIC_CHECK_TOOLS(NM, nm)
+    fi
     BASIC_FIXUP_EXECUTABLE(NM)
     GNM="$NM"
     AC_SUBST(GNM)
@@ -586,6 +676,43 @@ AC_DEFUN_ONCE([TOOLCHAIN_DETECT_TOOLCHAIN_EXTRA],
     # Only call fixup if objcopy was found.
     if test -n "$OBJCOPY"; then
       BASIC_FIXUP_EXECUTABLE(OBJCOPY)
+      if test "x$OPENJDK_BUILD_OS" = xsolaris; then
+        # objcopy prior to 2.21.1 on solaris is broken and is not usable.
+        # Rewrite objcopy version output to VALID_VERSION or BAD_VERSION.
+        # - version number is last blank separate word on first line
+        # - version number formats that have been seen:
+        #   - <major>.<minor>
+        #   - <major>.<minor>.<micro>
+        OBJCOPY_VERSION=`$OBJCOPY --version | $HEAD -n 1`
+        # The outer [ ] is to prevent m4 from eating the [] in the sed expression.
+        [ OBJCOPY_VERSION_CHECK=`$ECHO $OBJCOPY_VERSION | $SED -n \
+              -e 's/.* //' \
+              -e '/^[01]\./b bad' \
+              -e '/^2\./{' \
+              -e '  s/^2\.//' \
+              -e '  /^[0-9]$/b bad' \
+              -e '  /^[0-9]\./b bad' \
+              -e '  /^1[0-9]$/b bad' \
+              -e '  /^1[0-9]\./b bad' \
+              -e '  /^20\./b bad' \
+              -e '  /^21\.0$/b bad' \
+              -e '  /^21\.0\./b bad' \
+              -e '}' \
+              -e ':good' \
+              -e 's/.*/VALID_VERSION/p' \
+              -e 'q' \
+              -e ':bad' \
+              -e 's/.*/BAD_VERSION/p' \
+              -e 'q'` ]
+        if test "x$OBJCOPY_VERSION_CHECK" = xBAD_VERSION; then
+          OBJCOPY=
+          AC_MSG_WARN([Ignoring found objcopy since it is broken (prior to 2.21.1). No debug symbols will be generated.])
+          AC_MSG_NOTICE([objcopy reports version $OBJCOPY_VERSION])
+          AC_MSG_NOTICE([Note: patch 149063-01 or newer contains the correct Solaris 10 SPARC version])
+          AC_MSG_NOTICE([Note: patch 149064-01 or newer contains the correct Solaris 10 X86 version])
+          AC_MSG_NOTICE([Note: Solaris 11 Update 1 contains the correct version])
+        fi
+      fi
     fi
   fi
 
@@ -610,56 +737,111 @@ AC_DEFUN_ONCE([TOOLCHAIN_SETUP_BUILD_COMPILERS],
     # path, otherwise we might pick up cross-compilers which don't use standard
     # naming.
 
+    OLDPATH="$PATH"
+
+    AC_ARG_WITH(build-devkit, [AS_HELP_STRING([--with-build-devkit],
+        [Devkit to use for the build platform toolchain])])
+    if test "x$with_build_devkit" = "xyes"; then
+      AC_MSG_ERROR([--with-build-devkit must have a value])
+    elif test -n "$with_build_devkit"; then
+      if test ! -d "$with_build_devkit"; then
+        AC_MSG_ERROR([--with-build-devkit points to non existing dir: $with_build_devkit])
+      else
+        BASIC_FIXUP_PATH([with_build_devkit])
+        BUILD_DEVKIT_ROOT="$with_build_devkit"
+        # Check for a meta data info file in the root of the devkit
+        if test -f "$BUILD_DEVKIT_ROOT/devkit.info"; then
+          # Process devkit.info so that existing devkit variables are not
+          # modified by this
+          $SED -e "s/^DEVKIT_/BUILD_DEVKIT_/g" \
+              -e "s/\$DEVKIT_ROOT/\$BUILD_DEVKIT_ROOT/g" \
+              -e "s/\$host/\$build/g" \
+              $BUILD_DEVKIT_ROOT/devkit.info \
+              > $CONFIGURESUPPORT_OUTPUTDIR/build-devkit.info
+          . $CONFIGURESUPPORT_OUTPUTDIR/build-devkit.info
+          # This potentially sets the following:
+          # A descriptive name of the devkit
+          BASIC_EVAL_DEVKIT_VARIABLE([BUILD_DEVKIT_NAME])
+          # Corresponds to --with-extra-path
+          BASIC_EVAL_DEVKIT_VARIABLE([BUILD_DEVKIT_EXTRA_PATH])
+          # Corresponds to --with-toolchain-path
+          BASIC_EVAL_DEVKIT_VARIABLE([BUILD_DEVKIT_TOOLCHAIN_PATH])
+          # Corresponds to --with-sysroot
+          BASIC_EVAL_DEVKIT_VARIABLE([BUILD_DEVKIT_SYSROOT])
+          # Skip the Window specific parts
+        fi
+
+        AC_MSG_CHECKING([for build platform devkit])
+        if test "x$BUILD_DEVKIT_NAME" != x; then
+          AC_MSG_RESULT([$BUILD_DEVKIT_NAME in $BUILD_DEVKIT_ROOT])
+        else
+          AC_MSG_RESULT([$BUILD_DEVKIT_ROOT])
+        fi
+
+        BUILD_SYSROOT="$BUILD_DEVKIT_SYSROOT"
+        FLAGS_SETUP_SYSROOT_FLAGS([BUILD_])
+
+         # Fallback default of just /bin if DEVKIT_PATH is not defined
+        if test "x$BUILD_DEVKIT_TOOLCHAIN_PATH" = x; then
+          BUILD_DEVKIT_TOOLCHAIN_PATH="$BUILD_DEVKIT_ROOT/bin"
+        fi
+        PATH="$BUILD_DEVKIT_TOOLCHAIN_PATH:$BUILD_DEVKIT_EXTRA_PATH"
+      fi
+    fi
+
     # FIXME: we should list the discovered compilers as an exclude pattern!
     # If we do that, we can do this detection before POST_DETECTION, and still
     # find the build compilers in the tools dir, if needed.
-    BASIC_PATH_PROGS(BUILD_CC, [cl cc gcc])
+    BASIC_REQUIRE_PROGS(BUILD_CC, [cl cc gcc])
     BASIC_FIXUP_EXECUTABLE(BUILD_CC)
-    BASIC_PATH_PROGS(BUILD_CXX, [cl CC g++])
+    BASIC_REQUIRE_PROGS(BUILD_CXX, [cl CC g++])
     BASIC_FIXUP_EXECUTABLE(BUILD_CXX)
-    BASIC_PATH_PROGS(BUILD_LD, ld)
-    BASIC_FIXUP_EXECUTABLE(BUILD_LD)
+    BASIC_PATH_PROGS(BUILD_NM, nm gcc-nm)
+    BASIC_FIXUP_EXECUTABLE(BUILD_NM)
+    BASIC_PATH_PROGS(BUILD_AR, ar gcc-ar)
+    BASIC_FIXUP_EXECUTABLE(BUILD_AR)
+    BASIC_PATH_PROGS(BUILD_OBJCOPY, objcopy)
+    BASIC_FIXUP_EXECUTABLE(BUILD_OBJCOPY)
+    BASIC_PATH_PROGS(BUILD_STRIP, strip)
+    BASIC_FIXUP_EXECUTABLE(BUILD_STRIP)
+    # Assume the C compiler is the assembler
+    BUILD_AS="$BUILD_CC -c"
+    # Just like for the target compiler, use the compiler as linker
+    BUILD_LD="$BUILD_CC"
+    BUILD_LDCXX="$BUILD_CXX"
+
+    PATH="$OLDPATH"
+
+    TOOLCHAIN_EXTRACT_COMPILER_VERSION(BUILD_CC, [BuildC])
+    TOOLCHAIN_EXTRACT_COMPILER_VERSION(BUILD_CXX, [BuildC++])
+    TOOLCHAIN_PREPARE_FOR_VERSION_COMPARISONS([BUILD_], [OPENJDK_BUILD_])
   else
     # If we are not cross compiling, use the normal target compilers for
     # building the build platform executables.
     BUILD_CC="$CC"
     BUILD_CXX="$CXX"
     BUILD_LD="$LD"
+    BUILD_LDCXX="$LDCXX"
+    BUILD_NM="$NM"
+    BUILD_AS="$AS"
+    BUILD_OBJCOPY="$OBJCOPY"
+    BUILD_STRIP="$STRIP"
+    BUILD_SYSROOT_CFLAGS="$SYSROOT_CFLAGS"
+    BUILD_SYSROOT_LDFLAGS="$SYSROOT_LDFLAGS"
+    BUILD_AR="$AR"
+
+    TOOLCHAIN_PREPARE_FOR_VERSION_COMPARISONS([], [OPENJDK_BUILD_])
   fi
 
   AC_SUBST(BUILD_CC)
   AC_SUBST(BUILD_CXX)
   AC_SUBST(BUILD_LD)
-])
-
-# Setup legacy variables that are still needed as alternative ways to refer to
-# parts of the toolchain.
-AC_DEFUN_ONCE([TOOLCHAIN_SETUP_LEGACY],
-[
-  if test "x$TOOLCHAIN_TYPE" = xmicrosoft; then
-    # For hotspot, we need these in Windows mixed path,
-    # so rewrite them all. Need added .exe suffix.
-    HOTSPOT_CXX="$CXX.exe"
-    HOTSPOT_LD="$LD.exe"
-    HOTSPOT_MT="$MT.exe"
-    HOTSPOT_RC="$RC.exe"
-    BASIC_WINDOWS_REWRITE_AS_WINDOWS_MIXED_PATH(HOTSPOT_CXX)
-    BASIC_WINDOWS_REWRITE_AS_WINDOWS_MIXED_PATH(HOTSPOT_LD)
-    BASIC_WINDOWS_REWRITE_AS_WINDOWS_MIXED_PATH(HOTSPOT_MT)
-    BASIC_WINDOWS_REWRITE_AS_WINDOWS_MIXED_PATH(HOTSPOT_RC)
-    AC_SUBST(HOTSPOT_MT)
-    AC_SUBST(HOTSPOT_RC)
-  else
-    HOTSPOT_CXX="$CXX"
-    HOTSPOT_LD="$LD"
-  fi
-  AC_SUBST(HOTSPOT_CXX)
-  AC_SUBST(HOTSPOT_LD)
-
-  if test  "x$TOOLCHAIN_TYPE" = xclang; then
-    USE_CLANG=true
-  fi
-  AC_SUBST(USE_CLANG)
+  AC_SUBST(BUILD_LDCXX)
+  AC_SUBST(BUILD_NM)
+  AC_SUBST(BUILD_AS)
+  AC_SUBST(BUILD_SYSROOT_CFLAGS)
+  AC_SUBST(BUILD_SYSROOT_LDFLAGS)
+  AC_SUBST(BUILD_AR)
 ])
 
 # Do some additional checks on the detected tools.
@@ -693,21 +875,21 @@ AC_DEFUN_ONCE([TOOLCHAIN_MISC_CHECKS],
 
     # "-Og" suppported for GCC 4.8 and later
     CFLAG_OPTIMIZE_DEBUG_FLAG="-Og"
-    FLAGS_COMPILER_CHECK_ARGUMENTS([$CFLAG_OPTIMIZE_DEBUG_FLAG],
-      [HAS_CFLAG_OPTIMIZE_DEBUG=true],
-      [HAS_CFLAG_OPTIMIZE_DEBUG=false])
+    FLAGS_COMPILER_CHECK_ARGUMENTS(ARGUMENT: [$CFLAG_OPTIMIZE_DEBUG_FLAG],
+      IF_TRUE: [HAS_CFLAG_OPTIMIZE_DEBUG=true],
+      IF_FALSE: [HAS_CFLAG_OPTIMIZE_DEBUG=false])
 
     # "-z relro" supported in GNU binutils 2.17 and later
-    LINKER_RELRO_FLAG="-Xlinker -z -Xlinker relro"
-    FLAGS_LINKER_CHECK_ARGUMENTS([$LINKER_RELRO_FLAG],
-      [HAS_LINKER_RELRO=true],
-      [HAS_LINKER_RELRO=false])
+    LINKER_RELRO_FLAG="-Wl,-z,relro"
+    FLAGS_LINKER_CHECK_ARGUMENTS(ARGUMENT: [$LINKER_RELRO_FLAG],
+      IF_TRUE: [HAS_LINKER_RELRO=true],
+      IF_FALSE: [HAS_LINKER_RELRO=false])
 
     # "-z now" supported in GNU binutils 2.11 and later
-    LINKER_NOW_FLAG="-Xlinker -z -Xlinker now"
-    FLAGS_LINKER_CHECK_ARGUMENTS([$LINKER_NOW_FLAG],
-      [HAS_LINKER_NOW=true],
-      [HAS_LINKER_NOW=false])
+    LINKER_NOW_FLAG="-Wl,-z,now"
+    FLAGS_LINKER_CHECK_ARGUMENTS(ARGUMENT: [$LINKER_NOW_FLAG],
+      IF_TRUE: [HAS_LINKER_NOW=true],
+      IF_FALSE: [HAS_LINKER_NOW=false])
   fi
 
   # Check for broken SuSE 'ld' for which 'Only anonymous version tag is allowed
@@ -717,57 +899,109 @@ AC_DEFUN_ONCE([TOOLCHAIN_MISC_CHECKS],
     AC_MSG_CHECKING([for broken SuSE 'ld' which only understands anonymous version tags in executables])
     $ECHO "SUNWprivate_1.1 { local: *; };" > version-script.map
     $ECHO "int main() { }" > main.c
-    if $CXX -Xlinker -version-script=version-script.map main.c 2>&AS_MESSAGE_LOG_FD >&AS_MESSAGE_LOG_FD; then
+    if $CXX -Wl,-version-script=version-script.map main.c 2>&AS_MESSAGE_LOG_FD >&AS_MESSAGE_LOG_FD; then
       AC_MSG_RESULT(no)
       USING_BROKEN_SUSE_LD=no
     else
       AC_MSG_RESULT(yes)
       USING_BROKEN_SUSE_LD=yes
     fi
-    rm -rf version-script.map main.c a.out
+    $RM version-script.map main.c a.out
   fi
   AC_SUBST(USING_BROKEN_SUSE_LD)
+
+  # Setup hotspot lecagy names for toolchains
+  HOTSPOT_TOOLCHAIN_TYPE=$TOOLCHAIN_TYPE
+  if test "x$TOOLCHAIN_TYPE" = xclang; then
+    HOTSPOT_TOOLCHAIN_TYPE=gcc
+  elif test "x$TOOLCHAIN_TYPE" = xsolstudio; then
+    HOTSPOT_TOOLCHAIN_TYPE=sparcWorks
+  elif test "x$TOOLCHAIN_TYPE" = xmicrosoft; then
+    HOTSPOT_TOOLCHAIN_TYPE=visCPP
+  fi
+  AC_SUBST(HOTSPOT_TOOLCHAIN_TYPE)
 ])
 
 # Setup the JTReg Regression Test Harness.
 AC_DEFUN_ONCE([TOOLCHAIN_SETUP_JTREG],
 [
   AC_ARG_WITH(jtreg, [AS_HELP_STRING([--with-jtreg],
-      [Regression Test Harness @<:@probed@:>@])],
-      [],
-      [with_jtreg=no])
+      [Regression Test Harness @<:@probed@:>@])])
 
   if test "x$with_jtreg" = xno; then
     # jtreg disabled
-    AC_MSG_CHECKING([for jtreg])
-    AC_MSG_RESULT(no)
-  else
-    if test "x$with_jtreg" != xyes; then
-      # with path specified.
-      JT_HOME="$with_jtreg"
+    AC_MSG_CHECKING([for jtreg test harness])
+    AC_MSG_RESULT([no, disabled])
+  elif test "x$with_jtreg" != xyes && test "x$with_jtreg" != x; then
+    # An explicit path is specified, use it.
+    JT_HOME="$with_jtreg"
+    if test ! -d "$JT_HOME"; then
+      AC_MSG_ERROR([jtreg home directory from --with-jtreg=$with_jtreg does not exist])
     fi
 
+    if test ! -e "$JT_HOME/lib/jtreg.jar"; then
+      AC_MSG_ERROR([jtreg home directory from --with-jtreg=$with_jtreg is not a valid jtreg home])
+    fi
+
+    JTREGEXE="$JT_HOME/bin/jtreg"
+    if test ! -x "$JTREGEXE"; then
+      AC_MSG_ERROR([jtreg home directory from --with-jtreg=$with_jtreg does not contain valid jtreg executable])
+    fi
+
+    AC_MSG_CHECKING([for jtreg test harness])
+    AC_MSG_RESULT([$JT_HOME])
+  else
+    # Try to locate jtreg
     if test "x$JT_HOME" != x; then
-      AC_MSG_CHECKING([for jtreg])
-
-      # use JT_HOME enviroment var.
-      BASIC_FIXUP_PATH([JT_HOME])
-
-      # jtreg win32 script works for everybody
-      JTREGEXE="$JT_HOME/bin/jtreg"
-
-      if test ! -f "$JTREGEXE"; then
-        AC_MSG_ERROR([JTReg executable does not exist: $JTREGEXE])
+      # JT_HOME set in environment, use it
+      if test ! -d "$JT_HOME"; then
+        AC_MSG_WARN([Ignoring JT_HOME pointing to invalid directory: $JT_HOME])
+        JT_HOME=
+      else
+        if test ! -e "$JT_HOME/lib/jtreg.jar"; then
+          AC_MSG_WARN([Ignoring JT_HOME which is not a valid jtreg home: $JT_HOME])
+          JT_HOME=
+        elif test ! -x "$JT_HOME/bin/jtreg"; then
+          AC_MSG_WARN([Ignoring JT_HOME which does not contain valid jtreg executable: $JT_HOME])
+          JT_HOME=
+        else
+          JTREGEXE="$JT_HOME/bin/jtreg"
+          AC_MSG_NOTICE([Located jtreg using JT_HOME from environment])
+        fi
       fi
+    fi
 
-      AC_MSG_RESULT($JTREGEXE)
+    if test "x$JT_HOME" = x; then
+      # JT_HOME is not set in environment, or was deemed invalid.
+      # Try to find jtreg on path
+      BASIC_PATH_PROGS(JTREGEXE, jtreg)
+      if test "x$JTREGEXE" != x; then
+        # That's good, now try to derive JT_HOME
+        JT_HOME=`(cd $($DIRNAME $JTREGEXE)/.. && pwd)`
+        if test ! -e "$JT_HOME/lib/jtreg.jar"; then
+          AC_MSG_WARN([Ignoring jtreg from path since a valid jtreg home cannot be found])
+          JT_HOME=
+          JTREGEXE=
+        else
+          AC_MSG_NOTICE([Located jtreg using jtreg executable in path])
+        fi
+      fi
+    fi
+
+    AC_MSG_CHECKING([for jtreg test harness])
+    if test "x$JT_HOME" != x; then
+      AC_MSG_RESULT([$JT_HOME])
     else
-      # try to find jtreg on path
-      BASIC_REQUIRE_PROGS(JTREGEXE, jtreg)
-      JT_HOME="`$DIRNAME $JTREGEXE`"
+      AC_MSG_RESULT([no, not found])
+
+      if test "x$with_jtreg" = xyes; then
+        AC_MSG_ERROR([--with-jtreg was specified, but no jtreg found.])
+      fi
     fi
   fi
 
+  BASIC_FIXUP_EXECUTABLE(JTREGEXE)
+  BASIC_FIXUP_PATH(JT_HOME)
   AC_SUBST(JT_HOME)
   AC_SUBST(JTREGEXE)
 ])

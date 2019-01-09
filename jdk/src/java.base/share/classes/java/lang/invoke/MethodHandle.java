@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,8 +26,10 @@
 package java.lang.invoke;
 
 
-import java.util.*;
 import jdk.internal.HotSpotIntrinsicCandidate;
+
+import java.util.Arrays;
+import java.util.Objects;
 
 import static java.lang.invoke.MethodHandleStatics.*;
 
@@ -92,14 +94,16 @@ import static java.lang.invoke.MethodHandleStatics.*;
  * and {@code invoke} compile to an {@code invokevirtual} instruction.
  * More unusually, the compiler must record the actual argument types,
  * and may not perform method invocation conversions on the arguments.
- * Instead, it must push them on the stack according to their own unconverted types.
- * The method handle object itself is pushed on the stack before the arguments.
- * The compiler then calls the method handle with a symbolic type descriptor which
- * describes the argument and return types.
+ * Instead, it must generate instructions that push them on the stack according
+ * to their own unconverted types.  The method handle object itself is pushed on
+ * the stack before the arguments.
+ * The compiler then generates an {@code invokevirtual} instruction that invokes
+ * the method handle with a symbolic type descriptor which describes the argument
+ * and return types.
  * <p>
  * To issue a complete symbolic type descriptor, the compiler must also determine
  * the return type.  This is based on a cast on the method invocation expression,
- * if there is one, or else {@code Object} if the invocation is an expression
+ * if there is one, or else {@code Object} if the invocation is an expression,
  * or else {@code void} if the invocation is a statement.
  * The cast may be to a primitive type (but not {@code void}).
  * <p>
@@ -109,12 +113,12 @@ import static java.lang.invoke.MethodHandleStatics.*;
  * {@code Void} except the null reference.
  *
  * <h1>Method handle invocation</h1>
- * The first time a {@code invokevirtual} instruction is executed
- * it is linked, by symbolically resolving the names in the instruction
+ * The first time an {@code invokevirtual} instruction is executed
+ * it is linked by symbolically resolving the names in the instruction
  * and verifying that the method call is statically legal.
- * This is true of calls to {@code invokeExact} and {@code invoke}.
+ * This also holds for calls to {@code invokeExact} and {@code invoke}.
  * In this case, the symbolic type descriptor emitted by the compiler is checked for
- * correct syntax and names it contains are resolved.
+ * correct syntax, and names it contains are resolved.
  * Thus, an {@code invokevirtual} instruction which invokes
  * a method handle will always link, as long
  * as the symbolic type descriptor is syntactically well-formed
@@ -163,7 +167,7 @@ import static java.lang.invoke.MethodHandleStatics.*;
  * in a program which uses method handles.
  * <p>
  * Because method types contain "live" {@code Class} objects,
- * method type matching takes into account both types names and class loaders.
+ * method type matching takes into account both type names and class loaders.
  * Thus, even if a method handle {@code M} is created in one
  * class loader {@code L1} and used in another {@code L2},
  * method handle calls are type-safe, because the caller's symbolic type
@@ -174,7 +178,7 @@ import static java.lang.invoke.MethodHandleStatics.*;
  * and its type is assigned, while the resolution in {@code L2} happens
  * when the {@code invokevirtual} instruction is linked.
  * <p>
- * Apart from the checking of type descriptors,
+ * Apart from type descriptor checks,
  * a method handle's capability to call its underlying method is unrestricted.
  * If a method handle is formed on a non-public method by a class
  * that has access to that method, the resulting handle can be used
@@ -196,7 +200,7 @@ import static java.lang.invoke.MethodHandleStatics.*;
  * Java code can create a method handle that directly accesses
  * any method, constructor, or field that is accessible to that code.
  * This is done via a reflective, capability-based API called
- * {@link java.lang.invoke.MethodHandles.Lookup MethodHandles.Lookup}
+ * {@link java.lang.invoke.MethodHandles.Lookup MethodHandles.Lookup}.
  * For example, a static method handle can be obtained
  * from {@link java.lang.invoke.MethodHandles.Lookup#findStatic Lookup.findStatic}.
  * There are also conversion methods from Core Reflection API objects,
@@ -215,7 +219,8 @@ import static java.lang.invoke.MethodHandleStatics.*;
  * Method handles produced by lookups or constant loads from methods or
  * constructors with the variable arity modifier bit ({@code 0x0080})
  * have a corresponding variable arity, as if they were defined with
- * the help of {@link #asVarargsCollector asVarargsCollector}.
+ * the help of {@link #asVarargsCollector asVarargsCollector}
+ * or {@link #withVarargs withVarargs}.
  * <p>
  * A method reference may refer either to a static or non-static method.
  * In the non-static case, the method handle type includes an explicit
@@ -305,7 +310,7 @@ mh.invokeExact(System.out, "Hello, world.");
  * throwables locally, rethrowing only those which are legal in the context,
  * and wrapping ones which are illegal.
  *
- * <h1><a name="sigpoly"></a>Signature polymorphism</h1>
+ * <h1><a id="sigpoly"></a>Signature polymorphism</h1>
  * The unusual compilation and linkage behavior of
  * {@code invokeExact} and plain {@code invoke}
  * is referenced by the term <em>signature polymorphism</em>.
@@ -399,7 +404,7 @@ mh.invokeExact(System.out, "Hello, world.");
  * genericity with a Java type parameter.</li>
  * </ul>
  *
- * <h1><a name="maxarity"></a>Arity limits</h1>
+ * <h1><a id="maxarity"></a>Arity limits</h1>
  * The JVM imposes on all methods and constructors of any kind an absolute
  * limit of 255 stacked arguments.  This limit can appear more restrictive
  * in certain cases:
@@ -418,9 +423,9 @@ mh.invokeExact(System.out, "Hello, world.");
  * @see MethodType
  * @see MethodHandles
  * @author John Rose, JSR 292 EG
+ * @since 1.7
  */
 public abstract class MethodHandle {
-    static { MethodHandleImpl.initStatics(); }
 
     /**
      * Internal marker interface which distinguishes (to the Java compiler)
@@ -641,7 +646,7 @@ public abstract class MethodHandle {
      * <p>
      * This method is also equivalent to the following code:
      * <blockquote><pre>{@code
-     *   invokeWithArguments(arguments.toArray()
+     *   invokeWithArguments(arguments.toArray())
      * }</pre></blockquote>
      *
      * @param arguments the arguments to pass to the target
@@ -872,13 +877,54 @@ assertEquals("[A, B, C]", (String) caToString2.invokeExact('A', "BC".toCharArray
      * @see #asCollector
      */
     public MethodHandle asSpreader(Class<?> arrayType, int arrayLength) {
-        MethodType postSpreadType = asSpreaderChecks(arrayType, arrayLength);
-        int arity = type().parameterCount();
-        int spreadArgPos = arity - arrayLength;
+        return asSpreader(type().parameterCount() - arrayLength, arrayType, arrayLength);
+    }
+
+    /**
+     * Makes an <em>array-spreading</em> method handle, which accepts an array argument at a given position and spreads
+     * its elements as positional arguments in place of the array. The new method handle adapts, as its <i>target</i>,
+     * the current method handle. The type of the adapter will be the same as the type of the target, except that the
+     * {@code arrayLength} parameters of the target's type, starting at the zero-based position {@code spreadArgPos},
+     * are replaced by a single array parameter of type {@code arrayType}.
+     * <p>
+     * This method behaves very much like {@link #asSpreader(Class, int)}, but accepts an additional {@code spreadArgPos}
+     * argument to indicate at which position in the parameter list the spreading should take place.
+     * <p>
+     * @apiNote Example:
+     * <blockquote><pre>{@code
+    MethodHandle compare = LOOKUP.findStatic(Objects.class, "compare", methodType(int.class, Object.class, Object.class, Comparator.class));
+    MethodHandle compare2FromArray = compare.asSpreader(0, Object[].class, 2);
+    Object[] ints = new Object[]{3, 9, 7, 7};
+    Comparator<Integer> cmp = (a, b) -> a - b;
+    assertTrue((int) compare2FromArray.invoke(Arrays.copyOfRange(ints, 0, 2), cmp) < 0);
+    assertTrue((int) compare2FromArray.invoke(Arrays.copyOfRange(ints, 1, 3), cmp) > 0);
+    assertTrue((int) compare2FromArray.invoke(Arrays.copyOfRange(ints, 2, 4), cmp) == 0);
+     * }</pre></blockquote>
+     * @param spreadArgPos the position (zero-based index) in the argument list at which spreading should start.
+     * @param arrayType usually {@code Object[]}, the type of the array argument from which to extract the spread arguments
+     * @param arrayLength the number of arguments to spread from an incoming array argument
+     * @return a new method handle which spreads an array argument at a given position,
+     *         before calling the original method handle
+     * @throws NullPointerException if {@code arrayType} is a null reference
+     * @throws IllegalArgumentException if {@code arrayType} is not an array type,
+     *         or if target does not have at least
+     *         {@code arrayLength} parameter types,
+     *         or if {@code arrayLength} is negative,
+     *         or if {@code spreadArgPos} has an illegal value (negative, or together with arrayLength exceeding the
+     *         number of arguments),
+     *         or if the resulting method handle's type would have
+     *         <a href="MethodHandle.html#maxarity">too many parameters</a>
+     * @throws WrongMethodTypeException if the implied {@code asType} call fails
+     *
+     * @see #asSpreader(Class, int)
+     * @since 9
+     */
+    public MethodHandle asSpreader(int spreadArgPos, Class<?> arrayType, int arrayLength) {
+        MethodType postSpreadType = asSpreaderChecks(arrayType, spreadArgPos, arrayLength);
         MethodHandle afterSpread = this.asType(postSpreadType);
         BoundMethodHandle mh = afterSpread.rebind();
         LambdaForm lform = mh.editor().spreadArgumentsForm(1 + spreadArgPos, arrayType, arrayLength);
-        MethodType preSpreadType = postSpreadType.replaceParameterTypes(spreadArgPos, arity, arrayType);
+        MethodType preSpreadType = postSpreadType.replaceParameterTypes(spreadArgPos, spreadArgPos + arrayLength, arrayType);
         return mh.copyWith(preSpreadType, lform);
     }
 
@@ -886,15 +932,18 @@ assertEquals("[A, B, C]", (String) caToString2.invokeExact('A', "BC".toCharArray
      * See if {@code asSpreader} can be validly called with the given arguments.
      * Return the type of the method handle call after spreading but before conversions.
      */
-    private MethodType asSpreaderChecks(Class<?> arrayType, int arrayLength) {
+    private MethodType asSpreaderChecks(Class<?> arrayType, int pos, int arrayLength) {
         spreadArrayChecks(arrayType, arrayLength);
         int nargs = type().parameterCount();
         if (nargs < arrayLength || arrayLength < 0)
             throw newIllegalArgumentException("bad spread array length");
+        if (pos < 0 || pos + arrayLength > nargs) {
+            throw newIllegalArgumentException("bad spread position");
+        }
         Class<?> arrayElement = arrayType.getComponentType();
         MethodType mtype = type();
         boolean match = true, fail = false;
-        for (int i = nargs - arrayLength; i < nargs; i++) {
+        for (int i = pos; i < pos + arrayLength; i++) {
             Class<?> ptype = mtype.parameterType(i);
             if (ptype != arrayElement) {
                 match = false;
@@ -905,11 +954,11 @@ assertEquals("[A, B, C]", (String) caToString2.invokeExact('A', "BC".toCharArray
             }
         }
         if (match)  return mtype;
-        MethodType needType = mtype.asSpreaderType(arrayType, arrayLength);
+        MethodType needType = mtype.asSpreaderType(arrayType, pos, arrayLength);
         if (!fail)  return needType;
         // elicit an error:
         this.asType(needType);
-        throw newInternalError("should not return", null);
+        throw newInternalError("should not return");
     }
 
     private void spreadArrayChecks(Class<?> arrayType, int arrayLength) {
@@ -923,6 +972,36 @@ assertEquals("[A, B, C]", (String) caToString2.invokeExact('A', "BC".toCharArray
             if (arrayElement == long.class ||
                 arrayElement == double.class)
                 throw newIllegalArgumentException("array length is not legal for long[] or double[]", arrayLength);
+        }
+    }
+    /**
+      * Adapts this method handle to be {@linkplain #asVarargsCollector variable arity}
+      * if the boolean flag is true, else {@linkplain #asFixedArity fixed arity}.
+      * If the method handle is already of the proper arity mode, it is returned
+      * unchanged.
+      * @apiNote
+      * <p>This method is sometimes useful when adapting a method handle that
+      * may be variable arity, to ensure that the resulting adapter is also
+      * variable arity if and only if the original handle was.  For example,
+      * this code changes the first argument of a handle {@code mh} to {@code int} without
+      * disturbing its variable arity property:
+      * {@code mh.asType(mh.type().changeParameterType(0,int.class))
+      *     .withVarargs(mh.isVarargsCollector())}
+      * @param makeVarargs true if the return method handle should have variable arity behavior
+      * @return a method handle of the same type, with possibly adjusted variable arity behavior
+      * @throws IllegalArgumentException if {@code makeVarargs} is true and
+      *         this method handle does not have a trailing array parameter
+      * @since 9
+      * @see #asVarargsCollector
+      * @see #asFixedArity
+     */
+     public MethodHandle withVarargs(boolean makeVarargs) {
+        if (!makeVarargs) {
+            return asFixedArity();
+        } else if (!isVarargsCollector()) {
+            return asVarargsCollector(type().lastParameterType());
+        } else {
+            return this;
         }
     }
 
@@ -953,7 +1032,8 @@ assertEquals("[A, B, C]", (String) caToString2.invokeExact('A', "BC".toCharArray
      * to allow the target to use a simple {@code Object} as its last parameter type.)
      * <p>
      * In order to create a collecting adapter which is not restricted to a particular
-     * number of collected arguments, use {@link #asVarargsCollector asVarargsCollector} instead.
+     * number of collected arguments, use {@link #asVarargsCollector asVarargsCollector}
+     * or {@link #withVarargs withVarargs} instead.
      * <p>
      * Here are some examples of array-collecting method handles:
      * <blockquote><pre>{@code
@@ -983,6 +1063,9 @@ MethodHandle longsToString = publicLookup()
   .asCollector(long[].class, 1);
 assertEquals("[123]", (String) longsToString.invokeExact((long)123));
      * }</pre></blockquote>
+     * <p>
+     * <em>Note:</em> The resulting adapter is never a {@linkplain MethodHandle#asVarargsCollector
+     * variable-arity method handle}, even if the original target method handle was.
      * @param arrayType often {@code Object[]}, the type of the array argument which will collect the arguments
      * @param arrayLength the number of arguments to collect into a new array argument
      * @return a new method handle which collects some trailing argument
@@ -998,10 +1081,56 @@ assertEquals("[123]", (String) longsToString.invokeExact((long)123));
      * @see #asVarargsCollector
      */
     public MethodHandle asCollector(Class<?> arrayType, int arrayLength) {
-        asCollectorChecks(arrayType, arrayLength);
-        int collectArgPos = type().parameterCount() - 1;
+        return asCollector(type().parameterCount() - 1, arrayType, arrayLength);
+    }
+
+    /**
+     * Makes an <em>array-collecting</em> method handle, which accepts a given number of positional arguments starting
+     * at a given position, and collects them into an array argument. The new method handle adapts, as its
+     * <i>target</i>, the current method handle. The type of the adapter will be the same as the type of the target,
+     * except that the parameter at the position indicated by {@code collectArgPos} (usually of type {@code arrayType})
+     * is replaced by {@code arrayLength} parameters whose type is element type of {@code arrayType}.
+     * <p>
+     * This method behaves very much like {@link #asCollector(Class, int)}, but differs in that its {@code
+     * collectArgPos} argument indicates at which position in the parameter list arguments should be collected. This
+     * index is zero-based.
+     * <p>
+     * @apiNote Examples:
+     * <blockquote><pre>{@code
+    StringWriter swr = new StringWriter();
+    MethodHandle swWrite = LOOKUP.findVirtual(StringWriter.class, "write", methodType(void.class, char[].class, int.class, int.class)).bindTo(swr);
+    MethodHandle swWrite4 = swWrite.asCollector(0, char[].class, 4);
+    swWrite4.invoke('A', 'B', 'C', 'D', 1, 2);
+    assertEquals("BC", swr.toString());
+    swWrite4.invoke('P', 'Q', 'R', 'S', 0, 4);
+    assertEquals("BCPQRS", swr.toString());
+    swWrite4.invoke('W', 'X', 'Y', 'Z', 3, 1);
+    assertEquals("BCPQRSZ", swr.toString());
+     * }</pre></blockquote>
+     * <p>
+     * <em>Note:</em> The resulting adapter is never a {@linkplain MethodHandle#asVarargsCollector
+     * variable-arity method handle}, even if the original target method handle was.
+     * @param collectArgPos the zero-based position in the parameter list at which to start collecting.
+     * @param arrayType often {@code Object[]}, the type of the array argument which will collect the arguments
+     * @param arrayLength the number of arguments to collect into a new array argument
+     * @return a new method handle which collects some arguments
+     *         into an array, before calling the original method handle
+     * @throws NullPointerException if {@code arrayType} is a null reference
+     * @throws IllegalArgumentException if {@code arrayType} is not an array type
+     *         or {@code arrayType} is not assignable to this method handle's array parameter type,
+     *         or {@code arrayLength} is not a legal array size,
+     *         or {@code collectArgPos} has an illegal value (negative, or greater than the number of arguments),
+     *         or the resulting method handle's type would have
+     *         <a href="MethodHandle.html#maxarity">too many parameters</a>
+     * @throws WrongMethodTypeException if the implied {@code asType} call fails
+     *
+     * @see #asCollector(Class, int)
+     * @since 9
+     */
+    public MethodHandle asCollector(int collectArgPos, Class<?> arrayType, int arrayLength) {
+        asCollectorChecks(arrayType, collectArgPos, arrayLength);
         BoundMethodHandle mh = rebind();
-        MethodType resultType = type().asCollectorType(arrayType, arrayLength);
+        MethodType resultType = type().asCollectorType(arrayType, collectArgPos, arrayLength);
         MethodHandle newArray = MethodHandleImpl.varargsArray(arrayType, arrayLength);
         LambdaForm lform = mh.editor().collectArgumentArrayForm(1 + collectArgPos, newArray);
         if (lform != null) {
@@ -1015,15 +1144,18 @@ assertEquals("[123]", (String) longsToString.invokeExact((long)123));
      * See if {@code asCollector} can be validly called with the given arguments.
      * Return false if the last parameter is not an exact match to arrayType.
      */
-    /*non-public*/ boolean asCollectorChecks(Class<?> arrayType, int arrayLength) {
+    /*non-public*/ boolean asCollectorChecks(Class<?> arrayType, int pos, int arrayLength) {
         spreadArrayChecks(arrayType, arrayLength);
         int nargs = type().parameterCount();
-        if (nargs != 0) {
-            Class<?> lastParam = type().parameterType(nargs-1);
-            if (lastParam == arrayType)  return true;
-            if (lastParam.isAssignableFrom(arrayType))  return false;
+        if (pos < 0 || pos >= nargs) {
+            throw newIllegalArgumentException("bad collect position");
         }
-        throw newIllegalArgumentException("array type not assignable to trailing argument", this, arrayType);
+        if (nargs != 0) {
+            Class<?> param = type().parameterType(pos);
+            if (param == arrayType)  return true;
+            if (param.isAssignableFrom(arrayType))  return false;
+        }
+        throw newIllegalArgumentException("array type not assignable to argument", this, arrayType);
     }
 
     /**
@@ -1117,7 +1249,7 @@ assertEquals("[123]", (String) longsToString.invokeExact((long)123));
      * <p>
      * No method handle transformations produce new method handles with
      * variable arity, unless they are documented as doing so.
-     * Therefore, besides {@code asVarargsCollector},
+     * Therefore, besides {@code asVarargsCollector} and {@code withVarargs},
      * all methods in {@code MethodHandle} and {@code MethodHandles}
      * will return a method handle with fixed arity,
      * except in the cases where they are specified to return their original
@@ -1174,11 +1306,12 @@ assertEquals("[three, thee, tee]", Arrays.toString((Object[])ls.get(0)));
      *         or {@code arrayType} is not assignable to this method handle's trailing parameter type
      * @see #asCollector
      * @see #isVarargsCollector
+     * @see #withVarargs
      * @see #asFixedArity
      */
     public MethodHandle asVarargsCollector(Class<?> arrayType) {
         Objects.requireNonNull(arrayType);
-        boolean lastMatch = asCollectorChecks(arrayType, 0);
+        boolean lastMatch = asCollectorChecks(arrayType, type().parameterCount() - 1, 0);
         if (isVarargsCollector() && lastMatch)
             return this;
         return MethodHandleImpl.makeVarargsCollector(this, arrayType);
@@ -1245,6 +1378,7 @@ assertEquals("[three, thee, tee]", asListFix.invoke((Object)argv).toString());
      * @return a new method handle which accepts only a fixed number of arguments
      * @see #asVarargsCollector
      * @see #isVarargsCollector
+     * @see #withVarargs
      */
     public MethodHandle asFixedArity() {
         assert(!isVarargsCollector());
@@ -1267,8 +1401,11 @@ assertEquals("[three, thee, tee]", asListFix.invoke((Object)argv).toString());
      * The reference {@code x} must be convertible to the first parameter
      * type of the target.
      * <p>
-     * (<em>Note:</em>  Because method handles are immutable, the target method handle
-     * retains its original type and behavior.)
+     * <em>Note:</em>  Because method handles are immutable, the target method handle
+     * retains its original type and behavior.
+     * <p>
+     * <em>Note:</em> The resulting adapter is never a {@linkplain MethodHandle#asVarargsCollector
+     * variable-arity method handle}, even if the original target method handle was.
      * @param x  the value to bind to the first argument of the target
      * @return a new method handle which prepends the given value to the incoming
      *         argument list, before calling the original method handle
@@ -1326,11 +1463,11 @@ assertEquals("[three, thee, tee]", asListFix.invoke((Object)argv).toString());
     /*non-public*/
     MethodHandle setVarargs(MemberName member) throws IllegalAccessException {
         if (!member.isVarargs())  return this;
-        Class<?> arrayType = type().lastParameterType();
-        if (arrayType.isArray()) {
-            return MethodHandleImpl.makeVarargsCollector(this, arrayType);
+        try {
+            return this.withVarargs(true);
+        } catch (IllegalArgumentException ex) {
+            throw member.makeAccessException("cannot make variable arity", null);
         }
-        throw member.makeAccessException("cannot make variable arity", null);
     }
 
     /*non-public*/
@@ -1341,7 +1478,6 @@ assertEquals("[three, thee, tee]", asListFix.invoke((Object)argv).toString());
         // cannot be cracked into MethodHandleInfo.
         assert viewAsTypeChecks(newType, strict);
         BoundMethodHandle mh = rebind();
-        assert(!((MethodHandle)mh instanceof DirectMethodHandle));
         return mh.copyWith(newType, mh.form);
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,12 +26,15 @@
  * @bug 7162400
  * @key regression
  * @summary Regression test for attach issue where stale pid files in /tmp lead to connection issues
- * @library /testlibrary
- * @build jdk.test.lib.* AttachWithStalePidFileTarget
+ * @modules java.base/jdk.internal.misc:open
+ * @modules java.base/java.lang:open
+ * @modules jdk.attach/sun.tools.attach
+ * @library /test/lib
  * @run main AttachWithStalePidFile
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.Platform;
+import jdk.test.lib.process.ProcessTools;
 import com.sun.tools.attach.VirtualMachine;
 import sun.tools.attach.HotSpotVirtualMachine;
 import java.lang.reflect.Field;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,7 +40,7 @@ import java.security.*;
  * @deprecated As of JDK 1.4, this implementation-specific class was
  *      replaced by {@link javax.net.ssl.KeyManagerFactory}.
  */
-@Deprecated
+@Deprecated(since="1.4")
 public class KeyManagerFactory {
     // The provider
     private Provider provider;
@@ -61,7 +61,7 @@ public class KeyManagerFactory {
      *
      * @see java.security.Security security properties
      */
-    public final static String getDefaultAlgorithm() {
+    public static final String getDefaultAlgorithm() {
         String type;
         type = AccessController.doPrivileged(new PrivilegedAction<>() {
             public String run() {

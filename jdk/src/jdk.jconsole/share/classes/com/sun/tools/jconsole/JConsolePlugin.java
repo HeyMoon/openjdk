@@ -34,8 +34,8 @@ import javax.swing.SwingWorker;
 
 /**
  * A JConsole plugin class.  JConsole uses the
- * <a href="{@docRoot}/../../../../api/java/util/ServiceLoader.html">
- * service provider</a> mechanism to search the JConsole plugins.
+ * {@link java.util.ServiceLoader service provider}
+ * mechanism to search the JConsole plugins.
  * Users can provide their JConsole plugins in a jar file
  * containing a file named
  *
@@ -54,7 +54,7 @@ import javax.swing.SwingWorker;
  * <blockquote><pre>
  * jconsole -pluginpath &lt;plugin-path&gt; </pre></blockquote>
  *
- * <p> where <tt>&lt;plugin-path&gt;</tt> specifies the paths of JConsole
+ * <p> where {@code <plugin-path>} specifies the paths of JConsole
  * plugins to look up which can be a directory or a jar file. Multiple
  * paths are separated by the path separator character of the platform.
  *
@@ -67,12 +67,10 @@ import javax.swing.SwingWorker;
  * call its {@link #getTabs getTabs} method and add the returned
  * tabs to the JConsole window.
  *
- * @see <a href="{@docRoot}/../../../../api/java/util/ServiceLoader.html">
- * java.util.ServiceLoader</a>
+ * @see java.util.ServiceLoader
  *
  * @since 1.6
  */
-@jdk.Exported
 public abstract class JConsolePlugin {
     private volatile JConsoleContext context = null;
     private List<PropertyChangeListener> listeners = null;
@@ -106,7 +104,7 @@ public abstract class JConsolePlugin {
 
     /**
      * Returns the {@link JConsoleContext JConsoleContext} object representing
-     * the connection to an application.  This method may return <tt>null</tt>
+     * the connection to an application.  This method may return {@code null}
      * if it is called before the {@link #setContext context} is initialized.
      *
      * @return the {@link JConsoleContext JConsoleContext} object representing
@@ -146,24 +144,24 @@ public abstract class JConsolePlugin {
      * method to schedule the returned {@code SwingWorker} for execution
      * if:
      * <ul>
-     *   <li> the <tt>SwingWorker</tt> object has not been executed
+     *   <li> the {@code SwingWorker} object has not been executed
      *        (i.e. the {@link SwingWorker#getState} method
      *        returns {@link javax.swing.SwingWorker.StateValue#PENDING PENDING}
      *        state); and</li>
-     *   <li> the <tt>SwingWorker</tt> object returned in the previous
-     *        update has completed the task if it was not <tt>null</tt>
+     *   <li> the {@code SwingWorker} object returned in the previous
+     *        update has completed the task if it was not {@code null}
      *        (i.e. the {@link SwingWorker#isDone SwingWorker.isDone} method
-     *        returns <tt>true</tt>).</li>
+     *        returns {@code true}).</li>
      * </ul>
      * <br>
-     * Otherwise, <tt>SwingWorker</tt> object will not be scheduled to work.
+     * Otherwise, {@code SwingWorker} object will not be scheduled to work.
      *
      * <p>
      * A plugin can schedule its own GUI update and this method
-     * will return <tt>null</tt>.
+     * will return {@code null}.
      *
-     * @return a <tt>SwingWorker</tt> to perform the GUI update; or
-     *         <tt>null</tt>.
+     * @return a {@code SwingWorker} to perform the GUI update; or
+     *         {@code null}.
      */
     public abstract SwingWorker<?,?> newSwingWorker();
 

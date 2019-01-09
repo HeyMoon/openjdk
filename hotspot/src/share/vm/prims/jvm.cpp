@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,11 +23,14 @@
  */
 
 #include "precompiled.hpp"
+#include "classfile/classFileStream.hpp"
 #include "classfile/classLoader.hpp"
-#include "classfile/imageDecompressor.hpp"
-#include "classfile/imageFile.hpp"
+#include "classfile/classLoaderData.inline.hpp"
 #include "classfile/javaAssertions.hpp"
 #include "classfile/javaClasses.inline.hpp"
+#include "classfile/moduleEntry.hpp"
+#include "classfile/modules.hpp"
+#include "classfile/packageEntry.hpp"
 #include "classfile/stringTable.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
@@ -35,6 +38,7 @@
 #include "gc/shared/collectedHeap.inline.hpp"
 #include "interpreter/bytecode.hpp"
 #include "memory/oopFactory.hpp"
+#include "memory/resourceArea.hpp"
 #include "memory/universe.inline.hpp"
 #include "oops/fieldStreams.hpp"
 #include "oops/instanceKlass.hpp"
@@ -48,8 +52,9 @@
 #include "prims/jvmtiThreadState.hpp"
 #include "prims/nativeLookup.hpp"
 #include "prims/privilegedStack.hpp"
+#include "prims/stackwalk.hpp"
 #include "runtime/arguments.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/init.hpp"
 #include "runtime/interfaceSupport.hpp"
@@ -71,30 +76,13 @@
 #include "utilities/copy.hpp"
 #include "utilities/defaultStream.hpp"
 #include "utilities/dtrace.hpp"
-#include "utilities/endian.hpp"
 #include "utilities/events.hpp"
 #include "utilities/histogram.hpp"
 #include "utilities/macros.hpp"
-#include "utilities/top.hpp"
 #include "utilities/utf8.hpp"
 #if INCLUDE_CDS
 #include "classfile/sharedClassUtil.hpp"
 #include "classfile/systemDictionaryShared.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_linux
-# include "jvm_linux.h"
-#endif
-#ifdef TARGET_OS_FAMILY_solaris
-# include "jvm_solaris.h"
-#endif
-#ifdef TARGET_OS_FAMILY_windows
-# include "jvm_windows.h"
-#endif
-#ifdef TARGET_OS_FAMILY_aix
-# include "jvm_aix.h"
-#endif
-#ifdef TARGET_OS_FAMILY_bsd
-# include "jvm_bsd.h"
 #endif
 
 #include <errno.h>
@@ -207,9 +195,9 @@ static void trace_class_resolution_impl(Klass* to_class, TRAPS) {
       const char * to = to_class->external_name();
       // print in a single call to reduce interleaving between threads
       if (source_file != NULL) {
-        tty->print("RESOLVE %s %s %s:%d (%s)\n", from, to, source_file, line_number, trace);
+        log_debug(class, resolve)("%s %s %s:%d (%s)", from, to, source_file, line_number, trace);
       } else {
-        tty->print("RESOLVE %s %s (%s)\n", from, to, trace);
+        log_debug(class, resolve)("%s %s (%s)", from, to, trace);
       }
     }
   }
@@ -226,19 +214,6 @@ void trace_class_resolution(Klass* to_class) {
 // Wrapper to trace JVM functions
 
 #ifdef ASSERT
-  class JVMTraceWrapper : public StackObj {
-   public:
-    JVMTraceWrapper(const char* format, ...) ATTRIBUTE_PRINTF(2, 3) {
-      if (TraceJVMCalls) {
-        va_list ap;
-        va_start(ap, format);
-        tty->print("JVM ");
-        tty->vprint_cr(format, ap);
-        va_end(ap);
-      }
-    }
-  };
-
   Histogram* JVMHistogram;
   volatile jint JVMHistogram_lock = 0;
 
@@ -272,15 +247,9 @@ void trace_class_resolution(Klass* to_class) {
       static JVMHistogramElement* e = new JVMHistogramElement(arg); \
       if (e != NULL) e->increment_count();  // Due to bug in VC++, we need a NULL check here eventhough it should never happen!
 
-  #define JVMWrapper(arg1)                    JVMCountWrapper(arg1); JVMTraceWrapper(arg1)
-  #define JVMWrapper2(arg1, arg2)             JVMCountWrapper(arg1); JVMTraceWrapper(arg1, arg2)
-  #define JVMWrapper3(arg1, arg2, arg3)       JVMCountWrapper(arg1); JVMTraceWrapper(arg1, arg2, arg3)
-  #define JVMWrapper4(arg1, arg2, arg3, arg4) JVMCountWrapper(arg1); JVMTraceWrapper(arg1, arg2, arg3, arg4)
+  #define JVMWrapper(arg) JVMCountWrapper(arg);
 #else
-  #define JVMWrapper(arg1)
-  #define JVMWrapper2(arg1, arg2)
-  #define JVMWrapper3(arg1, arg2, arg3)
-  #define JVMWrapper4(arg1, arg2, arg3, arg4)
+  #define JVMWrapper(arg)
 #endif
 
 
@@ -305,7 +274,7 @@ JVM_LEAF(jlong, JVM_NanoTime(JNIEnv *env, jclass ignored))
   return os::javaTimeNanos();
 JVM_END
 
-// The function below is actually exposed by sun.misc.VM and not
+// The function below is actually exposed by jdk.internal.misc.VM and not
 // java.lang.System, but we choose to keep it here so that it stays next
 // to JVM_CurrentTimeMillis and JVM_NanoTime
 
@@ -405,7 +374,7 @@ JVM_ENTRY(jobject, JVM_InitProperties(JNIEnv *env, jobject properties))
       PUTPROP(props, "sun.nio.MaxDirectMemorySize", "-1");
     } else {
       char as_chars[256];
-      jio_snprintf(as_chars, sizeof(as_chars), SIZE_FORMAT, MaxDirectMemorySize);
+      jio_snprintf(as_chars, sizeof(as_chars), JULONG_FORMAT, MaxDirectMemorySize);
       PUTPROP(props, "sun.nio.MaxDirectMemorySize", as_chars);
     }
   }
@@ -427,6 +396,8 @@ JVM_ENTRY(jobject, JVM_InitProperties(JNIEnv *env, jobject properties))
     const char* compiler_name = "HotSpot " CSIZE "Client Compiler";
 #elif defined(COMPILER2)
     const char* compiler_name = "HotSpot " CSIZE "Server Compiler";
+#elif INCLUDE_JVMCI
+    #error "INCLUDE_JVMCI should imply TIERED"
 #else
     const char* compiler_name = "";
 #endif // compilers
@@ -532,21 +503,79 @@ JVM_ENTRY(void, JVM_FillInStackTrace(JNIEnv *env, jobject receiver))
 JVM_END
 
 
-JVM_ENTRY(jint, JVM_GetStackTraceDepth(JNIEnv *env, jobject throwable))
-  JVMWrapper("JVM_GetStackTraceDepth");
-  oop exception = JNIHandles::resolve(throwable);
-  return java_lang_Throwable::get_stack_trace_depth(exception, THREAD);
+// java.lang.StackTraceElement //////////////////////////////////////////////
+
+
+JVM_ENTRY(void, JVM_InitStackTraceElementArray(JNIEnv *env, jobjectArray elements, jobject throwable))
+  JVMWrapper("JVM_InitStackTraceElementArray");
+  Handle exception(THREAD, JNIHandles::resolve(throwable));
+  objArrayOop st = objArrayOop(JNIHandles::resolve(elements));
+  objArrayHandle stack_trace(THREAD, st);
+  // Fill in the allocated stack trace
+  java_lang_Throwable::get_stack_trace_elements(exception, stack_trace, CHECK);
 JVM_END
 
 
-JVM_ENTRY(jobject, JVM_GetStackTraceElement(JNIEnv *env, jobject throwable, jint index))
-  JVMWrapper("JVM_GetStackTraceElement");
-  JvmtiVMObjectAllocEventCollector oam; // This ctor (throughout this module) may trigger a safepoint/GC
-  oop exception = JNIHandles::resolve(throwable);
-  oop element = java_lang_Throwable::get_stack_trace_element(exception, index, CHECK_NULL);
-  return JNIHandles::make_local(env, element);
+JVM_ENTRY(void, JVM_InitStackTraceElement(JNIEnv* env, jobject element, jobject stackFrameInfo))
+  JVMWrapper("JVM_InitStackTraceElement");
+  Handle stack_frame_info(THREAD, JNIHandles::resolve_non_null(stackFrameInfo));
+  Handle stack_trace_element(THREAD, JNIHandles::resolve_non_null(element));
+  java_lang_StackFrameInfo::to_stack_trace_element(stack_frame_info, stack_trace_element, THREAD);
 JVM_END
 
+
+// java.lang.StackWalker //////////////////////////////////////////////////////
+
+
+JVM_ENTRY(jobject, JVM_CallStackWalk(JNIEnv *env, jobject stackStream, jlong mode,
+                                     jint skip_frames, jint frame_count, jint start_index,
+                                     jobjectArray frames))
+  JVMWrapper("JVM_CallStackWalk");
+  JavaThread* jt = (JavaThread*) THREAD;
+  if (!jt->is_Java_thread() || !jt->has_last_Java_frame()) {
+    THROW_MSG_(vmSymbols::java_lang_InternalError(), "doStackWalk: no stack trace", NULL);
+  }
+
+  Handle stackStream_h(THREAD, JNIHandles::resolve_non_null(stackStream));
+
+  // frames array is a Class<?>[] array when only getting caller reference,
+  // and a StackFrameInfo[] array (or derivative) otherwise. It should never
+  // be null.
+  objArrayOop fa = objArrayOop(JNIHandles::resolve_non_null(frames));
+  objArrayHandle frames_array_h(THREAD, fa);
+
+  int limit = start_index + frame_count;
+  if (frames_array_h->length() < limit) {
+    THROW_MSG_(vmSymbols::java_lang_IllegalArgumentException(), "not enough space in buffers", NULL);
+  }
+
+  Handle result = StackWalk::walk(stackStream_h, mode, skip_frames, frame_count,
+                                  start_index, frames_array_h, CHECK_NULL);
+  return JNIHandles::make_local(env, result());
+JVM_END
+
+
+JVM_ENTRY(jint, JVM_MoreStackWalk(JNIEnv *env, jobject stackStream, jlong mode, jlong anchor,
+                                  jint frame_count, jint start_index,
+                                  jobjectArray frames))
+  JVMWrapper("JVM_MoreStackWalk");
+  JavaThread* jt = (JavaThread*) THREAD;
+
+  // frames array is a Class<?>[] array when only getting caller reference,
+  // and a StackFrameInfo[] array (or derivative) otherwise. It should never
+  // be null.
+  objArrayOop fa = objArrayOop(JNIHandles::resolve_non_null(frames));
+  objArrayHandle frames_array_h(THREAD, fa);
+
+  int limit = start_index+frame_count;
+  if (frames_array_h->length() < limit) {
+    THROW_MSG_0(vmSymbols::java_lang_IllegalArgumentException(), "not enough space in buffers");
+  }
+
+  Handle stackStream_h(THREAD, JNIHandles::resolve_non_null(stackStream));
+  return StackWalk::fetchNextBatch(stackStream_h, mode, anchor, frame_count,
+                                   start_index, frames_array_h, THREAD);
+JVM_END
 
 // java.lang.Object ///////////////////////////////////////////////
 
@@ -655,7 +684,7 @@ JVM_ENTRY(jobject, JVM_Clone(JNIEnv* env, jobject handle))
       // This can safepoint and redefine method, so need both new_obj and method
       // in a handle, for two different reasons.  new_obj can move, method can be
       // deleted if nothing is using it on the stack.
-      m->method_holder()->add_member_name(new_obj());
+      m->method_holder()->add_member_name(new_obj(), false);
     }
   }
 
@@ -673,7 +702,7 @@ JVM_END
 // java.io.File ///////////////////////////////////////////////////////////////
 
 JVM_LEAF(char*, JVM_NativePath(char* path))
-  JVMWrapper2("JVM_NativePath (%s)", path);
+  JVMWrapper("JVM_NativePath");
   return os::native_path(path);
 JVM_END
 
@@ -750,7 +779,7 @@ JVM_END
 // FindClassFromBootLoader is exported to the launcher for windows.
 JVM_ENTRY(jclass, JVM_FindClassFromBootLoader(JNIEnv* env,
                                               const char* name))
-  JVMWrapper2("JVM_FindClassFromBootLoader %s", name);
+  JVMWrapper("JVM_FindClassFromBootLoader");
 
   // Java libraries should ensure that name is never null...
   if (name == NULL || (int)strlen(name) > Symbol::max_length()) {
@@ -765,7 +794,7 @@ JVM_ENTRY(jclass, JVM_FindClassFromBootLoader(JNIEnv* env,
     return NULL;
   }
 
-  if (TraceClassResolution) {
+  if (log_is_enabled(Debug, class, resolve)) {
     trace_class_resolution(k);
   }
   return (jclass) JNIHandles::make_local(env, k->java_mirror());
@@ -775,7 +804,7 @@ JVM_END
 JVM_ENTRY(jclass, JVM_FindClassFromCaller(JNIEnv* env, const char* name,
                                           jboolean init, jobject loader,
                                           jclass caller))
-  JVMWrapper2("JVM_FindClassFromCaller %s throws ClassNotFoundException", name);
+  JVMWrapper("JVM_FindClassFromCaller throws ClassNotFoundException");
   // Java libraries should ensure that name is never null...
   if (name == NULL || (int)strlen(name) > Symbol::max_length()) {
     // It's impossible to create this class;  the name cannot fit
@@ -802,7 +831,7 @@ JVM_ENTRY(jclass, JVM_FindClassFromCaller(JNIEnv* env, const char* name,
   jclass result = find_class_from_class_loader(env, h_name, init, h_loader,
                                                h_prot, false, THREAD);
 
-  if (TraceClassResolution && result != NULL) {
+  if (log_is_enabled(Debug, class, resolve) && result != NULL) {
     trace_class_resolution(java_lang_Class::as_Klass(JNIHandles::resolve_non_null(result)));
   }
   return result;
@@ -810,7 +839,7 @@ JVM_END
 
 JVM_ENTRY(jclass, JVM_FindClassFromClass(JNIEnv *env, const char *name,
                                          jboolean init, jclass from))
-  JVMWrapper2("JVM_FindClassFromClass %s", name);
+  JVMWrapper("JVM_FindClassFromClass");
   if (name == NULL || (int)strlen(name) > Symbol::max_length()) {
     // It's impossible to create this class;  the name cannot fit
     // into the constant pool.
@@ -832,7 +861,7 @@ JVM_ENTRY(jclass, JVM_FindClassFromClass(JNIEnv *env, const char *name,
   jclass result = find_class_from_class_loader(env, h_name, init, h_loader,
                                                h_prot, true, thread);
 
-  if (TraceClassResolution && result != NULL) {
+  if (log_is_enabled(Debug, class, resolve) && result != NULL) {
     // this function is generally only used for class loading during verification.
     ResourceMark rm;
     oop from_mirror = JNIHandles::resolve_non_null(from);
@@ -842,7 +871,7 @@ JVM_ENTRY(jclass, JVM_FindClassFromClass(JNIEnv *env, const char *name,
     oop mirror = JNIHandles::resolve_non_null(result);
     Klass* to_class = java_lang_Class::as_Klass(mirror);
     const char * to = to_class->external_name();
-    tty->print("RESOLVE %s %s (verification)\n", from_name, to);
+    log_debug(class, resolve)("%s %s (verification)", from_name, to);
   }
 
   return result;
@@ -862,11 +891,10 @@ static void is_lock_held_by_thread(Handle loader, PerfCounter* counter, TRAPS) {
 }
 
 // common code for JVM_DefineClass() and JVM_DefineClassWithSource()
-// and JVM_DefineClassWithSourceCond()
 static jclass jvm_define_class_common(JNIEnv *env, const char *name,
                                       jobject loader, const jbyte *buf,
                                       jsize len, jobject pd, const char *source,
-                                      jboolean verify, TRAPS) {
+                                      TRAPS) {
   if (source == NULL)  source = "__JVM_DefineClass__";
 
   assert(THREAD->is_Java_thread(), "must be a JavaThread");
@@ -897,7 +925,7 @@ static jclass jvm_define_class_common(JNIEnv *env, const char *name,
   }
 
   ResourceMark rm(THREAD);
-  ClassFileStream st((u1*) buf, len, (char *)source);
+  ClassFileStream st((u1*)buf, len, source, ClassFileStream::verify);
   Handle class_loader (THREAD, JNIHandles::resolve(loader));
   if (UsePerfData) {
     is_lock_held_by_thread(class_loader,
@@ -905,12 +933,13 @@ static jclass jvm_define_class_common(JNIEnv *env, const char *name,
                            THREAD);
   }
   Handle protection_domain (THREAD, JNIHandles::resolve(pd));
-  Klass* k = SystemDictionary::resolve_from_stream(class_name, class_loader,
-                                                     protection_domain, &st,
-                                                     verify != 0,
-                                                     CHECK_NULL);
+  Klass* k = SystemDictionary::resolve_from_stream(class_name,
+                                                   class_loader,
+                                                   protection_domain,
+                                                   &st,
+                                                   CHECK_NULL);
 
-  if (TraceClassResolution && k != NULL) {
+  if (log_is_enabled(Debug, class, resolve) && k != NULL) {
     trace_class_resolution(k);
   }
 
@@ -919,25 +948,16 @@ static jclass jvm_define_class_common(JNIEnv *env, const char *name,
 
 
 JVM_ENTRY(jclass, JVM_DefineClass(JNIEnv *env, const char *name, jobject loader, const jbyte *buf, jsize len, jobject pd))
-  JVMWrapper2("JVM_DefineClass %s", name);
+  JVMWrapper("JVM_DefineClass");
 
-  return jvm_define_class_common(env, name, loader, buf, len, pd, NULL, true, THREAD);
+  return jvm_define_class_common(env, name, loader, buf, len, pd, NULL, THREAD);
 JVM_END
 
 
 JVM_ENTRY(jclass, JVM_DefineClassWithSource(JNIEnv *env, const char *name, jobject loader, const jbyte *buf, jsize len, jobject pd, const char *source))
-  JVMWrapper2("JVM_DefineClassWithSource %s", name);
+  JVMWrapper("JVM_DefineClassWithSource");
 
-  return jvm_define_class_common(env, name, loader, buf, len, pd, source, true, THREAD);
-JVM_END
-
-JVM_ENTRY(jclass, JVM_DefineClassWithSourceCond(JNIEnv *env, const char *name,
-                                                jobject loader, const jbyte *buf,
-                                                jsize len, jobject pd,
-                                                const char *source, jboolean verify))
-  JVMWrapper2("JVM_DefineClassWithSourceCond %s", name);
-
-  return jvm_define_class_common(env, name, loader, buf, len, pd, source, verify, THREAD);
+  return jvm_define_class_common(env, name, loader, buf, len, pd, source, THREAD);
 JVM_END
 
 JVM_ENTRY(jclass, JVM_FindLoadedClass(JNIEnv *env, jobject loader, jstring name))
@@ -986,6 +1006,38 @@ JVM_ENTRY(jclass, JVM_FindLoadedClass(JNIEnv *env, jobject loader, jstring name)
             (jclass) JNIHandles::make_local(env, k->java_mirror());
 JVM_END
 
+// Module support //////////////////////////////////////////////////////////////////////////////
+
+JVM_ENTRY(void, JVM_DefineModule(JNIEnv *env, jobject module, jboolean is_open, jstring version,
+                                 jstring location, const char* const* packages, jsize num_packages))
+  JVMWrapper("JVM_DefineModule");
+  Modules::define_module(module, version, location, packages, num_packages, CHECK);
+JVM_END
+
+JVM_ENTRY(void, JVM_SetBootLoaderUnnamedModule(JNIEnv *env, jobject module))
+  JVMWrapper("JVM_SetBootLoaderUnnamedModule");
+  Modules::set_bootloader_unnamed_module(module, CHECK);
+JVM_END
+
+JVM_ENTRY(void, JVM_AddModuleExports(JNIEnv *env, jobject from_module, const char* package, jobject to_module))
+  JVMWrapper("JVM_AddModuleExports");
+  Modules::add_module_exports_qualified(from_module, package, to_module, CHECK);
+JVM_END
+
+JVM_ENTRY(void, JVM_AddModuleExportsToAllUnnamed(JNIEnv *env, jobject from_module, const char* package))
+  JVMWrapper("JVM_AddModuleExportsToAllUnnamed");
+  Modules::add_module_exports_to_all_unnamed(from_module, package, CHECK);
+JVM_END
+
+JVM_ENTRY(void, JVM_AddModuleExportsToAll(JNIEnv *env, jobject from_module, const char* package))
+  JVMWrapper("JVM_AddModuleExportsToAll");
+  Modules::add_module_exports(from_module, package, NULL, CHECK);
+JVM_END
+
+JVM_ENTRY (void, JVM_AddReadsModule(JNIEnv *env, jobject from_module, jobject source_module))
+  JVMWrapper("JVM_AddReadsModule");
+  Modules::add_reads_module(from_module, source_module, CHECK);
+JVM_END
 
 // Reflection support //////////////////////////////////////////////////////////////////////////////
 
@@ -1023,10 +1075,10 @@ JVM_ENTRY(jobjectArray, JVM_GetClassInterfaces(JNIEnv *env, jclass cls))
   KlassHandle klass(thread, java_lang_Class::as_Klass(mirror));
   // Figure size of result array
   int size;
-  if (klass->oop_is_instance()) {
+  if (klass->is_instance_klass()) {
     size = InstanceKlass::cast(klass())->local_interfaces()->length();
   } else {
-    assert(klass->oop_is_objArray() || klass->oop_is_typeArray(), "Illegal mirror klass");
+    assert(klass->is_objArray_klass() || klass->is_typeArray_klass(), "Illegal mirror klass");
     size = 2;
   }
 
@@ -1034,7 +1086,7 @@ JVM_ENTRY(jobjectArray, JVM_GetClassInterfaces(JNIEnv *env, jclass cls))
   objArrayOop r = oopFactory::new_objArray(SystemDictionary::Class_klass(), size, CHECK_NULL);
   objArrayHandle result (THREAD, r);
   // Fill in result
-  if (klass->oop_is_instance()) {
+  if (klass->is_instance_klass()) {
     // Regular instance klass, fill in all local interfaces
     for (int index = 0; index < size; index++) {
       Klass* k = InstanceKlass::cast(klass())->local_interfaces()->at(index);
@@ -1057,7 +1109,7 @@ JVM_QUICK_ENTRY(jboolean, JVM_IsInterface(JNIEnv *env, jclass cls))
   }
   Klass* k = java_lang_Class::as_Klass(mirror);
   jboolean result = k->is_interface();
-  assert(!result || k->oop_is_instance(),
+  assert(!result || k->is_instance_klass(),
          "all interfaces are instance types");
   // The compiler intrinsic for isInterface tests the
   // Klass::_access_flags bits in the same way.
@@ -1098,7 +1150,7 @@ JVM_ENTRY(void, JVM_SetClassSigners(JNIEnv *env, jclass cls, jobjectArray signer
     // Signers are only set once, ClassLoader.java, and thus shouldn't
     // be called with an array.  Only the bootstrap loader creates arrays.
     Klass* k = java_lang_Class::as_Klass(JNIHandles::resolve_non_null(cls));
-    if (k->oop_is_instance()) {
+    if (k->is_instance_klass()) {
       java_lang_Class::set_signers(k->java_mirror(), objArrayOop(JNIHandles::resolve(signers)));
     }
   }
@@ -1157,7 +1209,7 @@ static bool is_authorized(Handle context, instanceKlassHandle klass, TRAPS) {
 // Create an AccessControlContext with a protection domain with null codesource
 // and null permissions - which gives no permissions.
 oop create_dummy_access_control_context(TRAPS) {
-  InstanceKlass* pd_klass = InstanceKlass::cast(SystemDictionary::ProtectionDomain_klass());
+  InstanceKlass* pd_klass = SystemDictionary::ProtectionDomain_klass();
   Handle obj = pd_klass->allocate_instance_handle(CHECK_NULL);
   // Call constructor ProtectionDomain(null, null);
   JavaValue result(T_VOID);
@@ -1357,7 +1409,7 @@ JVM_END
 JVM_QUICK_ENTRY(jboolean, JVM_IsArrayClass(JNIEnv *env, jclass cls))
   JVMWrapper("JVM_IsArrayClass");
   Klass* k = java_lang_Class::as_Klass(JNIHandles::resolve_non_null(cls));
-  return (k != NULL) && k->oop_is_array() ? true : false;
+  return (k != NULL) && k->is_array_klass() ? true : false;
 JVM_END
 
 
@@ -1390,7 +1442,7 @@ JVM_ENTRY(jobjectArray, JVM_GetDeclaredClasses(JNIEnv *env, jclass ofClass))
   // of an InstanceKlass
 
   if (java_lang_Class::is_primitive(JNIHandles::resolve_non_null(ofClass)) ||
-      ! java_lang_Class::as_Klass(JNIHandles::resolve_non_null(ofClass))->oop_is_instance()) {
+      ! java_lang_Class::as_Klass(JNIHandles::resolve_non_null(ofClass))->is_instance_klass()) {
     oop result = oopFactory::new_objArray(SystemDictionary::Class_klass(), 0, CHECK_NULL);
     return (jobjectArray)JNIHandles::make_local(env, result);
   }
@@ -1454,7 +1506,7 @@ JVM_ENTRY(jclass, JVM_GetDeclaringClass(JNIEnv *env, jclass ofClass))
 {
   // ofClass is a reference to a java_lang_Class object.
   if (java_lang_Class::is_primitive(JNIHandles::resolve_non_null(ofClass)) ||
-      ! java_lang_Class::as_Klass(JNIHandles::resolve_non_null(ofClass))->oop_is_instance()) {
+      ! java_lang_Class::as_Klass(JNIHandles::resolve_non_null(ofClass))->is_instance_klass()) {
     return NULL;
   }
 
@@ -1472,7 +1524,7 @@ JVM_ENTRY(jstring, JVM_GetSimpleBinaryName(JNIEnv *env, jclass cls))
 {
   oop mirror = JNIHandles::resolve_non_null(cls);
   if (java_lang_Class::is_primitive(mirror) ||
-      !java_lang_Class::as_Klass(mirror)->oop_is_instance()) {
+      !java_lang_Class::as_Klass(mirror)->is_instance_klass()) {
     return NULL;
   }
   instanceKlassHandle k(THREAD, InstanceKlass::cast(java_lang_Class::as_Klass(mirror)));
@@ -1497,7 +1549,7 @@ JVM_ENTRY(jstring, JVM_GetClassSignature(JNIEnv *env, jclass cls))
   // Return null for arrays and primatives
   if (!java_lang_Class::is_primitive(JNIHandles::resolve(cls))) {
     Klass* k = java_lang_Class::as_Klass(JNIHandles::resolve(cls));
-    if (k->oop_is_instance()) {
+    if (k->is_instance_klass()) {
       Symbol* sym = InstanceKlass::cast(k)->generic_signature();
       if (sym == NULL) return NULL;
       Handle str = java_lang_String::create_from_symbol(sym, CHECK_NULL);
@@ -1515,7 +1567,7 @@ JVM_ENTRY(jbyteArray, JVM_GetClassAnnotations(JNIEnv *env, jclass cls))
   // Return null for arrays and primitives
   if (!java_lang_Class::is_primitive(JNIHandles::resolve(cls))) {
     Klass* k = java_lang_Class::as_Klass(JNIHandles::resolve(cls));
-    if (k->oop_is_instance()) {
+    if (k->is_instance_klass()) {
       typeArrayOop a = Annotations::make_java_array(InstanceKlass::cast(k)->class_annotations(), CHECK_NULL);
       return (jbyteArray) JNIHandles::make_local(env, a);
     }
@@ -1585,7 +1637,7 @@ JVM_ENTRY(jbyteArray, JVM_GetClassTypeAnnotations(JNIEnv *env, jclass cls))
   // Return null for arrays and primitives
   if (!java_lang_Class::is_primitive(JNIHandles::resolve(cls))) {
     Klass* k = java_lang_Class::as_Klass(JNIHandles::resolve(cls));
-    if (k->oop_is_instance()) {
+    if (k->is_instance_klass()) {
       AnnotationArray* type_annotations = InstanceKlass::cast(k)->class_type_annotations();
       if (type_annotations != NULL) {
         typeArrayOop a = Annotations::make_java_array(type_annotations, CHECK_NULL);
@@ -1694,7 +1746,7 @@ JVM_ENTRY(jobjectArray, JVM_GetClassDeclaredFields(JNIEnv *env, jclass ofClass, 
 
   // Exclude primitive types and array types
   if (java_lang_Class::is_primitive(JNIHandles::resolve_non_null(ofClass)) ||
-      java_lang_Class::as_Klass(JNIHandles::resolve_non_null(ofClass))->oop_is_array()) {
+      java_lang_Class::as_Klass(JNIHandles::resolve_non_null(ofClass))->is_array_klass()) {
     // Return empty array
     oop res = oopFactory::new_objArray(SystemDictionary::reflect_Field_klass(), 0, CHECK_NULL);
     return (jobjectArray) JNIHandles::make_local(env, res);
@@ -1706,9 +1758,6 @@ JVM_ENTRY(jobjectArray, JVM_GetClassDeclaredFields(JNIEnv *env, jclass ofClass, 
   // Ensure class is linked
   k->link_class(CHECK_NULL);
 
-  // 4496456 We need to filter out java.lang.Throwable.backtrace
-  bool skip_backtrace = false;
-
   // Allocate result
   int num_fields;
 
@@ -1719,11 +1768,6 @@ JVM_ENTRY(jobjectArray, JVM_GetClassDeclaredFields(JNIEnv *env, jclass ofClass, 
     }
   } else {
     num_fields = k->java_fields_count();
-
-    if (k() == SystemDictionary::Throwable_klass()) {
-      num_fields--;
-      skip_backtrace = true;
-    }
   }
 
   objArrayOop r = oopFactory::new_objArray(SystemDictionary::reflect_Field_klass(), num_fields, CHECK_NULL);
@@ -1732,12 +1776,6 @@ JVM_ENTRY(jobjectArray, JVM_GetClassDeclaredFields(JNIEnv *env, jclass ofClass, 
   int out_idx = 0;
   fieldDescriptor fd;
   for (JavaFieldStream fs(k); !fs.done(); fs.next()) {
-    if (skip_backtrace) {
-      // 4496456 skip java.lang.Throwable.backtrace
-      int offset = fs.offset();
-      if (offset == java_lang_Throwable::get_backtrace_offset()) continue;
-    }
-
     if (!publicOnly || fs.access_flags().is_public()) {
       fd.reinitialize(k(), fs.index());
       oop field = Reflection::new_field(&fd, CHECK_NULL);
@@ -1768,7 +1806,7 @@ static jobjectArray get_class_declared_methods_helper(
 
   // Exclude primitive types and array types
   if (java_lang_Class::is_primitive(JNIHandles::resolve_non_null(ofClass))
-      || java_lang_Class::as_Klass(JNIHandles::resolve_non_null(ofClass))->oop_is_array()) {
+      || java_lang_Class::as_Klass(JNIHandles::resolve_non_null(ofClass))->is_array_klass()) {
     // Return empty array
     oop res = oopFactory::new_objArray(klass, 0, CHECK_NULL);
     return (jobjectArray) JNIHandles::make_local(env, res);
@@ -1869,10 +1907,10 @@ JVM_ENTRY(jobject, JVM_GetClassConstantPool(JNIEnv *env, jclass cls))
   // Return null for primitives and arrays
   if (!java_lang_Class::is_primitive(JNIHandles::resolve_non_null(cls))) {
     Klass* k = java_lang_Class::as_Klass(JNIHandles::resolve_non_null(cls));
-    if (k->oop_is_instance()) {
+    if (k->is_instance_klass()) {
       instanceKlassHandle k_h(THREAD, k);
-      Handle jcp = sun_reflect_ConstantPool::create(CHECK_NULL);
-      sun_reflect_ConstantPool::set_cp(jcp(), k_h->constants());
+      Handle jcp = reflect_ConstantPool::create(CHECK_NULL);
+      reflect_ConstantPool::set_cp(jcp(), k_h->constants());
       return JNIHandles::make_local(jcp());
     }
   }
@@ -1884,7 +1922,7 @@ JVM_END
 JVM_ENTRY(jint, JVM_ConstantPoolGetSize(JNIEnv *env, jobject obj, jobject unused))
 {
   JVMWrapper("JVM_ConstantPoolGetSize");
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   return cp->length();
 }
 JVM_END
@@ -1893,7 +1931,7 @@ JVM_END
 JVM_ENTRY(jclass, JVM_ConstantPoolGetClassAt(JNIEnv *env, jobject obj, jobject unused, jint index))
 {
   JVMWrapper("JVM_ConstantPoolGetClassAt");
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_NULL);
   constantTag tag = cp->tag_at(index);
   if (!tag.is_klass() && !tag.is_unresolved_klass()) {
@@ -1907,7 +1945,7 @@ JVM_END
 JVM_ENTRY(jclass, JVM_ConstantPoolGetClassAtIfLoaded(JNIEnv *env, jobject obj, jobject unused, jint index))
 {
   JVMWrapper("JVM_ConstantPoolGetClassAtIfLoaded");
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_NULL);
   constantTag tag = cp->tag_at(index);
   if (!tag.is_klass() && !tag.is_unresolved_klass()) {
@@ -1952,7 +1990,7 @@ JVM_ENTRY(jobject, JVM_ConstantPoolGetMethodAt(JNIEnv *env, jobject obj, jobject
 {
   JVMWrapper("JVM_ConstantPoolGetMethodAt");
   JvmtiVMObjectAllocEventCollector oam;
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_NULL);
   jobject res = get_method_at_helper(cp, index, true, CHECK_NULL);
   return res;
@@ -1963,7 +2001,7 @@ JVM_ENTRY(jobject, JVM_ConstantPoolGetMethodAtIfLoaded(JNIEnv *env, jobject obj,
 {
   JVMWrapper("JVM_ConstantPoolGetMethodAtIfLoaded");
   JvmtiVMObjectAllocEventCollector oam;
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_NULL);
   jobject res = get_method_at_helper(cp, index, false, CHECK_NULL);
   return res;
@@ -1999,7 +2037,7 @@ JVM_ENTRY(jobject, JVM_ConstantPoolGetFieldAt(JNIEnv *env, jobject obj, jobject 
 {
   JVMWrapper("JVM_ConstantPoolGetFieldAt");
   JvmtiVMObjectAllocEventCollector oam;
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_NULL);
   jobject res = get_field_at_helper(cp, index, true, CHECK_NULL);
   return res;
@@ -2010,7 +2048,7 @@ JVM_ENTRY(jobject, JVM_ConstantPoolGetFieldAtIfLoaded(JNIEnv *env, jobject obj, 
 {
   JVMWrapper("JVM_ConstantPoolGetFieldAtIfLoaded");
   JvmtiVMObjectAllocEventCollector oam;
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_NULL);
   jobject res = get_field_at_helper(cp, index, false, CHECK_NULL);
   return res;
@@ -2021,7 +2059,7 @@ JVM_ENTRY(jobjectArray, JVM_ConstantPoolGetMemberRefInfoAt(JNIEnv *env, jobject 
 {
   JVMWrapper("JVM_ConstantPoolGetMemberRefInfoAt");
   JvmtiVMObjectAllocEventCollector oam;
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_NULL);
   constantTag tag = cp->tag_at(index);
   if (!tag.is_field_or_method()) {
@@ -2043,10 +2081,60 @@ JVM_ENTRY(jobjectArray, JVM_ConstantPoolGetMemberRefInfoAt(JNIEnv *env, jobject 
 }
 JVM_END
 
+JVM_ENTRY(jint, JVM_ConstantPoolGetClassRefIndexAt(JNIEnv *env, jobject obj, jobject unused, jint index))
+{
+  JVMWrapper("JVM_ConstantPoolGetClassRefIndexAt");
+  JvmtiVMObjectAllocEventCollector oam;
+  constantPoolHandle cp(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  bounds_check(cp, index, CHECK_0);
+  constantTag tag = cp->tag_at(index);
+  if (!tag.is_field_or_method()) {
+    THROW_MSG_0(vmSymbols::java_lang_IllegalArgumentException(), "Wrong type at constant pool index");
+  }
+  return (jint) cp->uncached_klass_ref_index_at(index);
+}
+JVM_END
+
+JVM_ENTRY(jint, JVM_ConstantPoolGetNameAndTypeRefIndexAt(JNIEnv *env, jobject obj, jobject unused, jint index))
+{
+  JVMWrapper("JVM_ConstantPoolGetNameAndTypeRefIndexAt");
+  JvmtiVMObjectAllocEventCollector oam;
+  constantPoolHandle cp(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  bounds_check(cp, index, CHECK_0);
+  constantTag tag = cp->tag_at(index);
+  if (!tag.is_invoke_dynamic() && !tag.is_field_or_method()) {
+    THROW_MSG_0(vmSymbols::java_lang_IllegalArgumentException(), "Wrong type at constant pool index");
+  }
+  return (jint) cp->uncached_name_and_type_ref_index_at(index);
+}
+JVM_END
+
+JVM_ENTRY(jobjectArray, JVM_ConstantPoolGetNameAndTypeRefInfoAt(JNIEnv *env, jobject obj, jobject unused, jint index))
+{
+  JVMWrapper("JVM_ConstantPoolGetNameAndTypeRefInfoAt");
+  JvmtiVMObjectAllocEventCollector oam;
+  constantPoolHandle cp(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  bounds_check(cp, index, CHECK_NULL);
+  constantTag tag = cp->tag_at(index);
+  if (!tag.is_name_and_type()) {
+    THROW_MSG_0(vmSymbols::java_lang_IllegalArgumentException(), "Wrong type at constant pool index");
+  }
+  Symbol* member_name = cp->symbol_at(cp->name_ref_index_at(index));
+  Symbol* member_sig = cp->symbol_at(cp->signature_ref_index_at(index));
+  objArrayOop dest_o = oopFactory::new_objArray(SystemDictionary::String_klass(), 2, CHECK_NULL);
+  objArrayHandle dest(THREAD, dest_o);
+  Handle str = java_lang_String::create_from_symbol(member_name, CHECK_NULL);
+  dest->obj_at_put(0, str());
+  str = java_lang_String::create_from_symbol(member_sig, CHECK_NULL);
+  dest->obj_at_put(1, str());
+  return (jobjectArray) JNIHandles::make_local(dest());
+}
+JVM_END
+
 JVM_ENTRY(jint, JVM_ConstantPoolGetIntAt(JNIEnv *env, jobject obj, jobject unused, jint index))
 {
   JVMWrapper("JVM_ConstantPoolGetIntAt");
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_0);
   constantTag tag = cp->tag_at(index);
   if (!tag.is_int()) {
@@ -2059,7 +2147,7 @@ JVM_END
 JVM_ENTRY(jlong, JVM_ConstantPoolGetLongAt(JNIEnv *env, jobject obj, jobject unused, jint index))
 {
   JVMWrapper("JVM_ConstantPoolGetLongAt");
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_(0L));
   constantTag tag = cp->tag_at(index);
   if (!tag.is_long()) {
@@ -2072,7 +2160,7 @@ JVM_END
 JVM_ENTRY(jfloat, JVM_ConstantPoolGetFloatAt(JNIEnv *env, jobject obj, jobject unused, jint index))
 {
   JVMWrapper("JVM_ConstantPoolGetFloatAt");
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_(0.0f));
   constantTag tag = cp->tag_at(index);
   if (!tag.is_float()) {
@@ -2085,7 +2173,7 @@ JVM_END
 JVM_ENTRY(jdouble, JVM_ConstantPoolGetDoubleAt(JNIEnv *env, jobject obj, jobject unused, jint index))
 {
   JVMWrapper("JVM_ConstantPoolGetDoubleAt");
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_(0.0));
   constantTag tag = cp->tag_at(index);
   if (!tag.is_double()) {
@@ -2098,7 +2186,7 @@ JVM_END
 JVM_ENTRY(jstring, JVM_ConstantPoolGetStringAt(JNIEnv *env, jobject obj, jobject unused, jint index))
 {
   JVMWrapper("JVM_ConstantPoolGetStringAt");
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_NULL);
   constantTag tag = cp->tag_at(index);
   if (!tag.is_string()) {
@@ -2113,7 +2201,7 @@ JVM_ENTRY(jstring, JVM_ConstantPoolGetUTF8At(JNIEnv *env, jobject obj, jobject u
 {
   JVMWrapper("JVM_ConstantPoolGetUTF8At");
   JvmtiVMObjectAllocEventCollector oam;
-  constantPoolHandle cp = constantPoolHandle(THREAD, sun_reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
   bounds_check(cp, index, CHECK_NULL);
   constantTag tag = cp->tag_at(index);
   if (!tag.is_symbol()) {
@@ -2125,6 +2213,28 @@ JVM_ENTRY(jstring, JVM_ConstantPoolGetUTF8At(JNIEnv *env, jobject obj, jobject u
 }
 JVM_END
 
+JVM_ENTRY(jbyte, JVM_ConstantPoolGetTagAt(JNIEnv *env, jobject obj, jobject unused, jint index))
+{
+  JVMWrapper("JVM_ConstantPoolGetTagAt");
+  constantPoolHandle cp = constantPoolHandle(THREAD, reflect_ConstantPool::get_cp(JNIHandles::resolve_non_null(obj)));
+  bounds_check(cp, index, CHECK_0);
+  constantTag tag = cp->tag_at(index);
+  jbyte result = tag.value();
+  // If returned tag values are not from the JVM spec, e.g. tags from 100 to 105,
+  // they are changed to the corresponding tags from the JVM spec, so that java code in
+  // sun.reflect.ConstantPool will return only tags from the JVM spec, not internal ones.
+  if (tag.is_klass_or_reference()) {
+      result = JVM_CONSTANT_Class;
+  } else if (tag.is_string_index()) {
+      result = JVM_CONSTANT_String;
+  } else if (tag.is_method_type_in_error()) {
+      result = JVM_CONSTANT_MethodType;
+  } else if (tag.is_method_handle_in_error()) {
+      result = JVM_CONSTANT_MethodHandle;
+  }
+  return result;
+}
+JVM_END
 
 // Assertion support. //////////////////////////////////////////////////////////
 
@@ -2137,8 +2247,8 @@ JVM_ENTRY(jboolean, JVM_DesiredAssertionStatus(JNIEnv *env, jclass unused, jclas
   if (java_lang_Class::is_primitive(r)) return false;
 
   Klass* k = java_lang_Class::as_Klass(r);
-  assert(k->oop_is_instance(), "must be an instance klass");
-  if (! k->oop_is_instance()) return false;
+  assert(k->is_instance_klass(), "must be an instance klass");
+  if (!k->is_instance_klass()) return false;
 
   ResourceMark rm(THREAD);
   const char* name = k->name()->as_C_string();
@@ -2183,12 +2293,12 @@ JVM_QUICK_ENTRY(void, JVM_GetClassCPTypes(JNIEnv *env, jclass cls, unsigned char
   k = JvmtiThreadState::class_to_verify_considering_redefinition(k, thread);
   // types will have length zero if this is not an InstanceKlass
   // (length is determined by call to JVM_GetClassCPEntriesCount)
-  if (k->oop_is_instance()) {
+  if (k->is_instance_klass()) {
     ConstantPool* cp = InstanceKlass::cast(k)->constants();
     for (int index = cp->length() - 1; index >= 0; index--) {
       constantTag tag = cp->tag_at(index);
       types[index] = (tag.is_unresolved_klass()) ? JVM_CONSTANT_Class : tag.value();
-  }
+    }
   }
 JVM_END
 
@@ -2197,9 +2307,7 @@ JVM_QUICK_ENTRY(jint, JVM_GetClassCPEntriesCount(JNIEnv *env, jclass cls))
   JVMWrapper("JVM_GetClassCPEntriesCount");
   Klass* k = java_lang_Class::as_Klass(JNIHandles::resolve_non_null(cls));
   k = JvmtiThreadState::class_to_verify_considering_redefinition(k, thread);
-  if (!k->oop_is_instance())
-    return 0;
-  return InstanceKlass::cast(k)->constants()->length();
+  return (!k->is_instance_klass()) ? 0 : InstanceKlass::cast(k)->constants()->length();
 JVM_END
 
 
@@ -2207,9 +2315,7 @@ JVM_QUICK_ENTRY(jint, JVM_GetClassFieldsCount(JNIEnv *env, jclass cls))
   JVMWrapper("JVM_GetClassFieldsCount");
   Klass* k = java_lang_Class::as_Klass(JNIHandles::resolve_non_null(cls));
   k = JvmtiThreadState::class_to_verify_considering_redefinition(k, thread);
-  if (!k->oop_is_instance())
-    return 0;
-  return InstanceKlass::cast(k)->java_fields_count();
+  return (!k->is_instance_klass()) ? 0 : InstanceKlass::cast(k)->java_fields_count();
 JVM_END
 
 
@@ -2217,9 +2323,7 @@ JVM_QUICK_ENTRY(jint, JVM_GetClassMethodsCount(JNIEnv *env, jclass cls))
   JVMWrapper("JVM_GetClassMethodsCount");
   Klass* k = java_lang_Class::as_Klass(JNIHandles::resolve_non_null(cls));
   k = JvmtiThreadState::class_to_verify_considering_redefinition(k, thread);
-  if (!k->oop_is_instance())
-    return 0;
-  return InstanceKlass::cast(k)->methods()->length();
+  return (!k->is_instance_klass()) ? 0 : InstanceKlass::cast(k)->methods()->length();
 JVM_END
 
 
@@ -2404,7 +2508,6 @@ JVM_ENTRY(const char*, JVM_GetCPMethodNameUTF(JNIEnv *env, jclass cls, jint cp_i
   switch (cp->tag_at(cp_index).value()) {
     case JVM_CONSTANT_InterfaceMethodref:
     case JVM_CONSTANT_Methodref:
-    case JVM_CONSTANT_NameAndType:  // for invokedynamic
       return cp->uncached_name_ref_at(cp_index)->as_utf8();
     default:
       fatal("JVM_GetCPMethodNameUTF: illegal constant");
@@ -2422,7 +2525,6 @@ JVM_ENTRY(const char*, JVM_GetCPMethodSignatureUTF(JNIEnv *env, jclass cls, jint
   switch (cp->tag_at(cp_index).value()) {
     case JVM_CONSTANT_InterfaceMethodref:
     case JVM_CONSTANT_Methodref:
-    case JVM_CONSTANT_NameAndType:  // for invokedynamic
       return cp->uncached_signature_ref_at(cp_index)->as_utf8();
     default:
       fatal("JVM_GetCPMethodSignatureUTF: illegal constant");
@@ -3232,6 +3334,35 @@ JVM_ENTRY(jobjectArray, JVM_GetSystemPackages(JNIEnv *env))
 JVM_END
 
 
+// java.lang.ref.Reference ///////////////////////////////////////////////////////////////
+
+
+JVM_ENTRY(jobject, JVM_GetAndClearReferencePendingList(JNIEnv* env))
+  JVMWrapper("JVM_GetAndClearReferencePendingList");
+
+  MonitorLockerEx ml(Heap_lock);
+  oop ref = Universe::reference_pending_list();
+  if (ref != NULL) {
+    Universe::set_reference_pending_list(NULL);
+  }
+  return JNIHandles::make_local(env, ref);
+JVM_END
+
+JVM_ENTRY(jboolean, JVM_HasReferencePendingList(JNIEnv* env))
+  JVMWrapper("JVM_HasReferencePendingList");
+  MonitorLockerEx ml(Heap_lock);
+  return Universe::has_reference_pending_list();
+JVM_END
+
+JVM_ENTRY(void, JVM_WaitForReferencePendingList(JNIEnv* env))
+  JVMWrapper("JVM_WaitForReferencePendingList");
+  MonitorLockerEx ml(Heap_lock);
+  while (!Universe::has_reference_pending_list()) {
+    ml.wait();
+  }
+JVM_END
+
+
 // ObjectInputStream ///////////////////////////////////////////////////////////////
 
 bool force_verify_field_access(Klass* current_class, Klass* field_class, AccessFlags access, bool classloader_only) {
@@ -3252,14 +3383,14 @@ bool force_verify_field_access(Klass* current_class, Klass* field_class, AccessF
   return (!access.is_private() && InstanceKlass::cast(current_class)->is_same_class_package(field_class));
 }
 
-// Return the first non-null class loader up the execution stack, or null
-// if only code from the null class loader is on the stack.
+// Return the first user-defined class loader up the execution stack, or null
+// if only code from the bootstrap or platform class loader is on the stack.
 
 JVM_ENTRY(jobject, JVM_LatestUserDefinedLoader(JNIEnv *env))
   for (vframeStream vfst(thread); !vfst.at_end(); vfst.next()) {
     vfst.skip_reflection_related_frames(); // Only needed for 1.4 reflection
     oop loader = vfst.method()->method_holder()->class_loader();
-    if (loader != NULL) {
+    if (loader != NULL && !SystemDictionary::is_platform_class_loader(loader)) {
       return JNIHandles::make_local(env, loader);
     }
   }
@@ -3368,7 +3499,7 @@ JVM_END
 
 JVM_ENTRY_NO_ENV(void*, JVM_LoadLibrary(const char* name))
   //%note jvm_ct
-  JVMWrapper2("JVM_LoadLibrary (%s)", name);
+  JVMWrapper("JVM_LoadLibrary");
   char ebuf[1024];
   void *load_result;
   {
@@ -3400,7 +3531,7 @@ JVM_END
 
 
 JVM_LEAF(void*, JVM_FindLibraryEntry(void* handle, const char* name))
-  JVMWrapper2("JVM_FindLibraryEntry (%s)", name);
+  JVMWrapper("JVM_FindLibraryEntry");
   return os::dll_lookup(handle, name);
 JVM_END
 
@@ -3408,7 +3539,7 @@ JVM_END
 // JNI version ///////////////////////////////////////////////////////////////////////////////
 
 JVM_LEAF(jboolean, JVM_IsSupportedJNIVersion(jint version))
-  JVMWrapper2("JVM_IsSupportedJNIVersion (%d)", version);
+  JVMWrapper("JVM_IsSupportedJNIVersion");
   return Threads::is_supported_jni_version_including_1_1(version);
 JVM_END
 
@@ -3477,7 +3608,7 @@ jclass find_class_from_class_loader(JNIEnv* env, Symbol* name, jboolean init,
 
   KlassHandle klass_handle(THREAD, klass);
   // Check if we should initialize the class
-  if (init && klass_handle->oop_is_instance()) {
+  if (init && klass_handle->is_instance_klass()) {
     klass_handle->initialize(CHECK_NULL);
   }
   return (jclass) JNIHandles::make_local(env, klass_handle->java_mirror());
@@ -3625,7 +3756,7 @@ JVM_ENTRY(jobjectArray, JVM_GetEnclosingMethodInfo(JNIEnv *env, jclass ofClass))
     return NULL;
   }
   Klass* k = java_lang_Class::as_Klass(mirror());
-  if (!k->oop_is_instance()) {
+  if (!k->is_instance_klass()) {
     return NULL;
   }
   instanceKlassHandle ik_h(THREAD, k);
@@ -3659,8 +3790,7 @@ JVM_ENTRY(void, JVM_GetVersionInfo(JNIEnv* env, jvm_version_info* info, size_t i
   memset(info, 0, info_size);
 
   info->jvm_version = Abstract_VM_Version::jvm_version();
-  info->update_version = 0;          /* 0 in HotSpot Express VM */
-  info->special_update_version = 0;  /* 0 in HotSpot Express VM */
+  info->patch_version = Abstract_VM_Version::vm_patch_version();
 
   // when we add a new capability in the jvm_version_info struct, we should also
   // consider to expose this new capability in the sun.rt.jvmCapabilities jvmstat
@@ -3669,243 +3799,35 @@ JVM_ENTRY(void, JVM_GetVersionInfo(JNIEnv* env, jvm_version_info* info, size_t i
 }
 JVM_END
 
-// jdk.internal.jimage /////////////////////////////////////////////////////////
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
+// Returns an array of java.lang.String objects containing the input arguments to the VM.
+JVM_ENTRY(jobjectArray, JVM_GetVmArguments(JNIEnv *env))
+  ResourceMark rm(THREAD);
 
-// Java entry to open an image file for sharing.
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-JVM_ENTRY(jlong,
-JVM_ImageOpen(JNIEnv *env, const char *nativePath, jboolean big_endian)) {
-  JVMWrapper("JVM_ImageOpen");
-  // Open image file for reading.
-  ImageFileReader* reader = ImageFileReader::open(nativePath, big_endian != JNI_FALSE);
-  // Return image ID as a jlong.
-  return ImageFileReader::readerToID(reader);
-}
-JVM_END
-
-// Java entry for closing a shared image file.
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-JVM_ENTRY(void,
-JVM_ImageClose(JNIEnv *env, jlong id)) {
-  JVMWrapper("JVM_ImageClose");
-  // Convert image ID to image reader structure.
-  ImageFileReader* reader = ImageFileReader::idToReader(id);
-  // If valid reader the close.
-  if (reader != NULL) {
-    ImageFileReader::close(reader);
-  }
-}
-JVM_END
-
-// Java entry for accessing the base address of the image index.
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-JVM_ENTRY(jlong,
-JVM_ImageGetIndexAddress(JNIEnv *env, jlong id)) {
-  JVMWrapper("JVM_ImageGetIndexAddress");
-  // Convert image ID to image reader structure.
-  ImageFileReader* reader = ImageFileReader::idToReader(id);
-  // If valid reader return index base address (as jlong) else zero.
-  return  reader != NULL ? (jlong)reader->get_index_address() : 0L;
-}
-JVM_END
-
-// Java entry for accessing the base address of the image data.
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-JVM_ENTRY(jlong,
-JVM_ImageGetDataAddress(JNIEnv *env, jlong id)) {
-  JVMWrapper("JVM_ImageGetDataAddress");
-  // Convert image ID to image reader structure.
-  ImageFileReader* reader = ImageFileReader::idToReader(id);
-  // If valid reader return data base address (as jlong) else zero.
-  return MemoryMapImage && reader != NULL ? (jlong)reader->get_data_address() : 0L;
-}
-JVM_END
-
-// Java entry for reading an uncompressed resource from the image.
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-JVM_ENTRY(jboolean,
-JVM_ImageRead(JNIEnv *env, jlong id, jlong offset,
-              unsigned char* uncompressedAddress, jlong uncompressed_size)) {
-  JVMWrapper("JVM_ImageRead");
-  // Convert image ID to image reader structure.
-  ImageFileReader* reader = ImageFileReader::idToReader(id);\
-  // If not a valid reader the fail the read.
-  if (reader == NULL) return false;
-  // Get the file offset of resource data.
-  u8 file_offset = reader->get_index_size() + offset;
-  // Check validity of arguments.
-  if (offset < 0 ||
-      uncompressed_size < 0 ||
-      file_offset > reader->file_size() - uncompressed_size) {
-      return false;
-  }
-  // Read file content into buffer.
-  return (jboolean)reader->read_at((u1*)uncompressedAddress, uncompressed_size,
-                                   file_offset);
-}
-JVM_END
-
-// Java entry for reading a compressed resource from the image.
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-JVM_ENTRY(jboolean,
-JVM_ImageReadCompressed(JNIEnv *env,
-                    jlong id, jlong offset,
-                    unsigned char* compressedAddress, jlong compressed_size,
-                    unsigned char* uncompressedAddress, jlong uncompressed_size)) {
-  JVMWrapper("JVM_ImageReadCompressed");
-  // Convert image ID to image reader structure.
-  ImageFileReader* reader = ImageFileReader::idToReader(id);
-  // If not a valid reader the fail the read.
-  if (reader == NULL) return false;
-  // Get the file offset of resource data.
-  u8 file_offset = reader->get_index_size() + offset;
-  // Check validity of arguments.
-  if (offset < 0 ||
-      compressed_size < 0 ||
-      uncompressed_size < 0 ||
-      file_offset > reader->file_size() - compressed_size) {
-      return false;
+  if (Arguments::num_jvm_args() == 0 && Arguments::num_jvm_flags() == 0) {
+    return NULL;
   }
 
-  // Read file content into buffer.
-  bool is_read = reader->read_at(compressedAddress, compressed_size,
-                                 file_offset);
-  // If successfully read then decompress.
-  if (is_read) {
-    const ImageStrings strings = reader->get_strings();
-    ImageDecompressor::decompress_resource(compressedAddress, uncompressedAddress,
-    uncompressed_size, &strings, true);
+  char** vm_flags = Arguments::jvm_flags_array();
+  char** vm_args = Arguments::jvm_args_array();
+  int num_flags = Arguments::num_jvm_flags();
+  int num_args = Arguments::num_jvm_args();
+
+  instanceKlassHandle ik (THREAD, SystemDictionary::String_klass());
+  objArrayOop r = oopFactory::new_objArray(ik(), num_args + num_flags, CHECK_NULL);
+  objArrayHandle result_h(THREAD, r);
+
+  int index = 0;
+  for (int j = 0; j < num_flags; j++, index++) {
+    Handle h = java_lang_String::create_from_platform_dependent_str(vm_flags[j], CHECK_NULL);
+    result_h->obj_at_put(index, h());
   }
-  return (jboolean)is_read;
-}
-JVM_END
-
-// Java entry for retrieving UTF-8 bytes from image string table.
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-JVM_ENTRY(const char*, JVM_ImageGetStringBytes(JNIEnv *env, jlong id, jint offset)) {
-  JVMWrapper("JVM_ImageGetStringBytes");
-  // Convert image ID to image reader structure.
-  ImageFileReader* reader = ImageFileReader::idToReader(id);
-  // Fail if not valid reader.
-  if (reader == NULL) return NULL;
-  // Manage image string table.
-  ImageStrings strings = reader->get_strings();
-  // Retrieve string adrress from table.
-  const char* data = strings.get(offset);
-  return data;
-}
-JVM_END
-
-// Utility function to copy location information into a jlong array.
-// WARNING: This function is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-static void image_expand_location(JNIEnv *env, jlong* rawAttributes, ImageLocation& location) {
-  // Copy attributes from location.
-  for (int kind = ImageLocation::ATTRIBUTE_END + 1;
-           kind < ImageLocation::ATTRIBUTE_COUNT;
-           kind++) {
-    rawAttributes[kind] = location.get_attribute(kind);
+  for (int i = 0; i < num_args; i++, index++) {
+    Handle h = java_lang_String::create_from_platform_dependent_str(vm_args[i], CHECK_NULL);
+    result_h->obj_at_put(index, h());
   }
-}
-
-// Java entry for retrieving location attributes for attribute offset.
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-JVM_ENTRY(jlong*, JVM_ImageGetAttributes(JNIEnv *env, jlong* rawAttributes, jlong id, jint offset)) {
-  JVMWrapper("JVM_ImageGetAttributes");
-  // Convert image ID to image reader structure.
-  ImageFileReader* reader = ImageFileReader::idToReader(id);
-  // Fail if not valid reader.
-  if (reader == NULL) return NULL;
-  // Retrieve first byte address of resource's location attribute stream.
-  u1* data = reader->get_location_offset_data(offset);
-  // Fail if not valid offset.
-  if (data == NULL) return NULL;
-  // Expand stream into array.
-  ImageLocation location(data);
-  image_expand_location(env, rawAttributes, location);
-  return rawAttributes;
-}
+  return (jobjectArray) JNIHandles::make_local(env, result_h());
 JVM_END
 
-// Java entry for retrieving location attributes count for attribute offset.
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-JVM_ENTRY(jsize, JVM_ImageGetAttributesCount(JNIEnv *env)) {
-  JVMWrapper("JVM_ImageGetAttributesCount");
-  return ImageLocation::ATTRIBUTE_COUNT;
-}
-JVM_END
-
-// Java entry for retrieving location attributes for named resource.
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-JVM_ENTRY(jlong*,
-JVM_ImageFindAttributes(JNIEnv *env, jlong* rawAttributes, jbyte* rawBytes, jsize size, jlong id)) {
-  JVMWrapper("JVM_ImageFindAttributes");
-  // Mark for temporary buffers.
-  ResourceMark rm;
-  // Convert image ID to image reader structure.
-  ImageFileReader* reader = ImageFileReader::idToReader(id);
-  // Fail if not valid reader.
-  if (reader == NULL) return NULL;
-  // Convert byte array to a cstring.
-  char* path = NEW_RESOURCE_ARRAY(char, size + 1);
-  memcpy(path, rawBytes, size);
-  path[size] = '\0';
-  // Locate resource location data.
-  ImageLocation location;
-  bool found = reader->find_location(path, location);
-  // Resource not found.
-  if (!found) return NULL;
-  // Expand stream into array.
-  image_expand_location(env, rawAttributes, location);
-  return rawAttributes;
-}
-JVM_END
-
-// Java entry for retrieving all the attribute stream offsets from an image.
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-JVM_ENTRY(jint*, JVM_ImageAttributeOffsets(JNIEnv *env, jint* rawOffsets, unsigned int length, jlong id)) {
-  JVMWrapper("JVM_ImageAttributeOffsets");
-  // Convert image ID to image reader structure.
-  ImageFileReader* reader = ImageFileReader::idToReader(id);
-  // Fail if not valid reader.
-  if (reader == NULL) return NULL;
-  // Determine endian for reader.
-  Endian* endian = reader->endian();
-  // Get base address of attribute stream offsets table.
-  u4* offsets_table = reader->offsets_table();
-  // Allocate int array result.
-  // Copy values to result (converting endian.)
-  for (u4 i = 0; i < length; i++) {
-    rawOffsets[i] = endian->get(offsets_table[i]);
-  }
-  return rawOffsets;
-}
-JVM_END
-
-// Java entry for retrieving all the attribute stream offsets length from an image.
-// WARNING: This API is experimental and temporary during JDK 9 development
-// cycle. It will not be supported in the eventual JDK 9 release.
-JVM_ENTRY(unsigned int, JVM_ImageAttributeOffsetsLength(JNIEnv *env, jlong id)) {
-  JVMWrapper("JVM_ImageAttributeOffsetsLength");
-  // Convert image ID to image reader structure.
-  ImageFileReader* reader = ImageFileReader::idToReader(id);
-  // Fail if not valid reader.
-  if (reader == NULL) return 0;
-  // Get perfect hash table length.
-  u4 length = reader->table_length();
-  return (jint) length;
-}
+JVM_ENTRY_NO_ENV(jint, JVM_FindSignal(const char *name))
+  return os::get_signal_number(name);
 JVM_END

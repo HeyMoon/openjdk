@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,6 +33,7 @@ import java.security.InvalidParameterException;
 import java.security.ProviderException;
 import sun.security.jgss.krb5.Krb5MechFactory;
 import sun.security.jgss.spnego.SpNegoMechFactory;
+import static sun.security.util.SecurityConstants.PROVIDER_VER;
 
 /**
  * Defines the Sun JGSS provider.
@@ -97,11 +98,9 @@ public final class SunProvider extends Provider {
         }
     }
 
-    public static final SunProvider INSTANCE = new SunProvider();
-
     public SunProvider() {
         /* We are the Sun JGSS provider */
-        super("SunJGSS", 1.9d, INFO);
+        super("SunJGSS", PROVIDER_VER, INFO);
 
         final Provider p = this;
         AccessController.doPrivileged(new PrivilegedAction<Void>() {

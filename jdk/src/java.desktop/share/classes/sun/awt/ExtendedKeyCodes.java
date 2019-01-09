@@ -1,3 +1,27 @@
+/*
+ * Copyright (c) 2009, 2016, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
+ */
 package sun.awt;
 
 import java.util.Collections;
@@ -12,16 +36,16 @@ public class ExtendedKeyCodes {
      * or higher.
      */
      // Keycodes declared in KeyEvent.java with corresponding Unicode values.
-     private final static HashMap<Integer, Integer>  regularKeyCodesMap =
+     private static final HashMap<Integer, Integer>  regularKeyCodesMap =
                                           new HashMap<Integer,Integer>(98, 1.0f);
 
      // Keycodes derived from Unicode values. Here should be collected codes
      // for characters appearing on the primary layer of at least one
      // known keyboard layout. For instance, sterling sign is on the primary layer
      // of the Mac Italian layout.
-     private final static HashSet<Integer> extendedKeyCodesSet =
+     private static final HashSet<Integer> extendedKeyCodesSet =
                                                   new HashSet<Integer>(501, 1.0f);
-     final public static int getExtendedKeyCodeForChar( int c ) {
+     public static final int getExtendedKeyCodeForChar( int c ) {
          int uc = Character.toUpperCase( c );
          int lc = Character.toLowerCase( c );
          if (regularKeyCodesMap.containsKey( c )) {

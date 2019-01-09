@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,21 +22,12 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
-#include <windows.h>
-#include <winsock2.h>
-#include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <malloc.h>
-#include <sys/types.h>
-#include <process.h>
+
+#include "net_util.h"
 
 #include "java_net_InetAddress.h"
 #include "java_net_Inet4AddressImpl.h"
-#include "net_util.h"
-#include "icmp.h"
-
 
 /*
  * Returns true if hostname is in dotted IP address format. Note that this
@@ -122,24 +113,22 @@ Java_java_net_Inet4AddressImpl_getLocalHostName (JNIEnv *env, jobject this) {
  * Class:     java_net_Inet4AddressImpl
  * Method:    lookupAllHostAddr
  * Signature: (Ljava/lang/String;)[[B
- *
- * This is almost shared code
  */
-
 JNIEXPORT jobjectArray JNICALL
 Java_java_net_Inet4AddressImpl_lookupAllHostAddr(JNIEnv *env, jobject this,
-                                                jstring host) {
-    const char *hostname;
-    struct hostent *hp;
-    unsigned int addr[4];
-
+                                                 jstring host) {
     jobjectArray ret = NULL;
+    const char *hostname;
+    int error = 0;
+    unsigned int addr[4];
+    struct addrinfo hints, *res = NULL, *resNew = NULL, *last = NULL,
+        *iterator;
 
     initInetAddressIDs(env);
     JNU_CHECK_EXCEPTION_RETURN(env, NULL);
 
     if (IS_NULL(host)) {
-        JNU_ThrowNullPointerException(env, "host argument");
+        JNU_ThrowNullPointerException(env, "host argument is null");
         return NULL;
     }
     hostname = JNU_GetStringPlatformChars(env, host, JNI_FALSE);
@@ -175,9 +164,9 @@ Java_java_net_Inet4AddressImpl_lookupAllHostAddr(JNIEnv *env, jobject this,
         /*
          * Return an byte array with the populated address.
          */
-        address = (addr[3]<<24) & 0xff000000;
-        address |= (addr[2]<<16) & 0xff0000;
-        address |= (addr[1]<<8) & 0xff00;
+        address = (addr[3] << 24) & 0xff000000;
+        address |= (addr[2] << 16) & 0xff0000;
+        address |= (addr[1] << 8) & 0xff00;
         address |= addr[0];
 
         ret = (*env)->NewObjectArray(env, 1, ia_class, NULL);
@@ -188,58 +177,95 @@ Java_java_net_Inet4AddressImpl_lookupAllHostAddr(JNIEnv *env, jobject this,
 
         iaObj = (*env)->NewObject(env, ia4_class, ia4_ctrID);
         if (IS_NULL(iaObj)) {
-          ret = NULL;
-          goto cleanupAndReturn;
+            ret = NULL;
+            goto cleanupAndReturn;
         }
         setInetAddress_addr(env, iaObj, ntohl(address));
         (*env)->SetObjectArrayElement(env, ret, 0, iaObj);
-        JNU_ReleaseStringPlatformChars(env, host, hostname);
-        return ret;
+        goto cleanupAndReturn;
     }
 
-    /*
-     * Perform the lookup
-     */
-    if ((hp = gethostbyname((char*)hostname)) != NULL) {
-        struct in_addr **addrp = (struct in_addr **) hp->h_addr_list;
-        int len = sizeof(struct in_addr);
-        int i = 0;
+    // try once, with our static buffer
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_flags = AI_CANONNAME;
+    hints.ai_family = AF_INET;
 
-        while (*addrp != (struct in_addr *) 0) {
-            i++;
-            addrp++;
+    error = getaddrinfo(hostname, NULL, &hints, &res);
+
+    if (error) {
+        NET_ThrowByNameWithLastError(env, "java/net/UnknownHostException",
+                                     hostname);
+        goto cleanupAndReturn;
+    } else {
+        int i = 0;
+        iterator = res;
+        while (iterator != NULL) {
+            // skip duplicates
+            int skip = 0;
+            struct addrinfo *iteratorNew = resNew;
+            while (iteratorNew != NULL) {
+                struct sockaddr_in *addr1, *addr2;
+                addr1 = (struct sockaddr_in *)iterator->ai_addr;
+                addr2 = (struct sockaddr_in *)iteratorNew->ai_addr;
+                if (addr1->sin_addr.s_addr == addr2->sin_addr.s_addr) {
+                    skip = 1;
+                    break;
+                }
+                iteratorNew = iteratorNew->ai_next;
+            }
+
+            if (!skip) {
+                struct addrinfo *next
+                    = (struct addrinfo *)malloc(sizeof(struct addrinfo));
+                if (!next) {
+                    JNU_ThrowOutOfMemoryError(env, "Native heap allocation failed");
+                    ret = NULL;
+                    goto cleanupAndReturn;
+                }
+                memcpy(next, iterator, sizeof(struct addrinfo));
+                next->ai_next = NULL;
+                if (resNew == NULL) {
+                    resNew = next;
+                } else {
+                    last->ai_next = next;
+                }
+                last = next;
+                i++;
+            }
+            iterator = iterator->ai_next;
         }
 
+        // allocate array - at this point i contains the number of addresses
         ret = (*env)->NewObjectArray(env, i, ia_class, NULL);
-
         if (IS_NULL(ret)) {
             goto cleanupAndReturn;
         }
 
-        addrp = (struct in_addr **) hp->h_addr_list;
         i = 0;
-        while (*addrp != (struct in_addr *) 0) {
-          jobject iaObj = (*env)->NewObject(env, ia4_class, ia4_ctrID);
-          if (IS_NULL(iaObj)) {
-            ret = NULL;
-            goto cleanupAndReturn;
-          }
-          setInetAddress_addr(env, iaObj, ntohl((*addrp)->s_addr));
-          setInetAddress_hostName(env, iaObj, host);
-          (*env)->SetObjectArrayElement(env, ret, i, iaObj);
-          addrp++;
-          i++;
+        iterator = resNew;
+        while (iterator != NULL) {
+            jobject iaObj = (*env)->NewObject(env, ia4_class, ia4_ctrID);
+            if (IS_NULL(iaObj)) {
+                ret = NULL;
+                goto cleanupAndReturn;
+            }
+            setInetAddress_addr(env, iaObj, ntohl(((struct sockaddr_in *)
+                                (iterator->ai_addr))->sin_addr.s_addr));
+            setInetAddress_hostName(env, iaObj, host);
+            (*env)->SetObjectArrayElement(env, ret, i++, iaObj);
+            iterator = iterator->ai_next;
         }
-    } else if (WSAGetLastError() == WSATRY_AGAIN) {
-        NET_ThrowByNameWithLastError(env,
-                                     JNU_JAVANETPKG "UnknownHostException",
-                                     hostname);
-    } else {
-        JNU_ThrowByName(env, JNU_JAVANETPKG "UnknownHostException", hostname);
     }
-
 cleanupAndReturn:
     JNU_ReleaseStringPlatformChars(env, host, hostname);
+    while (resNew != NULL) {
+        last = resNew;
+        resNew = resNew->ai_next;
+        free(last);
+    }
+    if (res != NULL) {
+        freeaddrinfo(res);
+    }
     return ret;
 }
 
@@ -247,161 +273,51 @@ cleanupAndReturn:
  * Class:     java_net_Inet4AddressImpl
  * Method:    getHostByAddr
  * Signature: (I)Ljava/lang/String;
+ *
+ * Theoretically the UnknownHostException could be enriched with gai error
+ * information. But as it is silently ignored anyway, there's no need for this.
+ * It's only important that either a valid hostname is returned or an
+ * UnknownHostException is thrown.
  */
 JNIEXPORT jstring JNICALL
 Java_java_net_Inet4AddressImpl_getHostByAddr(JNIEnv *env, jobject this,
-                                            jbyteArray addrArray) {
-    struct hostent *hp;
+                                             jbyteArray addrArray) {
+    jstring ret = NULL;
+    char host[NI_MAXHOST + 1];
     jbyte caddr[4];
     jint addr;
+    struct sockaddr_in sa;
+
+    // construct a sockaddr_in structure
+    memset((char *)&sa, 0, sizeof(struct sockaddr_in));
     (*env)->GetByteArrayRegion(env, addrArray, 0, 4, caddr);
-    addr = ((caddr[0]<<24) & 0xff000000);
-    addr |= ((caddr[1] <<16) & 0xff0000);
-    addr |= ((caddr[2] <<8) & 0xff00);
+    addr = ((caddr[0] << 24) & 0xff000000);
+    addr |= ((caddr[1] << 16) & 0xff0000);
+    addr |= ((caddr[2] << 8) & 0xff00);
     addr |= (caddr[3] & 0xff);
-    addr = htonl(addr);
+    sa.sin_addr.s_addr = htonl(addr);
+    sa.sin_family = AF_INET;
 
-    hp = gethostbyaddr((char *)&addr, sizeof(addr), AF_INET);
-    if (hp == NULL) {
-        JNU_ThrowByName(env, JNU_JAVANETPKG "UnknownHostException", 0);
-        return NULL;
-    }
-    if (hp->h_name == NULL) { /* Deal with bug in Windows XP */
-        JNU_ThrowByName(env, JNU_JAVANETPKG "UnknownHostException", 0);
-        return NULL;
-    }
-    return JNU_NewStringPlatform(env, hp->h_name);
-}
-
-
-/**
- * ping implementation.
- * Send a ICMP_ECHO_REQUEST packet every second until either the timeout
- * expires or a answer is received.
- * Returns true is an ECHO_REPLY is received, otherwise, false.
- */
-static jboolean
-ping4(JNIEnv *env, jint fd, struct sockaddr_in* him, jint timeout,
-      struct sockaddr_in* netif, jint ttl) {
-    jint size;
-    jint n, len, hlen1, icmplen;
-    char sendbuf[1500];
-    char recvbuf[1500];
-    struct icmp *icmp;
-    struct ip *ip;
-    WSAEVENT hEvent;
-    struct sockaddr sa_recv;
-    jint tmout2;
-    u_short pid, seq;
-    int read_rv = 0;
-
-    /* Initialize the sequence number to a suitable random number and
-       shift right one place to allow sufficient room for increamenting. */
-    seq = ((unsigned short)rand()) >> 1;
-
-    /* icmp_id is a 16 bit data type, therefore down cast the pid */
-    pid = (u_short) _getpid();
-    size = 60*1024;
-    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (const char *) &size, sizeof(size));
-    /**
-     * A TTL was specified, let's set the socket option.
-     */
-    if (ttl > 0) {
-      setsockopt(fd, IPPROTO_IP, IP_TTL, (const char *) &ttl, sizeof(ttl));
-    }
-
-    /**
-     * A network interface was specified, let's bind to it.
-     */
-    if (netif != NULL) {
-      if (bind(fd, (struct sockaddr*)netif, sizeof(struct sockaddr_in)) < 0) {
-        NET_ThrowNew(env, WSAGetLastError(), "Can't bind socket");
-        closesocket(fd);
-        return JNI_FALSE;
-      }
-    }
-
-    /**
-     * Let's make the socket non blocking
-     */
-    hEvent = WSACreateEvent();
-    WSAEventSelect(fd, hEvent, FD_READ|FD_CONNECT|FD_CLOSE);
-
-    /**
-     * send 1 ICMP REQUEST every second until either we get a valid reply
-     * or the timeout expired.
-     */
-    do {
-      /**
-       * construct the ICMP header
-       */
-      memset(sendbuf, 0, 1500);
-      icmp = (struct icmp *) sendbuf;
-      icmp->icmp_type = ICMP_ECHO;
-      icmp->icmp_code = 0;
-      icmp->icmp_id = htons(pid);
-      icmp->icmp_seq = htons(seq);
-      /**
-       * checksum has to be set to zero before we can calculate the
-       * real checksum!
-       */
-      icmp->icmp_cksum = 0;
-      icmp->icmp_cksum = in_cksum((u_short *)icmp, 64);
-      /**
-       * Ping!
-       */
-      n = sendto(fd, sendbuf, 64, 0, (struct sockaddr *)him,
-                 sizeof(struct sockaddr));
-      if (n < 0 && WSAGetLastError() != WSAEWOULDBLOCK) {
-        NET_ThrowNew(env, WSAGetLastError(), "Can't send ICMP packet");
-        closesocket(fd);
-        WSACloseEvent(hEvent);
-        return JNI_FALSE;
-      }
-
-      /*
-       * wait for 1 second at most
-       */
-      tmout2 = timeout > 1000 ? 1000 : timeout;
-      do {
-        tmout2 = NET_Wait(env, fd, NET_WAIT_READ, tmout2);
-        if (tmout2 >= 0) {
-          len = sizeof(sa_recv);
-          n = recvfrom(fd, recvbuf, sizeof(recvbuf), 0, &sa_recv, &len);
-          ip = (struct ip*) recvbuf;
-          hlen1 = (ip->ip_hl) << 2;
-          icmp = (struct icmp *) (recvbuf + hlen1);
-          icmplen = n - hlen1;
-          /**
-           * Is that a proper ICMP reply?
-           */
-          if (icmplen >= 8 && icmp->icmp_type == ICMP_ECHOREPLY &&
-              (ntohs(icmp->icmp_seq) == seq) && (ntohs(icmp->icmp_id) == pid)) {
-            closesocket(fd);
-            WSACloseEvent(hEvent);
-            return JNI_TRUE;
-          }
+    if (getnameinfo((struct sockaddr *)&sa, sizeof(struct sockaddr_in),
+                    host, NI_MAXHOST, NULL, 0, NI_NAMEREQD)) {
+        JNU_ThrowByName(env, "java/net/UnknownHostException", NULL);
+    } else {
+        ret = (*env)->NewStringUTF(env, host);
+        if (ret == NULL) {
+            JNU_ThrowByName(env, "java/net/UnknownHostException", NULL);
         }
-      } while (tmout2 > 0);
-      timeout -= 1000;
-      seq++;
-    } while (timeout > 0);
-    closesocket(fd);
-    WSACloseEvent(hEvent);
-    return JNI_FALSE;
+    }
+
+    return ret;
 }
 
-/*
- * Class:     java_net_Inet4AddressImpl
- * Method:    isReachable0
- * Signature: ([bI[bI)Z
- */
-JNIEXPORT jboolean JNICALL
-Java_java_net_Inet4AddressImpl_isReachable0(JNIEnv *env, jobject this,
-                                           jbyteArray addrArray,
-                                           jint timeout,
-                                           jbyteArray ifArray,
-                                           jint ttl) {
+static jboolean
+tcp_ping4(JNIEnv *env,
+          jbyteArray addrArray,
+          jint timeout,
+          jbyteArray ifArray,
+          jint ttl)
+{
     jint addr;
     jbyte caddr[4];
     jint fd;
@@ -418,7 +334,7 @@ Java_java_net_Inet4AddressImpl_isReachable0(JNIEnv *env, jobject this,
      */
     sz = (*env)->GetArrayLength(env, addrArray);
     if (sz != 4) {
-      return JNI_FALSE;
+        return JNI_FALSE;
     }
     memset((char *) &him, 0, sizeof(him));
     memset((char *) caddr, 0, sizeof(caddr));
@@ -440,44 +356,24 @@ Java_java_net_Inet4AddressImpl_isReachable0(JNIEnv *env, jobject this,
      * as well.
      */
     if (!(IS_NULL(ifArray))) {
-      memset((char *) caddr, 0, sizeof(caddr));
-      (*env)->GetByteArrayRegion(env, ifArray, 0, 4, caddr);
-      addr = ((caddr[0]<<24) & 0xff000000);
-      addr |= ((caddr[1] <<16) & 0xff0000);
-      addr |= ((caddr[2] <<8) & 0xff00);
-      addr |= (caddr[3] & 0xff);
-      addr = htonl(addr);
-      inf.sin_addr.s_addr = addr;
-      inf.sin_family = AF_INET;
-      inf.sin_port = 0;
-      netif = &inf;
+        memset((char *) caddr, 0, sizeof(caddr));
+        (*env)->GetByteArrayRegion(env, ifArray, 0, 4, caddr);
+        addr = ((caddr[0]<<24) & 0xff000000);
+        addr |= ((caddr[1] <<16) & 0xff0000);
+        addr |= ((caddr[2] <<8) & 0xff00);
+        addr |= (caddr[3] & 0xff);
+        addr = htonl(addr);
+        inf.sin_addr.s_addr = addr;
+        inf.sin_family = AF_INET;
+        inf.sin_port = 0;
+        netif = &inf;
     }
-
-#if 0
-    /*
-     * Windows implementation of ICMP & RAW sockets is too unreliable for now.
-     * Therefore it's best not to try it at all and rely only on TCP
-     * We may revisit and enable this code in the future.
-     */
-
-    /*
-     * Let's try to create a RAW socket to send ICMP packets
-     * This usually requires "root" privileges, so it's likely to fail.
-     */
-    fd = NET_Socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
-    if (fd != -1) {
-      /*
-       * It didn't fail, so we can use ICMP_ECHO requests.
-       */
-        return ping4(env, fd, &him, timeout, netif, ttl);
-    }
-#endif
 
     /*
      * Can't create a raw socket, so let's try a TCP socket
      */
     fd = NET_Socket(AF_INET, SOCK_STREAM, 0);
-    if (fd == SOCKET_ERROR) {
+    if (fd == -1) {
         /* note: if you run out of fds, you may not be able to load
          * the exception class, and get a NoClassDefFoundError
          * instead.
@@ -486,17 +382,17 @@ Java_java_net_Inet4AddressImpl_isReachable0(JNIEnv *env, jobject this,
         return JNI_FALSE;
     }
     if (ttl > 0) {
-      setsockopt(fd, IPPROTO_IP, IP_TTL, (const char *)&ttl, sizeof(ttl));
+        setsockopt(fd, IPPROTO_IP, IP_TTL, (const char *)&ttl, sizeof(ttl));
     }
     /*
      * A network interface was specified, so let's bind to it.
      */
     if (netif != NULL) {
-      if (bind(fd, (struct sockaddr*)netif, sizeof(struct sockaddr_in)) < 0) {
-        NET_ThrowNew(env, WSAGetLastError(), "Can't bind socket");
-        closesocket(fd);
-        return JNI_FALSE;
-      }
+        if (bind(fd, (struct sockaddr*)netif, sizeof(struct sockaddr_in)) < 0) {
+            NET_ThrowNew(env, WSAGetLastError(), "Can't bind socket");
+            closesocket(fd);
+            return JNI_FALSE;
+        }
     }
 
     /*
@@ -525,9 +421,9 @@ Java_java_net_Inet4AddressImpl_isReachable0(JNIEnv *env, jobject this,
         case WSAENETUNREACH:    /* Network Unreachable */
         case WSAENETDOWN:       /* Network is down */
         case WSAEPFNOSUPPORT:   /* Protocol Family unsupported */
-          WSACloseEvent(hEvent);
-          closesocket(fd);
-          return JNI_FALSE;
+            WSACloseEvent(hEvent);
+            closesocket(fd);
+            return JNI_FALSE;
         }
 
         if (WSAGetLastError() != WSAEWOULDBLOCK) {
@@ -543,20 +439,196 @@ Java_java_net_Inet4AddressImpl_isReachable0(JNIEnv *env, jobject this,
         /* has connection been established */
 
         if (timeout >= 0) {
-          optlen = sizeof(connect_rv);
-          if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (void*)&connect_rv,
-                         &optlen) <0) {
-            connect_rv = WSAGetLastError();
-          }
+            optlen = sizeof(connect_rv);
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (void*)&connect_rv,
+                           &optlen) <0) {
+                connect_rv = WSAGetLastError();
+            }
 
-          if (connect_rv == 0 || connect_rv == WSAECONNREFUSED) {
-            WSACloseEvent(hEvent);
-            closesocket(fd);
-            return JNI_TRUE;
-          }
+            if (connect_rv == 0 || connect_rv == WSAECONNREFUSED) {
+                WSACloseEvent(hEvent);
+                closesocket(fd);
+                return JNI_TRUE;
+            }
         }
     }
     WSACloseEvent(hEvent);
     closesocket(fd);
     return JNI_FALSE;
 }
+
+/**
+ * ping implementation.
+ * Send a ICMP_ECHO_REQUEST packet every second until either the timeout
+ * expires or a answer is received.
+ * Returns true is an ECHO_REPLY is received, otherwise, false.
+ */
+static jboolean
+ping4(JNIEnv *env,
+      unsigned long src_addr,
+      unsigned long dest_addr,
+      jint timeout,
+      HANDLE hIcmpFile)
+{
+    // See https://msdn.microsoft.com/en-us/library/aa366050%28VS.85%29.aspx
+
+    DWORD dwRetVal = 0;
+    char SendData[32] = {0};
+    LPVOID ReplyBuffer = NULL;
+    DWORD ReplySize = 0;
+    jboolean ret = JNI_FALSE;
+
+    // https://msdn.microsoft.com/en-us/library/windows/desktop/aa366051%28v=vs.85%29.aspx
+    ReplySize = sizeof(ICMP_ECHO_REPLY)   // The buffer should be large enough
+                                          // to hold at least one ICMP_ECHO_REPLY
+                                          // structure
+                + sizeof(SendData)        // plus RequestSize bytes of data.
+                + 8;                      // This buffer should also be large enough
+                                          // to also hold 8 more bytes of data
+                                          // (the size of an ICMP error message)
+
+    ReplyBuffer = (VOID*) malloc(ReplySize);
+    if (ReplyBuffer == NULL) {
+        IcmpCloseHandle(hIcmpFile);
+        NET_ThrowNew(env, WSAGetLastError(), "Unable to allocate memory");
+        return JNI_FALSE;
+    }
+
+    if (src_addr == 0) {
+        dwRetVal = IcmpSendEcho(hIcmpFile,  // HANDLE IcmpHandle,
+                                dest_addr,  // IPAddr DestinationAddress,
+                                SendData,   // LPVOID RequestData,
+                                sizeof(SendData),   // WORD RequestSize,
+                                NULL,       // PIP_OPTION_INFORMATION RequestOptions,
+                                ReplyBuffer,// LPVOID ReplyBuffer,
+                                ReplySize,  // DWORD ReplySize,
+                                // Note: IcmpSendEcho and its derivatives
+                                // seem to have an undocumented minimum
+                                // timeout of 1000ms below which the
+                                // api behaves inconsistently.
+                                (timeout < 1000) ? 1000 : timeout);   // DWORD Timeout
+    } else {
+        dwRetVal = IcmpSendEcho2Ex(hIcmpFile,  // HANDLE IcmpHandle,
+                                   NULL,       // HANDLE Event
+                                   NULL,       // PIO_APC_ROUTINE ApcRoutine
+                                   NULL,       // ApcContext
+                                   src_addr,   // IPAddr SourceAddress,
+                                   dest_addr,  // IPAddr DestinationAddress,
+                                   SendData,   // LPVOID RequestData,
+                                   sizeof(SendData),   // WORD RequestSize,
+                                   NULL,       // PIP_OPTION_INFORMATION RequestOptions,
+                                   ReplyBuffer,// LPVOID ReplyBuffer,
+                                   ReplySize,  // DWORD ReplySize,
+                                   (timeout < 1000) ? 1000 : timeout);   // DWORD Timeout
+    }
+
+    if (dwRetVal == 0) { // if the call failed
+        TCHAR *buf;
+        DWORD err = WSAGetLastError();
+        switch (err) {
+            case ERROR_NO_NETWORK:
+            case ERROR_NETWORK_UNREACHABLE:
+            case ERROR_HOST_UNREACHABLE:
+            case ERROR_PROTOCOL_UNREACHABLE:
+            case ERROR_PORT_UNREACHABLE:
+            case ERROR_REQUEST_ABORTED:
+            case ERROR_INCORRECT_ADDRESS:
+            case ERROR_HOST_DOWN:
+            case ERROR_INVALID_COMPUTERNAME:
+            case ERROR_INVALID_NETNAME:
+            case WSAEHOSTUNREACH:   /* Host Unreachable */
+            case WSAENETUNREACH:    /* Network Unreachable */
+            case WSAENETDOWN:       /* Network is down */
+            case WSAEPFNOSUPPORT:   /* Protocol Family unsupported */
+            case IP_REQ_TIMED_OUT:
+                break;
+            default:
+                FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
+                        NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                        (LPTSTR)&buf, 0, NULL);
+                NET_ThrowNew(env, err, buf);
+                LocalFree(buf);
+                break;
+        }
+    } else {
+        PICMP_ECHO_REPLY pEchoReply = (PICMP_ECHO_REPLY)ReplyBuffer;
+
+        // This is to take into account the undocumented minimum
+        // timeout mentioned in the IcmpSendEcho call above.
+        // We perform an extra check to make sure that our
+        // roundtrip time was less than our desired timeout
+        // for cases where that timeout is < 1000ms.
+        if (pEchoReply->Status == IP_SUCCESS
+                && (int)pEchoReply->RoundTripTime <= timeout)
+        {
+            ret = JNI_TRUE;
+        }
+    }
+
+    free(ReplyBuffer);
+    IcmpCloseHandle(hIcmpFile);
+
+    return ret;
+}
+
+/*
+ * Class:     java_net_Inet4AddressImpl
+ * Method:    isReachable0
+ * Signature: ([bI[bI)Z
+ */
+JNIEXPORT jboolean JNICALL
+Java_java_net_Inet4AddressImpl_isReachable0(JNIEnv *env, jobject this,
+                                           jbyteArray addrArray,
+                                           jint timeout,
+                                           jbyteArray ifArray,
+                                           jint ttl) {
+    jint src_addr = 0;
+    jint dest_addr = 0;
+    jbyte caddr[4];
+    int sz;
+    HANDLE hIcmpFile;
+
+    /**
+     * Convert IP address from byte array to integer
+     */
+    sz = (*env)->GetArrayLength(env, addrArray);
+    if (sz != 4) {
+      return JNI_FALSE;
+    }
+    memset((char *) caddr, 0, sizeof(caddr));
+    (*env)->GetByteArrayRegion(env, addrArray, 0, 4, caddr);
+    dest_addr = ((caddr[0]<<24) & 0xff000000);
+    dest_addr |= ((caddr[1] <<16) & 0xff0000);
+    dest_addr |= ((caddr[2] <<8) & 0xff00);
+    dest_addr |= (caddr[3] & 0xff);
+    dest_addr = htonl(dest_addr);
+
+    /**
+     * If a network interface was specified, let's convert its address
+     * as well.
+     */
+    if (!(IS_NULL(ifArray))) {
+        memset((char *) caddr, 0, sizeof(caddr));
+        (*env)->GetByteArrayRegion(env, ifArray, 0, 4, caddr);
+        src_addr = ((caddr[0]<<24) & 0xff000000);
+        src_addr |= ((caddr[1] <<16) & 0xff0000);
+        src_addr |= ((caddr[2] <<8) & 0xff00);
+        src_addr |= (caddr[3] & 0xff);
+        src_addr = htonl(src_addr);
+    }
+
+    hIcmpFile = IcmpCreateFile();
+    if (hIcmpFile == INVALID_HANDLE_VALUE) {
+        int err = WSAGetLastError();
+        if (err == ERROR_ACCESS_DENIED) {
+            // fall back to TCP echo if access is denied to ICMP
+            return tcp_ping4(env, addrArray, timeout, ifArray, ttl);
+        } else {
+            NET_ThrowNew(env, err, "Unable to create ICMP file handle");
+            return JNI_FALSE;
+        }
+    } else {
+        return ping4(env, src_addr, dest_addr, timeout, hIcmpFile);
+    }
+}
+

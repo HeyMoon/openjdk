@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,30 +26,15 @@
 #define SHARE_VM_RUNTIME_OS_HPP
 
 #include "jvmtifiles/jvmti.h"
+#include "prims/jvm.h"
 #include "runtime/extendedPC.hpp"
 #include "runtime/handles.hpp"
-#include "utilities/top.hpp"
-#ifdef TARGET_OS_FAMILY_linux
-# include "jvm_linux.h"
+#include "utilities/macros.hpp"
+#ifndef _WINDOWS
 # include <setjmp.h>
 #endif
-#ifdef TARGET_OS_FAMILY_solaris
-# include "jvm_solaris.h"
-# include <setjmp.h>
-#endif
-#ifdef TARGET_OS_FAMILY_windows
-# include "jvm_windows.h"
-#endif
-#ifdef TARGET_OS_FAMILY_aix
-# include "jvm_aix.h"
-# include <setjmp.h>
-#endif
-#ifdef TARGET_OS_FAMILY_bsd
-# include "jvm_bsd.h"
-# include <setjmp.h>
-# ifdef __APPLE__
-#  include <mach/mach_time.h>
-# endif
+#ifdef __APPLE__
+# include <mach/mach_time.h>
 #endif
 
 class AgentLibrary;
@@ -96,12 +81,13 @@ enum ThreadPriority {        // JLS 20.20.1-3
 const bool ExecMem = true;
 
 // Typedef for structured exception handling support
-typedef void (*java_call_t)(JavaValue* value, methodHandle* method, JavaCallArguments* args, Thread* thread);
+typedef void (*java_call_t)(JavaValue* value, const methodHandle& method, JavaCallArguments* args, Thread* thread);
 
 class MallocTracker;
 
 class os: AllStatic {
   friend class VMStructs;
+  friend class JVMCIVMStructs;
   friend class MallocTracker;
  public:
   enum { page_sizes_max = 9 }; // Size of _page_sizes array (8 plus a sentinel)
@@ -150,6 +136,11 @@ class os: AllStatic {
 
   static size_t page_size_for_region(size_t region_size, size_t min_pages, bool must_be_aligned);
 
+  // Get summary strings for system information in buffer provided
+  static void  get_summary_cpu_info(char* buf, size_t buflen);
+  static void  get_summary_os_info(char* buf, size_t buflen);
+
+  static void initialize_initial_active_processor_count();
  public:
   static void init(void);                      // Called before command line parsing
   static void init_before_ergo(void);          // Called after command line parsing
@@ -206,10 +197,11 @@ class os: AllStatic {
   // information may require a lock on some platforms.
   static char*      local_time_string(char *buf, size_t buflen);
   static struct tm* localtime_pd     (const time_t* clock, struct tm*  res);
+  static struct tm* gmtime_pd        (const time_t* clock, struct tm*  res);
   // Fill in buffer with current local time as an ISO-8601 string.
   // E.g., YYYY-MM-DDThh:mm:ss.mmm+zzzz.
   // Returns buffer, or NULL if it failed.
-  static char* iso8601_time(char* buffer, size_t buffer_length);
+  static char* iso8601_time(char* buffer, size_t buffer_length, bool utc = false);
 
   // Interface for detecting multiprocessor system
   static inline bool is_MP() {
@@ -237,6 +229,13 @@ class os: AllStatic {
   // Note that on some OSes this can change dynamically.
   static int active_processor_count();
 
+  // At startup the number of active CPUs this process is allowed to run on.
+  // This value does not change dynamically. May be different from active_processor_count().
+  static int initial_active_processor_count() {
+    assert(_initial_active_processor_count > 0, "Initial active processor count not set yet.");
+    return _initial_active_processor_count;
+  }
+
   // Bind processes to processors.
   //     This is a two step procedure:
   //     first you generate a distribution of processes to processors,
@@ -256,9 +255,9 @@ class os: AllStatic {
   // exception processing)  There are guard pages, and above that shadow
   // pages for stack overflow checking.
   static bool uses_stack_guard_pages();
-  static bool allocate_stack_guard_pages();
-  static void bang_stack_shadow_pages();
-  static bool stack_shadow_pages_available(Thread *thread, methodHandle method);
+  static bool must_commit_stack_guard_pages();
+  static void map_stack_shadow_pages(address sp);
+  static bool stack_shadow_pages_available(Thread *thread, const methodHandle& method, address sp);
 
   // OS interface to Virtual Memory
 
@@ -281,18 +280,24 @@ class os: AllStatic {
     return _page_sizes[0];
   }
 
-  // Methods for tracing page sizes returned by the above method; enabled by
-  // TracePageSizes.  The region_{min,max}_size parameters should be the values
+  // Methods for tracing page sizes returned by the above method.
+  // The region_{min,max}_size parameters should be the values
   // passed to page_size_for_region() and page_size should be the result of that
   // call.  The (optional) base and size parameters should come from the
   // ReservedSpace base() and size() methods.
-  static void trace_page_sizes(const char* str, const size_t* page_sizes,
-                               int count) PRODUCT_RETURN;
-  static void trace_page_sizes(const char* str, const size_t region_min_size,
+  static void trace_page_sizes(const char* str, const size_t* page_sizes, int count);
+  static void trace_page_sizes(const char* str,
+                               const size_t region_min_size,
                                const size_t region_max_size,
                                const size_t page_size,
-                               const char* base = NULL,
-                               const size_t size = 0) PRODUCT_RETURN;
+                               const char* base,
+                               const size_t size);
+  static void trace_page_sizes_for_requested_size(const char* str,
+                                                  const size_t requested_size,
+                                                  const size_t page_size,
+                                                  const size_t alignment,
+                                                  const char* base,
+                                                  const size_t size);
 
   static int    vm_allocation_granularity();
   static char*  reserve_memory(size_t bytes, char* addr = 0,
@@ -320,7 +325,7 @@ class os: AllStatic {
   // to make the OS back the memory range with actual memory.
   // Current implementation may not touch the last page if unaligned addresses
   // are passed.
-  static void   pretouch_memory(char* start, char* end);
+  static void   pretouch_memory(void* start, void* end, size_t page_size = vm_page_size());
 
   enum ProtType { MEM_PROT_NONE, MEM_PROT_READ, MEM_PROT_RW, MEM_PROT_RWX };
   static bool   protect_memory(char* addr, size_t bytes, ProtType prot,
@@ -431,7 +436,7 @@ class os: AllStatic {
     vm_thread,
     cgc_thread,        // Concurrent GC thread
     pgc_thread,        // Parallel GC thread
-    java_thread,
+    java_thread,       // Java, CodeCacheSweeper, JVMTIAgent and Service threads.
     compiler_thread,
     watcher_thread,
     os_thread
@@ -439,7 +444,7 @@ class os: AllStatic {
 
   static bool create_thread(Thread* thread,
                             ThreadType thr_type,
-                            size_t stack_size = 0);
+                            size_t req_stack_size = 0);
   static bool create_main_thread(JavaThread* thread);
   static bool create_attached_thread(JavaThread* thread);
   static void pd_start_thread(Thread* thread);
@@ -466,11 +471,13 @@ class os: AllStatic {
 
   static int pd_self_suspend_thread(Thread* thread);
 
-  static ExtendedPC fetch_frame_from_context(void* ucVoid, intptr_t** sp, intptr_t** fp);
-  static frame      fetch_frame_from_context(void* ucVoid);
+  static ExtendedPC fetch_frame_from_context(const void* ucVoid, intptr_t** sp, intptr_t** fp);
+  static frame      fetch_frame_from_context(const void* ucVoid);
+  static frame      fetch_frame_from_ucontext(Thread* thread, void* ucVoid);
 
   static ExtendedPC get_thread_pc(Thread *thread);
   static void breakpoint();
+  static bool start_debugging(char *buf, int buflen);
 
   static address current_stack_pointer();
   static address current_stack_base();
@@ -478,7 +485,7 @@ class os: AllStatic {
 
   static void verify_stack_alignment() PRODUCT_RETURN;
 
-  static int message_box(const char* title, const char* message);
+  static bool message_box(const char* title, const char* message);
   static char* do_you_want_to_debug(const char* message);
 
   // run cmd in a separate process and return its exit code; or -1 on failures
@@ -492,7 +499,7 @@ class os: AllStatic {
 
   // Terminate with an error.  Default is to generate a core file on platforms
   // that support such things.  This calls shutdown() and then aborts.
-  static void abort(bool dump_core, void *siginfo, void *context);
+  static void abort(bool dump_core, void *siginfo, const void *context);
   static void abort(bool dump_core = true);
 
   // Die immediately, no exit hook, no abort hook, no cleanup.
@@ -508,6 +515,11 @@ class os: AllStatic {
   static int ftruncate(int fd, jlong length);
   static int fsync(int fd);
   static int available(int fd, jlong *bytes);
+  static int get_fileno(FILE* fp);
+  static void flockfile(FILE* fp);
+  static void funlockfile(FILE* fp);
+
+  static int compare_file_modified_times(const char* file1, const char* file2);
 
   //File i/o operations
 
@@ -584,24 +596,47 @@ class os: AllStatic {
   static void *find_agent_function(AgentLibrary *agent_lib, bool check_lib,
                                    const char *syms[], size_t syms_len);
 
+  // Write to stream
+  static int log_vsnprintf(char* buf, size_t len, const char* fmt, va_list args) ATTRIBUTE_PRINTF(3, 0);
+
+  // Get host name in buffer provided
+  static bool get_host_name(char* buf, size_t buflen);
+
   // Print out system information; they are called by fatal error handler.
   // Output format may be different on different platforms.
   static void print_os_info(outputStream* st);
   static void print_os_info_brief(outputStream* st);
   static void print_cpu_info(outputStream* st, char* buf, size_t buflen);
   static void pd_print_cpu_info(outputStream* st, char* buf, size_t buflen);
+  static void print_summary_info(outputStream* st, char* buf, size_t buflen);
   static void print_memory_info(outputStream* st);
   static void print_dll_info(outputStream* st);
   static void print_environment_variables(outputStream* st, const char** env_list);
-  static void print_context(outputStream* st, void* context);
-  static void print_register_info(outputStream* st, void* context);
-  static void print_siginfo(outputStream* st, void* siginfo);
+  static void print_context(outputStream* st, const void* context);
+  static void print_register_info(outputStream* st, const void* context);
+  static void print_siginfo(outputStream* st, const void* siginfo);
   static void print_signal_handlers(outputStream* st, char* buf, size_t buflen);
   static void print_date_and_time(outputStream* st, char* buf, size_t buflen);
 
   static void print_location(outputStream* st, intptr_t x, bool verbose = false);
   static size_t lasterror(char *buf, size_t len);
   static int get_last_error();
+
+  // Replacement for strerror().
+  // Will return the english description of the error (e.g. "File not found", as
+  //  suggested in the POSIX standard.
+  // Will return "Unknown error" for an unknown errno value.
+  // Will not attempt to localize the returned string.
+  // Will always return a valid string which is a static constant.
+  // Will not change the value of errno.
+  static const char* strerror(int e);
+
+  // Will return the literalized version of the given errno (e.g. "EINVAL"
+  //  for EINVAL).
+  // Will return "Unknown error" for an unknown errno value.
+  // Will always return a valid string which is a static constant.
+  // Will not change the value of errno.
+  static const char* errno_name(int e);
 
   // Determines whether the calling process is being debugged by a user-mode debugger.
   static bool is_debugger_attached();
@@ -632,6 +667,9 @@ class os: AllStatic {
   // returns NULL if exception_code is not an OS exception/signal.
   static const char* exception_name(int exception_code, char* buf, size_t buflen);
 
+  // Returns the signal number (e.g. 11) for a given signal name (SIGSEGV).
+  static int get_signal_number(const char* signal_name);
+
   // Returns native Java library, loads if necessary
   static void*    native_java_library();
 
@@ -657,12 +695,6 @@ class os: AllStatic {
   static jlong current_file_offset(int fd);
   static jlong seek_to_file_offset(int fd, jlong offset);
 
-  // Thread Local Storage
-  static int   allocate_thread_local_storage();
-  static void  thread_local_storage_at_put(int index, void* value);
-  static void* thread_local_storage_at(int index);
-  static void  free_thread_local_storage(int index);
-
   // Retrieve native stack frames.
   // Parameter:
   //   stack:  an array to storage stack pointers.
@@ -678,7 +710,6 @@ class os: AllStatic {
   static void* realloc (void *memblock, size_t size, MEMFLAGS flag);
 
   static void  free    (void *memblock);
-  static bool  check_heap(bool force = false);      // verify C heap integrity
   static char* strdup(const char *, MEMFLAGS flags = mtInternal);  // Like strdup
   // Like strdup, but exit VM when strdup() returns NULL
   static char* strdup_check_oom(const char*, MEMFLAGS flags = mtInternal);
@@ -716,7 +747,7 @@ class os: AllStatic {
   static void init_random(long initval);   // initialize random sequence
 
   // Structured OS Exception support
-  static void os_exception_wrapper(java_call_t f, JavaValue* value, methodHandle* method, JavaCallArguments* args, Thread* thread);
+  static void os_exception_wrapper(java_call_t f, JavaValue* value, const methodHandle& method, JavaCallArguments* args, Thread* thread);
 
   // On Posix compatible OS it will simply check core dump limits while on Windows
   // it will check if dump file can be created. Check or prepare a core dump to be
@@ -767,6 +798,8 @@ class os: AllStatic {
   // Amount beyond the callee frame size that we bang the stack.
   static int extra_bang_size_in_bytes();
 
+  static char** split_path(const char* path, int* n);
+
   // Extensions
 #include "runtime/os_ext.hpp"
 
@@ -777,61 +810,11 @@ class os: AllStatic {
   };
 
   // Platform dependent stuff
-#ifdef TARGET_OS_FAMILY_linux
-# include "os_linux.hpp"
+#ifndef _WINDOWS
 # include "os_posix.hpp"
 #endif
-#ifdef TARGET_OS_FAMILY_solaris
-# include "os_solaris.hpp"
-# include "os_posix.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_windows
-# include "os_windows.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_aix
-# include "os_aix.hpp"
-# include "os_posix.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_bsd
-# include "os_posix.hpp"
-# include "os_bsd.hpp"
-#endif
-#ifdef TARGET_OS_ARCH_linux_x86
-# include "os_linux_x86.hpp"
-#endif
-#ifdef TARGET_OS_ARCH_linux_sparc
-# include "os_linux_sparc.hpp"
-#endif
-#ifdef TARGET_OS_ARCH_linux_zero
-# include "os_linux_zero.hpp"
-#endif
-#ifdef TARGET_OS_ARCH_solaris_x86
-# include "os_solaris_x86.hpp"
-#endif
-#ifdef TARGET_OS_ARCH_solaris_sparc
-# include "os_solaris_sparc.hpp"
-#endif
-#ifdef TARGET_OS_ARCH_windows_x86
-# include "os_windows_x86.hpp"
-#endif
-#ifdef TARGET_OS_ARCH_linux_arm
-# include "os_linux_arm.hpp"
-#endif
-#ifdef TARGET_OS_ARCH_linux_ppc
-# include "os_linux_ppc.hpp"
-#endif
-#ifdef TARGET_OS_ARCH_aix_ppc
-# include "os_aix_ppc.hpp"
-#endif
-#ifdef TARGET_OS_ARCH_linux_aarch64
-# include "os_linux_aarch64.hpp"
-#endif
-#ifdef TARGET_OS_ARCH_bsd_x86
-# include "os_bsd_x86.hpp"
-#endif
-#ifdef TARGET_OS_ARCH_bsd_zero
-# include "os_bsd_zero.hpp"
-#endif
+#include OS_CPU_HEADER(os)
+#include OS_HEADER(os)
 
 #ifndef OS_NATIVE_THREAD_CREATION_FAILED_MSG
 #define OS_NATIVE_THREAD_CREATION_FAILED_MSG "unable to create native thread: possibly out of memory or process/resource limits reached"
@@ -840,7 +823,7 @@ class os: AllStatic {
  public:
 #ifndef PLATFORM_PRINT_NATIVE_STACK
   // No platform-specific code for printing the native stack.
-  static bool platform_print_native_stack(outputStream* st, void* context,
+  static bool platform_print_native_stack(outputStream* st, const void* context,
                                           char *buf, int buf_size) {
     return false;
   }
@@ -898,7 +881,7 @@ class os: AllStatic {
     bool _done;
   };
 
-#ifndef TARGET_OS_FAMILY_windows
+#ifndef _WINDOWS
   // Suspend/resume support
   // Protocol:
   //
@@ -969,12 +952,13 @@ class os: AllStatic {
       return _state == SR_SUSPENDED;
     }
   };
-#endif
+#endif // !WINDOWS
 
 
  protected:
-  static long _rand_seed;                   // seed for random number generator
-  static int _processor_count;              // number of processors
+  static long _rand_seed;                     // seed for random number generator
+  static int _processor_count;                // number of processors
+  static int _initial_active_processor_count; // number of active processors during initialization.
 
   static char* format_boot_path(const char* format_string,
                                 const char* home,
@@ -982,7 +966,6 @@ class os: AllStatic {
                                 char fileSep,
                                 char pathSep);
   static bool set_boot_path(char fileSep, char pathSep);
-  static char** split_path(const char* path, int* n);
 
 };
 

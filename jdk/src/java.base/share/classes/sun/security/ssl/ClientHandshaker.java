@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,10 +37,12 @@ import java.security.spec.ECParameterSpec;
 import java.security.cert.X509Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateParsingException;
+import java.security.cert.CertPathValidatorException;
+import java.security.cert.CertPathValidatorException.Reason;
+import java.security.cert.CertPathValidatorException.BasicReason;
 import javax.security.auth.x500.X500Principal;
 
 import javax.crypto.SecretKey;
-import javax.crypto.spec.SecretKeySpec;
 
 import javax.net.ssl.*;
 
@@ -58,8 +60,8 @@ import static sun.security.ssl.CipherSuite.KeyExchange.*;
 final class ClientHandshaker extends Handshaker {
 
     // constants for subject alt names of type DNS and IP
-    private final static int ALTNAME_DNS = 2;
-    private final static int ALTNAME_IP  = 7;
+    private static final int ALTNAME_DNS = 2;
+    private static final int ALTNAME_IP  = 7;
 
     // the server's public key from its certificate.
     private PublicKey serverKey;
@@ -79,6 +81,9 @@ final class ClientHandshaker extends Handshaker {
 
     private boolean serverKeyExchangeReceived;
 
+    private boolean staplingActive = false;
+    private X509Certificate[] deferredCerts;
+
     /*
      * The RSA PreMasterSecret needs to know the version of
      * ClientHello that was used on this handshake.  This represents
@@ -90,7 +95,7 @@ final class ClientHandshaker extends Handshaker {
     private ProtocolVersion maxProtocolVersion;
 
     // To switch off the SNI extension.
-    private final static boolean enableSNIExtension =
+    private static final boolean enableSNIExtension =
             Debug.getBooleanProperty("jsse.enableSNIExtension", true);
 
     /*
@@ -136,12 +141,15 @@ final class ClientHandshaker extends Handshaker {
      * If the system property is set to "true" explicitly, the restriction on
      * server certificate change in renegotiation is disabled.
      */
-    private final static boolean allowUnsafeServerCertChange =
+    private static final boolean allowUnsafeServerCertChange =
         Debug.getBooleanProperty("jdk.tls.allowUnsafeServerCertChange", false);
 
     // To switch off the max_fragment_length extension.
-    private final static boolean enableMFLExtension =
+    private static final boolean enableMFLExtension =
             Debug.getBooleanProperty("jsse.enableMFLExtension", false);
+
+    // Whether an ALPN extension was sent in the ClientHello
+    private boolean alpnActive = false;
 
     private List<SNIServerName> requestedServerNames =
             Collections.<SNIServerName>emptyList();
@@ -200,7 +208,16 @@ final class ClientHandshaker extends Handshaker {
     @Override
     void processMessage(byte type, int messageLen) throws IOException {
         // check the handshake state
-        handshakeState.check(type);
+        List<Byte> ignoredOptStates = handshakeState.check(type);
+
+        // If the state machine has skipped over certificate status
+        // and stapling was enabled, we need to check the chain immediately
+        // because it was deferred, waiting for CertificateStatus.
+        if (staplingActive && ignoredOptStates.contains(
+                HandshakeMessage.ht_certificate_status)) {
+            checkServerCerts(deferredCerts);
+            serverKey = session.getPeerCertificates()[0].getPublicKey();
+        }
 
         switch (type) {
         case HandshakeMessage.ht_hello_request:
@@ -241,8 +258,19 @@ final class ClientHandshaker extends Handshaker {
             CertificateMsg certificateMsg = new CertificateMsg(input);
             handshakeState.update(certificateMsg, resumingSession);
             this.serverCertificate(certificateMsg);
-            serverKey =
-                session.getPeerCertificates()[0].getPublicKey();
+            if (!staplingActive) {
+                // If we are not doing stapling, we can set serverKey right
+                // away.  Otherwise, we will wait until verification of the
+                // chain has completed after CertificateStatus;
+                serverKey = session.getPeerCertificates()[0].getPublicKey();
+            }
+            break;
+
+        case HandshakeMessage.ht_certificate_status:
+            CertificateStatus certStatusMsg = new CertificateStatus(input);
+            handshakeState.update(certStatusMsg, resumingSession);
+            this.certificateStatus(certStatusMsg);
+            serverKey = session.getPeerCertificates()[0].getPublicKey();
             break;
 
         case HandshakeMessage.ht_server_key_exchange:
@@ -302,7 +330,7 @@ final class ClientHandshaker extends Handshaker {
                             input, serverKey,
                             clnt_random.random_bytes, svr_random.random_bytes,
                             messageLen,
-                            localSupportedSignAlgs, protocolVersion);
+                            getLocalSupportedSignAlgs(), protocolVersion);
                     handshakeState.update(dhSrvKeyExchange, resumingSession);
                     this.serverKeyExchange(dhSrvKeyExchange);
                 } catch (GeneralSecurityException e) {
@@ -317,7 +345,7 @@ final class ClientHandshaker extends Handshaker {
                         new ECDH_ServerKeyExchange
                             (input, serverKey, clnt_random.random_bytes,
                             svr_random.random_bytes,
-                            localSupportedSignAlgs, protocolVersion);
+                            getLocalSupportedSignAlgs(), protocolVersion);
                     handshakeState.update(ecdhSrvKeyExchange, resumingSession);
                     this.serverKeyExchange(ecdhSrvKeyExchange);
                 } catch (GeneralSecurityException e) {
@@ -367,7 +395,7 @@ final class ClientHandshaker extends Handshaker {
 
                 Collection<SignatureAndHashAlgorithm> supportedPeerSignAlgs =
                     SignatureAndHashAlgorithm.getSupportedAlgorithms(
-                                                            peerSignAlgs);
+                            algorithmConstraints, peerSignAlgs);
                 if (supportedPeerSignAlgs.isEmpty()) {
                     throw new SSLHandshakeException(
                         "No supported signature and hash algorithm in common");
@@ -644,6 +672,12 @@ final class ClientHandshaker extends Handshaker {
                 }
             } else {
                 // we wanted to resume, but the server refused
+                //
+                // Invalidate the session for initial handshake in case
+                // of reusing next time.
+                if (isInitialHandshake) {
+                    session.invalidate();
+                }
                 session = null;
                 if (!enableNewSession) {
                     throw new SSLException("New session creation is disabled");
@@ -669,6 +703,44 @@ final class ClientHandshaker extends Handshaker {
         }   // Otherwise, using the value negotiated during the original
             // session initiation
 
+        // check the ALPN extension
+        ALPNExtension serverHelloALPN =
+            (ALPNExtension) mesg.extensions.get(ExtensionType.EXT_ALPN);
+
+        if (serverHelloALPN != null) {
+            // Check whether an ALPN extension was sent in ClientHello message
+            if (!alpnActive) {
+                fatalSE(Alerts.alert_unsupported_extension,
+                    "Server sent " + ExtensionType.EXT_ALPN +
+                    " extension when not requested by client");
+            }
+
+            List<String> protocols = serverHelloALPN.getPeerAPs();
+            // Only one application protocol name should be present
+            String p;
+            if ((protocols.size() == 1) &&
+                    !((p = protocols.get(0)).isEmpty())) {
+                int i;
+                for (i = 0; i < localApl.length; i++) {
+                    if (localApl[i].equals(p)) {
+                        break;
+                    }
+                }
+                if (i == localApl.length) {
+                    fatalSE(Alerts.alert_handshake_failure,
+                        "Server has selected an application protocol name " +
+                        "which was not offered by the client: " + p);
+                }
+                applicationProtocol = p;
+            } else {
+                fatalSE(Alerts.alert_handshake_failure,
+                    "Incorrect data in ServerHello " + ExtensionType.EXT_ALPN +
+                    " message");
+            }
+        } else {
+            applicationProtocol = "";
+        }
+
         if (resumingSession && session != null) {
             setHandshakeSessionSE(session);
             // Reserve the handshake state if this is a session-resumption
@@ -685,10 +757,23 @@ final class ClientHandshaker extends Handshaker {
             ExtensionType type = ext.type;
             if (type == ExtensionType.EXT_SERVER_NAME) {
                 serverNamesAccepted = true;
+            } else if (type == ExtensionType.EXT_STATUS_REQUEST ||
+                    type == ExtensionType.EXT_STATUS_REQUEST_V2) {
+                // Only enable the stapling feature if the client asserted
+                // these extensions.
+                if (sslContext.isStaplingEnabled(true)) {
+                    staplingActive = true;
+                } else {
+                    fatalSE(Alerts.alert_unexpected_message, "Server set " +
+                            type + " extension when not requested by client");
+                }
             } else if ((type != ExtensionType.EXT_ELLIPTIC_CURVES)
                     && (type != ExtensionType.EXT_EC_POINT_FORMATS)
                     && (type != ExtensionType.EXT_SERVER_NAME)
-                    && (type != ExtensionType.EXT_RENEGOTIATION_INFO)) {
+                    && (type != ExtensionType.EXT_ALPN)
+                    && (type != ExtensionType.EXT_RENEGOTIATION_INFO)
+                    && (type != ExtensionType.EXT_STATUS_REQUEST)
+                    && (type != ExtensionType.EXT_STATUS_REQUEST_V2)) {
                 fatalSE(Alerts.alert_unsupported_extension,
                     "Server sent an unsupported extension: " + type);
             }
@@ -795,30 +880,33 @@ final class ClientHandshaker extends Handshaker {
                 String typeName;
 
                 switch (certRequest.types[i]) {
-                case CertificateRequest.cct_rsa_sign:
-                    typeName = "RSA";
-                    break;
+                    case CertificateRequest.cct_rsa_sign:
+                        typeName = "RSA";
+                        break;
 
-                case CertificateRequest.cct_dss_sign:
-                    typeName = "DSA";
-                    break;
+                    case CertificateRequest.cct_dss_sign:
+                        typeName = "DSA";
+                            break;
 
-                case CertificateRequest.cct_ecdsa_sign:
-                    // ignore if we do not have EC crypto available
-                    typeName = JsseJce.isEcAvailable() ? "EC" : null;
-                    break;
+                    case CertificateRequest.cct_ecdsa_sign:
+                        // ignore if we do not have EC crypto available
+                        typeName = JsseJce.isEcAvailable() ? "EC" : null;
+                        break;
 
-                // Fixed DH/ECDH client authentication not supported
-                case CertificateRequest.cct_rsa_fixed_dh:
-                case CertificateRequest.cct_dss_fixed_dh:
-                case CertificateRequest.cct_rsa_fixed_ecdh:
-                case CertificateRequest.cct_ecdsa_fixed_ecdh:
-                // Any other values (currently not used in TLS)
-                case CertificateRequest.cct_rsa_ephemeral_dh:
-                case CertificateRequest.cct_dss_ephemeral_dh:
-                default:
-                    typeName = null;
-                    break;
+                    // Fixed DH/ECDH client authentication not supported
+                    //
+                    // case CertificateRequest.cct_rsa_fixed_dh:
+                    // case CertificateRequest.cct_dss_fixed_dh:
+                    // case CertificateRequest.cct_rsa_fixed_ecdh:
+                    // case CertificateRequest.cct_ecdsa_fixed_ecdh:
+                    //
+                    // Any other values (currently not used in TLS)
+                    //
+                    // case CertificateRequest.cct_rsa_ephemeral_dh:
+                    // case CertificateRequest.cct_dss_ephemeral_dh:
+                    default:
+                        typeName = null;
+                        break;
                 }
 
                 if ((typeName != null) && (!keytypesTmp.contains(typeName))) {
@@ -846,18 +934,6 @@ final class ClientHandshaker extends Handshaker {
                 X509Certificate[] certs = km.getCertificateChain(alias);
                 if ((certs != null) && (certs.length != 0)) {
                     PublicKey publicKey = certs[0].getPublicKey();
-                    // for EC, make sure we use a supported named curve
-                    if (publicKey instanceof ECPublicKey) {
-                        ECParameterSpec params =
-                            ((ECPublicKey)publicKey).getParams();
-                        int index =
-                            SupportedEllipticCurvesExtension.getCurveIndex(
-                                params);
-                        if (!SupportedEllipticCurvesExtension.isSupported(
-                                index)) {
-                            publicKey = null;
-                        }
-                    }
                     if (publicKey != null) {
                         m1 = new CertificateMsg(certs);
                         signingKey = km.getPrivateKey(alias);
@@ -1112,7 +1188,7 @@ final class ClientHandshaker extends Handshaker {
         /*
          * FOURTH, if we sent a Certificate, we need to send a signed
          * CertificateVerify (unless the key in the client's certificate
-         * was a Diffie-Hellman key).).
+         * was a Diffie-Hellman key).
          *
          * This uses a hash of the previous handshake messages ... either
          * a nonfinal one (if the particular implementation supports it)
@@ -1126,8 +1202,8 @@ final class ClientHandshaker extends Handshaker {
                 if (protocolVersion.useTLS12PlusSpec()) {
                     preferableSignatureAlgorithm =
                         SignatureAndHashAlgorithm.getPreferableAlgorithm(
-                            peerSupportedSignAlgs, signingKey.getAlgorithm(),
-                            signingKey);
+                            getPeerSupportedSignAlgs(),
+                            signingKey.getAlgorithm(), signingKey);
 
                     if (preferableSignatureAlgorithm == null) {
                         throw new SSLHandshakeException(
@@ -1419,6 +1495,17 @@ final class ClientHandshaker extends Handshaker {
                 sslContext.getSecureRandom(), maxProtocolVersion,
                 sessionId, cipherSuites, isDTLS);
 
+        // add elliptic curves and point format extensions
+        if (cipherSuites.containsEC()) {
+            EllipticCurvesExtension ece =
+                EllipticCurvesExtension.createExtension(algorithmConstraints);
+            if (ece != null) {
+                clientHelloMessage.extensions.add(ece);
+                clientHelloMessage.extensions.add(
+                        EllipticPointFormatsExtension.DEFAULT);
+            }
+        }
+
         // add signature_algorithm extension
         if (maxProtocolVersion.useTLS12PlusSpec()) {
             // we will always send the signature_algorithm extension
@@ -1474,6 +1561,18 @@ final class ClientHandshaker extends Handshaker {
             } else {
                 requestedMFLength = -1;
             }
+        }
+
+        // Add status_request and status_request_v2 extensions
+        if (sslContext.isStaplingEnabled(true)) {
+            clientHelloMessage.addCertStatusReqListV2Extension();
+            clientHelloMessage.addCertStatusRequestExtension();
+        }
+
+        // Add ALPN extension
+        if (localApl != null && localApl.length > 0) {
+            clientHelloMessage.addALPNExtension(localApl);
+            alpnActive = true;
         }
 
         // reset the client random cookie
@@ -1545,40 +1644,36 @@ final class ClientHandshaker extends Handshaker {
         }
 
         // ask the trust manager to verify the chain
-        X509TrustManager tm = sslContext.getX509TrustManager();
-        try {
-            // find out the key exchange algorithm used
-            // use "RSA" for non-ephemeral "RSA_EXPORT"
-            String keyExchangeString;
-            if (keyExchange == K_RSA_EXPORT && !serverKeyExchangeReceived) {
-                keyExchangeString = K_RSA.name;
-            } else {
-                keyExchangeString = keyExchange.name;
-            }
-
-            if (tm instanceof X509ExtendedTrustManager) {
-                if (conn != null) {
-                    ((X509ExtendedTrustManager)tm).checkServerTrusted(
-                        peerCerts.clone(),
-                        keyExchangeString,
-                        conn);
-                } else {
-                    ((X509ExtendedTrustManager)tm).checkServerTrusted(
-                        peerCerts.clone(),
-                        keyExchangeString,
-                        engine);
-                }
-            } else {
-                // Unlikely to happen, because we have wrapped the old
-                // X509TrustManager with the new X509ExtendedTrustManager.
-                throw new CertificateException(
-                    "Improper X509TrustManager implementation");
-            }
-        } catch (CertificateException e) {
-            // This will throw an exception, so include the original error.
-            fatalSE(Alerts.alert_certificate_unknown, e);
+        if (staplingActive) {
+            // Defer the certificate check until after we've received the
+            // CertificateStatus message.  If that message doesn't come in
+            // immediately following this message we will execute the check
+            // directly from processMessage before any other SSL/TLS processing.
+            deferredCerts = peerCerts;
+        } else {
+            // We're not doing stapling, so perform the check right now
+            checkServerCerts(peerCerts);
         }
-        session.setPeerCertificates(peerCerts);
+    }
+
+    /**
+     * If certificate status stapling has been enabled, the server will send
+     * one or more status messages to the client.
+     *
+     * @param mesg a {@code CertificateStatus} object built from the data
+     *      sent by the server.
+     *
+     * @throws IOException if any parsing errors occur.
+     */
+    private void certificateStatus(CertificateStatus mesg) throws IOException {
+        if (debug != null && Debug.isOn("handshake")) {
+            mesg.print(System.out);
+        }
+
+        // Perform the certificate check using the deferred certificates
+        // and responses that we have obtained.
+        session.setStatusResponses(mesg.getResponses());
+        checkServerCerts(deferredCerts);
     }
 
     /*
@@ -1700,4 +1795,88 @@ final class ClientHandshaker extends Handshaker {
 
         return false;
     }
+
+    /**
+     * Perform client-side checking of server certificates.
+     *
+     * @param certs an array of {@code X509Certificate} objects presented
+     *      by the server in the ServerCertificate message.
+     *
+     * @throws IOException if a failure occurs during validation or
+     *      the trust manager associated with the {@code SSLContext} is not
+     *      an {@code X509ExtendedTrustManager}.
+     */
+    private void checkServerCerts(X509Certificate[] certs)
+            throws IOException {
+        X509TrustManager tm = sslContext.getX509TrustManager();
+
+        // find out the key exchange algorithm used
+        // use "RSA" for non-ephemeral "RSA_EXPORT"
+        String keyExchangeString;
+        if (keyExchange == K_RSA_EXPORT && !serverKeyExchangeReceived) {
+            keyExchangeString = K_RSA.name;
+        } else {
+            keyExchangeString = keyExchange.name;
+        }
+
+        try {
+            if (tm instanceof X509ExtendedTrustManager) {
+                if (conn != null) {
+                    ((X509ExtendedTrustManager)tm).checkServerTrusted(
+                        certs.clone(),
+                        keyExchangeString,
+                        conn);
+                } else {
+                    ((X509ExtendedTrustManager)tm).checkServerTrusted(
+                        certs.clone(),
+                        keyExchangeString,
+                        engine);
+                }
+            } else {
+                // Unlikely to happen, because we have wrapped the old
+                // X509TrustManager with the new X509ExtendedTrustManager.
+                throw new CertificateException(
+                        "Improper X509TrustManager implementation");
+            }
+
+            // Once the server certificate chain has been validated, set
+            // the certificate chain in the TLS session.
+            session.setPeerCertificates(certs);
+        } catch (CertificateException ce) {
+            fatalSE(getCertificateAlert(ce), ce);
+        }
+    }
+
+    /**
+     * When a failure happens during certificate checking from an
+     * {@link X509TrustManager}, determine what TLS alert description to use.
+     *
+     * @param cexc The exception thrown by the {@link X509TrustManager}
+     *
+     * @return A byte value corresponding to a TLS alert description number.
+     */
+    private byte getCertificateAlert(CertificateException cexc) {
+        // The specific reason for the failure will determine how to
+        // set the alert description value
+        byte alertDesc = Alerts.alert_certificate_unknown;
+
+        Throwable baseCause = cexc.getCause();
+        if (baseCause instanceof CertPathValidatorException) {
+            CertPathValidatorException cpve =
+                    (CertPathValidatorException)baseCause;
+            Reason reason = cpve.getReason();
+            if (reason == BasicReason.REVOKED) {
+                alertDesc = staplingActive ?
+                        Alerts.alert_bad_certificate_status_response :
+                        Alerts.alert_certificate_revoked;
+            } else if (reason == BasicReason.UNDETERMINED_REVOCATION_STATUS) {
+                alertDesc = staplingActive ?
+                        Alerts.alert_bad_certificate_status_response :
+                        Alerts.alert_certificate_unknown;
+            }
+        }
+
+        return alertDesc;
+    }
 }
+

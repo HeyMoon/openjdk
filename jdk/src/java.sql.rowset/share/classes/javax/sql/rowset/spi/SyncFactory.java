@@ -383,17 +383,14 @@ public class SyncFactory {
                         strFileSep + "rowset" + strFileSep +
                         "rowset.properties";
 
-                ClassLoader cl = Thread.currentThread().getContextClassLoader();
-
                 try {
                     AccessController.doPrivileged((PrivilegedExceptionAction<Void>) () -> {
-                        try (InputStream stream = (cl == null) ?
-                                ClassLoader.getSystemResourceAsStream(ROWSET_PROPERTIES)
-                                : cl.getResourceAsStream(ROWSET_PROPERTIES)) {
-                            if (stream == null) {
-                                throw new SyncFactoryException("Resource " + ROWSET_PROPERTIES + " not found");
-                            }
-                            properties.load(stream);
+                        InputStream in = SyncFactory.class.getModule().getResourceAsStream(ROWSET_PROPERTIES);
+                        if (in == null) {
+                            throw new SyncFactoryException("Resource " + ROWSET_PROPERTIES + " not found");
+                        }
+                        try (in) {
+                            properties.load(in);
                         }
                         return null;
                     });
@@ -585,19 +582,12 @@ public class SyncFactory {
              * there.
              **/
             c = Class.forName(providerID, true, cl);
+            @SuppressWarnings("deprecation")
+            Object result =  c.newInstance();
+            return (SyncProvider)result;
 
-            if (c != null) {
-                return (SyncProvider) c.newInstance();
-            } else {
-                return new com.sun.rowset.providers.RIOptimisticProvider();
-            }
-
-        } catch (IllegalAccessException e) {
+        } catch (IllegalAccessException | InstantiationException | ClassNotFoundException e) {
             throw new SyncFactoryException("IllegalAccessException: " + e.getMessage());
-        } catch (InstantiationException e) {
-            throw new SyncFactoryException("InstantiationException: " + e.getMessage());
-        } catch (ClassNotFoundException e) {
-            throw new SyncFactoryException("ClassNotFoundException: " + e.getMessage());
         }
     }
 

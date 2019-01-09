@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,15 +34,6 @@ static bool zero_page_read_protected() { return false; }
 class Aix {
   friend class os;
 
-  // For signal-chaining
-  // highest so far (AIX 5.2 - 6.1) is SIGSAK (63)
-#define MAXSIGNUM 63
-  // Length of strings included in the libperfstat structures.
-#define IDENTIFIER_LENGTH 64
-
-  static struct sigaction sigact[MAXSIGNUM]; // saved preinstalled sigactions
-  static unsigned int sigs;             // mask of signals that have
-                                        // preinstalled signal handlers
   static bool libjsig_is_loaded;        // libjsig that interposes sigaction(),
                                         // __sigaction(), signal() is loaded
   static struct sigaction *(*get_signal_action)(int);
@@ -51,26 +42,22 @@ class Aix {
 
   static void check_signal_handler(int sig);
 
-  // For signal flags diagnostics
-  static int sigflags[MAXSIGNUM];
-
- protected:
+ private:
 
   static julong _physical_memory;
   static pthread_t _main_thread;
   static Mutex* _createThread_lock;
   static int _page_size;
-  static int _logical_cpus;
 
   // -1 = uninitialized, 0 = AIX, 1 = OS/400 (PASE)
   static int _on_pase;
 
-  // -1 = uninitialized, otherwise 16 bit number:
+  // 0 = uninitialized, otherwise 16 bit number:
   //  lower 8 bit - minor version
   //  higher 8 bit - major version
   //  For AIX, e.g. 0x0601 for AIX 6.1
   //  for OS/400 e.g. 0x0504 for OS/400 V5R4
-  static int _os_version;
+  static uint32_t _os_version;
 
   // -1 = uninitialized,
   //  0 - SPEC1170 not requested (XPG_SUS_ENV is OFF or not set)
@@ -81,35 +68,6 @@ class Aix {
   //  0 - EXTSHM=OFF or not set
   //  1 - EXTSHM=ON
   static int _extshm;
-
-  // page sizes on AIX.
-  //
-  //  AIX supports four different page sizes - 4K, 64K, 16MB, 16GB. The latter two
-  //  (16M "large" resp. 16G "huge" pages) require special setup and are normally
-  //  not available.
-  //
-  //  AIX supports multiple page sizes per process, for:
-  //  - Stack (of the primordial thread, so not relevant for us)
-  //  - Data - data, bss, heap, for us also pthread stacks
-  //  - Text - text code
-  //  - shared memory
-  //
-  //  Default page sizes can be set via linker options (-bdatapsize, -bstacksize, ...)
-  //  and via environment variable LDR_CNTRL (DATAPSIZE, STACKPSIZE, ...)
-  //
-  //  For shared memory, page size can be set dynamically via shmctl(). Different shared memory
-  //  regions can have different page sizes.
-  //
-  //  More information can be found at AIBM info center:
-  //   http://publib.boulder.ibm.com/infocenter/aix/v6r1/index.jsp?topic=/com.ibm.aix.prftungd/doc/prftungd/multiple_page_size_app_support.htm
-  //
-  // -----
-  //  We want to support 4K and 64K and, if the machine is set up correctly, 16MB pages.
-  //
-
-  // page size of the stack of newly created pthreads
-  // (should be LDR_CNTRL DATAPSIZE because stack is allocated on heap by pthread lib)
-  static int _stack_page_size;
 
   static julong available_memory();
   static julong physical_memory() { return _physical_memory; }
@@ -131,14 +89,9 @@ class Aix {
   static void initialize_libo4();
   static void initialize_libperfstat();
 
-  static bool supports_variable_stack_size();
-
  public:
   static void init_thread_fpu_state();
   static pthread_t main_thread(void)                                { return _main_thread; }
-  // returns kernel thread id (similar to LWP id on Solaris), which can be
-  // used to access /proc
-  static pid_t gettid();
   static void set_createThread_lock(Mutex* lk)                      { _createThread_lock = lk; }
   static Mutex* createThread_lock(void)                             { return _createThread_lock; }
   static void hotspot_sigmask(Thread* thread);
@@ -157,20 +110,13 @@ class Aix {
     return _page_size;
   }
 
-  // Accessor methods for stack page size which may be different from usual page size.
-  static int stack_page_size(void) {
-    assert(_stack_page_size != -1, "not initialized");
-    return _stack_page_size;
-  }
-
-  // This is used to scale stack space (guard pages etc.). The name is somehow misleading.
-  static int vm_default_page_size(void ) { return 8*K; }
-
   static address   ucontext_get_pc(const ucontext_t* uc);
-  static intptr_t* ucontext_get_sp(ucontext_t* uc);
-  static intptr_t* ucontext_get_fp(ucontext_t* uc);
+  static intptr_t* ucontext_get_sp(const ucontext_t* uc);
+  static intptr_t* ucontext_get_fp(const ucontext_t* uc);
   // Set PC into context. Needed for continuation after signal.
   static void ucontext_set_pc(ucontext_t* uc, address pc);
+
+  static bool get_frame_at_stack_banging_point(JavaThread* thread, ucontext_t* uc, frame* fr);
 
   // This boolean allows users to forward their own non-matching signals
   // to JVM_handle_aix_signal, harmlessly.
@@ -194,12 +140,7 @@ class Aix {
   // libpthread version string
   static void libpthread_init();
 
-  // Minimum stack size a thread can be created with (allowing
-  // the VM to completely create the thread and enter user code)
-  static size_t min_stack_allowed;
-
-  // Return default stack size or guard size for the specified thread type
-  static size_t default_stack_size(os::ThreadType thr_type);
+  // Return default libc guard size for the specified thread type.
   static size_t default_guard_size(os::ThreadType thr_type);
 
   // Function returns true if we run on OS/400 (pase), false if we run
@@ -216,24 +157,31 @@ class Aix {
     return _on_pase ? false : true;
   }
 
-  // -1 = uninitialized, otherwise 16 bit number:
+  // Get 4 byte AIX kernel version number:
+  // highest 2 bytes: Version, Release
+  // if available: lowest 2 bytes: Tech Level, Service Pack.
+  static uint32_t os_version() {
+    assert(_os_version != 0, "not initialized");
+    return _os_version;
+  }
+
+  // 0 = uninitialized, otherwise 16 bit number:
   // lower 8 bit - minor version
   // higher 8 bit - major version
   // For AIX, e.g. 0x0601 for AIX 6.1
   // for OS/400 e.g. 0x0504 for OS/400 V5R4
-  static int os_version () {
-    assert(_os_version != -1, "not initialized");
-    return _os_version;
+  static int os_version_short() {
+    return os_version() >> 16;
   }
 
   // Convenience method: returns true if running on PASE V5R4 or older.
   static bool on_pase_V5R4_or_older() {
-    return on_pase() && os_version() <= 0x0504;
+    return on_pase() && os_version_short() <= 0x0504;
   }
 
   // Convenience method: returns true if running on AIX 5.3 or older.
   static bool on_aix_53_or_older() {
-    return on_aix() && os_version() <= 0x0503;
+    return on_aix() && os_version_short() <= 0x0503;
   }
 
   // Returns true if we run in SPEC1170 compliant mode (XPG_SUS_ENV=ON).
@@ -268,27 +216,12 @@ class Aix {
 
   };
 
-  // Result struct for get_cpuinfo().
-  struct cpuinfo_t {
-    char description[IDENTIFIER_LENGTH];  // processor description (type/official name)
-    u_longlong_t processorHZ;             // processor speed in Hz
-    int ncpus;                            // number of active logical processors
-    double loadavg[3];                    // (1<<SBITS) times the average number of runnables processes during the last 1, 5 and 15 minutes.
-                                          // To calculate the load average, divide the numbers by (1<<SBITS). SBITS is defined in <sys/proc.h>.
-    char version[20];                     // processor version from _system_configuration (sys/systemcfg.h)
-  };
-
   // Functions to retrieve memory information on AIX, PASE.
   // (on AIX, using libperfstat, on PASE with libo4.so).
   // Returns true if ok, false if error.
   static bool get_meminfo(meminfo_t* pmi);
 
-  // Function to retrieve cpu information on AIX
-  // (on AIX, using libperfstat)
-  // Returns true if ok, false if error.
-  static bool get_cpuinfo(cpuinfo_t* pci);
-
-}; // os::Aix class
+};
 
 
 class PlatformEvent : public CHeapObj<mtInternal> {

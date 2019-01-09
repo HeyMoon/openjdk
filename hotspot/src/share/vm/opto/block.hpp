@@ -37,6 +37,7 @@ class MachCallNode;
 class Matcher;
 class RootNode;
 class VectorSet;
+class PhaseChaitin;
 struct Tarjan;
 
 //------------------------------Block_Array------------------------------------
@@ -185,18 +186,17 @@ public:
   Block* lone_fall_through();   // Return lone fall-through Block or null
 
   Block* dom_lca(Block* that);  // Compute LCA in dominator tree.
-#ifdef ASSERT
+
   bool dominates(Block* that) {
     int dom_diff = this->_dom_depth - that->_dom_depth;
     if (dom_diff > 0)  return false;
     for (; dom_diff < 0; dom_diff++)  that = that->_idom;
     return this == that;
   }
-#endif
 
   // Report the alignment required by this block.  Must be a power of 2.
   // The previous block will insert nops to get this alignment.
-  uint code_alignment();
+  uint code_alignment() const;
   uint compute_loop_alignment();
 
   // BLOCK_FREQUENCY is a sentinel to mark uses of constant block frequencies.
@@ -367,7 +367,6 @@ public:
 class PhaseCFG : public Phase {
   friend class VMStructs;
  private:
-
   // Root of whole program
   RootNode* _root;
 
@@ -382,6 +381,12 @@ class PhaseCFG : public Phase {
 
   // Arena for the blocks to be stored in
   Arena* _block_arena;
+
+  // Info used for scheduling
+  PhaseChaitin* _regalloc;
+
+  // Register pressure heuristic used?
+  bool _scheduling_for_pressure;
 
   // The matcher for this compilation
   Matcher& _matcher;
@@ -413,12 +418,12 @@ class PhaseCFG : public Phase {
   void global_code_motion();
 
   // Schedule Nodes early in their basic blocks.
-  bool schedule_early(VectorSet &visited, Node_List &roots);
+  bool schedule_early(VectorSet &visited, Node_Stack &roots);
 
   // For each node, find the latest block it can be scheduled into
   // and then select the cheapest block between the latest and earliest
   // block to place the node.
-  void schedule_late(VectorSet &visited, Node_List &stack);
+  void schedule_late(VectorSet &visited, Node_Stack &stack);
 
   // Compute the (backwards) latency of a node from a single use
   int latency_from_use(Node *n, const Node *def, Node *use);
@@ -427,18 +432,20 @@ class PhaseCFG : public Phase {
   void partial_latency_of_defs(Node *n);
 
   // Compute the instruction global latency with a backwards walk
-  void compute_latencies_backwards(VectorSet &visited, Node_List &stack);
+  void compute_latencies_backwards(VectorSet &visited, Node_Stack &stack);
 
   // Pick a block between early and late that is a cheaper alternative
   // to late. Helper for schedule_late.
   Block* hoist_to_cheaper_block(Block* LCA, Block* early, Node* self);
 
-  bool schedule_local(Block* block, GrowableArray<int>& ready_cnt, VectorSet& next_call);
+  bool schedule_local(Block* block, GrowableArray<int>& ready_cnt, VectorSet& next_call, intptr_t* recacl_pressure_nodes);
   void set_next_call(Block* block, Node* n, VectorSet& next_call);
   void needed_for_next_call(Block* block, Node* this_call, VectorSet& next_call);
 
   // Perform basic-block local scheduling
-  Node* select(Block* block, Node_List& worklist, GrowableArray<int>& ready_cnt, VectorSet& next_call, uint sched_slot);
+  Node* select(Block* block, Node_List& worklist, GrowableArray<int>& ready_cnt, VectorSet& next_call, uint sched_slot,
+               intptr_t* recacl_pressure_nodes);
+  void adjust_register_pressure(Node* n, Block* block, intptr_t *recalc_pressure_nodes, bool finalize_mode);
 
   // Schedule a call next in the block
   uint sched_call(Block* block, uint node_cnt, Node_List& worklist, GrowableArray<int>& ready_cnt, MachCallNode* mcall, VectorSet& next_call);
@@ -473,9 +480,9 @@ class PhaseCFG : public Phase {
   MachNode* _goto;
 
   Block* insert_anti_dependences(Block* LCA, Node* load, bool verify = false);
-  void verify_anti_dependences(Block* LCA, Node* load) {
+  void verify_anti_dependences(Block* LCA, Node* load) const {
     assert(LCA == get_block_for_node(load), "should already be scheduled");
-    insert_anti_dependences(LCA, load, true);
+    const_cast<PhaseCFG*>(this)->insert_anti_dependences(LCA, load, true);
   }
 
   bool move_to_next(Block* bx, uint b_index);
@@ -491,6 +498,7 @@ class PhaseCFG : public Phase {
   void convert_NeverBranch_to_Goto(Block *b);
 
   CFGLoop* create_loop_tree();
+  bool is_dominator(Node* dom_node, Node* node);
 
   #ifndef PRODUCT
   bool _trace_opto_pipelining;  // tracing flag

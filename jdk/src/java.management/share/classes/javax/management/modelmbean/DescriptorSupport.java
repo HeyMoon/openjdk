@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,12 +45,13 @@ import java.lang.reflect.Constructor;
 import java.security.AccessController;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.StringTokenizer;
 import java.util.TreeMap;
-import java.util.logging.Level;
+import java.lang.System.Logger.Level;
 
 import javax.management.Descriptor;
 import javax.management.ImmutableDescriptor;
@@ -163,10 +164,8 @@ public class DescriptorSupport
      * (the method {@link #isValid isValid} returns <CODE>false</CODE>)
      */
     public DescriptorSupport() {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "DescriptorSupport()" , "Constructor");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Constructor");
         }
         init(null);
     }
@@ -187,17 +186,14 @@ public class DescriptorSupport
      */
     public DescriptorSupport(int initNumFields)
             throws MBeanException, RuntimeOperationsException {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "Descriptor(initNumFields = " + initNumFields + ")",
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
+                    "Descriptor(initNumFields = " + initNumFields + ") " +
                     "Constructor");
         }
         if (initNumFields <= 0) {
-            if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                MODELMBEAN_LOGGER.logp(Level.FINEST,
-                        DescriptorSupport.class.getName(),
-                        "Descriptor(initNumFields)",
+            if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                MODELMBEAN_LOGGER.log(Level.TRACE,
                         "Illegal arguments: initNumFields <= 0");
             }
             final String msg =
@@ -218,10 +214,9 @@ public class DescriptorSupport
      * fields, an empty Descriptor will be created.
      */
     public DescriptorSupport(DescriptorSupport inDescr) {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "Descriptor(Descriptor)", "Constructor");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
+                    "Descriptor(Descriptor) Constructor");
         }
         if (inDescr == null)
             init(null);
@@ -267,23 +262,21 @@ public class DescriptorSupport
                    XMLParseException {
         /* parse an XML-formatted string and populate internal
          * structure with it */
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "Descriptor(String = '" + inStr + "')", "Constructor");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
+                    "Descriptor(String = '" + inStr + "') Constructor");
         }
         if (inStr == null) {
-            if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                MODELMBEAN_LOGGER.logp(Level.FINEST,
-                        DescriptorSupport.class.getName(),
-                        "Descriptor(String = null)", "Illegal arguments");
+            if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                MODELMBEAN_LOGGER.log(Level.TRACE,
+                        "Descriptor(String = null) Illegal arguments");
             }
             final String msg = "String in parameter is null";
             final RuntimeException iae = new IllegalArgumentException(msg);
             throw new RuntimeOperationsException(iae, msg);
         }
 
-        final String lowerInStr = inStr.toLowerCase();
+        final String lowerInStr = inStr.toLowerCase(Locale.ENGLISH);
         if (!lowerInStr.startsWith("<descriptor>")
             || !lowerInStr.endsWith("</descriptor>")) {
             throw new XMLParseException("No <descriptor>, </descriptor> pair");
@@ -349,10 +342,9 @@ public class DescriptorSupport
                 }
             }
         }  // while tokens
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "Descriptor(XMLString)", "Exit");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
+                    "Descriptor(XMLString) Exit");
         }
     }
 
@@ -379,19 +371,17 @@ public class DescriptorSupport
      */
     public DescriptorSupport(String[] fieldNames, Object[] fieldValues)
             throws RuntimeOperationsException {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "Descriptor(fieldNames,fieldObjects)", "Constructor");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
+                    "Descriptor(fieldNames,fieldObjects) Constructor");
         }
 
         if ((fieldNames == null) || (fieldValues == null) ||
             (fieldNames.length != fieldValues.length)) {
-            if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                MODELMBEAN_LOGGER.logp(Level.FINEST,
-                        DescriptorSupport.class.getName(),
-                        "Descriptor(fieldNames,fieldObjects)",
-                        "Illegal arguments");
+            if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                MODELMBEAN_LOGGER.log(Level.TRACE,
+                        "Descriptor(fieldNames,fieldObjects)" +
+                        " Illegal arguments");
             }
 
             final String msg =
@@ -407,10 +397,9 @@ public class DescriptorSupport
             // the fieldName and fieldValue will be validated in setField.
             setField(fieldNames[i], fieldValues[i]);
         }
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "Descriptor(fieldNames,fieldObjects)", "Exit");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
+                    "Descriptor(fieldNames,fieldObjects) Exit");
         }
     }
 
@@ -443,10 +432,9 @@ public class DescriptorSupport
      */
     public DescriptorSupport(String... fields)
     {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "Descriptor(String... fields)", "Constructor");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
+                    "Descriptor(String... fields) Constructor");
         }
         init(null);
         if (( fields == null ) || ( fields.length == 0))
@@ -461,10 +449,9 @@ public class DescriptorSupport
             int eq_separator = fields[i].indexOf('=');
             if (eq_separator < 0) {
                 // illegal if no = or is first character
-                if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                    MODELMBEAN_LOGGER.logp(Level.FINEST,
-                            DescriptorSupport.class.getName(),
-                            "Descriptor(String... fields)",
+                if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                    MODELMBEAN_LOGGER.log(Level.TRACE,
+                            "Descriptor(String... fields) " +
                             "Illegal arguments: field does not have " +
                             "'=' as a name and value separator");
                 }
@@ -481,10 +468,9 @@ public class DescriptorSupport
             }
 
             if (fieldName.equals("")) {
-                if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                    MODELMBEAN_LOGGER.logp(Level.FINEST,
-                            DescriptorSupport.class.getName(),
-                            "Descriptor(String... fields)",
+                if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                    MODELMBEAN_LOGGER.log(Level.TRACE,
+                            "Descriptor(String... fields) " +
                             "Illegal arguments: fieldName is empty");
                 }
 
@@ -495,10 +481,9 @@ public class DescriptorSupport
 
             setField(fieldName,fieldValue);
         }
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "Descriptor(String... fields)", "Exit");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
+                    "Descriptor(String... fields) Exit");
         }
     }
 
@@ -516,10 +501,8 @@ public class DescriptorSupport
             throws RuntimeOperationsException {
 
         if ((fieldName == null) || (fieldName.equals(""))) {
-            if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                MODELMBEAN_LOGGER.logp(Level.FINEST,
-                        DescriptorSupport.class.getName(),
-                        "getFieldValue(String fieldName)",
+            if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                MODELMBEAN_LOGGER.log(Level.TRACE,
                         "Illegal arguments: null field name");
             }
             final String msg = "Fieldname requested is null";
@@ -527,10 +510,9 @@ public class DescriptorSupport
             throw new RuntimeOperationsException(iae, msg);
         }
         Object retValue = descriptorMap.get(fieldName);
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "getFieldValue(String fieldName = " + fieldName + ")",
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
+                    "getFieldValue(String fieldName = " + fieldName + ") " +
                     "Returns '" + retValue + "'");
         }
         return(retValue);
@@ -541,10 +523,8 @@ public class DescriptorSupport
 
         // field name cannot be null or empty
         if ((fieldName == null) || (fieldName.equals(""))) {
-            if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                MODELMBEAN_LOGGER.logp(Level.FINEST,
-                        DescriptorSupport.class.getName(),
-                        "setField(fieldName,fieldValue)",
+            if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                MODELMBEAN_LOGGER.log(Level.TRACE,
                         "Illegal arguments: null or empty field name");
             }
 
@@ -554,10 +534,8 @@ public class DescriptorSupport
         }
 
         if (!validateField(fieldName, fieldValue)) {
-            if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                MODELMBEAN_LOGGER.logp(Level.FINEST,
-                        DescriptorSupport.class.getName(),
-                        "setField(fieldName,fieldValue)",
+            if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                MODELMBEAN_LOGGER.log(Level.TRACE,
                         "Illegal arguments");
             }
 
@@ -567,10 +545,8 @@ public class DescriptorSupport
             throw new RuntimeOperationsException(iae, msg);
         }
 
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "setField(fieldName,fieldValue)", "Entry: setting '"
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry: setting '"
                     + fieldName + "' to '" + fieldValue + "'");
         }
 
@@ -581,10 +557,8 @@ public class DescriptorSupport
     }
 
     public synchronized String[] getFields() {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "getFields()", "Entry");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry");
         }
         int numberOfEntries = descriptorMap.size();
 
@@ -593,20 +567,18 @@ public class DescriptorSupport
 
         int i = 0;
 
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "getFields()", "Returning " + numberOfEntries + " fields");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
+                    "Returning " + numberOfEntries + " fields");
         }
         for (Iterator<Map.Entry<String, Object>> iter = returnedSet.iterator();
              iter.hasNext(); i++) {
             Map.Entry<String, Object> currElement = iter.next();
 
             if (currElement == null) {
-                if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                    MODELMBEAN_LOGGER.logp(Level.FINEST,
-                            DescriptorSupport.class.getName(),
-                            "getFields()", "Element is null");
+                if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                    MODELMBEAN_LOGGER.log(Level.TRACE,
+                            "Element is null");
                 }
             } else {
                 Object currValue = currElement.getValue();
@@ -625,20 +597,16 @@ public class DescriptorSupport
             }
         }
 
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "getFields()", "Exit");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Exit");
         }
 
         return responseFields;
     }
 
     public synchronized String[] getFieldNames() {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "getFieldNames()", "Entry");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry");
         }
         int numberOfEntries = descriptorMap.size();
 
@@ -647,10 +615,8 @@ public class DescriptorSupport
 
         int i = 0;
 
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "getFieldNames()",
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
                     "Returning " + numberOfEntries + " fields");
         }
 
@@ -659,20 +625,16 @@ public class DescriptorSupport
             Map.Entry<String, Object> currElement = iter.next();
 
             if (( currElement == null ) || (currElement.getKey() == null)) {
-                if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                    MODELMBEAN_LOGGER.logp(Level.FINEST,
-                            DescriptorSupport.class.getName(),
-                            "getFieldNames()", "Field is null");
+                if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                    MODELMBEAN_LOGGER.log(Level.TRACE, "Field is null");
                 }
             } else {
                 responseFields[i] = currElement.getKey().toString();
             }
         }
 
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "getFieldNames()", "Exit");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Exit");
         }
 
         return responseFields;
@@ -680,10 +642,8 @@ public class DescriptorSupport
 
 
     public synchronized Object[] getFieldValues(String... fieldNames) {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "getFieldValues(String... fieldNames)", "Entry");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry");
         }
         // if fieldNames == null return all values
         // if fieldNames is String[0] return no values
@@ -694,10 +654,8 @@ public class DescriptorSupport
 
         int i = 0;
 
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "getFieldValues(String... fieldNames)",
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
                     "Returning " + numberOfEntries + " fields");
         }
 
@@ -714,10 +672,8 @@ public class DescriptorSupport
             }
         }
 
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "getFieldValues(String... fieldNames)", "Exit");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Exit");
         }
 
         return responseFields;
@@ -727,18 +683,14 @@ public class DescriptorSupport
                                        Object[] fieldValues)
             throws RuntimeOperationsException {
 
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "setFields(fieldNames,fieldValues)", "Entry");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry");
         }
 
         if ((fieldNames == null) || (fieldValues == null) ||
             (fieldNames.length != fieldValues.length)) {
-            if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                MODELMBEAN_LOGGER.logp(Level.FINEST,
-                        DescriptorSupport.class.getName(),
-                        "setFields(fieldNames,fieldValues)",
+            if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                MODELMBEAN_LOGGER.log(Level.TRACE,
                         "Illegal arguments");
             }
 
@@ -749,10 +701,8 @@ public class DescriptorSupport
 
         for (int i=0; i < fieldNames.length; i++) {
             if (( fieldNames[i] == null) || (fieldNames[i].equals(""))) {
-                if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                    MODELMBEAN_LOGGER.logp(Level.FINEST,
-                            DescriptorSupport.class.getName(),
-                            "setFields(fieldNames,fieldValues)",
+                if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                    MODELMBEAN_LOGGER.log(Level.TRACE,
                             "Null field name encountered at element " + i);
                 }
                 final String msg = "fieldNames is null or invalid";
@@ -761,10 +711,8 @@ public class DescriptorSupport
             }
             setField(fieldNames[i], fieldValues[i]);
         }
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "setFields(fieldNames,fieldValues)", "Exit");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Exit");
         }
     }
 
@@ -778,10 +726,8 @@ public class DescriptorSupport
 
     @Override
     public synchronized Object clone() throws RuntimeOperationsException {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "clone()", "Entry");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry");
         }
         return(new DescriptorSupport(this));
     }
@@ -897,20 +843,17 @@ public class DescriptorSupport
      */
 
     public synchronized boolean isValid() throws RuntimeOperationsException {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "isValid()", "Entry");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry");
         }
         // verify that the descriptor is valid, by iterating over each field...
 
         Set<Map.Entry<String, Object>> returnedSet = descriptorMap.entrySet();
 
         if (returnedSet == null) {   // null descriptor, not valid
-            if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                MODELMBEAN_LOGGER.logp(Level.FINEST,
-                        DescriptorSupport.class.getName(),
-                        "isValid()", "Returns false (null set)");
+            if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                MODELMBEAN_LOGGER.log(Level.TRACE,
+                        "isValid() Returns false (null set)");
             }
             return false;
         }
@@ -933,10 +876,8 @@ public class DescriptorSupport
                                       (currElement.getValue()).toString())) {
                         continue;
                     } else {
-                        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                                    DescriptorSupport.class.getName(),
-                                    "isValid()",
+                        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                            MODELMBEAN_LOGGER.log(Level.TRACE,
                                     "Field " + currElement.getKey() + "=" +
                                     currElement.getValue() + " is not valid");
                         }
@@ -947,10 +888,9 @@ public class DescriptorSupport
         }
 
         // fell through, all fields OK
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "isValid()", "Returns true");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
+                    "isValid() Returns true");
         }
         return true;
     }
@@ -1286,28 +1226,23 @@ public class DescriptorSupport
      */
     @Override
     public synchronized String toString() {
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "toString()", "Entry");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Entry");
         }
 
         String respStr = "";
         String[] fields = getFields();
 
         if ((fields == null) || (fields.length == 0)) {
-            if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-                MODELMBEAN_LOGGER.logp(Level.FINEST,
-                        DescriptorSupport.class.getName(),
-                        "toString()", "Empty Descriptor");
+            if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+                MODELMBEAN_LOGGER.log(Level.TRACE, "Empty Descriptor");
             }
             return respStr;
         }
 
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "toString()", "Printing " + fields.length + " fields");
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE,
+                    "Printing " + fields.length + " fields");
         }
 
         for (int i=0; i < fields.length; i++) {
@@ -1318,10 +1253,8 @@ public class DescriptorSupport
             }
         }
 
-        if (MODELMBEAN_LOGGER.isLoggable(Level.FINEST)) {
-            MODELMBEAN_LOGGER.logp(Level.FINEST,
-                    DescriptorSupport.class.getName(),
-                    "toString()", "Exit returning " + respStr);
+        if (MODELMBEAN_LOGGER.isLoggable(Level.TRACE)) {
+            MODELMBEAN_LOGGER.log(Level.TRACE, "Exit returning " + respStr);
         }
 
         return respStr;

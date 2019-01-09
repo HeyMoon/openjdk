@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -75,7 +75,6 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Random;
-import sun.misc.ManagedLocalsThread;
 import sun.security.util.Debug;
 
 abstract class SeedGenerator {
@@ -141,7 +140,7 @@ abstract class SeedGenerator {
     /**
      * Fill result with bytes from the queue. Wait for it if it isn't ready.
      */
-    static public void generateSeed(byte[] result) {
+    public static void generateSeed(byte[] result) {
         instance.getSeedBytes(result);
     }
 
@@ -305,9 +304,11 @@ abstract class SeedGenerator {
                             }
                             finalsg[0] = new ThreadGroup
                                 (group, "SeedGenerator ThreadGroup");
-                            Thread newT = new ManagedLocalsThread(finalsg[0],
+                            Thread newT = new Thread(finalsg[0],
                                 ThreadedSeedGenerator.this,
-                                "SeedGenerator Thread");
+                                "SeedGenerator Thread",
+                                0,
+                                false);
                             newT.setPriority(Thread.MIN_PRIORITY);
                             newT.setDaemon(true);
                             return newT;
@@ -322,7 +323,7 @@ abstract class SeedGenerator {
          * pushes them into the queue.
          */
         @Override
-        final public void run() {
+        public final void run() {
             try {
                 while (true) {
                     // Queue full? Wait till there's room.
@@ -342,8 +343,9 @@ abstract class SeedGenerator {
                         // Start some noisy threads
                         try {
                             BogusThread bt = new BogusThread();
-                            Thread t = new ManagedLocalsThread
-                                (seedGroup, bt, "SeedGenerator Thread");
+                            Thread t = new Thread
+                                (seedGroup, bt, "SeedGenerator Thread", 0,
+                                        false);
                             t.start();
                         } catch (Exception e) {
                             throw new InternalError("internal error: " +
@@ -353,10 +355,11 @@ abstract class SeedGenerator {
                         // We wait 250milli quanta, so the minimum wait time
                         // cannot be under 250milli.
                         int latch = 0;
-                        long l = System.currentTimeMillis() + 250;
-                        while (System.currentTimeMillis() < l) {
+                        long startTime = System.nanoTime();
+                        while (System.nanoTime() - startTime < 250000000) {
                             synchronized(this){};
-                            latch++;
+                            // Mask the sign bit and keep latch non-negative
+                            latch = (latch + 1) & 0x1FFFFFFF;
                         }
 
                         // Translate the value using the permutation, and xor
@@ -430,7 +433,7 @@ abstract class SeedGenerator {
         // data and using it to mix the trivial permutation.
         // It should be evenly distributed. The specific values
         // are not crucial to the security of this class.
-        private static byte[] rndTab = {
+        private static final byte[] rndTab = {
             56, 30, -107, -6, -86, 25, -83, 75, -12, -64,
             5, -128, 78, 21, 16, 32, 70, -81, 37, -51,
             -43, -46, -108, 87, 29, 17, -55, 22, -11, -111,
@@ -466,7 +469,7 @@ abstract class SeedGenerator {
          */
         private static class BogusThread implements Runnable {
             @Override
-            final public void run() {
+            public final void run() {
                 try {
                     for (int i = 0; i < 5; i++) {
                         Thread.sleep(50);

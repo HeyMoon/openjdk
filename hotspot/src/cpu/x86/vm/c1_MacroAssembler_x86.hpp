@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -65,7 +65,8 @@
     Register var_size_in_bytes,        // object size in bytes if unknown at compile time; invalid otherwise
     int      con_size_in_bytes,        // object size in bytes if   known at compile time
     Register t1,                       // temp register
-    Register t2                        // temp register
+    Register t2,                       // temp register
+    bool     is_tlab_allocated         // the object was allocated in a TLAB; relevant for the implementation of ZeroTLAB
   );
 
   // allocation of fixed-size objects
@@ -116,5 +117,8 @@
   }
 
   void invalidate_registers(bool inv_rax, bool inv_rbx, bool inv_rcx, bool inv_rdx, bool inv_rsi, bool inv_rdi) PRODUCT_RETURN;
+
+  // This platform only uses signal-based null checks. The Label is not needed.
+  void null_check(Register r, Label *Lnull = NULL) { MacroAssembler::null_check(r); }
 
 #endif // CPU_X86_VM_C1_MACROASSEMBLER_X86_HPP

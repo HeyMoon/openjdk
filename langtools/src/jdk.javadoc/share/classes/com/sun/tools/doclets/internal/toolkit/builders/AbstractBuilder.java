@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,6 +52,7 @@ import com.sun.tools.doclets.internal.toolkit.util.*;
  * @since 1.5
  */
 
+@Deprecated
 public abstract class AbstractBuilder {
     public static class Context {
         /**
@@ -123,7 +124,7 @@ public abstract class AbstractBuilder {
     /**
      * Build the documentation.
      *
-     * @throws IOException there was a problem writing the output.
+     * @throws IOException if there is a problem writing the output
      */
     public abstract void build() throws IOException;
 
@@ -144,7 +145,14 @@ public abstract class AbstractBuilder {
             configuration.root.printError("Unknown element: " + component);
             throw new DocletAbortException(e);
         } catch (InvocationTargetException e) {
-            throw new DocletAbortException(e.getCause());
+            Throwable cause = e.getCause();
+            if (cause instanceof FatalError) {
+                throw (FatalError) cause;
+            } else if (cause instanceof DocletAbortException) {
+                throw (DocletAbortException) cause;
+            } else {
+                throw new DocletAbortException(cause);
+            }
         } catch (Exception e) {
             e.printStackTrace();
             configuration.root.printError("Exception " +

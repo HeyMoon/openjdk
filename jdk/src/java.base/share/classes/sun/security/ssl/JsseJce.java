@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,6 +44,7 @@ import sun.security.jca.ProviderList;
 import sun.security.util.ECUtil;
 
 import static sun.security.ssl.SunJSSE.cryptoProvider;
+import static sun.security.util.SecurityConstants.PROVIDER_VER;
 
 /**
  * This class contains a few static methods for interaction with the JCA/JCE
@@ -53,16 +54,11 @@ import static sun.security.ssl.SunJSSE.cryptoProvider;
  */
 final class JsseJce {
 
-    private final static ProviderList fipsProviderList;
-
-    // Flag indicating whether EC crypto is available.
-    // If null, then we have not checked yet.
-    // If yes, then all the EC based crypto we need is available.
-    private static Boolean ecAvailable;
+    private static final ProviderList fipsProviderList;
 
     // Flag indicating whether Kerberos crypto is available.
     // If true, then all the Kerberos-based crypto we need is available.
-    private final static boolean kerberosAvailable;
+    private static final boolean kerberosAvailable;
     static {
         ClientKeyExchangeService p =
                 ClientKeyExchangeService.find("KRB5");
@@ -95,7 +91,7 @@ final class JsseJce {
         private static final long serialVersionUID = -3284138292032213752L;
 
         SunCertificates(final Provider p) {
-            super("SunCertificates", 1.9d, "SunJSSE internal");
+            super("SunCertificates", PROVIDER_VER, "SunJSSE internal");
             AccessController.doPrivileged(new PrivilegedAction<Object>() {
                 @Override
                 public Object run() {
@@ -119,85 +115,69 @@ final class JsseJce {
      * JCE transformation string for RSA with PKCS#1 v1.5 padding.
      * Can be used for encryption, decryption, signing, verifying.
      */
-    final static String CIPHER_RSA_PKCS1 = "RSA/ECB/PKCS1Padding";
+    static final String CIPHER_RSA_PKCS1 = "RSA/ECB/PKCS1Padding";
     /**
      * JCE transformation string for the stream cipher RC4.
      */
-    final static String CIPHER_RC4 = "RC4";
+    static final String CIPHER_RC4 = "RC4";
     /**
      * JCE transformation string for DES in CBC mode without padding.
      */
-    final static String CIPHER_DES = "DES/CBC/NoPadding";
+    static final String CIPHER_DES = "DES/CBC/NoPadding";
     /**
      * JCE transformation string for (3-key) Triple DES in CBC mode
      * without padding.
      */
-    final static String CIPHER_3DES = "DESede/CBC/NoPadding";
+    static final String CIPHER_3DES = "DESede/CBC/NoPadding";
     /**
      * JCE transformation string for AES in CBC mode
      * without padding.
      */
-    final static String CIPHER_AES = "AES/CBC/NoPadding";
+    static final String CIPHER_AES = "AES/CBC/NoPadding";
     /**
      * JCE transformation string for AES in GCM mode
      * without padding.
      */
-    final static String CIPHER_AES_GCM = "AES/GCM/NoPadding";
+    static final String CIPHER_AES_GCM = "AES/GCM/NoPadding";
     /**
      * JCA identifier string for DSA, i.e. a DSA with SHA-1.
      */
-    final static String SIGNATURE_DSA = "DSA";
+    static final String SIGNATURE_DSA = "DSA";
     /**
      * JCA identifier string for ECDSA, i.e. a ECDSA with SHA-1.
      */
-    final static String SIGNATURE_ECDSA = "SHA1withECDSA";
+    static final String SIGNATURE_ECDSA = "SHA1withECDSA";
     /**
      * JCA identifier string for Raw DSA, i.e. a DSA signature without
      * hashing where the application provides the SHA-1 hash of the data.
      * Note that the standard name is "NONEwithDSA" but we use "RawDSA"
      * for compatibility.
      */
-    final static String SIGNATURE_RAWDSA = "RawDSA";
+    static final String SIGNATURE_RAWDSA = "RawDSA";
     /**
      * JCA identifier string for Raw ECDSA, i.e. a DSA signature without
      * hashing where the application provides the SHA-1 hash of the data.
      */
-    final static String SIGNATURE_RAWECDSA = "NONEwithECDSA";
+    static final String SIGNATURE_RAWECDSA = "NONEwithECDSA";
     /**
      * JCA identifier string for Raw RSA, i.e. a RSA PKCS#1 v1.5 signature
      * without hashing where the application provides the hash of the data.
      * Used for RSA client authentication with a 36 byte hash.
      */
-    final static String SIGNATURE_RAWRSA = "NONEwithRSA";
+    static final String SIGNATURE_RAWRSA = "NONEwithRSA";
     /**
      * JCA identifier string for the SSL/TLS style RSA Signature. I.e.
      * an signature using RSA with PKCS#1 v1.5 padding signing a
      * concatenation of an MD5 and SHA-1 digest.
      */
-    final static String SIGNATURE_SSLRSA = "MD5andSHA1withRSA";
+    static final String SIGNATURE_SSLRSA = "MD5andSHA1withRSA";
 
     private JsseJce() {
         // no instantiation of this class
     }
 
-    synchronized static boolean isEcAvailable() {
-        if (ecAvailable == null) {
-            try {
-                JsseJce.getSignature(SIGNATURE_ECDSA);
-                JsseJce.getSignature(SIGNATURE_RAWECDSA);
-                JsseJce.getKeyAgreement("ECDH");
-                JsseJce.getKeyFactory("EC");
-                JsseJce.getKeyPairGenerator("EC");
-                ecAvailable = true;
-            } catch (Exception e) {
-                ecAvailable = false;
-            }
-        }
-        return ecAvailable;
-    }
-
-    synchronized static void clearEcAvailable() {
-        ecAvailable = null;
+    static boolean isEcAvailable() {
+        return EcAvailability.isAvailable;
     }
 
     static boolean isKerberosAvailable() {
@@ -293,6 +273,15 @@ final class JsseJce {
             return KeyFactory.getInstance(algorithm);
         } else {
             return KeyFactory.getInstance(algorithm, cryptoProvider);
+        }
+    }
+
+    static AlgorithmParameters getAlgorithmParameters(String algorithm)
+            throws NoSuchAlgorithmException {
+        if (cryptoProvider == null) {
+            return AlgorithmParameters.getInstance(algorithm);
+        } else {
+            return AlgorithmParameters.getInstance(algorithm, cryptoProvider);
         }
     }
 
@@ -399,4 +388,28 @@ final class JsseJce {
         }
     }
 
+
+    // lazy initialization holder class idiom for static default parameters
+    //
+    // See Effective Java Second Edition: Item 71.
+    private static class EcAvailability {
+        // Is EC crypto available?
+        private final static boolean isAvailable;
+
+        static {
+            boolean mediator = true;
+            try {
+                JsseJce.getSignature(SIGNATURE_ECDSA);
+                JsseJce.getSignature(SIGNATURE_RAWECDSA);
+                JsseJce.getKeyAgreement("ECDH");
+                JsseJce.getKeyFactory("EC");
+                JsseJce.getKeyPairGenerator("EC");
+                JsseJce.getAlgorithmParameters("EC");
+            } catch (Exception e) {
+                mediator = false;
+            }
+
+            isAvailable = mediator;
+        }
+    }
 }

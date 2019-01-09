@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,44 +41,6 @@ Register LIR_OprDesc::as_register_lo() const {
 Register LIR_OprDesc::as_register_hi() const {
   return FrameMap::cpu_rnr2reg(cpu_regnrHi());
 }
-
-#if defined(X86)
-
-XMMRegister LIR_OprDesc::as_xmm_float_reg() const {
-  return FrameMap::nr2xmmreg(xmm_regnr());
-}
-
-XMMRegister LIR_OprDesc::as_xmm_double_reg() const {
-  assert(xmm_regnrLo() == xmm_regnrHi(), "assumed in calculation");
-  return FrameMap::nr2xmmreg(xmm_regnrLo());
-}
-
-#endif // X86
-
-#if defined(SPARC) || defined(PPC)
-
-FloatRegister LIR_OprDesc::as_float_reg() const {
-  return FrameMap::nr2floatreg(fpu_regnr());
-}
-
-FloatRegister LIR_OprDesc::as_double_reg() const {
-  return FrameMap::nr2floatreg(fpu_regnrHi());
-}
-
-#endif
-
-#if defined(ARM) || defined (AARCH64)
-
-FloatRegister LIR_OprDesc::as_float_reg() const {
-  return as_FloatRegister(fpu_regnr());
-}
-
-FloatRegister LIR_OprDesc::as_double_reg() const {
-  return as_FloatRegister(fpu_regnrLo());
-}
-
-#endif
-
 
 LIR_Opr LIR_OprFact::illegalOpr = LIR_OprFact::illegal();
 
@@ -140,32 +102,6 @@ LIR_Address::Scale LIR_Address::scale(BasicType type) {
   return LIR_Address::times_1;
 }
 
-
-#ifndef PRODUCT
-void LIR_Address::verify0() const {
-#if defined(SPARC) || defined(PPC)
-  assert(scale() == times_1, "Scaled addressing mode not available on SPARC/PPC and should not be used");
-  assert(disp() == 0 || index()->is_illegal(), "can't have both");
-#endif
-#ifdef _LP64
-  assert(base()->is_cpu_register(), "wrong base operand");
-#ifndef AARCH64
-  assert(index()->is_illegal() || index()->is_double_cpu(), "wrong index operand");
-#else
-  assert(index()->is_illegal() || index()->is_double_cpu() || index()->is_single_cpu(), "wrong index operand");
-#endif
-  assert(base()->type() == T_OBJECT || base()->type() == T_LONG || base()->type() == T_METADATA,
-         "wrong type for addresses");
-#else
-  assert(base()->is_single_cpu(), "wrong base operand");
-  assert(index()->is_illegal() || index()->is_single_cpu(), "wrong index operand");
-  assert(base()->type() == T_OBJECT || base()->type() == T_INT || base()->type() == T_METADATA,
-         "wrong type for addresses");
-#endif
-}
-#endif
-
-
 //---------------------------------------------------
 
 char LIR_OprDesc::type_char(BasicType t) {
@@ -207,17 +143,17 @@ void LIR_OprDesc::validate_type() const {
              size_field() == double_size, "must match");
       break;
     case T_FLOAT:
-      // FP return values can be also in CPU registers on ARM and PPC (softfp ABI)
+      // FP return values can be also in CPU registers on ARM and PPC32 (softfp ABI)
       assert((kindfield == fpu_register || kindfield == stack_value
              ARM_ONLY(|| kindfield == cpu_register)
-             PPC_ONLY(|| kindfield == cpu_register) ) &&
+             PPC32_ONLY(|| kindfield == cpu_register) ) &&
              size_field() == single_size, "must match");
       break;
     case T_DOUBLE:
-      // FP return values can be also in CPU registers on ARM and PPC (softfp ABI)
+      // FP return values can be also in CPU registers on ARM and PPC32 (softfp ABI)
       assert((kindfield == fpu_register || kindfield == stack_value
              ARM_ONLY(|| kindfield == cpu_register)
-             PPC_ONLY(|| kindfield == cpu_register) ) &&
+             PPC32_ONLY(|| kindfield == cpu_register) ) &&
              size_field() == double_size, "must match");
       break;
     case T_BOOLEAN:
@@ -273,6 +209,17 @@ void LIR_Op2::verify() const {
   }
 
   if (TwoOperandLIRForm) {
+
+#ifdef ASSERT
+    bool threeOperandForm = false;
+#ifdef S390
+    // There are 3 operand shifts on S390 (see LIR_Assembler::shift_op()).
+    threeOperandForm =
+      code() == lir_shl ||
+      ((code() == lir_shr || code() == lir_ushr) && (result_opr()->is_double_cpu() || in_opr1()->type() == T_OBJECT));
+#endif
+#endif
+
     switch (code()) {
     case lir_add:
     case lir_sub:
@@ -286,13 +233,13 @@ void LIR_Op2::verify() const {
     case lir_logic_xor:
     case lir_shl:
     case lir_shr:
-      assert(in_opr1() == result_opr(), "opr1 and result must match");
+      assert(in_opr1() == result_opr() || threeOperandForm, "opr1 and result must match");
       assert(in_opr1()->is_valid() && in_opr2()->is_valid(), "must be valid");
       break;
 
     // special handling for lir_ushr because of write barriers
     case lir_ushr:
-      assert(in_opr1() == result_opr() || in_opr2()->is_constant(), "opr1 and result must match or shift count is constant");
+      assert(in_opr1() == result_opr() || in_opr2()->is_constant() || threeOperandForm, "opr1 and result must match or shift count is constant");
       assert(in_opr1()->is_valid() && in_opr2()->is_valid(), "must be valid");
       break;
 
@@ -483,6 +430,7 @@ void LIR_OpVisitState::visit(LIR_Op* op) {
     case lir_membar_storestore:        // result and info always invalid
     case lir_membar_loadstore:         // result and info always invalid
     case lir_membar_storeload:         // result and info always invalid
+    case lir_on_spin_wait:
     {
       assert(op->as_Op0() != NULL, "must be");
       assert(op->_info == NULL, "info not used by this instruction");
@@ -558,7 +506,7 @@ void LIR_OpVisitState::visit(LIR_Op* op) {
       assert(opConvert->_info == NULL, "must be");
       if (opConvert->_opr->is_valid())       do_input(opConvert->_opr);
       if (opConvert->_result->is_valid())    do_output(opConvert->_result);
-#ifdef PPC
+#ifdef PPC32
       if (opConvert->_tmp1->is_valid())      do_temp(opConvert->_tmp1);
       if (opConvert->_tmp2->is_valid())      do_temp(opConvert->_tmp2);
 #endif
@@ -727,63 +675,6 @@ void LIR_OpVisitState::visit(LIR_Op* op) {
       break;
     }
 
-
-    case lir_tan:
-    case lir_sin:
-    case lir_cos:
-    case lir_log:
-    case lir_log10:
-    case lir_exp: {
-      assert(op->as_Op2() != NULL, "must be");
-      LIR_Op2* op2 = (LIR_Op2*)op;
-
-      // On x86 tan/sin/cos need two temporary fpu stack slots and
-      // log/log10 need one so handle opr2 and tmp as temp inputs.
-      // Register input operand as temp to guarantee that it doesn't
-      // overlap with the input.
-      assert(op2->_info == NULL, "not used");
-      assert(op2->_tmp5->is_illegal(), "not used");
-      assert(op2->_tmp2->is_valid() == (op->code() == lir_exp), "not used");
-      assert(op2->_tmp3->is_valid() == (op->code() == lir_exp), "not used");
-      assert(op2->_tmp4->is_valid() == (op->code() == lir_exp), "not used");
-      assert(op2->_opr1->is_valid(), "used");
-      do_input(op2->_opr1); do_temp(op2->_opr1);
-
-      if (op2->_opr2->is_valid())         do_temp(op2->_opr2);
-      if (op2->_tmp1->is_valid())         do_temp(op2->_tmp1);
-      if (op2->_tmp2->is_valid())         do_temp(op2->_tmp2);
-      if (op2->_tmp3->is_valid())         do_temp(op2->_tmp3);
-      if (op2->_tmp4->is_valid())         do_temp(op2->_tmp4);
-      if (op2->_result->is_valid())       do_output(op2->_result);
-
-      break;
-    }
-
-    case lir_pow: {
-      assert(op->as_Op2() != NULL, "must be");
-      LIR_Op2* op2 = (LIR_Op2*)op;
-
-      // On x86 pow needs two temporary fpu stack slots: tmp1 and
-      // tmp2. Register input operands as temps to guarantee that it
-      // doesn't overlap with the temporary slots.
-      assert(op2->_info == NULL, "not used");
-      assert(op2->_opr1->is_valid() && op2->_opr2->is_valid(), "used");
-      assert(op2->_tmp1->is_valid() && op2->_tmp2->is_valid() && op2->_tmp3->is_valid()
-             && op2->_tmp4->is_valid() && op2->_tmp5->is_valid(), "used");
-      assert(op2->_result->is_valid(), "used");
-
-      do_input(op2->_opr1); do_temp(op2->_opr1);
-      do_input(op2->_opr2); do_temp(op2->_opr2);
-      do_temp(op2->_tmp1);
-      do_temp(op2->_tmp2);
-      do_temp(op2->_tmp3);
-      do_temp(op2->_tmp4);
-      do_temp(op2->_tmp5);
-      do_output(op2->_result);
-
-      break;
-    }
-
 // LIR_Op3
     case lir_idiv:
     case lir_irem: {
@@ -804,6 +695,17 @@ void LIR_OpVisitState::visit(LIR_Op* op) {
       break;
     }
 
+    case lir_fmad:
+    case lir_fmaf: {
+      assert(op->as_Op3() != NULL, "must be");
+      LIR_Op3* op3= (LIR_Op3*)op;
+      assert(op3->_info == NULL, "no info");
+      do_input(op3->_opr1);
+      do_input(op3->_opr2);
+      do_input(op3->_opr3);
+      do_output(op3->_result);
+      break;
+    }
 
 // LIR_OpJavaCall
     case lir_static_call:
@@ -1511,6 +1413,17 @@ void LIR_List::store_check(LIR_Opr object, LIR_Opr array, LIR_Opr tmp1, LIR_Opr 
   append(c);
 }
 
+void LIR_List::null_check(LIR_Opr opr, CodeEmitInfo* info, bool deoptimize_on_null) {
+  if (deoptimize_on_null) {
+    // Emit an explicit null check and deoptimize if opr is null
+    CodeStub* deopt = new DeoptimizeStub(info, Deoptimization::Reason_null_check, Deoptimization::Action_none);
+    cmp(lir_cond_equal, opr, LIR_OprFact::oopConst(NULL));
+    branch(lir_cond_equal, T_OBJECT, deopt);
+  } else {
+    // Emit an implicit null check
+    append(new LIR_Op1(lir_null_check, opr, info));
+  }
+}
 
 void LIR_List::cas_long(LIR_Opr addr, LIR_Opr cmp_value, LIR_Opr new_value,
                         LIR_Opr t1, LIR_Opr t2, LIR_Opr result) {
@@ -1723,6 +1636,7 @@ const char * LIR_Op::name() const {
      case lir_word_align:            s = "word_align";    break;
      case lir_label:                 s = "label";         break;
      case lir_nop:                   s = "nop";           break;
+     case lir_on_spin_wait:          s = "on_spin_wait";  break;
      case lir_backwardbranch_target: s = "backbranch";    break;
      case lir_std_entry:             s = "std_entry";     break;
      case lir_osr_entry:             s = "osr_entry";     break;
@@ -1770,13 +1684,6 @@ const char * LIR_Op::name() const {
      case lir_rem:                   s = "rem";           break;
      case lir_abs:                   s = "abs";           break;
      case lir_sqrt:                  s = "sqrt";          break;
-     case lir_sin:                   s = "sin";           break;
-     case lir_cos:                   s = "cos";           break;
-     case lir_tan:                   s = "tan";           break;
-     case lir_log:                   s = "log";           break;
-     case lir_log10:                 s = "log10";         break;
-     case lir_exp:                   s = "exp";           break;
-     case lir_pow:                   s = "pow";           break;
      case lir_logic_and:             s = "logic_and";     break;
      case lir_logic_or:              s = "logic_or";      break;
      case lir_logic_xor:             s = "logic_xor";     break;
@@ -1789,6 +1696,8 @@ const char * LIR_Op::name() const {
      // LIR_Op3
      case lir_idiv:                  s = "idiv";          break;
      case lir_irem:                  s = "irem";          break;
+     case lir_fmad:                  s = "fmad";          break;
+     case lir_fmaf:                  s = "fmaf";          break;
      // LIR_OpJavaCall
      case lir_static_call:           s = "static";        break;
      case lir_optvirtual_call:       s = "optvirtual";    break;
@@ -1960,7 +1869,7 @@ void LIR_OpConvert::print_instr(outputStream* out) const {
   print_bytecode(out, bytecode());
   in_opr()->print(out);                  out->print(" ");
   result_opr()->print(out);              out->print(" ");
-#ifdef PPC
+#ifdef PPC32
   if(tmp1()->is_valid()) {
     tmp1()->print(out); out->print(" ");
     tmp2()->print(out); out->print(" ");
@@ -2011,7 +1920,7 @@ void LIR_OpRoundFP::print_instr(outputStream* out) const {
 
 // LIR_Op2
 void LIR_Op2::print_instr(outputStream* out) const {
-  if (code() == lir_cmove) {
+  if (code() == lir_cmove || code() == lir_cmp) {
     print_condition(out, condition());         out->print(" ");
   }
   in_opr1()->print(out);    out->print(" ");

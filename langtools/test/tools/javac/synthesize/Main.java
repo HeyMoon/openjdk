@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -92,18 +92,29 @@ public class Main
         File empty = new File("empty");
         empty.mkdirs();
 
+        // files to compile are in a separate directory from test to avoid
+        // confusing jtreg
+        File src = new File(testSrc, "src");
+
         List<String> args = new ArrayList<String>();
         args.add("-classpath");
         args.add("empty");
 
-        if (!stdBootClassPath) {
-            args.add("-bootclasspath");
-            args.add("empty");
+        if (stdBootClassPath) {
+            args.add("--patch-module");
+            args.add("java.base=" + testSrc.getAbsolutePath());
+        } else {
+            args.add("--system");
+            args.add("none");
+            files.add("module-info.java");
         }
+
+
         args.add("-d");
         args.add(".");
+
         for (String f: files)
-            args.add(new File(testSrc, f).getPath());
+            args.add(new File(src, f).getPath());
 
         System.out.println("Compile: " + args);
         StringWriter out = new StringWriter();

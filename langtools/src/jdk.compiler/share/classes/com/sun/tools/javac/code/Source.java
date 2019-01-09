@@ -137,6 +137,9 @@ public enum Source {
     public boolean allowImprovedCatchAnalysis() {
         return compareTo(JDK1_7) >= 0;
     }
+    public boolean allowModules() {
+        return compareTo(JDK1_9) >= 0;
+    }
     public boolean allowTryWithResources() {
         return compareTo(JDK1_7) >= 0;
     }
@@ -205,6 +208,9 @@ public enum Source {
     }
     public boolean allowPostApplicabilityVarargsAccessCheck() {
         return compareTo(JDK1_8) >= 0;
+    }
+    public boolean mapCapturesToBounds() {
+        return compareTo(JDK1_8) < 0;
     }
     public boolean allowPrivateSafeVarargs() {
         return compareTo(JDK1_9) >= 0;

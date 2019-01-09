@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -50,7 +50,7 @@ inline void frame::init(intptr_t* sp, intptr_t* fp, address pc) {
   _cb = CodeCache::find_blob(pc);
   adjust_unextended_sp();
 
-  address original_pc = nmethod::get_deopt_original_pc(this);
+  address original_pc = CompiledMethod::get_deopt_original_pc(this);
   if (original_pc != NULL) {
     _pc = original_pc;
     _deopt_state = is_deoptimized;
@@ -72,13 +72,18 @@ inline frame::frame(intptr_t* sp, intptr_t* unextended_sp, intptr_t* fp, address
   _cb = CodeCache::find_blob(pc);
   adjust_unextended_sp();
 
-  address original_pc = nmethod::get_deopt_original_pc(this);
+  address original_pc = CompiledMethod::get_deopt_original_pc(this);
   if (original_pc != NULL) {
     _pc = original_pc;
-    assert(((nmethod*)_cb)->insts_contains(_pc), "original PC must be in nmethod");
+    assert(_cb->as_compiled_method()->insts_contains_inclusive(_pc),
+           "original PC must be in the main code section of the the compiled method (or must be immediately following it)");
     _deopt_state = is_deoptimized;
   } else {
-    _deopt_state = not_deoptimized;
+    if (_cb->is_deoptimization_stub()) {
+      _deopt_state = is_deoptimized;
+    } else {
+      _deopt_state = not_deoptimized;
+    }
   }
 }
 
@@ -97,12 +102,13 @@ inline frame::frame(intptr_t* sp, intptr_t* fp) {
   // call a specialized frame constructor instead of this one.
   // Then we could use the assert below. However this assert is of somewhat dubious
   // value.
+  // UPDATE: this constructor is only used by trace_method_handle_stub() now.
   // assert(_pc != NULL, "no pc?");
 
   _cb = CodeCache::find_blob(_pc);
   adjust_unextended_sp();
 
-  address original_pc = nmethod::get_deopt_original_pc(this);
+  address original_pc = CompiledMethod::get_deopt_original_pc(this);
   if (original_pc != NULL) {
     _pc = original_pc;
     _deopt_state = is_deoptimized;
@@ -147,59 +153,6 @@ inline intptr_t* frame::unextended_sp() const     { return _unextended_sp; }
 inline address* frame::sender_pc_addr()      const { return (address*) addr_at( return_addr_offset); }
 inline address  frame::sender_pc()           const { return *sender_pc_addr(); }
 
-#ifdef CC_INTERP
-
-inline interpreterState frame::get_interpreterState() const {
-  return ((interpreterState)addr_at( -((int)sizeof(BytecodeInterpreter))/wordSize ));
-}
-
-inline intptr_t*    frame::sender_sp()        const {
-  // Hmm this seems awfully expensive QQQ, is this really called with interpreted frames?
-  if (is_interpreted_frame()) {
-    assert(false, "should never happen");
-    return get_interpreterState()->sender_sp();
-  } else {
-    return            addr_at(sender_sp_offset);
-  }
-}
-
-inline intptr_t** frame::interpreter_frame_locals_addr() const {
-  assert(is_interpreted_frame(), "must be interpreted");
-  return &(get_interpreterState()->_locals);
-}
-
-inline intptr_t* frame::interpreter_frame_bcp_addr() const {
-  assert(is_interpreted_frame(), "must be interpreted");
-  return (intptr_t*) &(get_interpreterState()->_bcp);
-}
-
-
-// Constant pool cache
-
-inline ConstantPoolCache** frame::interpreter_frame_cache_addr() const {
-  assert(is_interpreted_frame(), "must be interpreted");
-  return &(get_interpreterState()->_constants);
-}
-
-// Method
-
-inline Method** frame::interpreter_frame_method_addr() const {
-  assert(is_interpreted_frame(), "must be interpreted");
-  return &(get_interpreterState()->_method);
-}
-
-inline intptr_t* frame::interpreter_frame_mdp_addr() const {
-  assert(is_interpreted_frame(), "must be interpreted");
-  return (intptr_t*) &(get_interpreterState()->_mdx);
-}
-
-// top of expression stack
-inline intptr_t* frame::interpreter_frame_tos_address() const {
-  assert(is_interpreted_frame(), "wrong frame type");
-  return get_interpreterState()->_stack + 1;
-}
-
-#else /* asm interpreter */
 inline intptr_t*    frame::sender_sp()        const { return            addr_at(   sender_sp_offset); }
 
 inline intptr_t** frame::interpreter_frame_locals_addr() const {
@@ -233,6 +186,12 @@ inline Method** frame::interpreter_frame_method_addr() const {
   return (Method**)addr_at(interpreter_frame_method_offset);
 }
 
+// Mirror
+
+inline oop* frame::interpreter_frame_mirror_addr() const {
+  return (oop*)addr_at(interpreter_frame_mirror_offset);
+}
+
 // top of expression stack
 inline intptr_t* frame::interpreter_frame_tos_address() const {
   intptr_t* last_sp = interpreter_frame_last_sp();
@@ -250,8 +209,6 @@ inline intptr_t* frame::interpreter_frame_tos_address() const {
 inline oop* frame::interpreter_frame_temp_oop_addr() const {
   return (oop *)(fp() + interpreter_frame_oop_temp_offset);
 }
-
-#endif /* CC_INTERP */
 
 inline int frame::pd_oop_map_offset_adjustment() const {
   return 0;

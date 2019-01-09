@@ -58,6 +58,8 @@
 #define WM_SPLASHUPDATE         WM_USER+1
 #define WM_SPLASHRECONFIGURE    WM_USER+2
 
+#define BUFF_SIZE 1024
+
 /* Could use npt but decided to cut down on linked code size */
 char* SplashConvertStringAlloc(const char* in, int *size) {
     int len, outChars, rc;
@@ -533,6 +535,9 @@ SplashScreenThread(LPVOID param)
     splash->hWnd = SplashCreateWindow(splash);
     if (splash->hWnd) {
         SplashRedrawWindow(splash);
+        //map the splash co-ordinates as per system scale
+        splash->x /= splash->scaleFactor;
+        splash->y /= splash->scaleFactor;
         SplashUnlock(splash);
         SplashMessagePump();
         SplashLock(splash);
@@ -569,10 +574,18 @@ SplashReconfigure(Splash * splash)
     PostMessage(splash->hWnd, WM_SPLASHRECONFIGURE, 0, 0);
 }
 
-SPLASHEXPORT char*
+jboolean
 SplashGetScaledImageName(const char* jarName, const char* fileName,
-                           float *scaleFactor)
+                           float *scaleFactor, char *scaleImageName,
+                           const size_t scaledImageLength)
 {
-    *scaleFactor = 1;
-    return NULL;
+    float dpiScaleX = -1.0f;
+    float dpiScaleY = -1.0f;
+    FILE *fp = NULL;
+    *scaleFactor = 1.0;
+    GetScreenDpi(getPrimaryMonitor(), &dpiScaleX, &dpiScaleY);
+    *scaleFactor = dpiScaleX > 0 ? dpiScaleX / 96 : *scaleFactor;
+    return GetScaledImageName(fileName, scaleImageName,
+        scaleFactor, scaledImageLength);
 }
+

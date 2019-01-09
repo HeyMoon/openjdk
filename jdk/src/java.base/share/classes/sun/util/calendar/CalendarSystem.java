@@ -25,13 +25,6 @@
 
 package sun.util.calendar;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.security.AccessController;
-import java.security.PrivilegedActionException;
-import java.security.PrivilegedExceptionAction;
-import java.util.Properties;
 import java.util.TimeZone;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -76,7 +69,7 @@ public abstract class CalendarSystem {
 
     /////////////////////// Calendar Factory Methods /////////////////////////
 
-    private volatile static boolean initialized = false;
+    private static volatile boolean initialized;
 
     // Map of calendar names and calendar class names
     private static ConcurrentMap<String, String> names;
@@ -118,7 +111,7 @@ public abstract class CalendarSystem {
         }
     }
 
-    private final static Gregorian GREGORIAN_INSTANCE = new Gregorian();
+    private static final Gregorian GREGORIAN_INSTANCE = new Gregorian();
 
     /**
      * Returns the singleton instance of the <code>Gregorian</code>
@@ -164,8 +157,9 @@ public abstract class CalendarSystem {
             cal = LocalGregorianCalendar.getLocalGregorianCalendar(calendarName);
         } else {
             try {
-                Class<?> cl = Class.forName(className);
-                cal = (CalendarSystem) cl.newInstance();
+                @SuppressWarnings("deprecation")
+                Object tmp = Class.forName(className).newInstance();
+                cal = (CalendarSystem) tmp;
             } catch (Exception e) {
                 throw new InternalError(e);
             }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #include "precompiled.hpp"
 #include "libadt/vectset.hpp"
 #include "memory/allocation.hpp"
+#include "memory/resourceArea.hpp"
 #include "opto/block.hpp"
 #include "opto/machnode.hpp"
 #include "opto/phaseX.hpp"
@@ -506,8 +507,8 @@ void PhaseIdealLoop::Dominators() {
 // Perform DFS search.  Setup 'vertex' as DFS to vertex mapping.  Setup
 // 'semi' as vertex to DFS mapping.  Set 'parent' to DFS parent.
 int NTarjan::DFS( NTarjan *ntarjan, VectorSet &visited, PhaseIdealLoop *pil, uint *dfsorder) {
-  // Allocate stack of size C->unique()/8 to avoid frequent realloc
-  GrowableArray <Node *> dfstack(pil->C->unique() >> 3);
+  // Allocate stack of size C->live_nodes()/8 to avoid frequent realloc
+  GrowableArray <Node *> dfstack(pil->C->live_nodes() >> 3);
   Node *b = pil->C->root();
   int dfsnum = 1;
   dfsorder[b->_idx] = dfsnum; // Cache parent's dfsnum for a later use

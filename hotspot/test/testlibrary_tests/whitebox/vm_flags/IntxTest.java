@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,13 +23,14 @@
 
 /*
  * @test IntxTest
- * @bug 8028756
- * @library /testlibrary /../../test/lib
+ * @bug 8038756
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  * @modules java.management/sun.management
- * @build IntxTest
+ * @build sun.hotspot.WhiteBox
  * @run main ClassFileInstaller sun.hotspot.WhiteBox
  *                              sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main/othervm/timeout=600 -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI IntxTest
+ * @run main/othervm/timeout=600 -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xint -XX:-ProfileInterpreter IntxTest
  * @summary testing of WB::set/getIntxVMFlag()
  * @author igor.ignatyev@oracle.com
  */
@@ -37,8 +38,7 @@
 public class IntxTest {
     private static final String FLAG_NAME = "OnStackReplacePercentage";
     private static final String FLAG_DEBUG_NAME = "InlineFrequencyCount";
-    private static final Long[] TESTS = {0L, 100L, -1L,
-            (long) Integer.MAX_VALUE, (long) Integer.MIN_VALUE};
+    private static final Long[] TESTS = {0L, 100L, (long) Integer.MAX_VALUE};
 
     public static void main(String[] args) throws Exception {
         VmFlagTest.runTest(FLAG_NAME, TESTS,

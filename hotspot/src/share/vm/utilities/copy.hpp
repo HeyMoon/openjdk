@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 #define SHARE_VM_UTILITIES_COPY_HPP
 
 #include "runtime/stubRoutines.hpp"
+#include "utilities/macros.hpp"
 
 // Assembly code for platforms that need it.
 extern "C" {
@@ -227,6 +228,16 @@ class Copy : AllStatic {
     }
   }
 
+  /**
+   * Copy and *unconditionally* byte swap elements
+   *
+   * @param src address of source
+   * @param dst address of destination
+   * @param byte_count number of bytes to copy
+   * @param elem_size size of the elements to copy-swap
+   */
+  static void conjoint_swap(address src, address dst, size_t byte_count, size_t elem_size);
+
   // Fill methods
 
   // Fill word-aligned words, not atomic on each word
@@ -322,24 +333,7 @@ class Copy : AllStatic {
   }
 
   // Platform dependent implementations of the above methods.
-#ifdef TARGET_ARCH_x86
-# include "copy_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "copy_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "copy_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "copy_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "copy_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "copy_aarch64.hpp"
-#endif
+#include CPU_HEADER(copy)
 
 };
 

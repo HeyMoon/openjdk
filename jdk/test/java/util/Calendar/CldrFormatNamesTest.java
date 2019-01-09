@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,9 +23,10 @@
 
 /*
  * @test
- * @bug 8004489 8006509 8008577
+ * @bug 8004489 8006509 8008577 8145136
  * @summary Unit test for CLDR FormatData resources
  * @modules java.base/sun.util.locale.provider
+ *          jdk.localedata
  * @compile -XDignore.symbol.file CldrFormatNamesTest.java
  * @run main/othervm -Djava.locale.providers=CLDR CldrFormatNamesTest
  */
@@ -51,7 +52,7 @@ public class CldrFormatNamesTest {
                 "Gy\u5e74M\u6708d\u65e5EEEE",
                 "Gy\u5e74M\u6708d\u65e5",
                 "Gy\u5e74M\u6708d\u65e5",
-                "Gyy/MM/dd",
+                "GGGGGy/M/d",
             },
             "java.time.roc.DatePatterns", new String[] {
                 "Gy\u5e74M\u6708d\u65e5EEEE",

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,13 +48,12 @@ import java.util.NoSuchElementException;
  * until the blank line that indicates end of header. The input stream
  * is positioned at the start of the body. The lines are stored
  * within the object and can be extracted as either Strings or
- * {@link Header} objects. <p>
- * <p/>
+ * {@link Header} objects.
+ * <p>
  * This class is mostly intended for service providers. MimeMessage
- * and MimeBody use this class for holding their headers. <p>
- * <p/>
- * <hr> <strong>A note on RFC822 and MIME headers</strong><p>
- * <p/>
+ * and MimeBody use this class for holding their headers.
+ * <hr> <strong>A note on RFC822 and MIME headers</strong>
+ * <p>
  * RFC822 and MIME header fields <strong>must</strong> contain only
  * US-ASCII characters. If a header contains non US-ASCII characters,
  * it must be encoded as per the rules in RFC 2047. The MimeUtility
@@ -65,7 +64,7 @@ import java.util.NoSuchElementException;
  * header fields must be folded (wrapped) before being sent if they
  * exceed the line length limitation for the transport (1000 bytes for
  * SMTP).  Received headers may have been folded.  The application is
- * responsible for folding and unfolding headers as appropriate. <p>
+ * responsible for folding and unfolding headers as appropriate.
  *
  * @author John Mani
  * @author Bill Shannon
@@ -73,12 +72,12 @@ import java.util.NoSuchElementException;
  */
 public final class InternetHeaders {
 
-    private final FinalArrayList headers = new FinalArrayList();
+    private final FinalArrayList<hdr> headers = new FinalArrayList<hdr>();
 
     /**
      * Lazily cerated view of header lines (Strings).
      */
-    private List headerValueView;
+    private List<String> headerValueView;
 
     /**
      * Create an empty InternetHeaders object.
@@ -90,12 +89,13 @@ public final class InternetHeaders {
      * Read and parse the given RFC822 message stream till the
      * blank line separating the header from the body. The input
      * stream is left positioned at the start of the body. The
-     * header lines are stored internally. <p>
-     * <p/>
+     * header lines are stored internally.
+     * <p>
      * For efficiency, wrap a BufferedInputStream around the actual
      * input stream and pass it as the parameter.
      *
      * @param   is RFC822 input stream
+     * @exception MessagingException in case of error
      */
     public InternetHeaders(InputStream is) throws MessagingException {
         load(is);
@@ -104,13 +104,14 @@ public final class InternetHeaders {
     /**
      * Read and parse the given RFC822 message stream till the
      * blank line separating the header from the body. Store the
-     * header lines inside this InternetHeaders object. <p>
-     * <p/>
+     * header lines inside this InternetHeaders object.
+     * <p>
      * Note that the header lines are added into this InternetHeaders
      * object, so any existing headers in this object will not be
      * affected.
      *
      * @param   is RFC822 input stream
+     * @exception MessagingException in case of error
      */
     public void load(InputStream is) throws MessagingException {
         // Read header lines until a blank line. It is valid
@@ -119,7 +120,7 @@ public final class InternetHeaders {
         LineInputStream lis = new LineInputStream(is);
         String prevline = null; // the previous header line, as a string
         // a buffer to accumulate the header in, when we know it's needed
-        StringBuffer lineBuffer = new StringBuffer();
+        StringBuilder lineBuffer = new StringBuilder();
 
         try {
             //while ((line = lis.readLine()) != null) {
@@ -161,11 +162,11 @@ public final class InternetHeaders {
      */
     public String[] getHeader(String name) {
         // XXX - should we just step through in index order?
-        FinalArrayList v = new FinalArrayList(); // accumulate return values
+        FinalArrayList<String> v = new FinalArrayList<String>(); // accumulate return values
 
         int len = headers.size();
         for( int i=0; i<len; i++ ) {
-            hdr h = (hdr) headers.get(i);
+            hdr h = headers.get(i);
             if (name.equalsIgnoreCase(h.name)) {
                 v.add(h.getValue());
             }
@@ -173,7 +174,7 @@ public final class InternetHeaders {
         if (v.size() == 0)
             return (null);
         // convert Vector to an array for return
-        return (String[]) v.toArray(new String[v.size()]);
+        return v.toArray(new String[v.size()]);
     }
 
     /**
@@ -197,7 +198,7 @@ public final class InternetHeaders {
         if ((s.length == 1) || delimiter == null)
             return s[0];
 
-        StringBuffer r = new StringBuffer(s[0]);
+        StringBuilder r = new StringBuilder(s[0]);
         for (int i = 1; i < s.length; i++) {
             r.append(delimiter);
             r.append(s[i]);
@@ -208,9 +209,9 @@ public final class InternetHeaders {
     /**
      * Change the first header line that matches name
      * to have value, adding a new header if no existing header
-     * matches. Remove all matching headers but the first. <p>
-     * <p/>
-     * Note that RFC822 headers can only contain US-ASCII characters
+     * matches. Remove all matching headers but the first.
+     * <p>
+     * Note that RFC822 headers can only contain US-ASCII characters.
      *
      * @param   name    header name
      * @param   value   header value
@@ -219,7 +220,7 @@ public final class InternetHeaders {
         boolean found = false;
 
         for (int i = 0; i < headers.size(); i++) {
-            hdr h = (hdr) headers.get(i);
+            hdr h = headers.get(i);
             if (name.equalsIgnoreCase(h.name)) {
                 if (!found) {
                     int j;
@@ -242,8 +243,7 @@ public final class InternetHeaders {
     }
 
     /**
-     * Add a header with the specified name and value to the header list. <p>
-     * <p/>
+     * Add a header with the specified name and value to the header list.
      * Note that RFC822 headers can only contain US-ASCII characters.
      *
      * @param   name    header name
@@ -252,7 +252,7 @@ public final class InternetHeaders {
     public void addHeader(String name, String value) {
         int pos = headers.size();
         for (int i = headers.size() - 1; i >= 0; i--) {
-            hdr h = (hdr) headers.get(i);
+            hdr h = headers.get(i);
             if (name.equalsIgnoreCase(h.name)) {
                 headers.add(i + 1, new hdr(name, value));
                 return;
@@ -271,7 +271,7 @@ public final class InternetHeaders {
      */
     public void removeHeader(String name) {
         for (int i = 0; i < headers.size(); i++) {
-            hdr h = (hdr) headers.get(i);
+            hdr h = headers.get(i);
             if (name.equalsIgnoreCase(h.name)) {
                 headers.remove(i);
                 i--;    // have to look at i again
@@ -285,15 +285,15 @@ public final class InternetHeaders {
      *
      * @return  Header objects
      */
-    public FinalArrayList getAllHeaders() {
+    public FinalArrayList<hdr> getAllHeaders() {
         return headers; // conceptually it should be read-only, but for performance reason I'm not wrapping it here
     }
 
     /**
      * Add an RFC822 header line to the header store.
      * If the line starts with a space or tab (a continuation line),
-     * add it to the last header line in the list. <p>
-     * <p/>
+     * add it to the last header line in the list.
+     * <p>
      * Note that RFC822 headers can only contain US-ASCII characters
      *
      * @param   line    raw RFC822 header line
@@ -302,7 +302,7 @@ public final class InternetHeaders {
         try {
             char c = line.charAt(0);
             if (c == ' ' || c == '\t') {
-                hdr h = (hdr) headers.get(headers.size() - 1);
+                hdr h = headers.get(headers.size() - 1);
                 h.line += "\r\n" + line;
             } else
                 headers.add(new hdr(line));
@@ -316,14 +316,18 @@ public final class InternetHeaders {
 
     /**
      * Return all the header lines as a collection
+     *
+     * @return list of header lines.
      */
-    public List getAllHeaderLines() {
-        if(headerValueView==null)
-            headerValueView = new AbstractList() {
-                public Object get(int index) {
-                    return ((hdr)headers.get(index)).line;
+    public List<String> getAllHeaderLines() {
+        if (headerValueView == null)
+            headerValueView = new AbstractList<String>() {
+                @Override
+                public String get(int index) {
+                    return headers.get(index).line;
                 }
 
+                @Override
                 public int size() {
                     return headers.size();
                 }
@@ -368,6 +372,7 @@ class hdr implements Header {
     /*
      * Return the "name" part of the header line.
      */
+    @Override
     public String getName() {
         return name;
     }
@@ -375,6 +380,7 @@ class hdr implements Header {
     /*
      * Return the "value" part of the header line.
      */
+    @Override
     public String getValue() {
         int i = line.indexOf(':');
         if (i < 0)

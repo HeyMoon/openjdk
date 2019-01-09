@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2014 Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2014, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
 
 /*
  * @test
+ * @key headful
  * @bug 6694823
  * @summary Checks that popup menu cannot be partially hidden
  * by the task bar in applets.

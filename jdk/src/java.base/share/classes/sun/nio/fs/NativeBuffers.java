@@ -25,7 +25,7 @@
 
 package sun.nio.fs;
 
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 /**
  * Factory for native buffers.
@@ -107,14 +107,14 @@ class NativeBuffers {
         for (int i=0; i<TEMP_BUF_POOL_SIZE; i++) {
             NativeBuffer existing = buffers[i];
             if (existing.size() < buffer.size()) {
-                existing.cleaner().clean();
+                existing.free();
                 buffers[i] = buffer;
                 return;
             }
         }
 
         // free it
-        buffer.cleaner().clean();
+        buffer.free();
     }
 
     /**

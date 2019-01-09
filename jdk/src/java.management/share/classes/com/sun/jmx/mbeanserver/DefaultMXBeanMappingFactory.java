@@ -60,6 +60,7 @@ import java.util.WeakHashMap;
 
 import javax.management.JMX;
 import javax.management.ObjectName;
+import javax.management.ConstructorParameters;
 import javax.management.openmbean.ArrayType;
 import javax.management.openmbean.CompositeData;
 import javax.management.openmbean.CompositeDataInvocationHandler;
@@ -654,7 +655,9 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
             final Object[] openArray = (Object[]) openValue;
             final Collection<Object> valueCollection;
             try {
-                valueCollection = cast(collectionClass.newInstance());
+                @SuppressWarnings("deprecation")
+                Collection<?> tmp = collectionClass.newInstance();
+                valueCollection = cast(tmp);
             } catch (Exception e) {
                 throw invalidObjectException("Cannot create collection", e);
             }
@@ -1113,7 +1116,9 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
             try {
                 final Class<?> targetClass = getTargetClass();
                 ReflectUtil.checkPackageAccess(targetClass);
-                o = targetClass.newInstance();
+                @SuppressWarnings("deprecation")
+                Object tmp = targetClass.newInstance();
+                o = tmp;
                 for (int i = 0; i < itemNames.length; i++) {
                     if (cd.containsKey(itemNames[i])) {
                         Object openItem = cd.get(itemNames[i]);
@@ -1132,8 +1137,8 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
     }
 
     /** Builder for when the target class has a constructor that is
-        annotated with @ConstructorProperties so we can see the correspondence
-        to getters.  */
+        annotated with {@linkplain ConstructorParameters &#64;ConstructorParameters}
+        or {@code @ConstructorProperties} so we can see the correspondence to getters.  */
     private static final class CompositeBuilderViaConstructor
             extends CompositeBuilder {
 
@@ -1141,10 +1146,19 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
             super(targetClass, itemNames);
         }
 
-        String applicable(Method[] getters) throws InvalidObjectException {
-            if (!JavaBeansAccessor.isAvailable())
-                return "@ConstructorProperties annotation not available";
+        private String[] getConstPropValues(Constructor<?> ctr) {
+            // is constructor annotated by javax.management.ConstructorParameters ?
+            ConstructorParameters ctrProps = ctr.getAnnotation(ConstructorParameters.class);
+            if (ctrProps != null) {
+                return ctrProps.value();
+            } else {
+                // try the legacy java.beans.ConstructorProperties annotation
+                String[] vals = JavaBeansAccessor.getConstructorPropertiesValue(ctr);
+                return vals;
+            }
+        }
 
+        String applicable(Method[] getters) throws InvalidObjectException {
             Class<?> targetClass = getTargetClass();
             Constructor<?>[] constrs = targetClass.getConstructors();
 
@@ -1152,12 +1166,13 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
             List<Constructor<?>> annotatedConstrList = newList();
             for (Constructor<?> constr : constrs) {
                 if (Modifier.isPublic(constr.getModifiers())
-                        && JavaBeansAccessor.getConstructorPropertiesValue(constr) != null)
+                        && getConstPropValues(constr) != null)
                     annotatedConstrList.add(constr);
             }
 
             if (annotatedConstrList.isEmpty())
-                return "no constructor has @ConstructorProperties annotation";
+                return "no constructor has either @ConstructorParameters " +
+                       "or @ConstructorProperties annotation";
 
             annotatedConstructors = newList();
 
@@ -1181,13 +1196,17 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
             // so we can test unambiguity.
             Set<BitSet> getterIndexSets = newSet();
             for (Constructor<?> constr : annotatedConstrList) {
-                String[] propertyNames = JavaBeansAccessor.getConstructorPropertiesValue(constr);
+                String annotationName =
+                    constr.isAnnotationPresent(ConstructorParameters.class) ?
+                        "@ConstructorParameters" : "@ConstructorProperties";
+
+                String[] propertyNames = getConstPropValues(constr);
 
                 Type[] paramTypes = constr.getGenericParameterTypes();
                 if (paramTypes.length != propertyNames.length) {
                     final String msg =
                         "Number of constructor params does not match " +
-                        "@ConstructorProperties annotation: " + constr;
+                        annotationName + " annotation: " + constr;
                     throw new InvalidObjectException(msg);
                 }
 
@@ -1200,7 +1219,7 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
                     String propertyName = propertyNames[i];
                     if (!getterMap.containsKey(propertyName)) {
                         String msg =
-                            "@ConstructorProperties includes name " + propertyName +
+                            annotationName + " includes name " + propertyName +
                             " which does not correspond to a property";
                         for (String getterName : getterMap.keySet()) {
                             if (getterName.equalsIgnoreCase(propertyName)) {
@@ -1215,7 +1234,7 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
                     paramIndexes[getterIndex] = i;
                     if (present.get(getterIndex)) {
                         final String msg =
-                            "@ConstructorProperties contains property " +
+                            annotationName + " contains property " +
                             propertyName + " more than once: " + constr;
                         throw new InvalidObjectException(msg);
                     }
@@ -1224,7 +1243,7 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
                     Type propertyType = getter.getGenericReturnType();
                     if (!propertyType.equals(paramTypes[i])) {
                         final String msg =
-                            "@ConstructorProperties gives property " + propertyName +
+                            annotationName + " gives property " + propertyName +
                             " of type " + propertyType + " for parameter " +
                             " of type " + paramTypes[i] + ": " + constr;
                         throw new InvalidObjectException(msg);
@@ -1233,7 +1252,8 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
 
                 if (!getterIndexSets.add(present)) {
                     final String msg =
-                        "More than one constructor has a @ConstructorProperties " +
+                        "More than one constructor has " +
+                        "@ConstructorParameters or @ConstructorProperties " +
                         "annotation with this set of names: " +
                         Arrays.toString(propertyNames);
                     throw new InvalidObjectException(msg);
@@ -1252,10 +1272,10 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
              * just the bigger constructor.
              *
              * The algorithm here is quadratic in the number of constructors
-             * with a @ConstructorProperties annotation.  Typically this corresponds
-             * to the number of versions of the class there have been.  Ten
-             * would already be a large number, so although it's probably
-             * possible to have an O(n lg n) algorithm it wouldn't be
+             * with a @ConstructorParameters or @ConstructructorProperties annotation.
+             * Typically this corresponds to the number of versions of the class
+             * there have been.  Ten would already be a large number, so although
+             * it's probably possible to have an O(n lg n) algorithm it wouldn't be
              * worth the complexity.
              */
             for (BitSet a : getterIndexSets) {
@@ -1272,8 +1292,9 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
                                  i = u.nextSetBit(i+1))
                                 names.add(itemNames[i]);
                             final String msg =
-                                "Constructors with @ConstructorProperties annotation " +
-                                " would be ambiguous for these items: " +
+                                "Constructors with @ConstructorParameters or " +
+                                "@ConstructorProperties annotation " +
+                                "would be ambiguous for these items: " +
                                 names;
                             throw new InvalidObjectException(msg);
                         }
@@ -1310,7 +1331,8 @@ public class DefaultMXBeanMappingFactory extends MXBeanMappingFactory {
 
             if (max == null) {
                 final String msg =
-                    "No constructor has a @ConstructorProperties for this set of " +
+                    "No constructor has either @ConstructorParameters " +
+                    "or @ConstructorProperties annotation for this set of " +
                     "items: " + ct.keySet();
                 throw new InvalidObjectException(msg);
             }

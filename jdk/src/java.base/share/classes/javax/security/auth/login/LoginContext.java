@@ -182,6 +182,7 @@ import sun.security.util.ResourcesMgr;
  * </ul>
  * </ol>
  *
+ * @since 1.4
  * @see java.security.Security
  * @see javax.security.auth.AuthPermission
  * @see javax.security.auth.Subject
@@ -304,7 +305,9 @@ public class LoginContext {
                     Class<? extends CallbackHandler> c = Class.forName(
                             defaultHandler, true,
                             finalLoader).asSubclass(CallbackHandler.class);
-                    return c.newInstance();
+                    @SuppressWarnings("deprecation")
+                    CallbackHandler result = c.newInstance();
+                    return result;
                 }
             });
         } catch (java.security.PrivilegedActionException pae) {
@@ -697,8 +700,9 @@ public class LoginContext {
 
                     if (moduleStack[i].module == null) {
                         try {
-                            moduleStack[i].module = (LoginModule) Class.forName(
-                                    name, false, contextClassLoader).newInstance();
+                            @SuppressWarnings("deprecation")
+                            Object tmp = Class.forName(name, false, contextClassLoader).newInstance();
+                            moduleStack[i].module = (LoginModule) tmp;
                             if (debug != null) {
                                 debug.println(name + " loaded via reflection");
                             }

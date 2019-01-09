@@ -67,7 +67,7 @@ public class AquaTableHeaderUI extends BasicTableHeaderUI {
         super.uninstallDefaults();
     }
 
-    final static RecyclableSingleton<ClientPropertyApplicator<JTableHeader, JTableHeader>> TABLE_HEADER_APPLICATORS = new RecyclableSingleton<ClientPropertyApplicator<JTableHeader, JTableHeader>>() {
+    private static final RecyclableSingleton<ClientPropertyApplicator<JTableHeader, JTableHeader>> TABLE_HEADER_APPLICATORS = new RecyclableSingleton<ClientPropertyApplicator<JTableHeader, JTableHeader>>() {
         @Override
         @SuppressWarnings("unchecked")
         protected ClientPropertyApplicator<JTableHeader, JTableHeader> getInstance() {
@@ -128,14 +128,17 @@ public class AquaTableHeaderUI extends BasicTableHeaderUI {
             // Modify the table "border" to draw smaller, and with the titles in the right position
             // and sort indicators, just like an NSSave/Open panel.
             final AquaTableHeaderBorder cellBorder = AquaTableHeaderBorder.getListHeaderBorder();
-            final boolean thisColumnSelected = localTable.getColumnModel().getColumn(column).getModelIndex() == sortColumn;
+            cellBorder.setSortOrder(AquaTableHeaderBorder.SORT_NONE);
 
-            cellBorder.setSelected(thisColumnSelected);
-            if (thisColumnSelected) {
-                cellBorder.setSortOrder(sortOrder);
-            } else {
-                cellBorder.setSortOrder(AquaTableHeaderBorder.SORT_NONE);
+            if (localTable != null) {
+                final boolean thisColumnSelected = localTable.getColumnModel().getColumn(column).getModelIndex() == sortColumn;
+
+                cellBorder.setSelected(thisColumnSelected);
+                if (thisColumnSelected) {
+                    cellBorder.setSortOrder(sortOrder);
+               }
             }
+
             setBorder(cellBorder);
             return this;
         }

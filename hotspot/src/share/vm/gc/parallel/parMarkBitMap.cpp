@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,9 +24,10 @@
 
 #include "precompiled.hpp"
 #include "gc/parallel/parMarkBitMap.hpp"
-#include "gc/parallel/psParallelCompact.hpp"
+#include "gc/parallel/psCompactionManager.inline.hpp"
+#include "gc/parallel/psParallelCompact.inline.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/os.hpp"
 #include "services/memTracker.hpp"
 #include "utilities/bitMap.inline.hpp"
@@ -48,7 +49,7 @@ ParMarkBitMap::initialize(MemRegion covered_region)
   const size_t rs_align = page_sz == (size_t) os::vm_page_size() ? 0 :
     MAX2(page_sz, granularity);
   ReservedSpace rs(_reserved_byte_size, rs_align, rs_align > 0);
-  os::trace_page_sizes("par bitmap", raw_bytes, raw_bytes, page_sz,
+  os::trace_page_sizes("Mark Bitmap", raw_bytes, raw_bytes, page_sz,
                        rs.base(), rs.size());
 
   MemTracker::record_virtual_memory_type((address)rs.base(), mtGC);
@@ -58,10 +59,8 @@ ParMarkBitMap::initialize(MemRegion covered_region)
     _region_start = covered_region.start();
     _region_size = covered_region.word_size();
     BitMap::bm_word_t* map = (BitMap::bm_word_t*)_virtual_space->reserved_low_addr();
-    _beg_bits.set_map(map);
-    _beg_bits.set_size(bits / 2);
-    _end_bits.set_map(map + words / 2);
-    _end_bits.set_size(bits / 2);
+    _beg_bits = BitMapView(map,             bits / 2);
+    _end_bits = BitMapView(map + words / 2, bits / 2);
     return true;
   }
 
@@ -96,7 +95,20 @@ ParMarkBitMap::mark_obj(HeapWord* addr, size_t size)
   return false;
 }
 
-size_t ParMarkBitMap::live_words_in_range(HeapWord* beg_addr, oop end_obj) const
+inline bool
+ParMarkBitMap::is_live_words_in_range_in_cache(ParCompactionManager* cm, HeapWord* beg_addr) const {
+  return cm->last_query_begin() == beg_addr;
+}
+
+inline void
+ParMarkBitMap::update_live_words_in_range_cache(ParCompactionManager* cm, HeapWord* beg_addr, oop end_obj, size_t result) const {
+  cm->set_last_query_begin(beg_addr);
+  cm->set_last_query_object(end_obj);
+  cm->set_last_query_return(result);
+}
+
+size_t
+ParMarkBitMap::live_words_in_range_helper(HeapWord* beg_addr, oop end_obj) const
 {
   assert(beg_addr <= (HeapWord*)end_obj, "bad range");
   assert(is_marked(end_obj), "end_obj must be live");
@@ -115,6 +127,42 @@ size_t ParMarkBitMap::live_words_in_range(HeapWord* beg_addr, oop end_obj) const
     beg_bit = find_obj_beg(tmp_end + 1, range_end);
   }
   return bits_to_words(live_bits);
+}
+
+size_t
+ParMarkBitMap::live_words_in_range_use_cache(ParCompactionManager* cm, HeapWord* beg_addr, oop end_obj) const
+{
+  HeapWord* last_beg = cm->last_query_begin();
+  oop last_obj = cm->last_query_object();
+  size_t last_ret = cm->last_query_return();
+  if (end_obj > last_obj) {
+    last_ret = last_ret + live_words_in_range_helper((HeapWord*)last_obj, end_obj);
+    last_obj = end_obj;
+  } else if (end_obj < last_obj) {
+    // The cached value is for an object that is to the left (lower address) of the current
+    // end_obj. Calculate back from that cached value.
+    if (pointer_delta((HeapWord*)end_obj, (HeapWord*)beg_addr) > pointer_delta((HeapWord*)last_obj, (HeapWord*)end_obj)) {
+      last_ret = last_ret - live_words_in_range_helper((HeapWord*)end_obj, last_obj);
+    } else {
+      last_ret = live_words_in_range_helper(beg_addr, end_obj);
+    }
+    last_obj = end_obj;
+  }
+
+  update_live_words_in_range_cache(cm, last_beg, last_obj, last_ret);
+  return last_ret;
+}
+
+size_t
+ParMarkBitMap::live_words_in_range(ParCompactionManager* cm, HeapWord* beg_addr, oop end_obj) const
+{
+  // Try to reuse result from ParCompactionManager cache first.
+  if (is_live_words_in_range_in_cache(cm, beg_addr)) {
+    return live_words_in_range_use_cache(cm, beg_addr, end_obj);
+  }
+  size_t ret = live_words_in_range_helper(beg_addr, end_obj);
+  update_live_words_in_range_cache(cm, beg_addr, end_obj, ret);
+  return ret;
 }
 
 ParMarkBitMap::IterationStatus

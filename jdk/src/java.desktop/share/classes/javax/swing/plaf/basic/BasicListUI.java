@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -167,35 +167,35 @@ public class BasicListUI extends ListUI
     /**
      * The bit relates to model changed property.
      */
-    protected final static int modelChanged = 1 << 0;
+    protected static final int modelChanged = 1 << 0;
     /**
      * The bit relates to selection model changed property.
      */
-    protected final static int selectionModelChanged = 1 << 1;
+    protected static final int selectionModelChanged = 1 << 1;
     /**
      * The bit relates to font changed property.
      */
-    protected final static int fontChanged = 1 << 2;
+    protected static final int fontChanged = 1 << 2;
     /**
      * The bit relates to fixed cell width changed property.
      */
-    protected final static int fixedCellWidthChanged = 1 << 3;
+    protected static final int fixedCellWidthChanged = 1 << 3;
     /**
      * The bit relates to fixed cell height changed property.
      */
-    protected final static int fixedCellHeightChanged = 1 << 4;
+    protected static final int fixedCellHeightChanged = 1 << 4;
     /**
      * The bit relates to prototype cell value changed property.
      */
-    protected final static int prototypeCellValueChanged = 1 << 5;
+    protected static final int prototypeCellValueChanged = 1 << 5;
     /**
      * The bit relates to cell renderer changed property.
      */
-    protected final static int cellRendererChanged = 1 << 6;
-    private final static int layoutOrientationChanged = 1 << 7;
-    private final static int heightChanged = 1 << 8;
-    private final static int widthChanged = 1 << 9;
-    private final static int componentOrientationChanged = 1 << 10;
+    protected static final int cellRendererChanged = 1 << 6;
+    private static final int layoutOrientationChanged = 1 << 7;
+    private static final int heightChanged = 1 << 8;
+    private static final int widthChanged = 1 << 9;
+    private static final int componentOrientationChanged = 1 << 10;
 
     private static final int DROP_LINE_THICKNESS = 2;
 
@@ -583,8 +583,14 @@ public class BasicListUI extends ListUI
 
     /**
      * The preferredSize of the list depends upon the layout orientation.
-     * <table summary="Describes the preferred size for each layout orientation">
+     *
+     * <table class="striped">
+     * <caption>Describes the preferred size for each layout orientation
+     * </caption>
+     * <thead>
      * <tr><th>Layout Orientation</th><th>Preferred Size</th></tr>
+     * </thead>
+     * <tbody>
      * <tr>
      *   <td>JList.VERTICAL
      *   <td>The preferredSize of the list is total height of the rows
@@ -626,6 +632,7 @@ public class BasicListUI extends ListUI
      *       Max cell height is either the fixed
      *       cell height, or is determined by iterating through all the cells
      *       to find the maximum height from the ListCellRenderer.
+     * </tbody>
      * </table>
      * The above specifies the raw preferred width and height. The resulting
      * preferred width is the above width + insets.left + insets.right and
@@ -2060,7 +2067,8 @@ public class BasicListUI extends ListUI
             }
         }
 
-        public boolean isEnabled(Object c) {
+        @Override
+        public boolean accept(Object c) {
             Object name = getName();
             if (name == SELECT_PREVIOUS_COLUMN_CHANGE_LEAD ||
                     name == SELECT_NEXT_COLUMN_CHANGE_LEAD ||

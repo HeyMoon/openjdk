@@ -195,8 +195,8 @@ public class Win32PrintService implements PrintService, AttributeUpdater,
     private PrinterName name;
     private String port;
 
-    transient private PrintServiceAttributeSet lastSet;
-    transient private ServiceNotifier notifier = null;
+    private transient PrintServiceAttributeSet lastSet;
+    private transient ServiceNotifier notifier = null;
 
     private MediaSizeName[] mediaSizeNames;
     private MediaPrintableArea[] mediaPrintables;
@@ -759,10 +759,18 @@ public class Win32PrintService implements PrintService, AttributeUpdater,
     private boolean isSupportedMediaPrintableArea(MediaPrintableArea mpa) {
 
         getMediaPrintables(null);
+        int units = MediaPrintableArea.INCH;
 
         if (mediaPrintables != null) {
             for (int i=0; i<mediaPrintables.length; i++) {
-                if (mpa.equals(mediaPrintables[i])) {
+                if ((mpa.getX(units) >= mediaPrintables[i].getX(units)) &&
+                    (mpa.getY(units) >= mediaPrintables[i].getY(units)) &&
+                    (mpa.getX(units) + mpa.getWidth(units) <=
+                            mediaPrintables[i].getX(units) +
+                            mediaPrintables[i].getWidth(units)) &&
+                    (mpa.getY(units) + mpa.getHeight(units) <=
+                            mediaPrintables[i].getY(units) +
+                            mediaPrintables[i].getHeight(units))) {
                     return true;
                 }
             }
@@ -1734,7 +1742,7 @@ class Win32MediaSize extends MediaSizeName {
 
     }
 
-    private synchronized static int nextValue(String name) {
+    private static synchronized int nextValue(String name) {
       winStringTable.add(name);
       return (winStringTable.size()-1);
     }

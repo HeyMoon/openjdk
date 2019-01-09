@@ -352,7 +352,7 @@ public class DefaultHighlighter extends LayeredHighlighter {
 
     // ---- member variables --------------------------------------------
 
-    private final static Highlighter.Highlight[] noHighlights =
+    private static final Highlighter.Highlight[] noHighlights =
             new Highlighter.Highlight[0];
     private Vector<HighlightInfo> highlights = new Vector<HighlightInfo>();
     private JTextComponent component;
@@ -405,6 +405,7 @@ public class DefaultHighlighter extends LayeredHighlighter {
          * @param bounds the bounding box for the highlight
          * @param c the editor
          */
+        @SuppressWarnings("deprecation")
         public void paint(Graphics g, int offs0, int offs1, Shape bounds, JTextComponent c) {
             Rectangle alloc = bounds.getBounds();
             try {

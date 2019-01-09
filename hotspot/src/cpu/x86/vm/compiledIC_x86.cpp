@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
 
 #include "precompiled.hpp"
 #include "asm/macroAssembler.inline.hpp"
+#include "code/codeCache.hpp"
 #include "code/compiledIC.hpp"
 #include "code/icBuffer.hpp"
 #include "code/nmethod.hpp"
@@ -31,49 +32,39 @@
 #include "runtime/mutexLocker.hpp"
 #include "runtime/safepoint.hpp"
 
-// Release the CompiledICHolder* associated with this call site is there is one.
-void CompiledIC::cleanup_call_site(virtual_call_Relocation* call_site) {
-  // This call site might have become stale so inspect it carefully.
-  NativeCall* call = nativeCall_at(call_site->addr());
-  if (is_icholder_entry(call->destination())) {
-    NativeMovConstReg* value = nativeMovConstReg_at(call_site->cached_value());
-    InlineCacheBuffer::queue_for_release((CompiledICHolder*)value->data());
-  }
-}
-
-bool CompiledIC::is_icholder_call_site(virtual_call_Relocation* call_site) {
-  // This call site might have become stale so inspect it carefully.
-  NativeCall* call = nativeCall_at(call_site->addr());
-  return is_icholder_entry(call->destination());
-}
-
 // ----------------------------------------------------------------------------
 
 #define __ _masm.
-void CompiledStaticCall::emit_to_interp_stub(CodeBuffer &cbuf) {
+address CompiledStaticCall::emit_to_interp_stub(CodeBuffer &cbuf, address mark) {
   // Stub is fixed up when the corresponding call is converted from
   // calling compiled code to calling interpreted code.
   // movq rbx, 0
   // jmp -5 # to self
 
-  address mark = cbuf.insts_mark();  // Get mark within main instrs section.
+  if (mark == NULL) {
+    mark = cbuf.insts_mark();  // Get mark within main instrs section.
+  }
 
   // Note that the code buffer's insts_mark is always relative to insts.
   // That's why we must use the macroassembler to generate a stub.
   MacroAssembler _masm(&cbuf);
 
-  address base =
-  __ start_a_stub(to_interp_stub_size()*2);
-  if (base == NULL) return;  // CodeBuffer::expand failed.
+  address base = __ start_a_stub(to_interp_stub_size());
+  if (base == NULL) {
+    return NULL;  // CodeBuffer::expand failed.
+  }
   // Static stub relocation stores the instruction address of the call.
-  __ relocate(static_stub_Relocation::spec(mark), Assembler::imm_operand);
+  __ relocate(static_stub_Relocation::spec(mark, false), Assembler::imm_operand);
   // Static stub relocation also tags the Method* in the code-stream.
   __ mov_metadata(rbx, (Metadata*) NULL);  // Method is zapped till fixup time.
   // This is recognized as unresolved by relocs/nativeinst/ic code.
   __ jump(RuntimeAddress(__ pc()));
 
+  assert(__ pc() - base <= to_interp_stub_size(), "wrong stub size");
+
   // Update current stubs pointer and restore insts_end.
   __ end_a_stub();
+  return base;
 }
 #undef __
 
@@ -87,13 +78,73 @@ int CompiledStaticCall::reloc_to_interp_stub() {
   return 4; // 3 in emit_to_interp_stub + 1 in emit_call
 }
 
-void CompiledStaticCall::set_to_interpreted(methodHandle callee, address entry) {
-  address stub = find_stub();
+#if INCLUDE_AOT
+#define __ _masm.
+void CompiledStaticCall::emit_to_aot_stub(CodeBuffer &cbuf, address mark) {
+  if (!UseAOT) {
+    return;
+  }
+  // Stub is fixed up when the corresponding call is converted from
+  // calling compiled code to calling aot code.
+  // movq rax, imm64_aot_code_address
+  // jmp  rax
+
+  if (mark == NULL) {
+    mark = cbuf.insts_mark();  // Get mark within main instrs section.
+  }
+
+  // Note that the code buffer's insts_mark is always relative to insts.
+  // That's why we must use the macroassembler to generate a stub.
+  MacroAssembler _masm(&cbuf);
+
+  address base =
+  __ start_a_stub(to_aot_stub_size());
+  guarantee(base != NULL, "out of space");
+
+  // Static stub relocation stores the instruction address of the call.
+  __ relocate(static_stub_Relocation::spec(mark, true /* is_aot */), Assembler::imm_operand);
+  // Load destination AOT code address.
+#ifdef _LP64
+  __ mov64(rax, CONST64(0));  // address is zapped till fixup time.
+#else
+  __ movl(rax, 0);  // address is zapped till fixup time.
+#endif
+  // This is recognized as unresolved by relocs/nativeinst/ic code.
+  __ jmp(rax);
+
+  assert(__ pc() - base <= to_aot_stub_size(), "wrong stub size");
+
+  // Update current stubs pointer and restore insts_end.
+  __ end_a_stub();
+}
+#undef __
+
+int CompiledStaticCall::to_aot_stub_size() {
+  if (UseAOT) {
+    return NOT_LP64(7)    // movl; jmp
+           LP64_ONLY(12);  // movq (1+1+8); jmp (2)
+  } else {
+    return 0;
+  }
+}
+
+// Relocation entries for call stub, compiled java to aot.
+int CompiledStaticCall::reloc_to_aot_stub() {
+  if (UseAOT) {
+    return 2; // 1 in emit_to_aot_stub + 1 in emit_call
+  } else {
+    return 0;
+  }
+}
+#endif // INCLUDE_AOT
+
+void CompiledDirectStaticCall::set_to_interpreted(const methodHandle& callee, address entry) {
+  address stub = find_stub(false /* is_aot */);
   guarantee(stub != NULL, "stub not found");
 
   if (TraceICs) {
     ResourceMark rm;
-    tty->print_cr("CompiledStaticCall@" INTPTR_FORMAT ": set_to_interpreted %s",
+    tty->print_cr("CompiledDirectStaticCall@" INTPTR_FORMAT ": set_to_interpreted %s",
                   p2i(instruction_address()),
                   callee->name_and_sig_as_C_string());
   }
@@ -102,10 +153,15 @@ void CompiledStaticCall::set_to_interpreted(methodHandle callee, address entry) 
   NativeMovConstReg* method_holder = nativeMovConstReg_at(stub);
   NativeJump*        jump          = nativeJump_at(method_holder->next_instruction_address());
 
-  assert(method_holder->data() == 0 || method_holder->data() == (intptr_t)callee(),
+#ifdef ASSERT
+  // read the value once
+  intptr_t data = method_holder->data();
+  address destination = jump->jump_destination();
+  assert(data == 0 || data == (intptr_t)callee(),
          "a) MT-unsafe modification of inline cache");
-  assert(jump->jump_destination() == (address)-1 || jump->jump_destination() == entry,
+  assert(destination == (address)-1 || destination == entry,
          "b) MT-unsafe modification of inline cache");
+#endif
 
   // Update stub.
   method_holder->set_data((intptr_t)callee());
@@ -115,31 +171,39 @@ void CompiledStaticCall::set_to_interpreted(methodHandle callee, address entry) 
   set_destination_mt_safe(stub);
 }
 
-void CompiledStaticCall::set_stub_to_clean(static_stub_Relocation* static_stub) {
+void CompiledDirectStaticCall::set_stub_to_clean(static_stub_Relocation* static_stub) {
   assert (CompiledIC_lock->is_locked() || SafepointSynchronize::is_at_safepoint(), "mt unsafe call");
   // Reset stub.
   address stub = static_stub->addr();
   assert(stub != NULL, "stub not found");
   // Creation also verifies the object.
   NativeMovConstReg* method_holder = nativeMovConstReg_at(stub);
-  NativeJump*        jump          = nativeJump_at(method_holder->next_instruction_address());
   method_holder->set_data(0);
-  jump->set_jump_destination((address)-1);
+  if (!static_stub->is_aot()) {
+    NativeJump* jump = nativeJump_at(method_holder->next_instruction_address());
+    jump->set_jump_destination((address)-1);
+  }
 }
+
 
 //-----------------------------------------------------------------------------
 // Non-product mode code
 #ifndef PRODUCT
 
-void CompiledStaticCall::verify() {
+void CompiledDirectStaticCall::verify() {
   // Verify call.
-  NativeCall::verify();
+  _call->verify();
   if (os::is_MP()) {
-    verify_alignment();
+    _call->verify_alignment();
   }
 
+#ifdef ASSERT
+  CodeBlob *cb = CodeCache::find_blob_unsafe((address) _call);
+  assert(cb && !cb->is_aot(), "CompiledDirectStaticCall cannot be used on AOTCompiledMethod");
+#endif
+
   // Verify stub.
-  address stub = find_stub();
+  address stub = find_stub(false /* is_aot */);
   assert(stub != NULL, "no stub found for static call");
   // Creation also verifies the object.
   NativeMovConstReg* method_holder = nativeMovConstReg_at(stub);
@@ -148,5 +212,4 @@ void CompiledStaticCall::verify() {
   // Verify state.
   assert(is_clean() || is_call_to_compiled() || is_call_to_interpreted(), "sanity check");
 }
-
 #endif // !PRODUCT

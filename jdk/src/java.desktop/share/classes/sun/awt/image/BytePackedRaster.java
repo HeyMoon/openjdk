@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,15 +24,16 @@
  */
 
 package sun.awt.image;
-import java.awt.image.Raster;
-import java.awt.image.WritableRaster;
-import java.awt.image.RasterFormatException;
-import java.awt.image.SampleModel;
-import java.awt.image.MultiPixelPackedSampleModel;
+
+import java.awt.Point;
+import java.awt.Rectangle;
 import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferByte;
-import java.awt.Rectangle;
-import java.awt.Point;
+import java.awt.image.MultiPixelPackedSampleModel;
+import java.awt.image.Raster;
+import java.awt.image.RasterFormatException;
+import java.awt.image.SampleModel;
+import java.awt.image.WritableRaster;
 
 /**
  * This class is useful for describing 1, 2, or 4 bit image data
@@ -73,7 +74,7 @@ public class BytePackedRaster extends SunWritableRaster {
     /** A cached copy of minY + height for use in bounds checks. */
     private int maxY;
 
-    static private native void initIDs();
+    private static native void initIDs();
     static {
         /* ensure that the necessary native libraries are loaded */
         NativeLibLoader.loadLibraries();
@@ -89,10 +90,9 @@ public class BytePackedRaster extends SunWritableRaster {
      * @param sampleModel     The SampleModel that specifies the layout.
      * @param origin          The Point that specified the origin.
      */
-    public BytePackedRaster(SampleModel sampleModel,
-                            Point origin) {
+    public BytePackedRaster(SampleModel sampleModel, Point origin) {
         this(sampleModel,
-             sampleModel.createDataBuffer(),
+             (DataBufferByte) sampleModel.createDataBuffer(),
              new Rectangle(origin.x,
                            origin.y,
                            sampleModel.getWidth(),
@@ -108,12 +108,13 @@ public class BytePackedRaster extends SunWritableRaster {
      * initialized and must be a DataBufferByte compatible with SampleModel.
      * SampleModel must be of type MultiPixelPackedSampleModel.
      * @param sampleModel     The SampleModel that specifies the layout.
-     * @param dataBuffer      The DataBufferShort that contains the image data.
+     * @param dataBuffer      The DataBufferByte that contains the image data.
      * @param origin          The Point that specifies the origin.
      */
     public BytePackedRaster(SampleModel sampleModel,
-                            DataBuffer dataBuffer,
-                            Point origin) {
+                            DataBufferByte dataBuffer,
+                            Point origin)
+    {
         this(sampleModel,
              dataBuffer,
              new Rectangle(origin.x,
@@ -137,7 +138,7 @@ public class BytePackedRaster extends SunWritableRaster {
      * Note that this constructor should generally be called by other
      * constructors or create methods, it should not be used directly.
      * @param sampleModel     The SampleModel that specifies the layout.
-     * @param dataBuffer      The DataBufferShort that contains the image data.
+     * @param dataBuffer      The DataBufferByte that contains the image data.
      * @param aRegion         The Rectangle that specifies the image area.
      * @param origin          The Point that specifies the origin.
      * @param parent          The parent (if any) of this raster.
@@ -146,26 +147,22 @@ public class BytePackedRaster extends SunWritableRaster {
      * to requirements of this Raster type.
      */
     public BytePackedRaster(SampleModel sampleModel,
-                            DataBuffer dataBuffer,
+                            DataBufferByte dataBuffer,
                             Rectangle aRegion,
                             Point origin,
-                            BytePackedRaster parent){
+                            BytePackedRaster parent)
+    {
         super(sampleModel,dataBuffer,aRegion,origin, parent);
         this.maxX = minX + width;
         this.maxY = minY + height;
 
-        if (!(dataBuffer instanceof DataBufferByte)) {
-           throw new RasterFormatException("BytePackedRasters must have" +
-                "byte DataBuffers");
-        }
-        DataBufferByte dbb = (DataBufferByte)dataBuffer;
-        this.data = stealData(dbb, 0);
-        if (dbb.getNumBanks() != 1) {
+        this.data = stealData(dataBuffer, 0);
+        if (dataBuffer.getNumBanks() != 1) {
             throw new
                 RasterFormatException("DataBuffer for BytePackedRasters"+
                                       " must only have 1 bank.");
         }
-        int dbOffset = dbb.getOffset();
+        int dbOffset = dataBuffer.getOffset();
 
         if (sampleModel instanceof MultiPixelPackedSampleModel) {
             MultiPixelPackedSampleModel mppsm =
@@ -1322,7 +1319,7 @@ public class BytePackedRaster extends SunWritableRaster {
         int deltaY = y0 - y;
 
         return new BytePackedRaster(sm,
-                                    dataBuffer,
+                                    (DataBufferByte) dataBuffer,
                                     new Rectangle(x0, y0, width, height),
                                     new Point(sampleModelTranslateX+deltaX,
                                               sampleModelTranslateY+deltaY),

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #
-# Copyright (c) 2009, 2013 Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2009, 2013, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@
 #  @author dcubed (based on the test program posted to the following
 #  Eclipse thread https://bugs.eclipse.org/bugs/show_bug.cgi?id=279137)
 #
+#  @key intermittent
 #  @run shell BreakpointWithFullGC.sh
 
 compileOptions=-g
@@ -120,7 +121,8 @@ jdbFailIfNotPresent 'System\..*bottom of loop'
 jdbFailIfNotPresent 'System\..*end of test'
 
 # make sure we had at least one full GC
-debuggeeFailIfNotPresent 'Full GC'
+# Prior to JDK9-B95, the pattern was 'Full GC'
+debuggeeMatchRegexp '^.*?\bPause Full\b\(System.gc\(\)\)\b.*?$'
 
 # check for error message due to thread ID change
 debuggeeFailIfPresent \

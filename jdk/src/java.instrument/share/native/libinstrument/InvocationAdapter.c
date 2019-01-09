@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2008, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -106,7 +106,7 @@ getBooleanAttribute(const jarAttribute* attributes, const char* name) {
  * convert them to JVM TI capabilities.
  */
 void
-convertCapabilityAtrributes(const jarAttribute* attributes, JPLISAgent* agent) {
+convertCapabilityAttributes(const jarAttribute* attributes, JPLISAgent* agent) {
     /* set redefineClasses capability */
     if (getBooleanAttribute(attributes, "Can-Redefine-Classes")) {
         addRedefineClassesCapability(agent);
@@ -141,7 +141,7 @@ convertCapabilityAtrributes(const jarAttribute* attributes, JPLISAgent* agent) {
  *  to create boot class path segments to append to the boot class path.
  */
 JNIEXPORT jint JNICALL
-Agent_OnLoad(JavaVM *vm, char *tail, void * reserved) {
+DEF_Agent_OnLoad(JavaVM *vm, char *tail, void * reserved) {
     JPLISInitializationError initerror  = JPLIS_INIT_ERROR_NONE;
     jint                     result     = JNI_OK;
     JPLISAgent *             agent      = NULL;
@@ -190,10 +190,8 @@ Agent_OnLoad(JavaVM *vm, char *tail, void * reserved) {
             return JNI_ERR;
         }
 
-        /*
-         * Add to the jarfile
-         */
-        appendClassPath(agent, jarfile);
+        /* Save the jarfile name */
+        agent->mJarfile = jarfile;
 
         /*
          * The value of the Premain-Class attribute becomes the agent
@@ -231,7 +229,7 @@ Agent_OnLoad(JavaVM *vm, char *tail, void * reserved) {
         /*
          * Convert JAR attributes into agent capabilities
          */
-        convertCapabilityAtrributes(attributes, agent);
+        convertCapabilityAttributes(attributes, agent);
 
         /*
          * Track (record) the agent class name and options data
@@ -241,7 +239,6 @@ Agent_OnLoad(JavaVM *vm, char *tail, void * reserved) {
         /*
          * Clean-up
          */
-        free(jarfile);
         if (options != NULL) free(options);
         freeAttributes(attributes);
         free(premainClass);
@@ -290,7 +287,7 @@ Agent_OnLoad(JavaVM *vm, char *tail, void * reserved) {
  *  the JPLIS library.
  */
 JNIEXPORT jint JNICALL
-Agent_OnAttach(JavaVM* vm, char *args, void * reserved) {
+DEF_Agent_OnAttach(JavaVM* vm, char *args, void * reserved) {
     JPLISInitializationError initerror  = JPLIS_INIT_ERROR_NONE;
     jint                     result     = JNI_OK;
     JPLISAgent *             agent      = NULL;
@@ -389,7 +386,7 @@ Agent_OnAttach(JavaVM* vm, char *args, void * reserved) {
         /*
          * Convert JAR attributes into agent capabilities
          */
-        convertCapabilityAtrributes(attributes, agent);
+        convertCapabilityAttributes(attributes, agent);
 
         /*
          * Create the java.lang.instrument.Instrumentation instance
@@ -435,9 +432,112 @@ Agent_OnAttach(JavaVM* vm, char *args, void * reserved) {
 
 
 JNIEXPORT void JNICALL
-Agent_OnUnload(JavaVM *vm) {
+DEF_Agent_OnUnload(JavaVM *vm) {
 }
 
+/**
+ * Invoked by the java launcher to load an agent in the main executable JAR.
+ * The Launcher-Agent-Class attribute in the main manifest of the JAR file
+ * is the agent class.
+ *
+ * Returns JNI_OK if the agent is loaded and initialized; JNI_ERR if this
+ * function fails, possibly with a pending exception.
+ */
+jint loadAgent(JNIEnv* env, jstring path) {
+    JavaVM* vm;
+    JPLISAgent* agent;
+    const char* jarfile = NULL;
+    jarAttribute* attributes = NULL;
+    char* agentClass = NULL;
+    char* bootClassPath;
+    int oldLen, newLen;
+    jint result = JNI_ERR;
+
+    if ((*env)->GetJavaVM(env, &vm) < 0) {
+        return JNI_ERR;
+    }
+
+    // create JPLISAgent with JVMTI environment
+    if (createNewJPLISAgent(vm, &agent) != JPLIS_INIT_ERROR_NONE) {
+        return JNI_ERR;
+    }
+
+    // get path to JAR file as UTF-8 string
+    jarfile = (*env)->GetStringUTFChars(env, path, NULL);
+    if (jarfile == NULL) {
+        return JNI_ERR;
+    }
+
+    // read the attributes in the main section of JAR manifest
+    attributes = readAttributes(jarfile);
+    if (attributes == NULL) {
+        goto releaseAndReturn;
+    }
+
+    // Launcher-Agent-Class is required
+    agentClass = getAttribute(attributes, "Launcher-Agent-Class");
+    if (agentClass == NULL) {
+        goto releaseAndReturn;
+    }
+
+    // The value of Launcher-Agent-Class is in UTF-8, convert it to modified UTF-8
+    oldLen = (int) strlen(agentClass);
+    newLen = modifiedUtf8LengthOfUtf8(agentClass, oldLen);
+    if (newLen == oldLen) {
+        agentClass = strdup(agentClass);
+    } else {
+        char* str = (char*) malloc(newLen + 1);
+        if (str != NULL) {
+            convertUtf8ToModifiedUtf8(agentClass, oldLen, str, newLen);
+        }
+        agentClass = str;
+    }
+    if (agentClass == NULL) {
+         jthrowable oome = createThrowable(env, "java/lang/OutOfMemoryError", NULL);
+         if (oome != NULL) (*env)->Throw(env, oome);
+         goto releaseAndReturn;
+    }
+
+    // Boot-Class-Path
+    bootClassPath = getAttribute(attributes, "Boot-Class-Path");
+    if (bootClassPath != NULL) {
+        appendBootClassPath(agent, jarfile, bootClassPath);
+    }
+
+    // Can-XXXX capabilities
+    convertCapabilityAttributes(attributes, agent);
+
+    // Create the java.lang.instrument.Instrumentation object
+    if (!createInstrumentationImpl(env, agent)) {
+        goto releaseAndReturn;
+    }
+
+    // Enable the ClassFileLoadHook
+    if (!setLivePhaseEventHandlers(agent)) {
+        goto releaseAndReturn;
+    }
+
+    // invoke the agentmain method
+    if (!startJavaAgent(agent, env, agentClass, "", agent->mAgentmainCaller)) {
+        goto releaseAndReturn;
+    }
+
+    // initialization complete
+    result = JNI_OK;
+
+    releaseAndReturn:
+        if (agentClass != NULL) {
+            free(agentClass);
+        }
+        if (attributes != NULL) {
+            freeAttributes(attributes);
+        }
+        if (jarfile != NULL) {
+            (*env)->ReleaseStringUTFChars(env, path, jarfile);
+        }
+
+    return result;
+}
 
 /*
  *  JVMTI callback support
@@ -459,7 +559,23 @@ eventHandlerVMInit( jvmtiEnv *      jvmtienv,
 
     /* process the premain calls on the all the JPL agents */
     if ( environment != NULL ) {
-        jthrowable outstandingException = preserveThrowable(jnienv);
+        jthrowable outstandingException = NULL;
+        /*
+         * Add the jarfile to the system class path
+         */
+        JPLISAgent * agent = environment->mAgent;
+        if (appendClassPath(agent, agent->mJarfile)) {
+            fprintf(stderr, "Unable to add %s to system class path - "
+                    "the system class loader does not define the "
+                    "appendToClassPathForInstrumentation method or the method failed\n",
+                    agent->mJarfile);
+            free((void *)agent->mJarfile);
+            abortJVM(jnienv, JPLIS_ERRORMESSAGE_CANNOTSTART);
+        }
+        free((void *)agent->mJarfile);
+        agent->mJarfile = NULL;
+
+        outstandingException = preserveThrowable(jnienv);
         success = processJavaStart( environment->mAgent,
                                     jnienv);
         restoreThrowable(jnienv, outstandingException);
@@ -518,18 +634,22 @@ static void
 splitPathList(const char* str, int* pathCount, char*** paths) {
     int count = 0;
     char** segments = NULL;
+    char** new_segments;
     char* c = (char*) str;
     while (*c != '\0') {
         while (*c == ' ') c++;          /* skip leading spaces */
         if (*c == '\0') {
             break;
         }
-        if (segments == NULL) {
-            segments = (char**)malloc( sizeof(char**) );
-        } else {
-            segments = (char**)realloc( segments, (count+1)*sizeof(char**) );
+        new_segments = (char**)realloc(segments, (count+1)*sizeof(char*));
+        if (new_segments == NULL) {
+            jplis_assert(0);
+            free(segments);
+            count = 0;
+            segments = NULL;
+            break;
         }
-        jplis_assert(segments != (char**)NULL);
+        segments = new_segments;
         segments[count++] = c;
         c = strchr(c, ' ');
         if (c == NULL) {
@@ -627,32 +747,19 @@ appendClassPath( JPLISAgent* agent,
     jvmtierr = (*jvmtienv)->AddToSystemClassLoaderSearch(jvmtienv, jarfile);
     check_phase_ret_1(jvmtierr);
 
-    if (jvmtierr == JVMTI_ERROR_NONE) {
-        return 0;
-    } else {
-        jvmtiPhase phase;
-        jvmtiError err;
-
-        err = (*jvmtienv)->GetPhase(jvmtienv, &phase);
-        /* can be called from any phase */
-        jplis_assert(err == JVMTI_ERROR_NONE);
-
-        if (phase == JVMTI_PHASE_LIVE) {
-            switch (jvmtierr) {
-                case JVMTI_ERROR_CLASS_LOADER_UNSUPPORTED :
-                    fprintf(stderr, "System class loader does not support adding "
-                        "JAR file to system class path during the live phase!\n");
-                        break;
-                default:
-                    fprintf(stderr, "Unexpected error (%d) returned by "
-                        "AddToSystemClassLoaderSearch\n", jvmtierr);
-                    break;
-            }
-            return -1;
-        }
-        jplis_assert(0);
+    switch (jvmtierr) {
+        case JVMTI_ERROR_NONE :
+            return 0;
+        case JVMTI_ERROR_CLASS_LOADER_UNSUPPORTED :
+            fprintf(stderr, "System class loader does not define "
+                "the appendToClassPathForInstrumentation method\n");
+            break;
+        default:
+            fprintf(stderr, "Unexpected error (%d) returned by "
+                "AddToSystemClassLoaderSearch\n", jvmtierr);
+            break;
     }
-    return -2;
+    return -1;
 }
 
 

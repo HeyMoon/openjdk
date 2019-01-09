@@ -1,6 +1,5 @@
 /*
- * reserved comment block
- * DO NOT REMOVE OR ALTER!
+ * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
  */
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
@@ -23,7 +22,7 @@
 package com.sun.org.apache.xml.internal.serialize;
 
 
-import java.util.Hashtable;
+import java.util.Map;
 
 
 /**
@@ -32,7 +31,7 @@ import java.util.Hashtable;
  * @author <a href="mailto:arkin@intalio.com">Assaf Arkin</a>
  * @see BaseMarkupSerializer
  *
- * @deprecated As of JDK 1.9, Xerces 2.9.0, Xerces DOM L3 Serializer implementation
+ * @deprecated As of JDK 9, Xerces 2.9.0, Xerces DOM L3 Serializer implementation
  * is replaced by that of Xalan. Main class
  * {@link com.sun.org.apache.xml.internal.serialize.DOMSerializerImpl} is replaced
  * by {@link com.sun.org.apache.xml.internal.serializer.dom3.LSSerializerImpl}.
@@ -107,7 +106,7 @@ public class ElementState
     /**
      * Association between namespace URIs (keys) and prefixes (values).
      */
-    public Hashtable prefixes;
+    public Map<String, String> prefixes;
 
 
 }

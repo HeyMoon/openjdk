@@ -26,6 +26,8 @@
 package sun.management;
 
 import java.lang.management.*;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import javax.management.InstanceAlreadyExistsException;
 import javax.management.InstanceNotFoundException;
 import javax.management.MBeanServer;
@@ -36,9 +38,19 @@ import javax.management.RuntimeOperationsException;
 import java.security.AccessController;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
-import sun.util.logging.LoggingSupport;
+
+import jdk.internal.misc.JavaNioAccess;
+import jdk.internal.misc.SharedSecrets;
+
 import java.util.ArrayList;
 import java.util.List;
+
+import java.lang.reflect.UndeclaredThrowableException;
+import java.security.PrivilegedAction;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * ManagementFactoryHelper provides static factory methods to create
@@ -48,7 +60,7 @@ public class ManagementFactoryHelper {
     static {
         // make sure that the management lib is loaded within
         // java.lang.management.ManagementFactory
-        sun.misc.Unsafe.getUnsafe().ensureClassInitialized(ManagementFactory.class);
+        jdk.internal.misc.Unsafe.getUnsafe().ensureClassInitialized(ManagementFactory.class);
     }
 
     private static final VMManagement jvm = new VMManagementImpl();
@@ -59,6 +71,7 @@ public class ManagementFactoryHelper {
         return jvm;
     }
 
+    static final String LOGGING_MXBEAN_NAME = "java.util.logging:type=Logging";
     private static ClassLoadingImpl    classMBean = null;
     private static MemoryImpl          memoryMBean = null;
     private static ThreadImpl          threadMBean = null;
@@ -138,34 +151,137 @@ public class ManagementFactoryHelper {
     }
 
     public static PlatformLoggingMXBean getPlatformLoggingMXBean() {
-        if (LoggingSupport.isAvailable()) {
-            return PlatformLoggingImpl.instance;
+        if (LoggingMXBeanAccess.isAvailable()) {
+            return PlatformLoggingImpl.MBEAN;
         } else {
             return null;
         }
     }
 
-    /**
-     * The logging MXBean object is an instance of
-     * PlatformLoggingMXBean and java.util.logging.LoggingMXBean
-     * but it can't directly implement two MXBean interfaces
-     * as a compliant MXBean implements exactly one MXBean interface,
-     * or if it implements one interface that is a subinterface of
-     * all the others; otherwise, it is a non-compliant MXBean
-     * and MBeanServer will throw NotCompliantMBeanException.
-     * See the Definition of an MXBean section in javax.management.MXBean spec.
-     *
-     * To create a compliant logging MXBean, define a LoggingMXBean interface
-     * that extend PlatformLoggingMXBean and j.u.l.LoggingMXBean
-    */
-    public interface LoggingMXBean
-        extends PlatformLoggingMXBean, java.util.logging.LoggingMXBean {
+    public static boolean isPlatformLoggingMXBeanAvailable() {
+        return LoggingMXBeanAccess.isAvailable();
     }
 
-    static class PlatformLoggingImpl implements LoggingMXBean
-    {
-        final static PlatformLoggingMXBean instance = new PlatformLoggingImpl();
-        final static String LOGGING_MXBEAN_NAME = "java.util.logging:type=Logging";
+    // The LoggingMXBeanAccess class uses reflection to determine
+    // whether java.util.logging is present, and load the actual LoggingMXBean
+    // implementation.
+    //
+    static final class LoggingMXBeanAccess {
+
+        final static String LOG_MANAGER_CLASS_NAME = "java.util.logging.LogManager";
+        final static String LOGGING_MXBEAN_CLASS_NAME = "java.util.logging.LoggingMXBean";
+        final static Class<?> LOG_MANAGER_CLASS = loadLoggingClass(LOG_MANAGER_CLASS_NAME);
+
+        static boolean isAvailable() {
+            return LOG_MANAGER_CLASS != null;
+        }
+
+        private static Class<?> loadLoggingClass(String className) {
+            return AccessController.doPrivileged(new PrivilegedAction<>() {
+                @Override
+                public Class<?> run() {
+                    Optional<Module> logging = ModuleLayer.boot().findModule("java.logging");
+                    if (logging.isPresent()) {
+                        return Class.forName(logging.get(), className);
+                    }
+                    return null;
+                }
+            });
+        }
+
+        private Map<String, Method> initMethodMap(Object impl) {
+            if (impl == null) {
+                return Collections.emptyMap();
+            }
+            Class<?> intfClass = loadLoggingClass(LOGGING_MXBEAN_CLASS_NAME);
+            final Map<String, Method> methodsMap = new HashMap<>();
+            for (Method m : intfClass.getMethods()) {
+                try {
+                    // Sanity checking: all public methods present in
+                    // java.util.logging.LoggingMXBean should
+                    // also be in PlatformLoggingMXBean
+                    Method specMethod = PlatformLoggingMXBean.class
+                             .getMethod(m.getName(), m.getParameterTypes());
+                    if (specMethod.getReturnType().isAssignableFrom(m.getReturnType())) {
+                        if (methodsMap.putIfAbsent(m.getName(), m) != null) {
+                            throw new RuntimeException("unexpected polymorphic method: "
+                                     + m.getName());
+                        }
+                    }
+                } catch (NoSuchMethodException x) {
+                    // All methods in java.util.logging.LoggingMXBean should
+                    // also be in PlatformLoggingMXBean
+                    throw new InternalError(x);
+                }
+            }
+            return Collections.unmodifiableMap(methodsMap);
+        }
+
+        private static Object getMXBeanImplementation() {
+            if (!isAvailable()) {
+                // should not happen
+                throw new NoClassDefFoundError(LOG_MANAGER_CLASS_NAME);
+            }
+            try {
+                final Method m = LOG_MANAGER_CLASS.getMethod("getLoggingMXBean");
+                return m.invoke(null);
+            } catch (NoSuchMethodException
+                    | IllegalAccessException
+                    | InvocationTargetException x) {
+                throw new ExceptionInInitializerError(x);
+            }
+         }
+
+        // The implementation object, which will be invoked through
+        // reflection. The implementation does not need to implement
+        // PlatformLoggingMXBean, but must declare the same methods
+        // with same signatures, and they must be public, with one
+        // exception:
+        // getObjectName will not be called on the implementation object,
+        // so the implementation object does not need to declare such
+        // a method.
+        final Object impl = getMXBeanImplementation();
+        final Map<String, Method> methods = initMethodMap(impl);
+
+        LoggingMXBeanAccess() {
+        }
+
+        <T> T invoke(String methodName, Object... args) {
+            Method m = methods.get(methodName);
+            if (m == null) {
+                throw new UnsupportedOperationException(methodName);
+            }
+            try {
+                @SuppressWarnings("unchecked")
+                T result = (T) m.invoke(impl, args);
+                return result;
+            } catch (IllegalAccessException ex) {
+                throw new UnsupportedOperationException(ex);
+            } catch (InvocationTargetException ex) {
+                throw unwrap(ex);
+            }
+        }
+
+        private static RuntimeException unwrap(InvocationTargetException x) {
+            Throwable t = x.getCause();
+            if (t instanceof RuntimeException) {
+                return (RuntimeException)t;
+            }
+            if (t instanceof Error) {
+                throw (Error)t;
+            }
+            return new UndeclaredThrowableException(t == null ? x : t);
+        }
+
+
+    }
+
+    static final class PlatformLoggingImpl implements PlatformLoggingMXBean {
+
+        private final LoggingMXBeanAccess loggingAccess;
+        private PlatformLoggingImpl(LoggingMXBeanAccess loggingAccess) {
+            this.loggingAccess = loggingAccess;
+        }
 
         private volatile ObjectName objname;  // created lazily
         @Override
@@ -185,30 +301,36 @@ public class ManagementFactoryHelper {
 
         @Override
         public java.util.List<String> getLoggerNames() {
-            return LoggingSupport.getLoggerNames();
+            return loggingAccess.invoke("getLoggerNames");
         }
 
         @Override
         public String getLoggerLevel(String loggerName) {
-            return LoggingSupport.getLoggerLevel(loggerName);
+            return loggingAccess.invoke("getLoggerLevel", loggerName);
         }
 
         @Override
         public void setLoggerLevel(String loggerName, String levelName) {
-            LoggingSupport.setLoggerLevel(loggerName, levelName);
+            loggingAccess.invoke("setLoggerLevel", loggerName, levelName);
         }
 
         @Override
         public String getParentLoggerName(String loggerName) {
-            return LoggingSupport.getParentLoggerName(loggerName);
+            return loggingAccess.invoke("getParentLoggerName", loggerName);
         }
+
+        private static PlatformLoggingImpl getInstance() {
+            return new PlatformLoggingImpl(new LoggingMXBeanAccess());
+         }
+
+        static final PlatformLoggingMXBean MBEAN = getInstance();
     }
 
     private static List<BufferPoolMXBean> bufferPools = null;
     public static synchronized List<BufferPoolMXBean> getBufferPoolMXBeans() {
         if (bufferPools == null) {
             bufferPools = new ArrayList<>(2);
-            bufferPools.add(createBufferPoolMXBean(sun.misc.SharedSecrets.getJavaNioAccess()
+            bufferPools.add(createBufferPoolMXBean(SharedSecrets.getJavaNioAccess()
                 .getDirectBufferPool()));
             bufferPools.add(createBufferPoolMXBean(sun.nio.ch.FileChannelImpl
                 .getMappedBufferPool()));
@@ -222,7 +344,7 @@ public class ManagementFactoryHelper {
      * Creates management interface for the given buffer pool.
      */
     private static BufferPoolMXBean
-        createBufferPoolMXBean(final sun.misc.JavaNioAccess.BufferPool pool)
+        createBufferPoolMXBean(final JavaNioAccess.BufferPool pool)
     {
         return new BufferPoolMXBean() {
             private volatile ObjectName objname;  // created lazily
@@ -426,7 +548,7 @@ public class ManagementFactoryHelper {
     public static Thread.State toThreadState(int state) {
         // suspended and native bits may be set in state
         int threadStatus = state & ~JMM_THREAD_STATE_FLAG_MASK;
-        return sun.misc.VM.toThreadState(threadStatus);
+        return jdk.internal.misc.VM.toThreadState(threadStatus);
     }
 
     // These values are defined in jmm.h

@@ -48,7 +48,7 @@ import sun.security.krb5.internal.util.KerberosString;
 /**
  * Implements the ASN.1 KRBError type.
  *
- * <xmp>
+ * <pre>{@code
  * KRB-ERROR       ::= [APPLICATION 30] SEQUENCE {
  *         pvno            [0] INTEGER (5),
  *         msg-type        [1] INTEGER (30),
@@ -71,7 +71,7 @@ import sun.security.krb5.internal.util.KerberosString;
  *         data-type       [0] Int32,
  *         data-value      [1] OCTET STRING OPTIONAL
  * }
- * </xmp>
+ * }</pre>
  *
  * <p>
  * This definition reflects the Network Working Group RFC 4120
@@ -227,7 +227,7 @@ public class KRBError implements java.io.Serializable {
             } catch (Exception e) {
                 if (DEBUG) {
                     System.out.println("Unable to parse eData field of KRB-ERROR:\n" +
-                            new sun.misc.HexDumpEncoder().encodeBuffer(data));
+                            new sun.security.util.HexDumpEncoder().encodeBuffer(data));
                 }
                 IOException ioe = new IOException(
                         "Unable to parse eData field of KRB-ERROR");
@@ -237,7 +237,7 @@ public class KRBError implements java.io.Serializable {
         } else {
             if (DEBUG) {
                 System.out.println("Unknown eData field of KRB-ERROR:\n" +
-                        new sun.misc.HexDumpEncoder().encodeBuffer(data));
+                        new sun.security.util.HexDumpEncoder().encodeBuffer(data));
             }
         }
     }

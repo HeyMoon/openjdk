@@ -52,7 +52,7 @@ uint AddNode::hash() const {
 
 //------------------------------Identity---------------------------------------
 // If either input is a constant 0, return the other input.
-Node *AddNode::Identity( PhaseTransform *phase ) {
+Node* AddNode::Identity(PhaseGVN* phase) {
   const Type *zero = add_id();  // The additive identity
   if( phase->type( in(1) )->higher_equal( zero ) ) return in(2);
   if( phase->type( in(2) )->higher_equal( zero ) ) return in(1);
@@ -61,7 +61,7 @@ Node *AddNode::Identity( PhaseTransform *phase ) {
 
 //------------------------------commute----------------------------------------
 // Commute operands to move loads and constants to the right.
-static bool commute( Node *add, int con_left, int con_right ) {
+static bool commute(Node *add, bool con_left, bool con_right) {
   Node *in1 = add->in(1);
   Node *in2 = add->in(2);
 
@@ -110,8 +110,8 @@ static bool commute( Node *add, int con_left, int con_right ) {
 Node *AddNode::Ideal(PhaseGVN *phase, bool can_reshape) {
   const Type *t1 = phase->type( in(1) );
   const Type *t2 = phase->type( in(2) );
-  int con_left  = t1->singleton();
-  int con_right = t2->singleton();
+  bool con_left  = t1->singleton();
+  bool con_right = t2->singleton();
 
   // Check for commutative operation desired
   if( commute(this,con_left,con_right) ) return this;
@@ -204,7 +204,7 @@ Node *AddNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 //------------------------------Value-----------------------------------------
 // An add node sums it's two _in.  If one input is an RSD, we must mixin
 // the other input's symbols.
-const Type *AddNode::Value( PhaseTransform *phase ) const {
+const Type* AddNode::Value(PhaseGVN* phase) const {
   // Either input is TOP ==> the result is TOP
   const Type *t1 = phase->type( in(1) );
   const Type *t2 = phase->type( in(2) );
@@ -326,7 +326,7 @@ Node *AddINode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
 //------------------------------Identity---------------------------------------
 // Fold (x-y)+y  OR  y+(x-y)  into  x
-Node *AddINode::Identity( PhaseTransform *phase ) {
+Node* AddINode::Identity(PhaseGVN* phase) {
   if( in(1)->Opcode() == Op_SubI && phase->eqv(in(1)->in(2),in(2)) ) {
     return in(1)->in(1);
   }
@@ -344,8 +344,8 @@ Node *AddINode::Identity( PhaseTransform *phase ) {
 const Type *AddINode::add_ring( const Type *t0, const Type *t1 ) const {
   const TypeInt *r0 = t0->is_int(); // Handy access
   const TypeInt *r1 = t1->is_int();
-  int lo = r0->_lo + r1->_lo;
-  int hi = r0->_hi + r1->_hi;
+  int lo = java_add(r0->_lo, r1->_lo);
+  int hi = java_add(r0->_hi, r1->_hi);
   if( !(r0->is_con() && r1->is_con()) ) {
     // Not both constants, compute approximate result
     if( (r0->_lo & r1->_lo) < 0 && lo >= 0 ) {
@@ -443,7 +443,7 @@ Node *AddLNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
 //------------------------------Identity---------------------------------------
 // Fold (x-y)+y  OR  y+(x-y)  into  x
-Node *AddLNode::Identity( PhaseTransform *phase ) {
+Node* AddLNode::Identity(PhaseGVN* phase) {
   if( in(1)->Opcode() == Op_SubL && phase->eqv(in(1)->in(2),in(2)) ) {
     return in(1)->in(1);
   }
@@ -461,8 +461,8 @@ Node *AddLNode::Identity( PhaseTransform *phase ) {
 const Type *AddLNode::add_ring( const Type *t0, const Type *t1 ) const {
   const TypeLong *r0 = t0->is_long(); // Handy access
   const TypeLong *r1 = t1->is_long();
-  jlong lo = r0->_lo + r1->_lo;
-  jlong hi = r0->_hi + r1->_hi;
+  jlong lo = java_add(r0->_lo, r1->_lo);
+  jlong hi = java_add(r0->_hi, r1->_hi);
   if( !(r0->is_con() && r1->is_con()) ) {
     // Not both constants, compute approximate result
     if( (r0->_lo & r1->_lo) < 0 && lo >= 0 ) {
@@ -561,7 +561,7 @@ Node *AddDNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 //=============================================================================
 //------------------------------Identity---------------------------------------
 // If one input is a constant 0, return the other input.
-Node *AddPNode::Identity( PhaseTransform *phase ) {
+Node* AddPNode::Identity(PhaseGVN* phase) {
   return ( phase->type( in(Offset) )->higher_equal( TypeX_ZERO ) ) ? in(Address) : this;
 }
 
@@ -659,7 +659,7 @@ const Type *AddPNode::bottom_type() const {
 }
 
 //------------------------------Value------------------------------------------
-const Type *AddPNode::Value( PhaseTransform *phase ) const {
+const Type* AddPNode::Value(PhaseGVN* phase) const {
   // Either input is TOP ==> the result is TOP
   const Type *t1 = phase->type( in(Address) );
   const Type *t2 = phase->type( in(Offset) );
@@ -733,7 +733,7 @@ uint AddPNode::match_edge(uint idx) const {
 
 //=============================================================================
 //------------------------------Identity---------------------------------------
-Node *OrINode::Identity( PhaseTransform *phase ) {
+Node* OrINode::Identity(PhaseGVN* phase) {
   // x | x => x
   if (phase->eqv(in(1), in(2))) {
     return in(1);
@@ -774,7 +774,7 @@ const Type *OrINode::add_ring( const Type *t0, const Type *t1 ) const {
 
 //=============================================================================
 //------------------------------Identity---------------------------------------
-Node *OrLNode::Identity( PhaseTransform *phase ) {
+Node* OrLNode::Identity(PhaseGVN* phase) {
   // x | x => x
   if (phase->eqv(in(1), in(2))) {
     return in(1);

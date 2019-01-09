@@ -29,7 +29,6 @@ import java.awt.peer.FileDialogPeer;
 import java.io.File;
 import java.io.FilenameFilter;
 import sun.awt.AWTAccessor;
-import sun.misc.ManagedLocalsThread;
 
 /**
  * FileDialogPeer for the GtkFileChooser.
@@ -42,6 +41,8 @@ final class GtkFileDialogPeer extends XDialogPeer implements FileDialogPeer {
 
     // A pointer to the native GTK FileChooser widget
     private volatile long widget = 0L;
+    private long standaloneWindow;
+    private volatile boolean quit;
 
     GtkFileDialogPeer(FileDialog fd) {
         super(fd);
@@ -111,12 +112,14 @@ final class GtkFileDialogPeer extends XDialogPeer implements FileDialogPeer {
     public void setVisible(boolean b) {
         XToolkit.awtLock();
         try {
+            quit = !b;
             if (b) {
                 Runnable task = () -> {
                     showNativeDialog();
+                    standaloneWindow = 0;
                     fd.setVisible(false);
                 };
-                new ManagedLocalsThread(task).start();
+                new Thread(null, task, "ShowDialog", 0, false).start();
             } else {
                 quit();
                 fd.setVisible(false);
@@ -128,7 +131,14 @@ final class GtkFileDialogPeer extends XDialogPeer implements FileDialogPeer {
 
     @Override
     public void dispose() {
-        quit();
+        XToolkit.awtLock();
+        try {
+            quit = true;
+            quit();
+        }
+        finally {
+            XToolkit.awtUnlock();
+        }
         super.dispose();
     }
 
@@ -142,6 +152,17 @@ final class GtkFileDialogPeer extends XDialogPeer implements FileDialogPeer {
     public void setFile(String file) {
         // We do not implement this method because we
         // have delegated to FileDialog#setFile
+    }
+
+    protected void requestXFocus(long time, boolean timeProvided) {
+        if(standaloneWindow == 0) {
+            super.requestXFocus(time, timeProvided);
+            return;
+        }
+        XNETProtocol net_protocol = XWM.getWM().getNETProtocol();
+        if (net_protocol != null) {
+            net_protocol.setActiveWindow(standaloneWindow);
+        }
     }
 
     @Override
@@ -170,7 +191,21 @@ final class GtkFileDialogPeer extends XDialogPeer implements FileDialogPeer {
                 dirname = file.getParent();
             }
         }
-        run(fd.getTitle(), fd.getMode(), dirname, filename,
-            fd.getFilenameFilter(), fd.isMultipleMode(), fd.getX(), fd.getY());
+        if (!quit) {
+            run(fd.getTitle(), fd.getMode(), dirname, filename,
+                    fd.getFilenameFilter(), fd.isMultipleMode(), fd.getX(), fd.getY());
+        }
+    }
+
+    /**
+     * Called by native code when GTK dialog is created.
+     */
+    boolean setWindow(long xid) {
+        if (!quit && widget != 0) {
+            standaloneWindow = xid;
+            requestXFocus();
+            return true;
+        }
+        return false;
     }
 }

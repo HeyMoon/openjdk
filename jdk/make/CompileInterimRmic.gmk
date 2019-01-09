@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -44,8 +44,9 @@ RMIC_PKGS := \
 $(eval $(call SetupJavaCompilation,BUILD_INTERIM_RMIC, \
     SETUP := GENERATE_OLDBYTECODE, \
     SRC := $(JDK_TOPDIR)/src/jdk.rmic/share/classes, \
+    EXCLUDE_FILES := module-info.java, \
     INCLUDES := $(RMIC_PKGS), \
-    BIN := $(BUILDTOOLS_OUTPUTDIR)/interim_rmic_classes, \
+    BIN := $(BUILDTOOLS_OUTPUTDIR)/override_modules/jdk.rmic, \
     COPY := .properties))
 
 ##########################################################################################

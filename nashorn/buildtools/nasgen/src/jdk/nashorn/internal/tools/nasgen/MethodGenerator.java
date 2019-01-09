@@ -77,6 +77,7 @@ import static jdk.internal.org.objectweb.asm.Opcodes.SASTORE;
 import static jdk.internal.org.objectweb.asm.Opcodes.SIPUSH;
 import static jdk.internal.org.objectweb.asm.Opcodes.SWAP;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.INIT;
+import static jdk.nashorn.internal.tools.nasgen.StringConstants.OBJ_ANNO_PKG;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.SPECIALIZATION_INIT2;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.SPECIALIZATION_INIT3;
 import static jdk.nashorn.internal.tools.nasgen.StringConstants.SPECIALIZATION_TYPE;
@@ -85,7 +86,6 @@ import java.util.List;
 import jdk.internal.org.objectweb.asm.Handle;
 import jdk.internal.org.objectweb.asm.MethodVisitor;
 import jdk.internal.org.objectweb.asm.Type;
-import jdk.nashorn.internal.objects.annotations.SpecializedFunction.LinkLogic;
 
 /**
  * Base class for all method generating classes.
@@ -98,7 +98,7 @@ public class MethodGenerator extends MethodVisitor {
     private final Type returnType;
     private final Type[] argumentTypes;
 
-    static final Type EMPTY_LINK_LOGIC_TYPE = Type.getType(LinkLogic.getEmptyLinkLogicClass());
+    static final Type EMPTY_LINK_LOGIC_TYPE = Type.getType("L" + OBJ_ANNO_PKG + "SpecializedFunction$LinkLogic$Empty;");
 
     MethodGenerator(final MethodVisitor mv, final int access, final String name, final String descriptor) {
         super(Main.ASM_VERSION, mv);
@@ -404,7 +404,7 @@ public class MethodGenerator extends MethodVisitor {
             push(pos++);
             visitTypeInsn(NEW, SPECIALIZATION_TYPE);
             dup();
-            visitLdcInsn(new Handle(H_INVOKESTATIC, className, mi.getJavaName(), mi.getJavaDesc()));
+            visitLdcInsn(new Handle(H_INVOKESTATIC, className, mi.getJavaName(), mi.getJavaDesc(), false));
             final Type    linkLogicClass = mi.getLinkLogicClass();
             final boolean linkLogic      = !linkLogicIsEmpty(linkLogicClass);
             final String  ctor           = linkLogic ? SPECIALIZATION_INIT3 : SPECIALIZATION_INIT2;
@@ -412,6 +412,7 @@ public class MethodGenerator extends MethodVisitor {
                 visitLdcInsn(linkLogicClass);
             }
             visitInsn(mi.isOptimistic() ? ICONST_1 : ICONST_0);
+            visitInsn(mi.convertsNumericArgs() ? ICONST_1 : ICONST_0);
             visitMethodInsn(INVOKESPECIAL, SPECIALIZATION_TYPE, INIT, ctor, false);
             arrayStore(TYPE_SPECIALIZATION);
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,9 @@
 package java.net;
 
 import java.io.*;
+import java.security.AccessController;
 import java.security.PrivilegedAction;
+import sun.security.action.GetPropertyAction;
 
 /*
  * This class PlainSocketImpl simply delegates to the appropriate real
@@ -45,55 +47,29 @@ class PlainSocketImpl extends AbstractPlainSocketImpl
 {
     private AbstractPlainSocketImpl impl;
 
-    /* the windows version. */
-    private static float version;
-
     /* java.net.preferIPv4Stack */
-    private static boolean preferIPv4Stack = false;
-
-    /* If the version supports a dual stack TCP implementation */
-    private static boolean useDualStackImpl = false;
-
-    /* sun.net.useExclusiveBind */
-    private static String exclBindProp;
+    private static final boolean preferIPv4Stack;
 
     /* True if exclusive binding is on for Windows */
-    private static boolean exclusiveBind = true;
+    private static final boolean exclusiveBind;
 
     static {
-        java.security.AccessController.doPrivileged( new PrivilegedAction<Object>() {
-                public Object run() {
-                    version = 0;
-                    try {
-                        version = Float.parseFloat(System.getProperties().getProperty("os.version"));
-                        preferIPv4Stack = Boolean.parseBoolean(
-                                          System.getProperties().getProperty("java.net.preferIPv4Stack"));
-                        exclBindProp = System.getProperty("sun.net.useExclusiveBind");
-                    } catch (NumberFormatException e ) {
-                        assert false : e;
-                    }
-                    return null; // nothing to return
-                } });
+        preferIPv4Stack = Boolean.parseBoolean(
+        AccessController.doPrivileged(
+                new GetPropertyAction("java.net.preferIPv4Stack")));
 
-        // (version >= 6.0) implies Vista or greater.
-        if (version >= 6.0 && !preferIPv4Stack) {
-                useDualStackImpl = true;
-        }
-
-        if (exclBindProp != null) {
-            // sun.net.useExclusiveBind is true
-            exclusiveBind = exclBindProp.length() == 0 ? true
-                    : Boolean.parseBoolean(exclBindProp);
-        } else if (version < 6.0) {
-            exclusiveBind = false;
-        }
+        String exclBindProp = AccessController.doPrivileged(
+                new GetPropertyAction("sun.net.useExclusiveBind", ""));
+        exclusiveBind = (exclBindProp.isEmpty())
+                ? true
+                : Boolean.parseBoolean(exclBindProp);
     }
 
     /**
      * Constructs an empty instance.
      */
     PlainSocketImpl() {
-        if (useDualStackImpl) {
+        if (!preferIPv4Stack) {
             impl = new DualStackPlainSocketImpl(exclusiveBind);
         } else {
             impl = new TwoStacksPlainSocketImpl(exclusiveBind);
@@ -104,7 +80,7 @@ class PlainSocketImpl extends AbstractPlainSocketImpl
      * Constructs an instance with the given file descriptor.
      */
     PlainSocketImpl(FileDescriptor fd) {
-        if (useDualStackImpl) {
+        if (!preferIPv4Stack) {
             impl = new DualStackPlainSocketImpl(fd, exclusiveBind);
         } else {
             impl = new TwoStacksPlainSocketImpl(fd, exclusiveBind);
@@ -173,10 +149,18 @@ class PlainSocketImpl extends AbstractPlainSocketImpl
     }
 
     public void setOption(int opt, Object val) throws SocketException {
+        if (opt == SocketOptions.SO_REUSEPORT) {
+            // SO_REUSEPORT is not supported on Windows.
+            throw new UnsupportedOperationException("unsupported option");
+        }
         impl.setOption(opt, val);
     }
 
     public Object getOption(int opt) throws SocketException {
+        if (opt == SocketOptions.SO_REUSEPORT) {
+            // SO_REUSEPORT is not supported on Windows.
+            throw new UnsupportedOperationException("unsupported option");
+        }
         return impl.getOption(opt);
     }
 
@@ -332,14 +316,27 @@ class PlainSocketImpl extends AbstractPlainSocketImpl
 
     void socketSetOption(int cmd, boolean on, Object value)
         throws SocketException {
+        if (cmd == SocketOptions.SO_REUSEPORT) {
+            // SO_REUSEPORT is not supported on Windows.
+            throw new UnsupportedOperationException("unsupported option");
+        }
         impl.socketSetOption(cmd, on, value);
     }
 
     int socketGetOption(int opt, Object iaContainerObj) throws SocketException {
+        if (opt == SocketOptions.SO_REUSEPORT) {
+            // SO_REUSEPORT is not supported on Windows.
+            throw new UnsupportedOperationException("unsupported option");
+        }
         return impl.socketGetOption(opt, iaContainerObj);
     }
 
     void socketSendUrgentData(int data) throws IOException {
         impl.socketSendUrgentData(data);
+    }
+
+    static boolean isReusePortAvailable() {
+        // SO_REUSEPORT is not supported on Windows.
+        return false;
     }
 }

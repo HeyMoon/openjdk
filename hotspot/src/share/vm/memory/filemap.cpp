@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
 
 #include "precompiled.hpp"
 #include "classfile/classLoader.hpp"
+#include "classfile/compactHashtable.inline.hpp"
 #include "classfile/sharedClassUtil.hpp"
 #include "classfile/symbolTable.hpp"
 #include "classfile/systemDictionaryShared.hpp"
@@ -50,7 +51,6 @@
 #define O_BINARY 0     // otherwise do nothing.
 #endif
 
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 extern address JVM_FunctionAtStart();
 extern address JVM_FunctionAtEnd();
 
@@ -99,7 +99,8 @@ void FileMapInfo::fail_continue(const char *msg, ...) {
       fail(msg, ap);
     } else {
       if (PrintSharedSpaces) {
-        tty->print_cr("UseSharedSpaces: %s", msg);
+        tty->print("UseSharedSpaces: ");
+        tty->vprint_cr(msg, ap);
       }
     }
     UseSharedSpaces = false;
@@ -169,6 +170,7 @@ void FileMapInfo::FileMapHeader::populate(FileMapInfo* mapinfo, size_t alignment
   _version = _current_version;
   _alignment = alignment;
   _obj_alignment = ObjectAlignmentInBytes;
+  _compact_strings = CompactStrings;
   _narrow_oop_mode = Universe::narrow_oop_mode();
   _narrow_oop_shift = Universe::narrow_oop_shift();
   _max_heap_size = MaxHeapSize;
@@ -197,19 +199,51 @@ void FileMapInfo::allocate_classpath_entry_table() {
   size_t entry_size = SharedClassUtil::shared_class_path_entry_size();
 
   for (int pass=0; pass<2; pass++) {
-    ClassPathEntry *cpe = ClassLoader::classpath_entry(0);
 
-    for (int cur_entry = 0 ; cpe != NULL; cpe = cpe->next(), cur_entry++) {
+    // Process the modular java runtime image first
+    ClassPathEntry* jrt_entry = ClassLoader::get_jrt_entry();
+    assert(jrt_entry != NULL,
+           "No modular java runtime image present when allocating the CDS classpath entry table");
+    const char *name = jrt_entry->name();
+    int name_bytes = (int)(strlen(name) + 1);
+    if (pass == 0) {
+      count++;
+      bytes += (int)entry_size;
+      bytes += name_bytes;
+      log_info(class, path)("add main shared path for modular java runtime image %s", name);
+    } else {
+      // The java runtime image is always in slot 0 on the shared class path.
+      SharedClassPathEntry* ent = shared_classpath(0);
+      struct stat st;
+      if (os::stat(name, &st) == 0) {
+        ent->_timestamp = st.st_mtime;
+        ent->_filesize = st.st_size;
+      }
+      if (ent->_filesize == 0) {
+        // unknown
+        ent->_filesize = -2;
+      }
+      ent->_name = strptr;
+      assert(strptr + name_bytes <= strptr_max, "miscalculated buffer size");
+      strncpy(strptr, name, (size_t)name_bytes); // name_bytes includes trailing 0.
+      strptr += name_bytes;
+    }
+
+    // Walk the appended entries, which includes the entries added for the classpath.
+    ClassPathEntry *cpe = ClassLoader::classpath_entry(1);
+
+    // Since the java runtime image is always in slot 0 on the shared class path, the
+    // appended entries are started at slot 1 immediately after.
+    for (int cur_entry = 1 ; cpe != NULL; cpe = cpe->next(), cur_entry++) {
       const char *name = cpe->name();
       int name_bytes = (int)(strlen(name) + 1);
+      assert(!cpe->is_jrt(), "A modular java runtime image is present on the list of appended entries");
 
       if (pass == 0) {
         count ++;
         bytes += (int)entry_size;
         bytes += name_bytes;
-        if (TraceClassPaths || (TraceClassLoading && Verbose)) {
-          tty->print_cr("[Add main shared path (%s) %s]", (cpe->is_jar_file() ? "jar" : "dir"), name);
-        }
+        log_info(class, path)("add main shared path (%s) %s", (cpe->is_jar_file() ? "jar" : "dir"), name);
       } else {
         SharedClassPathEntry* ent = shared_classpath(cur_entry);
         if (cpe->is_jar_file()) {
@@ -227,12 +261,17 @@ void FileMapInfo::allocate_classpath_entry_table() {
           SharedClassUtil::update_shared_classpath(cpe, ent, st.st_mtime, st.st_size, THREAD);
         } else {
           struct stat st;
-          if ((os::stat(name, &st) == 0) && ((st.st_mode & S_IFDIR) == S_IFDIR)) {
-            if (!os::dir_is_empty(name)) {
-              ClassLoader::exit_with_path_failure("Cannot have non-empty directory in archived classpaths", name);
+          if (os::stat(name, &st) == 0) {
+            if ((st.st_mode & S_IFMT) == S_IFDIR) {
+              if (!os::dir_is_empty(name)) {
+                ClassLoader::exit_with_path_failure(
+                  "Cannot have non-empty directory in archived classpaths", name);
+              }
+              ent->_filesize = -1;
             }
-            ent->_filesize = -1;
-          } else {
+          }
+          if (ent->_filesize == 0) {
+            // unknown
             ent->_filesize = -2;
           }
         }
@@ -274,9 +313,7 @@ bool FileMapInfo::validate_classpath_entry_table() {
     struct stat st;
     const char* name = ent->_name;
     bool ok = true;
-    if (TraceClassPaths || (TraceClassLoading && Verbose)) {
-      tty->print_cr("[Checking shared classpath entry: %s]", name);
-    }
+    log_info(class, path)("checking shared classpath entry: %s", name);
     if (os::stat(name, &st) != 0) {
       fail_continue("Required classpath entry does not exist: %s", name);
       ok = false;
@@ -285,7 +322,7 @@ bool FileMapInfo::validate_classpath_entry_table() {
         fail_continue("directory is not empty: %s", name);
         ok = false;
       }
-    } else if (ent->is_jar()) {
+    } else if (ent->is_jar_or_bootimage()) {
       if (ent->_timestamp != st.st_mtime ||
           ent->_filesize != st.st_size) {
         ok = false;
@@ -294,15 +331,13 @@ bool FileMapInfo::validate_classpath_entry_table() {
                         "Timestamp mismatch" :
                         "File size mismatch");
         } else {
-          fail_continue("A jar file is not the one used while building"
+          fail_continue("A jar/jimage file is not the one used while building"
                         " the shared archive file: %s", name);
         }
       }
     }
     if (ok) {
-      if (TraceClassPaths || (TraceClassLoading && Verbose)) {
-        tty->print_cr("[ok]");
-      }
+      log_info(class, path)("ok");
     } else if (!PrintSharedArchiveAndExit) {
       _validating_classpath_entry_table = false;
       return false;
@@ -368,7 +403,7 @@ bool FileMapInfo::open_for_read() {
       fail_continue("Specified shared archive not found.");
     } else {
       fail_continue("Failed to open shared archive file (%s).",
-                    strerror(errno));
+                    os::strerror(errno));
     }
     return false;
   }
@@ -398,7 +433,7 @@ void FileMapInfo::open_for_write() {
   int fd = open(_full_path, O_RDWR | O_CREAT | O_TRUNC | O_BINARY, 0444);
   if (fd < 0) {
     fail_stop("Unable to create shared archive file %s: (%s).", _full_path,
-              strerror(errno));
+              os::strerror(errno));
   }
   _fd = fd;
   _file_offset = 0;
@@ -443,8 +478,8 @@ void FileMapInfo::write_region(int region, char* base, size_t size,
   if (_file_open) {
     guarantee(si->_file_offset == _file_offset, "file offset mismatch.");
     if (PrintSharedSpaces) {
-      tty->print_cr("Shared file region %d: 0x%6x bytes, addr " INTPTR_FORMAT
-                    " file offset 0x%6x", region, size, base, _file_offset);
+      tty->print_cr("Shared file region %d: " SIZE_FORMAT_HEX_W(6) " bytes, addr " INTPTR_FORMAT
+                    " file offset " SIZE_FORMAT_HEX_W(6), region, size, p2i(base), _file_offset);
     }
   } else {
     si->_file_offset = _file_offset;
@@ -602,7 +637,8 @@ ReservedSpace FileMapInfo::reserve_shared_memory() {
   // other reserved memory (like the code cache).
   ReservedSpace rs(size, os::vm_allocation_granularity(), false, requested_addr);
   if (!rs.is_reserved()) {
-    fail_continue("Unable to reserve shared space at required address " INTPTR_FORMAT, requested_addr);
+    fail_continue("Unable to reserve shared space at required address "
+                  INTPTR_FORMAT, p2i(requested_addr));
     return rs;
   }
   // the reserved virtual memory is for mapping class data sharing archive
@@ -613,7 +649,7 @@ ReservedSpace FileMapInfo::reserve_shared_memory() {
 
 // Memory map a region in the address space.
 static const char* shared_region_name[] = { "ReadOnly", "ReadWrite", "MiscData", "MiscCode",
-                                            "String1", "String2" };
+                                            "String1", "String2", "OptionalData" };
 
 char* FileMapInfo::map_region(int i) {
   assert(!MetaspaceShared::is_string_region(i), "sanity");
@@ -659,7 +695,7 @@ bool FileMapInfo::map_string_regions() {
         tty->print_cr("Shared string data from the CDS archive is being ignored. "
                      "The current CompressedOops/CompressedClassPointers encoding differs from "
                      "that archived due to heap size change. The archive was dumped using max heap "
-                     "size %dM.", max_heap_size()/M);
+                     "size " UINTX_FORMAT "M.", max_heap_size()/M);
       }
     } else {
       string_ranges = new MemRegion[MetaspaceShared::max_strings];
@@ -707,12 +743,16 @@ bool FileMapInfo::map_string_regions() {
                                     addr, string_ranges[i].byte_size(), si->_read_only,
                                     si->_allow_exec);
         if (base == NULL || base != addr) {
+          // dealloc the string regions from java heap
+          dealloc_string_regions();
           fail_continue("Unable to map shared string space at required address.");
           return false;
         }
       }
 
       if (!verify_string_regions()) {
+        // dealloc the string regions from java heap
+        dealloc_string_regions();
         fail_continue("Shared string regions are corrupt");
         return false;
       }
@@ -745,12 +785,14 @@ bool FileMapInfo::verify_string_regions() {
 }
 
 void FileMapInfo::fixup_string_regions() {
+#if INCLUDE_ALL_GCS
   // If any string regions were found, call the fill routine to make them parseable.
   // Note that string_ranges may be non-NULL even if no ranges were found.
   if (num_ranges != 0) {
     assert(string_ranges != NULL, "Null string_ranges array with non-zero count");
     G1CollectedHeap::heap()->fill_archive_regions(string_ranges, num_ranges);
   }
+#endif
 }
 
 bool FileMapInfo::verify_region_checksum(int i) {
@@ -793,20 +835,14 @@ void FileMapInfo::unmap_region(int i) {
   }
 }
 
-void FileMapInfo::unmap_string_regions() {
-  for (int i = MetaspaceShared::first_string;
-           i < MetaspaceShared::first_string + MetaspaceShared::max_strings; i++) {
-    struct FileMapInfo::FileMapHeader::space_info* si = &_header->_space[i];
-    size_t used = si->_used;
-    if (used > 0) {
-      size_t size = align_size_up(used, os::vm_allocation_granularity());
-      char* addr = (char*)((void*)oopDesc::decode_heap_oop_not_null(
-                                             (narrowOop)si->_addr._offset));
-      if (!os::unmap_memory(addr, size)) {
-        fail_stop("Unable to unmap shared space.");
-      }
-    }
+// dealloc the archived string region from java heap
+void FileMapInfo::dealloc_string_regions() {
+#if INCLUDE_ALL_GCS
+  if (num_ranges > 0) {
+    assert(string_ranges != NULL, "Null string_ranges array with non-zero count");
+    G1CollectedHeap::heap()->dealloc_archive_regions(string_ranges, num_ranges);
   }
+#endif
 }
 
 void FileMapInfo::assert_mark(bool check) {
@@ -875,6 +911,11 @@ bool FileMapInfo::FileMapHeader::validate() {
     return false;
   }
 
+  if (!Arguments::has_jimage()) {
+    FileMapInfo::fail_continue("The shared archive file cannot be used with an exploded module build.");
+    return false;
+  }
+
   if (_version != current_version()) {
     FileMapInfo::fail_continue("The shared archive file is the wrong version.");
     return false;
@@ -886,18 +927,23 @@ bool FileMapInfo::FileMapHeader::validate() {
   char header_version[JVM_IDENT_MAX];
   get_header_version(header_version);
   if (strncmp(_jvm_ident, header_version, JVM_IDENT_MAX-1) != 0) {
-    if (TraceClassPaths) {
-      tty->print_cr("Expected: %s", header_version);
-      tty->print_cr("Actual:   %s", _jvm_ident);
-    }
+    log_info(class, path)("expected: %s", header_version);
+    log_info(class, path)("actual:   %s", _jvm_ident);
     FileMapInfo::fail_continue("The shared archive file was created by a different"
                   " version or build of HotSpot");
     return false;
   }
   if (_obj_alignment != ObjectAlignmentInBytes) {
     FileMapInfo::fail_continue("The shared archive file's ObjectAlignmentInBytes of %d"
-                  " does not equal the current ObjectAlignmentInBytes of %d.",
+                  " does not equal the current ObjectAlignmentInBytes of " INTX_FORMAT ".",
                   _obj_alignment, ObjectAlignmentInBytes);
+    return false;
+  }
+  if (_compact_strings != CompactStrings) {
+    FileMapInfo::fail_continue("The shared archive file's CompactStrings setting (%s)"
+                  " does not equal the current CompactStrings setting (%s).",
+                  _compact_strings ? "enabled" : "disabled",
+                  CompactStrings   ? "enabled" : "disabled");
     return false;
   }
 
@@ -910,7 +956,7 @@ bool FileMapInfo::validate_header() {
   if (status) {
     if (!ClassLoader::check_shared_paths_misc_info(_paths_misc_info, _header->_paths_misc_info_size)) {
       if (!PrintSharedArchiveAndExit) {
-        fail_continue("shared class paths mismatch (hint: enable -XX:+TraceClassPaths to diagnose the failure)");
+        fail_continue("shared class paths mismatch (hint: enable -Xlog:class+path=info to diagnose the failure)");
         status = false;
       }
     }
@@ -944,14 +990,24 @@ bool FileMapInfo::is_in_shared_space(const void* p) {
   return false;
 }
 
+// Check if a given address is within one of the shared regions (ro, rw, md, mc)
+bool FileMapInfo::is_in_shared_region(const void* p, int idx) {
+  assert((idx >= MetaspaceShared::ro) && (idx <= MetaspaceShared::mc), "invalid region index");
+  char* base = _header->region_addr(idx);
+  if (p >= base && p < base + _header->_space[idx]._used) {
+    return true;
+  }
+  return false;
+}
+
 void FileMapInfo::print_shared_spaces() {
-  gclog_or_tty->print_cr("Shared Spaces:");
+  tty->print_cr("Shared Spaces:");
   for (int i = 0; i < MetaspaceShared::n_regions; i++) {
     struct FileMapInfo::FileMapHeader::space_info* si = &_header->_space[i];
     char *base = _header->region_addr(i);
-    gclog_or_tty->print("  %s " INTPTR_FORMAT "-" INTPTR_FORMAT,
+    tty->print("  %s " INTPTR_FORMAT "-" INTPTR_FORMAT,
                         shared_region_name[i],
-                        base, base + si->_used);
+                        p2i(base), p2i(base + si->_used));
   }
 }
 
@@ -967,7 +1023,9 @@ void FileMapInfo::stop_sharing_and_unmap(const char* msg) {
         map_info->_header->_space[i]._addr._base = NULL;
       }
     }
-    map_info->unmap_string_regions();
+    // Dealloc the string regions only without unmapping. The string regions are part
+    // of the java heap. Unmapping of the heap regions are managed by GC.
+    map_info->dealloc_string_regions();
   } else if (DumpSharedSpaces) {
     fail_stop("%s", msg);
   }

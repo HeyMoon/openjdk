@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@ package javax.sound.sampled;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * {@code AudioFormat} is the class that specifies a particular arrangement of
@@ -88,13 +89,16 @@ import java.util.Map;
  * The following table lists some common properties which service providers
  * should use, if applicable:
  *
- * <table border=0>
- *  <caption>Audio Format Properties</caption>
+ * <table class="striped">
+ * <caption>Audio Format Properties</caption>
+ * <thead>
  *  <tr>
  *   <th>Property key</th>
  *   <th>Value type</th>
  *   <th>Description</th>
  *  </tr>
+ * </thead>
+ * <tbody>
  *  <tr>
  *   <td>&quot;bitrate&quot;</td>
  *   <td>{@link java.lang.Integer Integer}</td>
@@ -111,6 +115,7 @@ import java.util.Map;
  *   <td>{@link java.lang.Integer Integer}</td>
  *   <td>encoding/conversion quality, 1..100</td>
  *  </tr>
+ * </tbody>
  * </table>
  * <p>
  * Vendors of service providers (plugins) are encouraged to seek information
@@ -223,7 +228,7 @@ public class AudioFormat {
                        boolean bigEndian, Map<String, Object> properties) {
         this(encoding, sampleRate, sampleSizeInBits, channels,
              frameSize, frameRate, bigEndian);
-        this.properties = new HashMap<String, Object>(properties);
+        this.properties = new HashMap<>(properties);
     }
 
     /**
@@ -592,14 +597,14 @@ public class AudioFormat {
         /**
          * Encoding name.
          */
-        private String name;
+        private final String name;
 
         /**
          * Constructs a new encoding.
          *
          * @param  name the name of the new type of encoding
          */
-        public Encoding(String name) {
+        public Encoding(final String name) {
             this.name = name;
         }
 
@@ -607,14 +612,14 @@ public class AudioFormat {
          * Finalizes the equals method.
          */
         @Override
-        public final boolean equals(Object obj) {
-            if (toString() == null) {
-                return (obj != null) && (obj.toString() == null);
+        public final boolean equals(final Object obj) {
+            if (this == obj) {
+                return true;
             }
-            if (obj instanceof Encoding) {
-                return toString().equals(obj.toString());
+            if (!(obj instanceof Encoding)) {
+                return false;
             }
-            return false;
+            return Objects.equals(name, ((Encoding) obj).name);
         }
 
         /**
@@ -622,10 +627,7 @@ public class AudioFormat {
          */
         @Override
         public final int hashCode() {
-            if (toString() == null) {
-                return 0;
-            }
-            return toString().hashCode();
+            return name != null ? name.hashCode() : 0;
         }
 
         /**
@@ -633,7 +635,7 @@ public class AudioFormat {
          * {@code String} is the same name that was passed to the constructor.
          * For the predefined encodings, the name is similar to the encoding's
          * variable (field) name. For example, {@code PCM_SIGNED.toString()}
-         * returns the name "pcm_signed".
+         * returns the name "PCM_SIGNED".
          *
          * @return the encoding name
          */

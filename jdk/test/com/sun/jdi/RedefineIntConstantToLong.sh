@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #
-# Copyright (c) 2006, 2014 Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2006, 2014, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 #  @bug 6394084
 #  @summary Redefine class can't handle addition of 64 bit constants in JDK1.5.0_05
 #
+#  @key intermittent
 #  @run shell RedefineIntConstantToLong.sh
 
 compileOptions=-g
@@ -49,13 +50,13 @@ public final class $1 {
     }
 
     public long m2(int j) {
-        System.out.println(System.getProperty("line.separator") + 
+        System.out.println(System.getProperty("line.separator") +
                            "**** public long m2(int j) with value: " + j);
         return j;
     }
 
     public long m2(long j) {
-        System.out.println(System.getProperty("line.separator") + 
+        System.out.println(System.getProperty("line.separator") +
                            "**** public long m2(long j) with value: " + j);
         return j;
     }
@@ -101,7 +102,7 @@ mysetup()
 
     for ii in . $TESTSRC $TESTSRC/.. ; do
         if [ -r "$ii/ShellScaffold.sh" ] ; then
-            . $ii/ShellScaffold.sh 
+            . $ii/ShellScaffold.sh
             break
         fi
     done

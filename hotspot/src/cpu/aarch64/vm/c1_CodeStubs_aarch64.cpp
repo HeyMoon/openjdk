@@ -41,7 +41,9 @@
 
 void CounterOverflowStub::emit_code(LIR_Assembler* ce) {
   __ bind(_entry);
-  ce->store_parameter(_method->as_register(), 1);
+  Metadata *m = _method->as_constant_ptr()->as_metadata();
+  __ mov_metadata(rscratch1, m);
+  ce->store_parameter(rscratch1, 1);
   ce->store_parameter(_bci, 0);
   __ far_call(RuntimeAddress(Runtime1::entry_for(Runtime1::counter_overflow_id)));
   ce->add_call_info_here(_info);
@@ -254,6 +256,7 @@ void PatchingStub::emit_code(LIR_Assembler* ce) {
 
 void DeoptimizeStub::emit_code(LIR_Assembler* ce) {
   __ bind(_entry);
+  ce->store_parameter(_trap_request, 0);
   __ far_call(RuntimeAddress(Runtime1::entry_for(Runtime1::deoptimize_id)));
   ce->add_call_info_here(_info);
   DEBUG_ONLY(__ should_not_reach_here());
@@ -327,9 +330,16 @@ void ArrayCopyStub::emit_code(LIR_Assembler* ce) {
   ce->align_call(lir_static_call);
 
   ce->emit_static_call_stub();
+  if (ce->compilation()->bailed_out()) {
+    return; // CodeCache is full
+  }
   Address resolve(SharedRuntime::get_resolve_static_call_stub(),
                   relocInfo::static_call_type);
-  __ trampoline_call(resolve);
+  address call = __ trampoline_call(resolve);
+  if (call == NULL) {
+    ce->bailout("trampoline stub overflow");
+    return;
+  }
   ce->add_call_info_here(info());
 
 #ifndef PRODUCT

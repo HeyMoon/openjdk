@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@ package com.sun.crypto.provider;
 import java.security.AccessController;
 import java.security.Provider;
 import java.security.SecureRandom;
+import static sun.security.util.SecurityConstants.PROVIDER_VER;
 
 
 /**
@@ -93,7 +94,7 @@ public final class SunJCE extends Provider {
 
     // Instance of this provider, so we don't have to call the provider list
     // to find ourselves or run the risk of not being in the list.
-    private static volatile SunJCE instance = null;
+    private static volatile SunJCE instance;
 
     // lazy initialize SecureRandom to avoid potential recursion if Sun
     // provider has not been installed yet
@@ -104,7 +105,7 @@ public final class SunJCE extends Provider {
 
     public SunJCE() {
         /* We are the "SunJCE" provider */
-        super("SunJCE", 1.9d, info);
+        super("SunJCE", PROVIDER_VER, info);
 
         final String BLOCK_MODES = "ECB|CBC|PCBC|CTR|CTS|CFB|OFB" +
             "|CFB8|CFB16|CFB24|CFB32|CFB40|CFB48|CFB56|CFB64" +
@@ -703,6 +704,12 @@ public final class SunJCE extends Provider {
                         "com.sun.crypto.provider.HmacCore$HmacSHA512");
                     put("Alg.Alias.Mac.OID.1.2.840.113549.2.11", "HmacSHA512");
                     put("Alg.Alias.Mac.1.2.840.113549.2.11", "HmacSHA512");
+
+                    // TODO: aliases with OIDs
+                    put("Mac.HmacSHA512/224",
+                            "com.sun.crypto.provider.HmacCore$HmacSHA512_224");
+                    put("Mac.HmacSHA512/256",
+                            "com.sun.crypto.provider.HmacCore$HmacSHA512_256");
 
                     put("Mac.HmacPBESHA1",
                         "com.sun.crypto.provider.HmacPKCS12PBESHA1");

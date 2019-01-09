@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@ import java.security.NoSuchProviderException;
 import java.security.InvalidKeyException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.spec.AlgorithmParameterSpec;
+import java.util.Objects;
 
 import sun.security.jca.GetInstance.Instance;
 
@@ -112,27 +113,35 @@ public class ExemptionMechanism {
      * <p> Note that the list of registered providers may be retrieved via
      * the {@link Security#getProviders() Security.getProviders()} method.
      *
+     * @implNote
+     * The JDK Reference Implementation additionally uses the
+     * {@code jdk.security.provider.preferred}
+     * {@link Security#getProperty(String) Security} property to determine
+     * the preferred provider order for the specified algorithm. This
+     * may be different than the order of providers returned by
+     * {@link Security#getProviders() Security.getProviders()}.
+     *
      * @param algorithm the standard name of the requested exemption
      * mechanism.
      * See the ExemptionMechanism section in the
      * <a href=
-     *   "{@docRoot}/../technotes/guides/security/StandardNames.html#Exemption">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     *   "{@docRoot}/../specs/security/standard-names.html#exemption-mechanisms">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard exemption mechanism names.
      *
-     * @return the new <code>ExemptionMechanism</code> object.
+     * @return the new {@code ExemptionMechanism} object
      *
-     * @exception NullPointerException if <code>algorithm</code>
-     *          is null.
+     * @throws NoSuchAlgorithmException if no {@code Provider} supports an
+     *         {@code ExemptionMechanismSpi} implementation for the
+     *         specified algorithm
      *
-     * @exception NoSuchAlgorithmException if no Provider supports an
-     *          ExemptionMechanismSpi implementation for the
-     *          specified algorithm.
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final ExemptionMechanism getInstance(String algorithm)
             throws NoSuchAlgorithmException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         Instance instance = JceSecurity.getInstance("ExemptionMechanism",
                 ExemptionMechanismSpi.class, algorithm);
         return new ExemptionMechanism((ExemptionMechanismSpi)instance.impl,
@@ -155,32 +164,32 @@ public class ExemptionMechanism {
      * @param algorithm the standard name of the requested exemption mechanism.
      * See the ExemptionMechanism section in the
      * <a href=
-     *   "{@docRoot}/../technotes/guides/security/StandardNames.html#Exemption">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     *   "{@docRoot}/../specs/security/standard-names.html#exemption-mechanisms">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard exemption mechanism names.
      *
      * @param provider the name of the provider.
      *
-     * @return the new <code>ExemptionMechanism</code> object.
+     * @return the new {@code ExemptionMechanism} object
      *
-     * @exception NullPointerException if <code>algorithm</code>
-     *          is null.
+     * @throws IllegalArgumentException if the {@code provider}
+     *         is {@code null} or empty
      *
-     * @exception NoSuchAlgorithmException if an ExemptionMechanismSpi
-     *          implementation for the specified algorithm is not
-     *          available from the specified provider.
+     * @throws NoSuchAlgorithmException if an {@code ExemptionMechanismSpi}
+     *         implementation for the specified algorithm is not
+     *         available from the specified provider
      *
-     * @exception NoSuchProviderException if the specified provider is not
-     *          registered in the security provider list.
+     * @throws NoSuchProviderException if the specified provider is not
+     *         registered in the security provider list
      *
-     * @exception IllegalArgumentException if the <code>provider</code>
-     *          is null or empty.
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final ExemptionMechanism getInstance(String algorithm,
             String provider) throws NoSuchAlgorithmException,
             NoSuchProviderException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         Instance instance = JceSecurity.getInstance("ExemptionMechanism",
                 ExemptionMechanismSpi.class, algorithm, provider);
         return new ExemptionMechanism((ExemptionMechanismSpi)instance.impl,
@@ -199,28 +208,28 @@ public class ExemptionMechanism {
      * @param algorithm the standard name of the requested exemption mechanism.
      * See the ExemptionMechanism section in the
      * <a href=
-     *   "{@docRoot}/../technotes/guides/security/StandardNames.html#Exemption">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     *   "{@docRoot}/../specs/security/standard-names.html#exemption-mechanisms">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard exemption mechanism names.
      *
      * @param provider the provider.
      *
-     * @return the new <code>ExemptionMechanism</code> object.
+     * @return the new {@code ExemptionMechanism} object
      *
-     * @exception NullPointerException if <code>algorithm</code>
-     *          is null.
+     * @throws IllegalArgumentException if the {@code provider}
+     *         is null
      *
-     * @exception NoSuchAlgorithmException if an ExemptionMechanismSpi
-     *          implementation for the specified algorithm is not available
-     *          from the specified Provider object.
+     * @throws NoSuchAlgorithmException if an {@code ExemptionMechanismSpi}
+     *         implementation for the specified algorithm is not available
+     *         from the specified {@code Provider object}
      *
-     * @exception IllegalArgumentException if the <code>provider</code>
-     *          is null.
+     * @exception NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final ExemptionMechanism getInstance(String algorithm,
             Provider provider) throws NoSuchAlgorithmException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         Instance instance = JceSecurity.getInstance("ExemptionMechanism",
                 ExemptionMechanismSpi.class, algorithm, provider);
         return new ExemptionMechanism((ExemptionMechanismSpi)instance.impl,
@@ -473,14 +482,5 @@ public class ExemptionMechanism {
         int n = exmechSpi.engineGenExemptionBlob(output, outputOffset);
         done = true;
         return n;
-    }
-
-    /**
-     * Ensures that the key stored away by this ExemptionMechanism
-     * object will be wiped out when there are no more references to it.
-     */
-    protected void finalize() {
-        keyStored = null;
-        // Are there anything else we could do?
     }
 }

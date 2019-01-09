@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,31 +25,31 @@
  * @test
  * @bug 8050167
  * @summary Test that error is not occurred during printing problematic frame
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.compiler
  *          java.management
- *          jdk.jvmstat/sun.jvmstat.monitor
- * @build jdk.test.lib.*
+ *          jdk.internal.jvmstat/sun.jvmstat.monitor
  * @run driver ProblematicFrameTest
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 
-import sun.misc.Unsafe;
-import jdk.test.lib.Utils;
+import jdk.internal.misc.Unsafe;
 
 public class ProblematicFrameTest {
     private static class Crasher {
         public static void main(String[] args) {
-            Utils.getUnsafe().getInt(0);
+            Unsafe.getUnsafe().getInt(0);
         }
     }
 
     public static void main(String[] args) throws Exception {
         ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(
-            "-Xmx64m", "-XX:-TransmitErrorReport", "-XX:-CreateCoredumpOnCrash", Crasher.class.getName());
+            "-Xmx64m", "-XX:-TransmitErrorReport", "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED", "-XX:-CreateCoredumpOnCrash", Crasher.class.getName());
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
+        output.shouldNotContain("Exception in thread");
         output.shouldNotMatch("error occurred during error reporting \\(printing problematic frame\\)");
     }
 }

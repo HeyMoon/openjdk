@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,14 +26,12 @@
 package sun.nio.ch;
 
 import java.io.*;
-import java.lang.ref.*;
 import java.net.*;
 import java.nio.*;
 import java.nio.channels.*;
 import java.security.AccessController;
 import java.security.PrivilegedExceptionAction;
-import java.util.*;
-
+import java.util.concurrent.TimeUnit;
 
 // Make a socket channel look like a socket.
 //
@@ -55,7 +53,7 @@ public class SocketAdaptor
     private final SocketChannelImpl sc;
 
     // Timeout "option" value for reads
-    private volatile int timeout = 0;
+    private volatile int timeout;
 
     private SocketAdaptor(SocketChannelImpl sc) throws SocketException {
         super((SocketImpl) null);
@@ -101,17 +99,19 @@ public class SocketAdaptor
                 try {
                     if (sc.connect(remote))
                         return;
-                    long to = timeout;
+                    long timeoutNanos =
+                        TimeUnit.NANOSECONDS.convert(timeout,
+                            TimeUnit.MILLISECONDS);
                     for (;;) {
                         if (!sc.isOpen())
                             throw new ClosedChannelException();
-                        long st = System.currentTimeMillis();
+                        long startTime = System.nanoTime();
 
-                        int result = sc.poll(Net.POLLCONN, to);
+                        int result = sc.poll(Net.POLLCONN, timeout);
                         if (result > 0 && sc.finishConnect())
                             break;
-                        to -= System.currentTimeMillis() - st;
-                        if (to <= 0) {
+                        timeoutNanos -= System.nanoTime() - startTime;
+                        if (timeoutNanos <= 0) {
                             try {
                                 sc.close();
                             } catch (IOException x) { }
@@ -196,18 +196,20 @@ public class SocketAdaptor
                     int n;
                     if ((n = sc.read(bb)) != 0)
                         return n;
-                    long to = timeout;
+                    long timeoutNanos =
+                        TimeUnit.NANOSECONDS.convert(timeout,
+                            TimeUnit.MILLISECONDS);
                     for (;;) {
                         if (!sc.isOpen())
                             throw new ClosedChannelException();
-                        long st = System.currentTimeMillis();
-                        int result = sc.poll(Net.POLLIN, to);
+                        long startTime = System.nanoTime();
+                        int result = sc.poll(Net.POLLIN, timeout);
                         if (result > 0) {
                             if ((n = sc.read(bb)) != 0)
                                 return n;
                         }
-                        to -= System.currentTimeMillis() - st;
-                        if (to <= 0)
+                        timeoutNanos -= System.nanoTime() - startTime;
+                        if (timeoutNanos <= 0)
                             throw new SocketTimeoutException();
                     }
                 } finally {

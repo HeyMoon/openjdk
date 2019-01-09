@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,21 +29,19 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-import jdk.test.lib.OutputAnalyzer;
+import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.dcmd.CommandExecutor;
 import jdk.test.lib.dcmd.JMXExecutor;
 
 /*
  * @test
  * @summary Test of diagnostic command GC.run
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.compiler
  *          java.management
- *          jdk.jvmstat/sun.jvmstat.monitor
- * @build jdk.test.lib.*
- * @build jdk.test.lib.dcmd.*
- * @run testng/othervm -XX:+PrintGCDetails -Xloggc:RunGC.gclog -XX:-ExplicitGCInvokesConcurrent RunGCTest
+ *          jdk.internal.jvmstat/sun.jvmstat.monitor
+ * @run testng/othervm -Xlog:gc=debug:RunGC.gclog -XX:-ExplicitGCInvokesConcurrent RunGCTest
  */
 public class RunGCTest {
     public void run(CommandExecutor executor) {
@@ -59,7 +57,7 @@ public class RunGCTest {
         }
 
         OutputAnalyzer output = new OutputAnalyzer(gcLog, "");
-        output.shouldContain("[Full GC (Diagnostic Command)");
+        output.shouldContain("Pause Full (Diagnostic Command)");
     }
 
     @Test

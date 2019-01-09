@@ -39,7 +39,6 @@ import jdk.nashorn.internal.runtime.Source;
  *
  * @since 1.8u40
  */
-@jdk.Exported
 public final class URLReader extends Reader {
     // underlying URL
     private final URL url;
@@ -103,7 +102,7 @@ public final class URLReader extends Reader {
     /**
      * Charset used by this reader
      *
-     * @return the Chartset used to convert bytes to chars
+     * @return the Charset used to convert bytes to chars
      */
     public Charset getCharset() {
         return cs;

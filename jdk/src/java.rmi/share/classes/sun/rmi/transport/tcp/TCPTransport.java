@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -75,7 +75,6 @@ import sun.rmi.transport.StreamRemoteCall;
 import sun.rmi.transport.Target;
 import sun.rmi.transport.Transport;
 import sun.rmi.transport.TransportConstants;
-import sun.rmi.transport.proxy.HttpReceiveSocket;
 
 /**
  * TCPTransport is the socket-based implementation of the RMI Transport
@@ -102,6 +101,11 @@ public class TCPTransport extends Transport {
     private static final long threadKeepAliveTime =     // default 1 minute
         AccessController.doPrivileged((PrivilegedAction<Long>) () ->
             Long.getLong("sun.rmi.transport.tcp.threadKeepAliveTime", 60000));
+
+    /** enable multiplexing protocol */
+    private static final boolean enableMultiplexProtocol =     // default false
+            AccessController.doPrivileged((PrivilegedAction<Boolean>) () ->
+                    Boolean.getBoolean("sun.rmi.transport.tcp.enableMultiplexProtocol"));
 
     /** thread pool for connection handlers */
     private static final ExecutorService connectionThreadPool =
@@ -711,34 +715,9 @@ public class TCPTransport extends Transport {
                         ? sockIn
                         : new BufferedInputStream(sockIn);
 
-                // Read magic (or HTTP wrapper)
-                bufIn.mark(4);
+                // Read magic
                 DataInputStream in = new DataInputStream(bufIn);
                 int magic = in.readInt();
-
-                if (magic == POST) {
-                    tcpLog.log(Log.BRIEF, "decoding HTTP-wrapped call");
-
-                    // It's really a HTTP-wrapped request.  Repackage
-                    // the socket in a HttpReceiveSocket, reinitialize
-                    // sockIn and in, and reread magic.
-                    bufIn.reset();      // unread "POST"
-
-                    try {
-                        socket = new HttpReceiveSocket(socket, bufIn, null);
-                        remoteHost = "0.0.0.0";
-                        sockIn = socket.getInputStream();
-                        bufIn = new BufferedInputStream(sockIn);
-                        in = new DataInputStream(bufIn);
-                        magic = in.readInt();
-
-                    } catch (IOException e) {
-                        throw new RemoteException("Error HTTP-unwrapping call",
-                                                  e);
-                    }
-                }
-                // bufIn's mark will invalidate itself when it overflows
-                // so it doesn't have to be turned off
 
                 // read and verify transport header
                 short version = in.readShort();
@@ -822,6 +801,19 @@ public class TCPTransport extends Transport {
                     break;
 
                 case TransportConstants.MultiplexProtocol:
+
+                    if (!enableMultiplexProtocol) {
+                        if (tcpLog.isLoggable(Log.VERBOSE)) {
+                            tcpLog.log(Log.VERBOSE, "(port " + port +
+                                    ") rejecting multiplex protocol");
+                        }
+
+                        // If MultiplexProtocol is disabled, send NACK immediately.
+                        out.writeByte(TransportConstants.ProtocolNack);
+                        out.flush();
+                        break;
+                    }
+
                     if (tcpLog.isLoggable(Log.VERBOSE)) {
                         tcpLog.log(Log.VERBOSE, "(port " + port +
                             ") accepting multiplex protocol");

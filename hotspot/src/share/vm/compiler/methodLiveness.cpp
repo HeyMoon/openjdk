@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,9 +30,9 @@
 #include "interpreter/bytecode.hpp"
 #include "interpreter/bytecodes.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/resourceArea.hpp"
+#include "runtime/timerTrace.hpp"
 #include "utilities/bitMap.inline.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 // The MethodLiveness class performs a simple liveness analysis on a method
 // in order to decide which locals are live (that is, will be used again) at
@@ -131,17 +131,12 @@ elapsedTimer MethodLiveness::_time_total;
 
 MethodLiveness::MethodLiveness(Arena* arena, ciMethod* method)
 #ifdef COMPILER1
-  : _bci_block_start((uintptr_t*)arena->Amalloc((method->code_size() >> LogBitsPerByte) + 1), method->code_size())
+  : _bci_block_start(arena, method->code_size())
 #endif
 {
   _arena = arena;
   _method = method;
   _bit_map_size_bits = method->max_locals();
-  _bit_map_size_words = (_bit_map_size_bits / sizeof(unsigned int)) + 1;
-
-#ifdef COMPILER1
-  _bci_block_start.clear();
-#endif
 }
 
 void MethodLiveness::compute_liveness() {
@@ -475,7 +470,7 @@ MethodLivenessResult MethodLiveness::get_liveness_at(int entry_bci) {
     bci = 0;
   }
 
-  MethodLivenessResult answer((BitMap::bm_word_t*)NULL,0);
+  MethodLivenessResult answer;
 
   if (_block_count > 0) {
     if (TimeLivenessAnalysis) _time_total.start();
@@ -540,7 +535,7 @@ void MethodLiveness::print_times() {
                  _time_flow.seconds() * 100 / _time_total.seconds());
   tty->print_cr ("    Query       : %3.3f sec. (%2.2f%%)", _time_query.seconds(),
                  _time_query.seconds() * 100 / _time_total.seconds());
-  tty->print_cr ("  #bytes   : %8d (%3.0f bytes per sec)",
+  tty->print_cr ("  #bytes   : %8ld (%3.0f bytes per sec)",
                  _total_bytes,
                  _total_bytes / _time_total.seconds());
   tty->print_cr ("  #methods : %8d (%3.0f methods per sec)",
@@ -554,7 +549,7 @@ void MethodLiveness::print_times() {
                  _max_method_blocks);
   tty->print_cr ("    avg bytes  : %3.3f",
                  (float)_total_bytes / _total_methods);
-  tty->print_cr ("  #blocks  : %8d",
+  tty->print_cr ("  #blocks  : %8ld",
                  _total_blocks);
   tty->print_cr ("    avg normal predecessors    : %3.3f  max normal predecessors    : %3d",
                  (float)_total_edges / _total_blocks,
@@ -564,7 +559,7 @@ void MethodLiveness::print_times() {
                  _max_block_exc_edges);
   tty->print_cr ("    avg visits                 : %3.3f",
                  (float)_total_visits / _total_blocks);
-  tty->print_cr ("  #locals queried : %8d    #live : %8d   %%live : %2.2f%%",
+  tty->print_cr ("  #locals queried : %8ld    #live : %8ld   %%live : %2.2f%%",
                  _total_locals_queried,
                  _total_live_locals_queried,
                  100.0 * _total_live_locals_queried / _total_locals_queried);
@@ -574,16 +569,11 @@ void MethodLiveness::print_times() {
 
 
 MethodLiveness::BasicBlock::BasicBlock(MethodLiveness *analyzer, int start, int limit) :
-         _gen((uintptr_t*)analyzer->arena()->Amalloc(BytesPerWord * analyzer->bit_map_size_words()),
-                         analyzer->bit_map_size_bits()),
-         _kill((uintptr_t*)analyzer->arena()->Amalloc(BytesPerWord * analyzer->bit_map_size_words()),
-                         analyzer->bit_map_size_bits()),
-         _entry((uintptr_t*)analyzer->arena()->Amalloc(BytesPerWord * analyzer->bit_map_size_words()),
-                         analyzer->bit_map_size_bits()),
-         _normal_exit((uintptr_t*)analyzer->arena()->Amalloc(BytesPerWord * analyzer->bit_map_size_words()),
-                         analyzer->bit_map_size_bits()),
-         _exception_exit((uintptr_t*)analyzer->arena()->Amalloc(BytesPerWord * analyzer->bit_map_size_words()),
-                         analyzer->bit_map_size_bits()),
+         _gen(analyzer->arena(),            analyzer->bit_map_size_bits()),
+         _kill(analyzer->arena(),           analyzer->bit_map_size_bits()),
+         _entry(analyzer->arena(),          analyzer->bit_map_size_bits()),
+         _normal_exit(analyzer->arena(),    analyzer->bit_map_size_bits()),
+         _exception_exit(analyzer->arena(), analyzer->bit_map_size_bits()),
          _last_bci(-1) {
   _analyzer = analyzer;
   _start_bci = start;
@@ -592,14 +582,6 @@ MethodLiveness::BasicBlock::BasicBlock(MethodLiveness *analyzer, int start, int 
     new (analyzer->arena()) GrowableArray<MethodLiveness::BasicBlock*>(analyzer->arena(), 5, 0, NULL);
   _exception_predecessors =
     new (analyzer->arena()) GrowableArray<MethodLiveness::BasicBlock*>(analyzer->arena(), 5, 0, NULL);
-  _normal_exit.clear();
-  _exception_exit.clear();
-  _entry.clear();
-
-  // this initialization is not strictly necessary.
-  // _gen and _kill are cleared at the beginning of compute_gen_kill_range()
-  _gen.clear();
-  _kill.clear();
 }
 
 
@@ -991,17 +973,16 @@ void MethodLiveness::BasicBlock::propagate(MethodLiveness *ml) {
   }
 }
 
-bool MethodLiveness::BasicBlock::merge_normal(BitMap other) {
+bool MethodLiveness::BasicBlock::merge_normal(const BitMap& other) {
   return _normal_exit.set_union_with_result(other);
 }
 
-bool MethodLiveness::BasicBlock::merge_exception(BitMap other) {
+bool MethodLiveness::BasicBlock::merge_exception(const BitMap& other) {
   return _exception_exit.set_union_with_result(other);
 }
 
 MethodLivenessResult MethodLiveness::BasicBlock::get_liveness_at(ciMethod* method, int bci) {
-  MethodLivenessResult answer(NEW_RESOURCE_ARRAY(BitMap::bm_word_t, _analyzer->bit_map_size_words()),
-                _analyzer->bit_map_size_bits());
+  MethodLivenessResult answer(_analyzer->bit_map_size_bits());
   answer.set_is_valid();
 
 #ifndef ASSERT
@@ -1013,8 +994,8 @@ MethodLivenessResult MethodLiveness::BasicBlock::get_liveness_at(ciMethod* metho
 
 #ifdef ASSERT
   ResourceMark rm;
-  BitMap g(_gen.size()); g.set_from(_gen);
-  BitMap k(_kill.size()); k.set_from(_kill);
+  ResourceBitMap g(_gen.size()); g.set_from(_gen);
+  ResourceBitMap k(_kill.size()); k.set_from(_kill);
 #endif
   if (_last_bci != bci || trueInDebug) {
     ciBytecodeStream bytes(method);
@@ -1026,7 +1007,6 @@ MethodLivenessResult MethodLiveness::BasicBlock::get_liveness_at(ciMethod* metho
     _last_bci = bci;
   }
 
-  answer.clear();
   answer.set_union(_normal_exit);
   answer.set_difference(_kill);
   answer.set_union(_gen);

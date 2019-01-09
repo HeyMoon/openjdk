@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -324,6 +324,8 @@ public final class OptimisticTypesPersistence {
                 }
                 versionDir.mkdirs();
                 if (versionDir.isDirectory()) {
+                    //FIXME:Logger is disabled as Context.getContext() always returns null here because global scope object will not be created
+                    //by the time this method gets invoked
                     getLogger().info("Optimistic type persistence directory is " + versionDir);
                     return versionDir;
                 }
@@ -353,6 +355,8 @@ public final class OptimisticTypesPersistence {
         }
     }
 
+    private static final String ANCHOR_PROPS = "anchor.properties";
+
     /**
      * In order to ensure that changes in Nashorn code don't cause corruption in the data, we'll create a
      * per-code-version directory. Normally, this will create the SHA-1 digest of the nashorn.jar. In case the classpath
@@ -368,7 +372,7 @@ public final class OptimisticTypesPersistence {
         // getResource("OptimisticTypesPersistence.class") but behavior of getResource with regard to its willingness
         // to hand out URLs to .class files is also unspecified. Therefore, the most robust way to obtain an URL to our
         // package is to have a small non-class anchor file and start out from its URL.
-        final URL url = OptimisticTypesPersistence.class.getResource("anchor.properties");
+        final URL url = OptimisticTypesPersistence.class.getResource(ANCHOR_PROPS);
         final String protocol = url.getProtocol();
         if (protocol.equals("jar")) {
             // Normal deployment: nashorn.jar
@@ -391,14 +395,14 @@ public final class OptimisticTypesPersistence {
             final String fileStr = url.getFile();
             final String className = OptimisticTypesPersistence.class.getName();
             final int packageNameLen = className.lastIndexOf('.');
-            final String dirStr = fileStr.substring(0, fileStr.length() - packageNameLen - 1);
+            final String dirStr = fileStr.substring(0, fileStr.length() - packageNameLen - 1 - ANCHOR_PROPS.length());
             final File dir = new File(dirStr);
             return "dev-" + new SimpleDateFormat("yyyyMMdd-HHmmss").format(new Date(getLastModifiedClassFile(
                     dir, 0L)));
         } else if(protocol.equals("jrt")) {
             return getJrtVersionDirName();
         } else {
-            throw new AssertionError();
+            throw new AssertionError("unknown protocol");
         }
     }
 
@@ -448,10 +452,12 @@ public final class OptimisticTypesPersistence {
     private static DebugLogger getLogger() {
         try {
             return Context.getContext().getLogger(RecompilableScriptFunctionData.class);
+        } catch (final NullPointerException e) {
+            //Don't print stacktrace until we revisit this, NPE is a known issue here
         } catch (final Exception e) {
             e.printStackTrace();
-            return DebugLogger.DISABLED_LOGGER;
         }
+        return DebugLogger.DISABLED_LOGGER;
     }
 
     private static void scheduleCleanup() {
@@ -556,13 +562,15 @@ public final class OptimisticTypesPersistence {
         return Math.max(0, Integer.parseInt(str));
     }
 
+    private static final String JRT_NASHORN_DIR = "/modules/jdk.scripting.nashorn";
+
     // version directory name if nashorn is loaded from jrt:/ URL
     private static String getJrtVersionDirName() throws Exception {
         final FileSystem fs = getJrtFileSystem();
         // consider all .class resources under nashorn module to compute checksum
-        final Path nashorn = fs.getPath("/jdk.scripting.nashorn");
+        final Path nashorn = fs.getPath(JRT_NASHORN_DIR);
         if (! Files.isDirectory(nashorn)) {
-            throw new FileNotFoundException("missing /jdk.scripting.nashorn dir in jrt fs");
+            throw new FileNotFoundException("missing " + JRT_NASHORN_DIR + " dir in jrt fs");
         }
         final MessageDigest digest = MessageDigest.getInstance("SHA-1");
         Files.walk(nashorn).forEach(new Consumer<Path>() {

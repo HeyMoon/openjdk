@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,9 +30,9 @@
 #include "gc/shared/blockOffsetTable.inline.hpp"
 #include "gc/shared/collectedHeap.inline.hpp"
 #include "gc/shared/genCollectedHeap.hpp"
-#include "gc/shared/liveRange.hpp"
 #include "gc/shared/space.inline.hpp"
 #include "gc/shared/spaceDecorator.hpp"
+#include "logging/logStream.inline.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.inline.hpp"
@@ -73,11 +73,7 @@ void CompactibleFreeListSpace::set_cms_values() {
 }
 
 // Constructor
-CompactibleFreeListSpace::CompactibleFreeListSpace(BlockOffsetSharedArray* bs,
-  MemRegion mr, bool use_adaptive_freelists,
-  FreeBlockDictionary<FreeChunk>::DictionaryChoice dictionaryChoice) :
-  _dictionaryChoice(dictionaryChoice),
-  _adaptive_freelists(use_adaptive_freelists),
+CompactibleFreeListSpace::CompactibleFreeListSpace(BlockOffsetSharedArray* bs, MemRegion mr) :
   _bt(bs, mr),
   // free list locks are in the range of values taken by _lockRank
   // This range currently is [_leaf+2, _leaf+3]
@@ -100,48 +96,17 @@ CompactibleFreeListSpace::CompactibleFreeListSpace(BlockOffsetSharedArray* bs,
          "FreeChunk is larger than expected");
   _bt.set_space(this);
   initialize(mr, SpaceDecorator::Clear, SpaceDecorator::Mangle);
-  // We have all of "mr", all of which we place in the dictionary
-  // as one big chunk. We'll need to decide here which of several
-  // possible alternative dictionary implementations to use. For
-  // now the choice is easy, since we have only one working
-  // implementation, namely, the simple binary tree (splaying
-  // temporarily disabled).
-  switch (dictionaryChoice) {
-    case FreeBlockDictionary<FreeChunk>::dictionaryBinaryTree:
-      _dictionary = new AFLBinaryTreeDictionary(mr);
-      break;
-    case FreeBlockDictionary<FreeChunk>::dictionarySplayTree:
-    case FreeBlockDictionary<FreeChunk>::dictionarySkipList:
-    default:
-      warning("dictionaryChoice: selected option not understood; using"
-              " default BinaryTreeDictionary implementation instead.");
-  }
+
+  _dictionary = new AFLBinaryTreeDictionary(mr);
+
   assert(_dictionary != NULL, "CMS dictionary initialization");
   // The indexed free lists are initially all empty and are lazily
   // filled in on demand. Initialize the array elements to NULL.
   initializeIndexedFreeListArray();
 
-  // Not using adaptive free lists assumes that allocation is first
-  // from the linAB's.  Also a cms perm gen which can be compacted
-  // has to have the klass's klassKlass allocated at a lower
-  // address in the heap than the klass so that the klassKlass is
-  // moved to its new location before the klass is moved.
-  // Set the _refillSize for the linear allocation blocks
-  if (!use_adaptive_freelists) {
-    FreeChunk* fc = _dictionary->get_chunk(mr.word_size(),
-                                           FreeBlockDictionary<FreeChunk>::atLeast);
-    // The small linAB initially has all the space and will allocate
-    // a chunk of any size.
-    HeapWord* addr = (HeapWord*) fc;
-    _smallLinearAllocBlock.set(addr, fc->size() ,
-      1024*SmallForLinearAlloc, fc->size());
-    // Note that _unallocated_block is not updated here.
-    // Allocations from the linear allocation block should
-    // update it.
-  } else {
-    _smallLinearAllocBlock.set(0, 0, 1024*SmallForLinearAlloc,
-                               SmallForLinearAlloc);
-  }
+  _smallLinearAllocBlock.set(0, 0, 1024*SmallForLinearAlloc,
+                             SmallForLinearAlloc);
+
   // CMSIndexedFreeListReplenish should be at least 1
   CMSIndexedFreeListReplenish = MAX2((uintx)1, CMSIndexedFreeListReplenish);
   _promoInfo.setSpace(this);
@@ -254,6 +219,10 @@ void CompactibleFreeListSpace::initializeIndexedFreeListArray() {
   }
 }
 
+size_t CompactibleFreeListSpace::obj_size(const HeapWord* addr) const {
+  return adjustObjectSize(oop(addr)->size());
+}
+
 void CompactibleFreeListSpace::resetIndexedFreeListArray() {
   for (size_t i = 1; i < IndexSetSize; i++) {
     assert(_indexedFreeList[i].size() == (size_t) i,
@@ -297,22 +266,7 @@ void CompactibleFreeListSpace::reset_after_compaction() {
   MemRegion mr(compaction_top(), end());
   reset(mr);
   // Now refill the linear allocation block(s) if possible.
-  if (_adaptive_freelists) {
-    refillLinearAllocBlocksIfNeeded();
-  } else {
-    // Place as much of mr in the linAB as we can get,
-    // provided it was big enough to go into the dictionary.
-    FreeChunk* fc = dictionary()->find_largest_dict();
-    if (fc != NULL) {
-      assert(fc->size() == mr.word_size(),
-             "Why was the chunk broken up?");
-      removeChunkFromDictionary(fc);
-      HeapWord* addr = (HeapWord*) fc;
-      _smallLinearAllocBlock.set(addr, fc->size() ,
-        1024*SmallForLinearAlloc, fc->size());
-      // Note that _unallocated_block is not updated here.
-    }
-  }
+  refillLinearAllocBlocksIfNeeded();
 }
 
 // Walks the entire dictionary, returning a coterminal
@@ -445,23 +399,21 @@ void CompactibleFreeListSpace::print_on(outputStream* st) const {
 
   // dump_memory_block(_smallLinearAllocBlock->_ptr, 128);
 
-  st->print_cr(" _fitStrategy = %s, _adaptive_freelists = %s",
-               _fitStrategy?"true":"false", _adaptive_freelists?"true":"false");
+  st->print_cr(" _fitStrategy = %s", BOOL_TO_STR(_fitStrategy));
 }
 
 void CompactibleFreeListSpace::print_indexed_free_lists(outputStream* st)
 const {
-  reportIndexedFreeListStatistics();
-  gclog_or_tty->print_cr("Layout of Indexed Freelists");
-  gclog_or_tty->print_cr("---------------------------");
+  reportIndexedFreeListStatistics(st);
+  st->print_cr("Layout of Indexed Freelists");
+  st->print_cr("---------------------------");
   AdaptiveFreeList<FreeChunk>::print_labels_on(st, "size");
   for (size_t i = IndexSetStart; i < IndexSetSize; i += IndexSetStride) {
-    _indexedFreeList[i].print_on(gclog_or_tty);
-    for (FreeChunk* fc = _indexedFreeList[i].head(); fc != NULL;
-         fc = fc->next()) {
-      gclog_or_tty->print_cr("\t[" PTR_FORMAT "," PTR_FORMAT ")  %s",
-                          p2i(fc), p2i((HeapWord*)fc + i),
-                          fc->cantCoalesce() ? "\t CC" : "");
+    _indexedFreeList[i].print_on(st);
+    for (FreeChunk* fc = _indexedFreeList[i].head(); fc != NULL; fc = fc->next()) {
+      st->print_cr("\t[" PTR_FORMAT "," PTR_FORMAT ")  %s",
+                   p2i(fc), p2i((HeapWord*)fc + i),
+                   fc->cantCoalesce() ? "\t CC" : "");
     }
   }
 }
@@ -473,7 +425,7 @@ const {
 
 void CompactibleFreeListSpace::print_dictionary_free_lists(outputStream* st)
 const {
-  _dictionary->report_statistics();
+  _dictionary->report_statistics(st);
   st->print_cr("Layout of Freelists in Tree");
   st->print_cr("---------------------------");
   _dictionary->print_free_lists(st);
@@ -523,54 +475,61 @@ size_t BlkPrintingClosure::do_blk(HeapWord* addr) {
   return sz;
 }
 
-void CompactibleFreeListSpace::dump_at_safepoint_with_locks(CMSCollector* c,
-  outputStream* st) {
-  st->print_cr("\n=========================");
+void CompactibleFreeListSpace::dump_at_safepoint_with_locks(CMSCollector* c, outputStream* st) {
+  st->print_cr("=========================");
   st->print_cr("Block layout in CMS Heap:");
   st->print_cr("=========================");
   BlkPrintingClosure  bpcl(c, this, c->markBitMap(), st);
   blk_iterate(&bpcl);
 
-  st->print_cr("\n=======================================");
+  st->print_cr("=======================================");
   st->print_cr("Order & Layout of Promotion Info Blocks");
   st->print_cr("=======================================");
   print_promo_info_blocks(st);
 
-  st->print_cr("\n===========================");
+  st->print_cr("===========================");
   st->print_cr("Order of Indexed Free Lists");
   st->print_cr("=========================");
   print_indexed_free_lists(st);
 
-  st->print_cr("\n=================================");
+  st->print_cr("=================================");
   st->print_cr("Order of Free Lists in Dictionary");
   st->print_cr("=================================");
   print_dictionary_free_lists(st);
 }
 
 
-void CompactibleFreeListSpace::reportFreeListStatistics() const {
+void CompactibleFreeListSpace::reportFreeListStatistics(const char* title) const {
   assert_lock_strong(&_freelistLock);
-  assert(PrintFLSStatistics != 0, "Reporting error");
-  _dictionary->report_statistics();
-  if (PrintFLSStatistics > 1) {
-    reportIndexedFreeListStatistics();
+  Log(gc, freelist, stats) log;
+  if (!log.is_debug()) {
+    return;
+  }
+  log.debug("%s", title);
+
+  LogStream out(log.debug());
+  _dictionary->report_statistics(&out);
+
+  if (log.is_trace()) {
+    LogStream trace_out(log.trace());
+    reportIndexedFreeListStatistics(&trace_out);
     size_t total_size = totalSizeInIndexedFreeLists() +
                        _dictionary->total_chunk_size(DEBUG_ONLY(freelistLock()));
-    gclog_or_tty->print(" free=" SIZE_FORMAT " frag=%1.4f\n", total_size, flsFrag());
+    log.trace(" free=" SIZE_FORMAT " frag=%1.4f", total_size, flsFrag());
   }
 }
 
-void CompactibleFreeListSpace::reportIndexedFreeListStatistics() const {
+void CompactibleFreeListSpace::reportIndexedFreeListStatistics(outputStream* st) const {
   assert_lock_strong(&_freelistLock);
-  gclog_or_tty->print("Statistics for IndexedFreeLists:\n"
-                      "--------------------------------\n");
+  st->print_cr("Statistics for IndexedFreeLists:");
+  st->print_cr("--------------------------------");
   size_t total_size = totalSizeInIndexedFreeLists();
-  size_t   free_blocks = numFreeBlocksInIndexedFreeLists();
-  gclog_or_tty->print("Total Free Space: " SIZE_FORMAT "\n", total_size);
-  gclog_or_tty->print("Max   Chunk Size: " SIZE_FORMAT "\n", maxChunkSizeInIndexedFreeLists());
-  gclog_or_tty->print("Number of Blocks: " SIZE_FORMAT "\n", free_blocks);
+  size_t free_blocks = numFreeBlocksInIndexedFreeLists();
+  st->print_cr("Total Free Space: " SIZE_FORMAT, total_size);
+  st->print_cr("Max   Chunk Size: " SIZE_FORMAT, maxChunkSizeInIndexedFreeLists());
+  st->print_cr("Number of Blocks: " SIZE_FORMAT, free_blocks);
   if (free_blocks != 0) {
-    gclog_or_tty->print("Av.  Block  Size: " SIZE_FORMAT "\n", total_size/free_blocks);
+    st->print_cr("Av.  Block  Size: " SIZE_FORMAT, total_size/free_blocks);
   }
 }
 
@@ -617,28 +576,14 @@ void CompactibleFreeListSpace::set_end(HeapWord* value) {
       // Now, take this new chunk and add it to the free blocks.
       // Note that the BOT has not yet been updated for this block.
       size_t newFcSize = pointer_delta(value, prevEnd);
-      // XXX This is REALLY UGLY and should be fixed up. XXX
-      if (!_adaptive_freelists && _smallLinearAllocBlock._ptr == NULL) {
-        // Mark the boundary of the new block in BOT
-        _bt.mark_block(prevEnd, value);
-        // put it all in the linAB
-        MutexLockerEx x(parDictionaryAllocLock(),
-                        Mutex::_no_safepoint_check_flag);
-        _smallLinearAllocBlock._ptr = prevEnd;
-        _smallLinearAllocBlock._word_size = newFcSize;
-        repairLinearAllocBlock(&_smallLinearAllocBlock);
-        // Births of chunks put into a LinAB are not recorded.  Births
-        // of chunks as they are allocated out of a LinAB are.
-      } else {
-        // Add the block to the free lists, if possible coalescing it
-        // with the last free block, and update the BOT and census data.
-        addChunkToFreeListsAtEndRecordingStats(prevEnd, newFcSize);
-      }
+      // Add the block to the free lists, if possible coalescing it
+      // with the last free block, and update the BOT and census data.
+      addChunkToFreeListsAtEndRecordingStats(prevEnd, newFcSize);
     }
   }
 }
 
-class FreeListSpace_DCTOC : public Filtering_DCTOC {
+class FreeListSpaceDCTOC : public FilteringDCTOC {
   CompactibleFreeListSpace* _cfls;
   CMSCollector* _collector;
   bool _parallel;
@@ -658,21 +603,21 @@ protected:
   walk_mem_region_with_cl_DECL(FilteringClosure);
 
 public:
-  FreeListSpace_DCTOC(CompactibleFreeListSpace* sp,
-                      CMSCollector* collector,
-                      ExtendedOopClosure* cl,
-                      CardTableModRefBS::PrecisionStyle precision,
-                      HeapWord* boundary,
-                      bool parallel) :
-    Filtering_DCTOC(sp, cl, precision, boundary),
+  FreeListSpaceDCTOC(CompactibleFreeListSpace* sp,
+                     CMSCollector* collector,
+                     ExtendedOopClosure* cl,
+                     CardTableModRefBS::PrecisionStyle precision,
+                     HeapWord* boundary,
+                     bool parallel) :
+    FilteringDCTOC(sp, cl, precision, boundary),
     _cfls(sp), _collector(collector), _parallel(parallel) {}
 };
 
 // We de-virtualize the block-related calls below, since we know that our
 // space is a CompactibleFreeListSpace.
 
-#define FreeListSpace_DCTOC__walk_mem_region_with_cl_DEFN(ClosureType)          \
-void FreeListSpace_DCTOC::walk_mem_region_with_cl(MemRegion mr,                 \
+#define FreeListSpaceDCTOC__walk_mem_region_with_cl_DEFN(ClosureType)           \
+void FreeListSpaceDCTOC::walk_mem_region_with_cl(MemRegion mr,                  \
                                                  HeapWord* bottom,              \
                                                  HeapWord* top,                 \
                                                  ClosureType* cl) {             \
@@ -682,10 +627,10 @@ void FreeListSpace_DCTOC::walk_mem_region_with_cl(MemRegion mr,                 
      walk_mem_region_with_cl_nopar(mr, bottom, top, cl);                        \
    }                                                                            \
 }                                                                               \
-void FreeListSpace_DCTOC::walk_mem_region_with_cl_par(MemRegion mr,             \
-                                                      HeapWord* bottom,         \
-                                                      HeapWord* top,            \
-                                                      ClosureType* cl) {        \
+void FreeListSpaceDCTOC::walk_mem_region_with_cl_par(MemRegion mr,              \
+                                                     HeapWord* bottom,          \
+                                                     HeapWord* top,             \
+                                                     ClosureType* cl) {         \
   /* Skip parts that are before "mr", in case "block_start" sent us             \
      back too far. */                                                           \
   HeapWord* mr_start = mr.start();                                              \
@@ -702,17 +647,17 @@ void FreeListSpace_DCTOC::walk_mem_region_with_cl_par(MemRegion mr,             
         !_cfls->CompactibleFreeListSpace::obj_allocated_since_save_marks(       \
                     oop(bottom)) &&                                             \
         !_collector->CMSCollector::is_dead_obj(oop(bottom))) {                  \
-      size_t word_sz = oop(bottom)->oop_iterate(cl, mr);                        \
+      size_t word_sz = oop(bottom)->oop_iterate_size(cl, mr);                   \
       bottom += _cfls->adjustObjectSize(word_sz);                               \
     } else {                                                                    \
       bottom += _cfls->CompactibleFreeListSpace::block_size(bottom);            \
     }                                                                           \
   }                                                                             \
 }                                                                               \
-void FreeListSpace_DCTOC::walk_mem_region_with_cl_nopar(MemRegion mr,           \
-                                                        HeapWord* bottom,       \
-                                                        HeapWord* top,          \
-                                                        ClosureType* cl) {      \
+void FreeListSpaceDCTOC::walk_mem_region_with_cl_nopar(MemRegion mr,            \
+                                                       HeapWord* bottom,        \
+                                                       HeapWord* top,           \
+                                                       ClosureType* cl) {       \
   /* Skip parts that are before "mr", in case "block_start" sent us             \
      back too far. */                                                           \
   HeapWord* mr_start = mr.start();                                              \
@@ -729,7 +674,7 @@ void FreeListSpace_DCTOC::walk_mem_region_with_cl_nopar(MemRegion mr,           
         !_cfls->CompactibleFreeListSpace::obj_allocated_since_save_marks(       \
                     oop(bottom)) &&                                             \
         !_collector->CMSCollector::is_dead_obj(oop(bottom))) {                  \
-      size_t word_sz = oop(bottom)->oop_iterate(cl, mr);                        \
+      size_t word_sz = oop(bottom)->oop_iterate_size(cl, mr);                   \
       bottom += _cfls->adjustObjectSize(word_sz);                               \
     } else {                                                                    \
       bottom += _cfls->CompactibleFreeListSpace::block_size_nopar(bottom);      \
@@ -740,15 +685,15 @@ void FreeListSpace_DCTOC::walk_mem_region_with_cl_nopar(MemRegion mr,           
 // (There are only two of these, rather than N, because the split is due
 // only to the introduction of the FilteringClosure, a local part of the
 // impl of this abstraction.)
-FreeListSpace_DCTOC__walk_mem_region_with_cl_DEFN(ExtendedOopClosure)
-FreeListSpace_DCTOC__walk_mem_region_with_cl_DEFN(FilteringClosure)
+FreeListSpaceDCTOC__walk_mem_region_with_cl_DEFN(ExtendedOopClosure)
+FreeListSpaceDCTOC__walk_mem_region_with_cl_DEFN(FilteringClosure)
 
 DirtyCardToOopClosure*
 CompactibleFreeListSpace::new_dcto_cl(ExtendedOopClosure* cl,
                                       CardTableModRefBS::PrecisionStyle precision,
                                       HeapWord* boundary,
                                       bool parallel) {
-  return new FreeListSpace_DCTOC(this, _collector, cl, precision, boundary, parallel);
+  return new FreeListSpaceDCTOC(this, _collector, cl, precision, boundary, parallel);
 }
 
 
@@ -977,17 +922,12 @@ size_t CompactibleFreeListSpace::block_size(const HeapWord* p) const {
         return res;
       }
     } else {
-      // must read from what 'p' points to in each loop.
-      Klass* k = ((volatile oopDesc*)p)->klass_or_null();
+      // Ensure klass read before size.
+      Klass* k = oop(p)->klass_or_null_acquire();
       if (k != NULL) {
         assert(k->is_klass(), "Should really be klass oop.");
         oop o = (oop)p;
         assert(o->is_oop(true /* ignore mark word */), "Should be an oop.");
-
-        // Bugfix for systems with weak memory model (PPC64/IA64).
-        // The object o may be an array. Acquire to make sure that the array
-        // size (third word) is consistent.
-        OrderAccess::acquire();
 
         size_t res = o->size_given_klass(k);
         res = adjustObjectSize(res);
@@ -1032,20 +972,12 @@ const {
         return res;
       }
     } else {
-      // must read from what 'p' points to in each loop.
-      Klass* k = ((volatile oopDesc*)p)->klass_or_null();
-      // We trust the size of any object that has a non-NULL
-      // klass and (for those in the perm gen) is parsable
-      // -- irrespective of its conc_safe-ty.
+      // Ensure klass read before size.
+      Klass* k = oop(p)->klass_or_null_acquire();
       if (k != NULL) {
         assert(k->is_klass(), "Should really be klass oop.");
         oop o = (oop)p;
         assert(o->is_oop(), "Should be an oop");
-
-        // Bugfix for systems with weak memory model (PPC64/IA64).
-        // The object o may be an array. Acquire to make sure that the array
-        // size (third word) is consistent.
-        OrderAccess::acquire();
 
         size_t res = o->size_given_klass(k);
         res = adjustObjectSize(res);
@@ -1083,7 +1015,7 @@ bool CompactibleFreeListSpace::block_is_obj(const HeapWord* p) const {
   FreeChunk* fc = (FreeChunk*)p;
   assert(is_in_reserved(p), "Should be in space");
   if (FreeChunk::indicatesFreeChunk(p)) return false;
-  Klass* k = oop(p)->klass_or_null();
+  Klass* k = oop(p)->klass_or_null_acquire();
   if (k != NULL) {
     // Ignore mark word because it may have been used to
     // chain together promoted objects (the last one
@@ -1177,11 +1109,7 @@ HeapWord* CompactibleFreeListSpace::allocate(size_t size) {
   assert(size == adjustObjectSize(size),
          "use adjustObjectSize() before calling into allocate()");
 
-  if (_adaptive_freelists) {
-    res = allocate_adaptive_freelists(size);
-  } else {  // non-adaptive free lists
-    res = allocate_non_adaptive_freelists(size);
-  }
+  res = allocate_adaptive_freelists(size);
 
   if (res != NULL) {
     // check that res does lie in this space!
@@ -1198,27 +1126,6 @@ HeapWord* CompactibleFreeListSpace::allocate(size_t size) {
     _bt.verify_not_unallocated(res, size);
     // mangle a just allocated object with a distinct pattern.
     debug_only(fc->mangleAllocated(size));
-  }
-
-  return res;
-}
-
-HeapWord* CompactibleFreeListSpace::allocate_non_adaptive_freelists(size_t size) {
-  HeapWord* res = NULL;
-  // try and use linear allocation for smaller blocks
-  if (size < _smallLinearAllocBlock._allocation_size_limit) {
-    // if successful, the following also adjusts block offset table
-    res = getChunkFromSmallLinearAllocBlock(size);
-  }
-  // Else triage to indexed lists for smaller sizes
-  if (res == NULL) {
-    if (size < SmallForDictionary) {
-      res = (HeapWord*) getChunkFromIndexedFreeList(size);
-    } else {
-      // else get it from the big dictionary; if even this doesn't
-      // work we are out of luck.
-      res = (HeapWord*)getChunkFromDictionaryExact(size);
-    }
   }
 
   return res;
@@ -1281,9 +1188,6 @@ size_t CompactibleFreeListSpace::expansionSpaceRequired(size_t obj_size) const {
   // bigLAB or a smallLAB plus refilling a PromotionInfo object.  MinChunkSize
   // is added because the dictionary may over-allocate to avoid fragmentation.
   size_t space = obj_size;
-  if (!_adaptive_freelists) {
-    space = MAX2(space, _smallLinearAllocBlock._refillSize);
-  }
   space += _promoInfo.refillSize() + 2 * MinChunkSize;
   return space;
 }
@@ -1698,11 +1602,7 @@ CompactibleFreeListSpace::returnChunkToFreeList(FreeChunk* fc) {
   size_t size = fc->size();
   _bt.verify_single_block((HeapWord*) fc, size);
   _bt.verify_not_unallocated((HeapWord*) fc, size);
-  if (_adaptive_freelists) {
-    _indexedFreeList[size].return_chunk_at_tail(fc);
-  } else {
-    _indexedFreeList[size].return_chunk_at_head(fc);
-  }
+  _indexedFreeList[size].return_chunk_at_tail(fc);
 #ifndef PRODUCT
   if (CMSCollector::abstract_state() != CMSCollector::Sweeping) {
      _indexedFreeList[size].verify_stats();
@@ -1921,28 +1821,17 @@ CompactibleFreeListSpace::sweep_completed() {
 void
 CompactibleFreeListSpace::gc_prologue() {
   assert_locked();
-  if (PrintFLSStatistics != 0) {
-    gclog_or_tty->print("Before GC:\n");
-    reportFreeListStatistics();
-  }
+  reportFreeListStatistics("Before GC:");
   refillLinearAllocBlocksIfNeeded();
 }
 
 void
 CompactibleFreeListSpace::gc_epilogue() {
   assert_locked();
-  if (PrintGCDetails && Verbose && !_adaptive_freelists) {
-    if (_smallLinearAllocBlock._word_size == 0)
-      warning("CompactibleFreeListSpace(epilogue):: Linear allocation failure");
-  }
   assert(_promoInfo.noPromotions(), "_promoInfo inconsistency");
   _promoInfo.stopTrackingPromotions();
   repairLinearAllocationBlocks();
-  // Print Space's stats
-  if (PrintFLSStatistics != 0) {
-    gclog_or_tty->print("After GC:\n");
-    reportFreeListStatistics();
-  }
+  reportFreeListStatistics("After GC:");
 }
 
 // Iteration support, mostly delegated from a CMS generation
@@ -1959,9 +1848,9 @@ void CompactibleFreeListSpace::save_marks() {
   MemRegion ur    = used_region();
   MemRegion urasm = used_region_at_save_marks();
   assert(ur.contains(urasm),
-         err_msg(" Error at save_marks(): [" PTR_FORMAT "," PTR_FORMAT ")"
-                 " should contain [" PTR_FORMAT "," PTR_FORMAT ")",
-                 p2i(ur.start()), p2i(ur.end()), p2i(urasm.start()), p2i(urasm.end())));
+         " Error at save_marks(): [" PTR_FORMAT "," PTR_FORMAT ")"
+         " should contain [" PTR_FORMAT "," PTR_FORMAT ")",
+         p2i(ur.start()), p2i(ur.end()), p2i(urasm.start()), p2i(urasm.end()));
 #endif
   // inform allocator that promotions should be tracked.
   assert(_promoInfo.noPromotions(), "_promoInfo inconsistency");
@@ -2032,11 +1921,6 @@ CompactibleFreeListSpace::refillLinearAllocBlockIfNeeded(LinearAllocBlock* blk) 
   if (blk->_ptr == NULL) {
     refillLinearAllocBlock(blk);
   }
-  if (PrintMiscellaneous && Verbose) {
-    if (blk->_word_size == 0) {
-      warning("CompactibleFreeListSpace(prologue):: Linear allocation failure");
-    }
-  }
 }
 
 void
@@ -2058,13 +1942,6 @@ CompactibleFreeListSpace::refillLinearAllocBlock(LinearAllocBlock* blk) {
     blk->_word_size = fc->size();
     fc->dontCoalesce();   // to prevent sweeper from sweeping us up
   }
-}
-
-// Support for concurrent collection policy decisions.
-bool CompactibleFreeListSpace::should_concurrent_collect() const {
-  // In the future we might want to add in fragmentation stats --
-  // including erosion of the "mountain" into this decision as well.
-  return !adaptive_freelists() && linearAllocationWouldFail();
 }
 
 // Support for compaction
@@ -2122,9 +1999,7 @@ void CompactibleFreeListSpace::beginSweepFLCensus(
   size_t i;
   for (i = IndexSetStart; i < IndexSetSize; i += IndexSetStride) {
     AdaptiveFreeList<FreeChunk>* fl    = &_indexedFreeList[i];
-    if (PrintFLSStatistics > 1) {
-      gclog_or_tty->print("size[" SIZE_FORMAT "] : ", i);
-    }
+    log_trace(gc, freelist)("size[" SIZE_FORMAT "] : ", i);
     fl->compute_desired(inter_sweep_current, inter_sweep_estimate, intra_sweep_estimate);
     fl->set_coal_desired((ssize_t)((double)fl->desired() * CMSSmallCoalSurplusPercent));
     fl->set_before_sweep(fl->count());
@@ -2173,16 +2048,10 @@ void CompactibleFreeListSpace::clearFLCensus() {
 }
 
 void CompactibleFreeListSpace::endSweepFLCensus(size_t sweep_count) {
-  if (PrintFLSStatistics > 0) {
-    HeapWord* largestAddr = (HeapWord*) dictionary()->find_largest_dict();
-    gclog_or_tty->print_cr("CMS: Large block " PTR_FORMAT,
-                           p2i(largestAddr));
-  }
+  log_debug(gc, freelist)("CMS: Large block " PTR_FORMAT, p2i(dictionary()->find_largest_dict()));
   setFLSurplus();
   setFLHints();
-  if (PrintGC && PrintFLSCensus > 0) {
-    printFLCensus(sweep_count);
-  }
+  printFLCensus(sweep_count);
   clearFLCensus();
   assert_locked();
   _dictionary->end_sweep_dict_census(CMSLargeSplitSurplusPercent);
@@ -2321,14 +2190,15 @@ class VerifyAllBlksClosure: public BlkClosure {
       }
     }
     if (res == 0) {
-      gclog_or_tty->print_cr("Livelock: no rank reduction!");
-      gclog_or_tty->print_cr(
-        " Current:  addr = " PTR_FORMAT ", size = " SIZE_FORMAT ", obj = %s, live = %s \n"
-        " Previous: addr = " PTR_FORMAT ", size = " SIZE_FORMAT ", obj = %s, live = %s \n",
+      Log(gc, verify) log;
+      log.error("Livelock: no rank reduction!");
+      log.error(" Current:  addr = " PTR_FORMAT ", size = " SIZE_FORMAT ", obj = %s, live = %s \n"
+                " Previous: addr = " PTR_FORMAT ", size = " SIZE_FORMAT ", obj = %s, live = %s \n",
         p2i(addr),       res,        was_obj      ?"true":"false", was_live      ?"true":"false",
         p2i(_last_addr), _last_size, _last_was_obj?"true":"false", _last_was_live?"true":"false");
-      _sp->print_on(gclog_or_tty);
-      guarantee(false, "Seppuku!");
+      ResourceMark rm;
+      _sp->print_on(log.error_stream());
+      guarantee(false, "Verification failed.");
     }
     _last_addr = addr;
     _last_size = res;
@@ -2494,17 +2364,23 @@ void CompactibleFreeListSpace::check_free_list_consistency() const {
 
 void CompactibleFreeListSpace::printFLCensus(size_t sweep_count) const {
   assert_lock_strong(&_freelistLock);
+  LogTarget(Debug, gc, freelist, census) log;
+  if (!log.is_enabled()) {
+    return;
+  }
   AdaptiveFreeList<FreeChunk> total;
-  gclog_or_tty->print("end sweep# " SIZE_FORMAT "\n", sweep_count);
-  AdaptiveFreeList<FreeChunk>::print_labels_on(gclog_or_tty, "size");
+  log.print("end sweep# " SIZE_FORMAT, sweep_count);
+  ResourceMark rm;
+  outputStream* out = log.stream();
+  AdaptiveFreeList<FreeChunk>::print_labels_on(out, "size");
   size_t total_free = 0;
   for (size_t i = IndexSetStart; i < IndexSetSize; i += IndexSetStride) {
     const AdaptiveFreeList<FreeChunk> *fl = &_indexedFreeList[i];
     total_free += fl->count() * fl->size();
     if (i % (40*IndexSetStride) == 0) {
-      AdaptiveFreeList<FreeChunk>::print_labels_on(gclog_or_tty, "size");
+      AdaptiveFreeList<FreeChunk>::print_labels_on(out, "size");
     }
-    fl->print_on(gclog_or_tty);
+    fl->print_on(out);
     total.set_bfr_surp(    total.bfr_surp()     + fl->bfr_surp()    );
     total.set_surplus(    total.surplus()     + fl->surplus()    );
     total.set_desired(    total.desired()     + fl->desired()    );
@@ -2516,18 +2392,17 @@ void CompactibleFreeListSpace::printFLCensus(size_t sweep_count) const {
     total.set_split_births(total.split_births() + fl->split_births());
     total.set_split_deaths(total.split_deaths() + fl->split_deaths());
   }
-  total.print_on(gclog_or_tty, "TOTAL");
-  gclog_or_tty->print_cr("Total free in indexed lists "
-                         SIZE_FORMAT " words", total_free);
-  gclog_or_tty->print("growth: %8.5f  deficit: %8.5f\n",
-    (double)(total.split_births()+total.coal_births()-total.split_deaths()-total.coal_deaths())/
-            (total.prev_sweep() != 0 ? (double)total.prev_sweep() : 1.0),
-    (double)(total.desired() - total.count())/(total.desired() != 0 ? (double)total.desired() : 1.0));
-  _dictionary->print_dict_census();
+  total.print_on(out, "TOTAL");
+  log.print("Total free in indexed lists " SIZE_FORMAT " words", total_free);
+  log.print("growth: %8.5f  deficit: %8.5f",
+            (double)(total.split_births()+total.coal_births()-total.split_deaths()-total.coal_deaths())/
+                    (total.prev_sweep() != 0 ? (double)total.prev_sweep() : 1.0),
+            (double)(total.desired() - total.count())/(total.desired() != 0 ? (double)total.desired() : 1.0));
+  _dictionary->print_dict_census(out);
 }
 
 ///////////////////////////////////////////////////////////////////////////
-// CFLS_LAB
+// CompactibleFreeListSpaceLAB
 ///////////////////////////////////////////////////////////////////////////
 
 #define VECTOR_257(x)                                                                                  \
@@ -2546,12 +2421,12 @@ void CompactibleFreeListSpace::printFLCensus(size_t sweep_count) const {
 // generic OldPLABSize, whose static default is different; if overridden at the
 // command-line, this will get reinitialized via a call to
 // modify_initialization() below.
-AdaptiveWeightedAverage CFLS_LAB::_blocks_to_claim[]    =
-  VECTOR_257(AdaptiveWeightedAverage(OldPLABWeight, (float)CFLS_LAB::_default_dynamic_old_plab_size));
-size_t CFLS_LAB::_global_num_blocks[]  = VECTOR_257(0);
-uint   CFLS_LAB::_global_num_workers[] = VECTOR_257(0);
+AdaptiveWeightedAverage CompactibleFreeListSpaceLAB::_blocks_to_claim[]    =
+  VECTOR_257(AdaptiveWeightedAverage(OldPLABWeight, (float)CompactibleFreeListSpaceLAB::_default_dynamic_old_plab_size));
+size_t CompactibleFreeListSpaceLAB::_global_num_blocks[]  = VECTOR_257(0);
+uint   CompactibleFreeListSpaceLAB::_global_num_workers[] = VECTOR_257(0);
 
-CFLS_LAB::CFLS_LAB(CompactibleFreeListSpace* cfls) :
+CompactibleFreeListSpaceLAB::CompactibleFreeListSpaceLAB(CompactibleFreeListSpace* cfls) :
   _cfls(cfls)
 {
   assert(CompactibleFreeListSpace::IndexSetSize == 257, "Modify VECTOR_257() macro above");
@@ -2565,7 +2440,7 @@ CFLS_LAB::CFLS_LAB(CompactibleFreeListSpace* cfls) :
 
 static bool _CFLS_LAB_modified = false;
 
-void CFLS_LAB::modify_initialization(size_t n, unsigned wt) {
+void CompactibleFreeListSpaceLAB::modify_initialization(size_t n, unsigned wt) {
   assert(!_CFLS_LAB_modified, "Call only once");
   _CFLS_LAB_modified = true;
   for (size_t i = CompactibleFreeListSpace::IndexSetStart;
@@ -2575,7 +2450,7 @@ void CFLS_LAB::modify_initialization(size_t n, unsigned wt) {
   }
 }
 
-HeapWord* CFLS_LAB::alloc(size_t word_sz) {
+HeapWord* CompactibleFreeListSpaceLAB::alloc(size_t word_sz) {
   FreeChunk* res;
   assert(word_sz == _cfls->adjustObjectSize(word_sz), "Error");
   if (word_sz >=  CompactibleFreeListSpace::IndexSetSize) {
@@ -2605,7 +2480,7 @@ HeapWord* CFLS_LAB::alloc(size_t word_sz) {
 
 // Get a chunk of blocks of the right size and update related
 // book-keeping stats
-void CFLS_LAB::get_from_global_pool(size_t word_sz, AdaptiveFreeList<FreeChunk>* fl) {
+void CompactibleFreeListSpaceLAB::get_from_global_pool(size_t word_sz, AdaptiveFreeList<FreeChunk>* fl) {
   // Get the #blocks we want to claim
   size_t n_blks = (size_t)_blocks_to_claim[word_sz].average();
   assert(n_blks > 0, "Error");
@@ -2625,7 +2500,11 @@ void CFLS_LAB::get_from_global_pool(size_t word_sz, AdaptiveFreeList<FreeChunk>*
   // Lacking sufficient experience, CMSOldPLABResizeQuicker is disabled by
   // default.
   if (ResizeOldPLAB && CMSOldPLABResizeQuicker) {
-    size_t multiple = _num_blocks[word_sz]/(CMSOldPLABToleranceFactor*CMSOldPLABNumRefills*n_blks);
+    //
+    // On a 32-bit VM, the denominator can become zero because of integer overflow,
+    // which is why there is a cast to double.
+    //
+    size_t multiple = (size_t) (_num_blocks[word_sz]/(((double)CMSOldPLABToleranceFactor)*CMSOldPLABNumRefills*n_blks));
     n_blks +=  CMSOldPLABReactivityFactor*multiple*n_blks;
     n_blks = MIN2(n_blks, CMSOldPLABMax);
   }
@@ -2635,7 +2514,7 @@ void CFLS_LAB::get_from_global_pool(size_t word_sz, AdaptiveFreeList<FreeChunk>*
   _num_blocks[word_sz] += fl->count();
 }
 
-void CFLS_LAB::compute_desired_plab_size() {
+void CompactibleFreeListSpaceLAB::compute_desired_plab_size() {
   for (size_t i =  CompactibleFreeListSpace::IndexSetStart;
        i < CompactibleFreeListSpace::IndexSetSize;
        i += CompactibleFreeListSpace::IndexSetStride) {
@@ -2647,15 +2526,12 @@ void CFLS_LAB::compute_desired_plab_size() {
         _blocks_to_claim[i].sample(
           MAX2(CMSOldPLABMin,
           MIN2(CMSOldPLABMax,
-               _global_num_blocks[i]/(_global_num_workers[i]*CMSOldPLABNumRefills))));
+               _global_num_blocks[i]/_global_num_workers[i]/CMSOldPLABNumRefills)));
       }
       // Reset counters for next round
       _global_num_workers[i] = 0;
       _global_num_blocks[i] = 0;
-      if (PrintOldPLAB) {
-        gclog_or_tty->print_cr("[" SIZE_FORMAT "]: " SIZE_FORMAT,
-                               i, (size_t)_blocks_to_claim[i].average());
-      }
+      log_trace(gc, plab)("[" SIZE_FORMAT "]: " SIZE_FORMAT, i, (size_t)_blocks_to_claim[i].average());
     }
   }
 }
@@ -2664,7 +2540,7 @@ void CFLS_LAB::compute_desired_plab_size() {
 // access, one would need to take the FL locks and,
 // depending on how it is used, stagger access from
 // parallel threads to reduce contention.
-void CFLS_LAB::retire(int tid) {
+void CompactibleFreeListSpaceLAB::retire(int tid) {
   // We run this single threaded with the world stopped;
   // so no need for locks and such.
   NOT_PRODUCT(Thread* t = Thread::current();)
@@ -2692,10 +2568,8 @@ void CFLS_LAB::retire(int tid) {
           _indexedFreeList[i].set_size(i);
         }
       }
-      if (PrintOldPLAB) {
-        gclog_or_tty->print_cr("%d[" SIZE_FORMAT "]: " SIZE_FORMAT "/" SIZE_FORMAT "/" SIZE_FORMAT,
-                               tid, i, num_retire, _num_blocks[i], (size_t)_blocks_to_claim[i].average());
-      }
+      log_trace(gc, plab)("%d[" SIZE_FORMAT "]: " SIZE_FORMAT "/" SIZE_FORMAT "/" SIZE_FORMAT,
+                          tid, i, num_retire, _num_blocks[i], (size_t)_blocks_to_claim[i].average());
       // Reset stats for next round
       _num_blocks[i]         = 0;
     }
@@ -2875,9 +2749,9 @@ FreeChunk* CompactibleFreeListSpace::get_n_way_chunk_to_split(size_t word_sz, si
     smallSplitBirth(rem);
   }
   assert(n * word_sz == fc->size(),
-    err_msg("Chunk size " SIZE_FORMAT " is not exactly splittable by "
-    SIZE_FORMAT " sized chunks of size " SIZE_FORMAT,
-    fc->size(), n, word_sz));
+         "Chunk size " SIZE_FORMAT " is not exactly splittable by "
+         SIZE_FORMAT " sized chunks of size " SIZE_FORMAT,
+         fc->size(), n, word_sz);
   return fc;
 }
 
@@ -2953,6 +2827,11 @@ void CompactibleFreeListSpace:: par_get_chunk_of_blocks(size_t word_sz, size_t n
   par_get_chunk_of_blocks_dictionary(word_sz, n, fl);
 }
 
+const size_t CompactibleFreeListSpace::max_flag_size_for_task_size() const {
+  const size_t ergo_max = _old_gen->reserved().word_size() / (CardTableModRefBS::card_size_in_words * BitsPerWord);
+  return ergo_max;
+}
+
 // Set up the space's par_seq_tasks structure for work claiming
 // for parallel rescan. See CMSParRemarkTask where this is currently used.
 // XXX Need to suitably abstract and generalize this and the next
@@ -2989,7 +2868,7 @@ initialize_sequential_subtasks_for_marking(int n_threads,
   assert(task_size > CardTableModRefBS::card_size_in_words &&
          (task_size %  CardTableModRefBS::card_size_in_words == 0),
          "Otherwise arithmetic below would be incorrect");
-  MemRegion span = _gen->reserved();
+  MemRegion span = _old_gen->reserved();
   if (low != NULL) {
     if (span.contains(low)) {
       // Align low down to  a card boundary so that

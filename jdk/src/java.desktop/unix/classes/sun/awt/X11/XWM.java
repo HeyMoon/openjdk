@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,7 +31,7 @@
 package sun.awt.X11;
 
 import sun.awt.IconInfo;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 import java.awt.Insets;
 import java.awt.Frame;
 import java.awt.Rectangle;
@@ -50,9 +50,9 @@ import sun.util.logging.PlatformLogger;
 final class XWM
 {
 
-    private final static PlatformLogger log = PlatformLogger.getLogger("sun.awt.X11.XWM");
-    private final static PlatformLogger insLog = PlatformLogger.getLogger("sun.awt.X11.insets.XWM");
-    private final static PlatformLogger stateLog = PlatformLogger.getLogger("sun.awt.X11.states.XWM");
+    private static final PlatformLogger log = PlatformLogger.getLogger("sun.awt.X11.XWM");
+    private static final PlatformLogger insLog = PlatformLogger.getLogger("sun.awt.X11.insets.XWM");
+    private static final PlatformLogger stateLog = PlatformLogger.getLogger("sun.awt.X11.states.XWM");
 
     static final XAtom XA_MWM_HINTS = new XAtom();
 
@@ -66,30 +66,30 @@ final class XWM
     XAtom XA_UTF8_STRING = XAtom.get("UTF8_STRING");    /* like STRING but encoding is UTF-8 */
 
 /* Currently we only care about max_v and max_h in _NET_WM_STATE */
-    final static int AWT_NET_N_KNOWN_STATES=2;
+    static final int AWT_NET_N_KNOWN_STATES=2;
 
 /* Enlightenment */
-    final static XAtom XA_E_FRAME_SIZE = new XAtom();
+    static final XAtom XA_E_FRAME_SIZE = new XAtom();
 
 /* KWin (KDE2) */
-    final static XAtom XA_KDE_NET_WM_FRAME_STRUT = new XAtom();
+    static final XAtom XA_KDE_NET_WM_FRAME_STRUT = new XAtom();
 
 /* KWM (KDE 1.x) OBSOLETE??? */
-    final static XAtom XA_KWM_WIN_ICONIFIED = new XAtom();
-    final static XAtom XA_KWM_WIN_MAXIMIZED = new XAtom();
+    static final XAtom XA_KWM_WIN_ICONIFIED = new XAtom();
+    static final XAtom XA_KWM_WIN_MAXIMIZED = new XAtom();
 
 /* OpenLook */
-    final static XAtom XA_OL_DECOR_DEL = new XAtom();
-    final static XAtom XA_OL_DECOR_HEADER = new XAtom();
-    final static XAtom XA_OL_DECOR_RESIZE = new XAtom();
-    final static XAtom XA_OL_DECOR_PIN = new XAtom();
-    final static XAtom XA_OL_DECOR_CLOSE = new XAtom();
+    static final XAtom XA_OL_DECOR_DEL = new XAtom();
+    static final XAtom XA_OL_DECOR_HEADER = new XAtom();
+    static final XAtom XA_OL_DECOR_RESIZE = new XAtom();
+    static final XAtom XA_OL_DECOR_PIN = new XAtom();
+    static final XAtom XA_OL_DECOR_CLOSE = new XAtom();
 
 /* EWMH */
-    final static XAtom XA_NET_FRAME_EXTENTS = new XAtom();
-    final static XAtom XA_NET_REQUEST_FRAME_EXTENTS = new XAtom();
+    static final XAtom XA_NET_FRAME_EXTENTS = new XAtom();
+    static final XAtom XA_NET_REQUEST_FRAME_EXTENTS = new XAtom();
 
-    final static int
+    static final int
         UNDETERMINED_WM = 1,
         NO_WM = 2,
         OTHER_WM = 3,
@@ -104,7 +104,8 @@ final class XWM
         COMPIZ_WM = 12,
         LG3D_WM = 13,
         CWM_WM = 14,
-        MUTTER_WM = 15;
+        MUTTER_WM = 15,
+        UNITY_COMPIZ_WM = 16;
     public String toString() {
         switch  (WMID) {
           case NO_WM:
@@ -129,6 +130,8 @@ final class XWM
               return "Metacity";
           case COMPIZ_WM:
               return "Compiz";
+            case UNITY_COMPIZ_WM:
+              return "Unity Compiz";
           case LG3D_WM:
               return "LookingGlass";
           case CWM_WM:
@@ -572,6 +575,10 @@ final class XWM
         return isNetWMName("compiz");
     }
 
+    static boolean isUnityCompiz() {
+        return isNetWMName("Compiz");
+    }
+
     static boolean isLookingGlass() {
         return isNetWMName("LG3D");
     }
@@ -790,6 +797,8 @@ final class XWM
                 awt_wmgr = CWM_WM;
             } else if (doIsIceWM && isIceWM()) {
                 awt_wmgr = XWM.ICE_WM;
+            } else if (isUnityCompiz()) {
+                awt_wmgr = XWM.UNITY_COMPIZ_WM;
             }
             /*
              * We don't check for legacy WM when we already know that WM
@@ -1020,12 +1029,22 @@ final class XWM
         }
         XToolkit.awtLock();
         try {
-            Rectangle shellBounds = window.getShellBounds();
-            shellBounds.translate(-window.currentInsets.left, -window.currentInsets.top);
+            Rectangle shellBounds;
+            if (getWMID() != UNITY_COMPIZ_WM) {
+                shellBounds = window.getShellBounds();
+                shellBounds.translate(-window.currentInsets.left,
+                                      -window.currentInsets.top);
+            } else {
+                shellBounds = window.getDimensions().getScreenBounds();
+            }
             window.updateSizeHints(window.getDimensions());
             requestWMExtents(window.getWindow());
-            XlibWrapper.XMoveResizeWindow(XToolkit.getDisplay(), window.getShell(),
-                                          shellBounds.x, shellBounds.y, shellBounds.width, shellBounds.height);
+            XlibWrapper.XMoveResizeWindow(XToolkit.getDisplay(),
+                                          window.getShell(),
+                                          window.scaleUp(shellBounds.x),
+                                          window.scaleUp(shellBounds.y),
+                                          window.scaleUp(shellBounds.width),
+                                          window.scaleUp(shellBounds.height));
             /* REMINDER: will need to revisit when setExtendedStateBounds is added */
             //Fix for 4320050: Minimum size for java.awt.Frame is not being enforced.
             //We need to update frame's minimum size, not to reset it
@@ -1058,8 +1077,12 @@ final class XWM
                 window.updateSizeHints(newDimensions);
                 requestWMExtents(window.getWindow());
                 XToolkit.XSync();
-                XlibWrapper.XMoveResizeWindow(XToolkit.getDisplay(), window.getShell(),
-                                              shellBounds.x, shellBounds.y, shellBounds.width, shellBounds.height);
+                XlibWrapper.XMoveResizeWindow(XToolkit.getDisplay(),
+                                              window.getShell(),
+                                              window.scaleUp(shellBounds.x),
+                                              window.scaleUp(shellBounds.y),
+                                              window.scaleUp(shellBounds.width),
+                                              window.scaleUp(shellBounds.height));
             }
             if (!justChangeSize) {  /* update decorations */
                 setShellDecor(window);
@@ -1342,6 +1365,9 @@ final class XWM
               case NO_WM:
               case LG3D_WM:
                   res = zeroInsets;
+                  break;
+              case UNITY_COMPIZ_WM:
+                  res = new Insets(28, 1, 1, 1);
                   break;
               case MOTIF_WM:
               case OPENLOOK_WM:
@@ -1701,6 +1727,12 @@ final class XWM
                 pattr.dispose();
             }
         }
+
+        correctWM.top = win.scaleUp(correctWM.top);
+        correctWM.bottom = win.scaleUp(correctWM.bottom);
+        correctWM.left = win.scaleUp(correctWM.left);
+        correctWM.right = win.scaleUp(correctWM.right);
+
         if (storedInsets.get(win.getClass()) == null) {
             storedInsets.put(win.getClass(), correctWM);
         }

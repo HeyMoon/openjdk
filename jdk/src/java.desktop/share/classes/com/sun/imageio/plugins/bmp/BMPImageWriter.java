@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -69,7 +69,7 @@ import com.sun.imageio.plugins.common.I18N;
  * a BMP format.
  *
  * The encoding process may clip, subsample using the parameters
- * specified in the <code>ImageWriteParam</code>.
+ * specified in the {@code ImageWriteParam}.
  *
  * @see javax.imageio.plugins.bmp.BMPImageWriteParam
  */
@@ -88,8 +88,8 @@ public class BMPImageWriter extends ImageWriter implements BMPConstants {
     private short[] spixels;
     private int[] ipixels;
 
-    /** Constructs <code>BMPImageWriter</code> based on the provided
-     *  <code>ImageWriterSpi</code>.
+    /** Constructs {@code BMPImageWriter} based on the provided
+     *  {@code ImageWriterSpi}.
      */
     public BMPImageWriter(ImageWriterSpi originator) {
         super(originator);
@@ -156,6 +156,10 @@ public class BMPImageWriter extends ImageWriter implements BMPConstants {
 
         clearAbortRequest();
         processImageStarted(0);
+        if (abortRequested()) {
+            processWriteAborted();
+            return;
+        }
         if (param == null)
             param = getDefaultWriteParam();
 
@@ -583,12 +587,8 @@ public class BMPImageWriter extends ImageWriter implements BMPConstants {
             stream.write(embedded_stream.toByteArray());
             embedded_stream = null;
 
-            if (abortRequested()) {
-                processWriteAborted();
-            } else {
-                processImageComplete();
-                stream.flushBefore(stream.getStreamPosition());
-            }
+            processImageComplete();
+            stream.flushBefore(stream.getStreamPosition());
 
             return;
         }
@@ -606,9 +606,6 @@ public class BMPImageWriter extends ImageWriter implements BMPConstants {
             destScanlineLength = destScanlineBytes / (DataBuffer.getDataTypeSize(dataType)>>3);
         }
         for (int i = 0; i < h; i++) {
-            if (abortRequested()) {
-                break;
-            }
 
             int row = minY + i;
 
@@ -724,6 +721,9 @@ public class BMPImageWriter extends ImageWriter implements BMPConstants {
             }
 
             processImageProgress(100.0f * (((float)i) / ((float)h)));
+            if (abortRequested()) {
+                break;
+            }
         }
 
         if (compressionType == BI_RLE4 ||

@@ -76,7 +76,7 @@ public:
   virtual bool pinned() const { return true; };
   virtual const Type *bottom_type() const;
   virtual const TypePtr *adr_type() const { return TypePtr::BOTTOM; }
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
   virtual void  calling_convention( BasicType* sig_bt, VMRegPair *parm_reg, uint length ) const;
   virtual const RegMask &in_RegMask(uint) const;
@@ -84,6 +84,7 @@ public:
   virtual uint ideal_reg() const { return 0; }
 #ifndef PRODUCT
   virtual void  dump_spec(outputStream *st) const;
+  virtual void  dump_compact_spec(outputStream *st) const;
 #endif
 };
 
@@ -110,6 +111,8 @@ public:
   virtual uint ideal_reg() const;
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const;
+  virtual void dump_compact_spec(outputStream *st) const;
+  virtual void related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const;
 #endif
 };
 
@@ -124,7 +127,7 @@ public:
   virtual uint hash() const { return NO_HASH; }  // CFG nodes do not hash
   virtual bool depends_only_on_test() const { return false; }
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual uint ideal_reg() const { return NotAMachineReg; }
   virtual uint match_edge(uint idx) const;
 #ifndef PRODUCT
@@ -145,7 +148,7 @@ class RethrowNode : public Node {
   virtual uint hash() const { return NO_HASH; }  // CFG nodes do not hash
   virtual bool depends_only_on_test() const { return false; }
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual uint match_edge(uint idx) const;
   virtual uint ideal_reg() const { return NotAMachineReg; }
 #ifndef PRODUCT
@@ -449,8 +452,8 @@ public:
   void delete_replaced_nodes() {
     _replaced_nodes.reset();
   }
-  void apply_replaced_nodes() {
-    _replaced_nodes.apply(this);
+  void apply_replaced_nodes(uint idx) {
+    _replaced_nodes.apply(this, idx);
   }
   void merge_replaced_nodes_with(SafePointNode* sfpt) {
     _replaced_nodes.merge_with(sfpt->_replaced_nodes);
@@ -462,11 +465,11 @@ public:
   // Standard Node stuff
   virtual int            Opcode() const;
   virtual bool           pinned() const { return true; }
-  virtual const Type    *Value( PhaseTransform *phase ) const;
+  virtual const Type*    Value(PhaseGVN* phase) const;
   virtual const Type    *bottom_type() const { return Type::CONTROL; }
   virtual const TypePtr *adr_type() const { return _adr_type; }
   virtual Node          *Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual Node          *Identity( PhaseTransform *phase );
+  virtual Node*          Identity(PhaseGVN* phase);
   virtual uint           ideal_reg() const { return 0; }
   virtual const RegMask &in_RegMask(uint) const;
   virtual const RegMask &out_RegMask() const;
@@ -476,6 +479,7 @@ public:
 
 #ifndef PRODUCT
   virtual void           dump_spec(outputStream *st) const;
+  virtual void           related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const;
 #endif
 };
 
@@ -589,9 +593,9 @@ public:
   void set_generator(CallGenerator* cg) { _generator = cg; }
 
   virtual const Type *bottom_type() const;
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual Node *Identity( PhaseTransform *phase ) { return this; }
+  virtual Node* Identity(PhaseGVN* phase) { return this; }
   virtual uint        cmp( const Node &n ) const;
   virtual uint        size_of() const = 0;
   virtual void        calling_convention( BasicType* sig_bt, VMRegPair *parm_regs, uint argcnt ) const;
@@ -653,28 +657,33 @@ protected:
 
   bool    _optimized_virtual;
   bool    _method_handle_invoke;
-  ciMethod* _method;            // Method being direct called
+  bool    _override_symbolic_info; // Override symbolic call site info from bytecode
+  ciMethod* _method;               // Method being direct called
 public:
   const int       _bci;         // Byte Code Index of call byte code
   CallJavaNode(const TypeFunc* tf , address addr, ciMethod* method, int bci)
     : CallNode(tf, addr, TypePtr::BOTTOM),
       _method(method), _bci(bci),
       _optimized_virtual(false),
-      _method_handle_invoke(false)
+      _method_handle_invoke(false),
+      _override_symbolic_info(false)
   {
     init_class_id(Class_CallJava);
   }
 
   virtual int   Opcode() const;
-  ciMethod* method() const                { return _method; }
-  void  set_method(ciMethod *m)           { _method = m; }
-  void  set_optimized_virtual(bool f)     { _optimized_virtual = f; }
-  bool  is_optimized_virtual() const      { return _optimized_virtual; }
-  void  set_method_handle_invoke(bool f)  { _method_handle_invoke = f; }
-  bool  is_method_handle_invoke() const   { return _method_handle_invoke; }
+  ciMethod* method() const                 { return _method; }
+  void  set_method(ciMethod *m)            { _method = m; }
+  void  set_optimized_virtual(bool f)      { _optimized_virtual = f; }
+  bool  is_optimized_virtual() const       { return _optimized_virtual; }
+  void  set_method_handle_invoke(bool f)   { _method_handle_invoke = f; }
+  bool  is_method_handle_invoke() const    { return _method_handle_invoke; }
+  void  set_override_symbolic_info(bool f) { _override_symbolic_info = f; }
+  bool  override_symbolic_info() const     { return _override_symbolic_info; }
 
 #ifndef PRODUCT
   virtual void  dump_spec(outputStream *st) const;
+  virtual void  dump_compact_spec(outputStream *st) const;
 #endif
 };
 
@@ -730,6 +739,7 @@ public:
   virtual int         Opcode() const;
 #ifndef PRODUCT
   virtual void        dump_spec(outputStream *st) const;
+  virtual void        dump_compact_spec(outputStream *st) const;
 #endif
 };
 
@@ -848,6 +858,8 @@ public:
   // Result of Escape Analysis
   bool _is_scalar_replaceable;
   bool _is_non_escaping;
+  // True when MemBar for new is redundant with MemBar at initialzer exit
+  bool _is_allocation_MemBar_redundant;
 
   virtual uint size_of() const; // Size is bigger
   AllocateNode(Compile* C, const TypeFunc *atype, Node *ctrl, Node *mem, Node *abio,
@@ -901,6 +913,25 @@ public:
 
   // Convenience for initialization->maybe_set_complete(phase)
   bool maybe_set_complete(PhaseGVN* phase);
+
+  // Return true if allocation doesn't escape thread, its escape state
+  // needs be noEscape or ArgEscape. InitializeNode._does_not_escape
+  // is true when its allocation's escape state is noEscape or
+  // ArgEscape. In case allocation's InitializeNode is NULL, check
+  // AlllocateNode._is_non_escaping flag.
+  // AlllocateNode._is_non_escaping is true when its escape state is
+  // noEscape.
+  bool does_not_escape_thread() {
+    InitializeNode* init = NULL;
+    return _is_non_escaping || (((init = initialization()) != NULL) && init->does_not_escape());
+  }
+
+  // If object doesn't escape in <.init> method and there is memory barrier
+  // inserted at exit of its <.init>, memory barrier for new is not necessary.
+  // Inovke this method when MemBar at exit of initializer and post-dominate
+  // allocation node.
+  void compute_MemBar_redundancy(ciMethod* initializer);
+  bool is_allocation_MemBar_redundant() { return _is_allocation_MemBar_redundant; }
 };
 
 //------------------------------AllocateArray---------------------------------
@@ -951,6 +982,7 @@ private:
   } _kind;
 #ifndef PRODUCT
   NamedCounter* _counter;
+  static const char* _kind_names[Nested+1];
 #endif
 
 protected:
@@ -1005,6 +1037,9 @@ public:
 #ifndef PRODUCT
   void create_lock_counter(JVMState* s);
   NamedCounter* counter() const { return _counter; }
+  virtual void dump_spec(outputStream* st) const;
+  virtual void dump_compact_spec(outputStream* st) const;
+  virtual void related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const;
 #endif
 };
 

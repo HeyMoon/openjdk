@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,10 +34,6 @@
 #include <sys/poll.h>
 #include <netdb.h>
 
-inline void* os::thread_local_storage_at(int index) {
-  return pthread_getspecific((pthread_key_t)index);
-}
-
 // File names are case-sensitive on windows only
 inline int os::file_name_strcmp(const char* s1, const char* s2) {
   return strcmp(s1, s2);
@@ -51,7 +47,7 @@ inline bool os::uses_stack_guard_pages() {
   return true;
 }
 
-inline bool os::allocate_stack_guard_pages() {
+inline bool os::must_commit_stack_guard_pages() {
   assert(uses_stack_guard_pages(), "sanity check");
   return true;
 }
@@ -64,7 +60,7 @@ inline void os::pd_split_reserved_memory(char *base, size_t size,
 
 
 // Bang the shadow pages if they need to be touched to be mapped.
-inline void os::bang_stack_shadow_pages() {
+inline void os::map_stack_shadow_pages(address sp) {
 }
 
 inline void os::dll_unload(void *lib) {

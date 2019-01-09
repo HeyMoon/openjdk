@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,6 @@ package sun.lwawt.macosx;
 
 import java.awt.Font;
 import java.awt.FontMetrics;
-import java.awt.Graphics;
 import java.awt.GraphicsDevice;
 import java.awt.GraphicsEnvironment;
 import java.awt.Insets;
@@ -37,7 +36,7 @@ import java.awt.Rectangle;
 import java.awt.Window;
 import sun.awt.CGraphicsDevice;
 import sun.awt.CGraphicsEnvironment;
-import sun.awt.CausedFocusEvent;
+import java.awt.event.FocusEvent;
 import sun.awt.LightweightFrame;
 import sun.java2d.SurfaceData;
 import sun.lwawt.LWLightweightFramePeer;
@@ -108,11 +107,6 @@ public class CPlatformLWWindow extends CPlatformWindow {
     }
 
     @Override
-    public long getNSWindowPtr() {
-        return 0;
-    }
-
-    @Override
     public SurfaceData getSurfaceData() {
         return null;
     }
@@ -134,7 +128,7 @@ public class CPlatformLWWindow extends CPlatformWindow {
     }
 
     @Override
-    public boolean rejectFocusRequest(CausedFocusEvent.Cause cause) {
+    public boolean rejectFocusRequest(FocusEvent.Cause cause) {
         return false;
     }
 
@@ -150,11 +144,6 @@ public class CPlatformLWWindow extends CPlatformWindow {
 
     @Override
     public void updateFocusableWindowState() {
-    }
-
-    @Override
-    public Graphics transformGraphics(Graphics g) {
-        return null;
     }
 
     @Override
@@ -202,7 +191,8 @@ public class CPlatformLWWindow extends CPlatformWindow {
                                   getLocalGraphicsEnvironment();
 
         LWLightweightFramePeer peer = (LWLightweightFramePeer)getPeer();
-        int scale = ((LightweightFrame)peer.getTarget()).getScaleFactor();
+        int scale =(int) Math.round(((LightweightFrame)peer.getTarget())
+                                                            .getScaleFactorX());
 
         Rectangle bounds = ((LightweightFrame)peer.getTarget()).getHostBounds();
         for (GraphicsDevice d : ge.getScreenDevices()) {

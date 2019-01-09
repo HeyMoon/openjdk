@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,11 +37,8 @@
 
 # include <sys/sysinfo.h>
 
-int VM_Version::_features = VM_Version::unknown_m;
-int VM_Version::_measured_cache_line_size = 32; // pessimistic init value
-const char* VM_Version::_features_str = "";
 bool VM_Version::_is_determine_features_test_running = false;
-
+uint64_t VM_Version::_dscr_val = 0;
 
 #define MSG(flag)   \
   if (flag && !FLAG_IS_DEFAULT(flag))                                  \
@@ -68,13 +65,21 @@ void VM_Version::initialize() {
       FLAG_SET_ERGO(uintx, PowerArchitecturePPC64, 0);
     }
   }
-  guarantee(PowerArchitecturePPC64 == 0 || PowerArchitecturePPC64 == 5 ||
-            PowerArchitecturePPC64 == 6 || PowerArchitecturePPC64 == 7 ||
-            PowerArchitecturePPC64 == 8,
-            "PowerArchitecturePPC64 should be 0, 5, 6, 7, or 8");
+
+  bool PowerArchitecturePPC64_ok = false;
+  switch (PowerArchitecturePPC64) {
+    case 8: if (!VM_Version::has_lqarx()  ) break;
+    case 7: if (!VM_Version::has_popcntw()) break;
+    case 6: if (!VM_Version::has_cmpb()   ) break;
+    case 5: if (!VM_Version::has_popcntb()) break;
+    case 0: PowerArchitecturePPC64_ok = true; break;
+    default: break;
+  }
+  guarantee(PowerArchitecturePPC64_ok, "PowerArchitecturePPC64 cannot be set to "
+            UINTX_FORMAT " on this machine", PowerArchitecturePPC64);
 
   // Power 8: Configure Data Stream Control Register.
-  if (PowerArchitecturePPC64 >= 8) {
+  if (has_mfdscr()) {
     config_dscr();
   }
 
@@ -106,7 +111,7 @@ void VM_Version::initialize() {
   // Create and print feature-string.
   char buf[(num_features+1) * 16]; // Max 16 chars per feature.
   jio_snprintf(buf, sizeof(buf),
-               "ppc64%s%s%s%s%s%s%s%s%s%s%s%s",
+               "ppc64%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
                (has_fsqrt()   ? " fsqrt"   : ""),
                (has_isel()    ? " isel"    : ""),
                (has_lxarxeh() ? " lxarxeh" : ""),
@@ -117,12 +122,14 @@ void VM_Version::initialize() {
                (has_fcfids()  ? " fcfids"  : ""),
                (has_vand()    ? " vand"    : ""),
                (has_lqarx()   ? " lqarx"   : ""),
-               (has_vcipher() ? " vcipher" : ""),
+               (has_vcipher() ? " aes"     : ""),
                (has_vpmsumb() ? " vpmsumb" : ""),
-               (has_tcheck()  ? " tcheck"  : "")
+               (has_tcheck()  ? " tcheck"  : ""),
+               (has_mfdscr()  ? " mfdscr"  : ""),
+               (has_vsx()     ? " vsx"     : "")
                // Make sure number of %s matches num_features!
               );
-  _features_str = os::strdup(buf);
+  _features_string = os::strdup(buf);
   if (Verbose) {
     print_features();
   }
@@ -132,9 +139,15 @@ void VM_Version::initialize() {
   // and 'atomic long memory ops' (see Unsafe_GetLongVolatile).
   _supports_cx8 = true;
 
+  // Used by C1.
+  _supports_atomic_getset4 = true;
+  _supports_atomic_getadd4 = true;
+  _supports_atomic_getset8 = true;
+  _supports_atomic_getadd8 = true;
+
   UseSSE = 0; // Only on x86 and x64
 
-  intx cache_line_size = _measured_cache_line_size;
+  intx cache_line_size = L1_data_cache_line_size();
 
   if (FLAG_IS_DEFAULT(AllocatePrefetchStyle)) AllocatePrefetchStyle = 1;
 
@@ -159,13 +172,43 @@ void VM_Version::initialize() {
 
   assert(AllocatePrefetchStyle >= 0, "AllocatePrefetchStyle should be positive");
 
-  if (UseCRC32Intrinsics) {
-    if (!FLAG_IS_DEFAULT(UseCRC32Intrinsics))
-      warning("CRC32 intrinsics  are not available on this CPU");
-    FLAG_SET_DEFAULT(UseCRC32Intrinsics, false);
+  // Implementation does not use any of the vector instructions
+  // available with Power8. Their exploitation is still pending.
+  if (!UseCRC32Intrinsics) {
+    if (FLAG_IS_DEFAULT(UseCRC32Intrinsics)) {
+      FLAG_SET_DEFAULT(UseCRC32Intrinsics, true);
+    }
+  }
+
+  if (UseCRC32CIntrinsics) {
+    if (!FLAG_IS_DEFAULT(UseCRC32CIntrinsics))
+      warning("CRC32C intrinsics are not available on this CPU");
+    FLAG_SET_DEFAULT(UseCRC32CIntrinsics, false);
   }
 
   // The AES intrinsic stubs require AES instruction support.
+#if defined(VM_LITTLE_ENDIAN)
+  if (has_vcipher()) {
+    if (FLAG_IS_DEFAULT(UseAES)) {
+      UseAES = true;
+    }
+  } else if (UseAES) {
+    if (!FLAG_IS_DEFAULT(UseAES))
+      warning("AES instructions are not available on this CPU");
+    FLAG_SET_DEFAULT(UseAES, false);
+  }
+
+  if (UseAES && has_vcipher()) {
+    if (FLAG_IS_DEFAULT(UseAESIntrinsics)) {
+      UseAESIntrinsics = true;
+    }
+  } else if (UseAESIntrinsics) {
+    if (!FLAG_IS_DEFAULT(UseAESIntrinsics))
+      warning("AES intrinsics are not available on this CPU");
+    FLAG_SET_DEFAULT(UseAESIntrinsics, false);
+  }
+
+#else
   if (UseAES) {
     warning("AES instructions are not available on this CPU");
     FLAG_SET_DEFAULT(UseAES, false);
@@ -175,10 +218,20 @@ void VM_Version::initialize() {
       warning("AES intrinsics are not available on this CPU");
     FLAG_SET_DEFAULT(UseAESIntrinsics, false);
   }
+#endif
+
+  if (UseAESCTRIntrinsics) {
+    warning("AES/CTR intrinsics are not available on this CPU");
+    FLAG_SET_DEFAULT(UseAESCTRIntrinsics, false);
+  }
 
   if (UseGHASHIntrinsics) {
     warning("GHASH intrinsics are not available on this CPU");
     FLAG_SET_DEFAULT(UseGHASHIntrinsics, false);
+  }
+
+  if (FLAG_IS_DEFAULT(UseFMA)) {
+    FLAG_SET_DEFAULT(UseFMA, true);
   }
 
   if (UseSHA) {
@@ -192,19 +245,65 @@ void VM_Version::initialize() {
     FLAG_SET_DEFAULT(UseSHA512Intrinsics, false);
   }
 
-  if (UseCRC32CIntrinsics) {
-    if (!FLAG_IS_DEFAULT(UseCRC32CIntrinsics))
-      warning("CRC32C intrinsics are not available on this CPU");
-    FLAG_SET_DEFAULT(UseCRC32CIntrinsics, false);
+  if (UseAdler32Intrinsics) {
+    warning("Adler32Intrinsics not available on this CPU.");
+    FLAG_SET_DEFAULT(UseAdler32Intrinsics, false);
   }
 
+  if (FLAG_IS_DEFAULT(UseMultiplyToLenIntrinsic)) {
+    UseMultiplyToLenIntrinsic = true;
+  }
+  if (FLAG_IS_DEFAULT(UseMontgomeryMultiplyIntrinsic)) {
+    UseMontgomeryMultiplyIntrinsic = true;
+  }
+  if (FLAG_IS_DEFAULT(UseMontgomerySquareIntrinsic)) {
+    UseMontgomerySquareIntrinsic = true;
+  }
+
+  if (UseVectorizedMismatchIntrinsic) {
+    warning("UseVectorizedMismatchIntrinsic specified, but not available on this CPU.");
+    FLAG_SET_DEFAULT(UseVectorizedMismatchIntrinsic, false);
+  }
+
+
   // Adjust RTM (Restricted Transactional Memory) flags.
-  if (!has_tcheck() && UseRTMLocking) {
+  if (UseRTMLocking) {
+    // If CPU or OS are too old:
     // Can't continue because UseRTMLocking affects UseBiasedLocking flag
     // setting during arguments processing. See use_biased_locking().
     // VM_Version_init() is executed after UseBiasedLocking is used
     // in Thread::allocate().
-    vm_exit_during_initialization("RTM instructions are not available on this CPU");
+    if (!has_tcheck()) {
+      vm_exit_during_initialization("RTM instructions are not available on this CPU");
+    }
+    bool os_too_old = true;
+#ifdef AIX
+    // Actually, this is supported since AIX 7.1.. Unfortunately, this first
+    // contained bugs, so that it can only be enabled after AIX 7.1.3.30.
+    // The Java property os.version, which is used in RTM tests to decide
+    // whether the feature is available, only knows major and minor versions.
+    // We don't want to change this property, as user code might depend on it.
+    // So the tests can not check on subversion 3.30, and we only enable RTM
+    // with AIX 7.2.
+    if (os::Aix::os_version() >= 0x07020000) { // At least AIX 7.2.
+      os_too_old = false;
+    }
+#endif
+#ifdef LINUX
+    // At least Linux kernel 4.2, as the problematic behavior of syscalls
+    // being called in the middle of a transaction has been addressed.
+    // Please, refer to commit b4b56f9ecab40f3b4ef53e130c9f6663be491894
+    // in Linux kernel source tree: https://goo.gl/Kc5i7A
+    if (os::Linux::os_version_is_known()) {
+      if (os::Linux::os_version() >= 0x040200)
+        os_too_old = false;
+    } else {
+      vm_exit_during_initialization("RTM can not be enabled: kernel version is unknown.");
+    }
+#endif
+    if (os_too_old) {
+      vm_exit_during_initialization("RTM is not supported on this OS version.");
+    }
   }
 
   if (UseRTMLocking) {
@@ -228,8 +327,10 @@ void VM_Version::initialize() {
       warning("RTMAbortRatio must be in the range 0 to 100, resetting it to 50");
       FLAG_SET_DEFAULT(RTMAbortRatio, 50);
     }
-    FLAG_SET_ERGO(bool, UseNewFastLockPPC64, false); // Does not implement TM.
-    guarantee(RTMSpinLoopCount > 0, "unsupported");
+    if (RTMSpinLoopCount < 0) {
+      warning("RTMSpinLoopCount must not be a negative value, resetting it to 0");
+      FLAG_SET_DEFAULT(RTMSpinLoopCount, 0);
+    }
 #else
     // Only C2 does RTM locking optimization.
     // Can't continue because UseRTMLocking affects UseBiasedLocking flag
@@ -251,11 +352,9 @@ void VM_Version::initialize() {
     }
   }
 
-  // This machine does not allow unaligned memory accesses
-  if (UseUnalignedAccesses) {
-    if (!FLAG_IS_DEFAULT(UseUnalignedAccesses))
-      warning("Unaligned memory access is not available on this CPU");
-    FLAG_SET_DEFAULT(UseUnalignedAccesses, false);
+  // This machine allows unaligned memory accesses
+  if (FLAG_IS_DEFAULT(UseUnalignedAccesses)) {
+    FLAG_SET_DEFAULT(UseUnalignedAccesses, true);
   }
 }
 
@@ -281,7 +380,7 @@ bool VM_Version::use_biased_locking() {
 }
 
 void VM_Version::print_features() {
-  tty->print_cr("Version: %s cache_line_size = %d", cpu_features(), (int) get_cache_line_size());
+  tty->print_cr("Version: %s L1_data_cache_line_size=%d", features_string(), L1_data_cache_line_size());
 }
 
 #ifdef COMPILER2
@@ -558,6 +657,8 @@ void VM_Version::determine_features() {
   a->vcipher(VR0, VR1, VR2);                   // code[10] -> vcipher
   a->vpmsumb(VR0, VR1, VR2);                   // code[11] -> vpmsumb
   a->tcheck(0);                                // code[12] -> tcheck
+  a->mfdscr(R0);                               // code[13] -> mfdscr
+  a->lxvd2x(VSR0, R3_ARG1);                    // code[14] -> vsx
   a->blr();
 
   // Emit function to set one cache line to zero. Emit function descriptor and get pointer to it.
@@ -582,7 +683,7 @@ void VM_Version::determine_features() {
   int count = 0; // count zeroed bytes
   for (int i = 0; i < BUFFER_SIZE; i++) if (test_area[i] == 0) count++;
   guarantee(is_power_of_2(count), "cache line size needs to be a power of 2");
-  _measured_cache_line_size = count;
+  _L1_data_cache_line_size = count;
 
   // Execute code. Illegal instructions will be replaced by 0 in the signal handler.
   VM_Version::_is_determine_features_test_running = true;
@@ -605,6 +706,8 @@ void VM_Version::determine_features() {
   if (code[feature_cntr++]) features |= vcipher_m;
   if (code[feature_cntr++]) features |= vpmsumb_m;
   if (code[feature_cntr++]) features |= tcheck_m;
+  if (code[feature_cntr++]) features |= mfdscr_m;
+  if (code[feature_cntr++]) features |= vsx_m;
 
   // Print the detection code.
   if (PrintAssembly) {
@@ -618,8 +721,6 @@ void VM_Version::determine_features() {
 
 // Power 8: Configure Data Stream Control Register.
 void VM_Version::config_dscr() {
-  assert(has_tcheck(), "Only execute on Power 8 or later!");
-
   // 7 InstWords for each call (function descriptor + blr instruction).
   const int code_size = (2+2*7)*BytesPerInstWord;
 
@@ -649,38 +750,38 @@ void VM_Version::config_dscr() {
   }
 
   // Apply the configuration if needed.
-  uint64_t dscr_val = (*get_dscr)();
+  _dscr_val = (*get_dscr)();
   if (Verbose) {
-    tty->print_cr("dscr value was 0x%lx" , dscr_val);
+    tty->print_cr("dscr value was 0x%lx" , _dscr_val);
   }
   bool change_requested = false;
   if (DSCR_PPC64 != (uintx)-1) {
-    dscr_val = DSCR_PPC64;
+    _dscr_val = DSCR_PPC64;
     change_requested = true;
   }
   if (DSCR_DPFD_PPC64 <= 7) {
     uint64_t mask = 0x7;
-    if ((dscr_val & mask) != DSCR_DPFD_PPC64) {
-      dscr_val = (dscr_val & ~mask) | (DSCR_DPFD_PPC64);
+    if ((_dscr_val & mask) != DSCR_DPFD_PPC64) {
+      _dscr_val = (_dscr_val & ~mask) | (DSCR_DPFD_PPC64);
       change_requested = true;
     }
   }
   if (DSCR_URG_PPC64 <= 7) {
     uint64_t mask = 0x7 << 6;
-    if ((dscr_val & mask) != DSCR_DPFD_PPC64 << 6) {
-      dscr_val = (dscr_val & ~mask) | (DSCR_URG_PPC64 << 6);
+    if ((_dscr_val & mask) != DSCR_DPFD_PPC64 << 6) {
+      _dscr_val = (_dscr_val & ~mask) | (DSCR_URG_PPC64 << 6);
       change_requested = true;
     }
   }
   if (change_requested) {
-    (*set_dscr)(dscr_val);
+    (*set_dscr)(_dscr_val);
     if (Verbose) {
       tty->print_cr("dscr was set to 0x%lx" , (*get_dscr)());
     }
   }
 }
 
-static int saved_features = 0;
+static uint64_t saved_features = 0;
 
 void VM_Version::allow_all() {
   saved_features = _features;

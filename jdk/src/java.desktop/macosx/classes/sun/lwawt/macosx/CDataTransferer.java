@@ -1,3 +1,4 @@
+
 /*
  * Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -26,17 +27,18 @@
 package sun.lwawt.macosx;
 
 import java.awt.*;
-import java.awt.image.*;
-import sun.awt.image.ImageRepresentation;
 
 import java.io.*;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.Charset;
 import java.text.Normalizer;
 import java.text.Normalizer.Form;
 import java.util.*;
-
+import java.util.regex.*;
 import java.awt.datatransfer.*;
+import java.nio.charset.StandardCharsets;
 import sun.awt.datatransfer.*;
 
 public class CDataTransferer extends DataTransferer {
@@ -55,7 +57,8 @@ public class CDataTransferer extends DataTransferer {
         "PDF",
         "URL",
         "PNG",
-        "JFIF"
+        "JFIF",
+        "XPICT"
     };
 
     static {
@@ -79,6 +82,7 @@ public class CDataTransferer extends DataTransferer {
     public static final int CF_URL         = 7;
     public static final int CF_PNG         = 8;
     public static final int CF_JPEG        = 9;
+    public static final int CF_XPICT       = 10;
 
     private CDataTransferer() {}
 
@@ -123,30 +127,57 @@ public class CDataTransferer extends DataTransferer {
 
     @Override
     public Object translateBytes(byte[] bytes, DataFlavor flavor,
-                                    long format, Transferable transferable) throws IOException {
+                                 long format, Transferable transferable) throws IOException {
 
-            if (format == CF_URL && URL.class.equals(flavor.getRepresentationClass()))
-            {
-                String charset = Charset.defaultCharset().name();
-                if (transferable != null && transferable.isDataFlavorSupported(javaTextEncodingFlavor)) {
-                    try {
-                        charset = new String((byte[])transferable.getTransferData(javaTextEncodingFlavor), "UTF-8");
-                    } catch (UnsupportedFlavorException cannotHappen) {
-                    }
+        if (format == CF_URL && URL.class.equals(flavor.getRepresentationClass())) {
+            String charset = Charset.defaultCharset().name();
+            if (transferable != null && transferable.isDataFlavorSupported(javaTextEncodingFlavor)) {
+                try {
+                    charset = new String((byte[]) transferable.getTransferData(javaTextEncodingFlavor), StandardCharsets.UTF_8);
+                } catch (UnsupportedFlavorException cannotHappen) {
                 }
-
-                return new URL(new String(bytes, charset));
             }
 
-            if (format == CF_STRING) {
-                bytes = Normalizer.normalize(new String(bytes, "UTF8"), Form.NFC).getBytes("UTF8");
-            }
+            String xml = new String(bytes, charset);
+            // macosx pasteboard returns a property list that consists of one URL
+            // let's extract it.
+            return new URL(extractURL(xml));
+        }
 
-            return super.translateBytes(bytes, flavor, format, transferable);
+        if(isUriListFlavor(flavor) && format == CF_FILE) {
+            // dragQueryFile works fine with files and url,
+            // it parses and extracts values from property list.
+            // maxosx always returns property list for
+            // CF_URL and CF_FILE
+            String[] strings = dragQueryFile(bytes);
+            if(strings == null) {
+                return null;
+            }
+            bytes = String.join(System.getProperty("line.separator"),
+                    strings).getBytes();
+            // now we extracted uri from xml, now we should treat it as
+            // regular string that allows to translate data to target represantation
+            // class by base method
+            format = CF_STRING;
+        } else if (format == CF_STRING) {
+            bytes = Normalizer.normalize(new String(bytes, "UTF8"), Form.NFC).getBytes("UTF8");
+        }
+
+        return super.translateBytes(bytes, flavor, format, transferable);
+    }
+
+    private String extractURL(String xml) {
+       Pattern urlExtractorPattern = Pattern.compile("<string>(.*)</string>");
+        Matcher matcher = urlExtractorPattern.matcher(xml);
+        if (matcher.find()) {
+            return matcher.group(1);
+        } else {
+            return null;
+        }
     }
 
     @Override
-    synchronized protected Long getFormatForNativeAsLong(String str) {
+    protected synchronized Long getFormatForNativeAsLong(String str) {
         Long format = predefinedClipboardNameMap.get(str);
 
         if (format == null) {
@@ -220,6 +251,7 @@ public class CDataTransferer extends DataTransferer {
         return nativeDragQueryFile(bytes);
     }
 
+
     @Override
     protected Image platformImageBytesToImage(byte[] bytes, long format) throws IOException {
         return CImage.getCreator().createImageFromPlatformImageBytes(bytes);
@@ -244,7 +276,7 @@ public class CDataTransferer extends DataTransferer {
         }
         try {
             DataFlavor df = new DataFlavor(nat);
-            if (df.getPrimaryType().equals("text") && df.getSubType().equals("uri-list")) {
+            if (isUriListFlavor(df)) {
                 return true;
             }
         } catch (Exception e) {
@@ -252,6 +284,11 @@ public class CDataTransferer extends DataTransferer {
         }
         return false;
     }
+
+    private boolean isUriListFlavor(DataFlavor df) {
+        if (df.getPrimaryType().equals("text") && df.getSubType().equals("uri-list")) {
+            return true;
+        }
+        return false;
+    }
 }
-
-

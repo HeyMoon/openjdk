@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -54,16 +54,16 @@ import sun.security.jca.GetInstance.Instance;
  * specified in RFC 2104.
  *
  * <p> Every implementation of the Java platform is required to support
- * the following standard <code>Mac</code> algorithms:
+ * the following standard {@code Mac} algorithms:
  * <ul>
- * <li><tt>HmacMD5</tt></li>
- * <li><tt>HmacSHA1</tt></li>
- * <li><tt>HmacSHA256</tt></li>
+ * <li>{@code HmacMD5}</li>
+ * <li>{@code HmacSHA1}</li>
+ * <li>{@code HmacSHA256}</li>
  * </ul>
  * These algorithms are described in the
- * <a href="{@docRoot}/../technotes/guides/security/StandardNames.html#Mac">
+ * <a href="{@docRoot}/../specs/security/standard-names.html#mac-algorithms">
  * Mac section</a> of the
- * Java Cryptography Architecture Standard Algorithm Name Documentation.
+ * Java Security Standard Algorithm Names Specification.
  * Consult the release documentation for your implementation to see if any
  * other algorithms are supported.
  *
@@ -127,20 +127,20 @@ public class Mac implements Cloneable {
     }
 
     /**
-     * Returns the algorithm name of this <code>Mac</code> object.
+     * Returns the algorithm name of this {@code Mac} object.
      *
      * <p>This is the same name that was specified in one of the
-     * <code>getInstance</code> calls that created this
-     * <code>Mac</code> object.
+     * {@code getInstance} calls that created this
+     * {@code Mac} object.
      *
-     * @return the algorithm name of this <code>Mac</code> object.
+     * @return the algorithm name of this {@code Mac} object.
      */
     public final String getAlgorithm() {
         return this.algorithm;
     }
 
     /**
-     * Returns a <code>Mac</code> object that implements the
+     * Returns a {@code Mac} object that implements the
      * specified MAC algorithm.
      *
      * <p> This method traverses the list of registered security Providers,
@@ -152,22 +152,32 @@ public class Mac implements Cloneable {
      * <p> Note that the list of registered providers may be retrieved via
      * the {@link Security#getProviders() Security.getProviders()} method.
      *
+     * @implNote
+     * The JDK Reference Implementation additionally uses the
+     * {@code jdk.security.provider.preferred}
+     * {@link Security#getProperty(String) Security} property to determine
+     * the preferred provider order for the specified algorithm. This
+     * may be different than the order of providers returned by
+     * {@link Security#getProviders() Security.getProviders()}.
+     *
      * @param algorithm the standard name of the requested MAC algorithm.
      * See the Mac section in the <a href=
-     *   "{@docRoot}/../technotes/guides/security/StandardNames.html#Mac">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     *   "{@docRoot}/../specs/security/standard-names.html#mac-algorithms">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard algorithm names.
      *
-     * @return the new <code>Mac</code> object.
+     * @return the new {@code Mac} object
      *
-     * @exception NoSuchAlgorithmException if no Provider supports a
-     *          MacSpi implementation for the
-     *          specified algorithm.
+     * @throws NoSuchAlgorithmException if no {@code Provider} supports a
+     *         {@code MacSpi} implementation for the specified algorithm
+     *
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final Mac getInstance(String algorithm)
             throws NoSuchAlgorithmException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         List<Service> services = GetInstance.getServices("Mac", algorithm);
         // make sure there is at least one service from a signed provider
         Iterator<Service> t = services.iterator();
@@ -183,7 +193,7 @@ public class Mac implements Cloneable {
     }
 
     /**
-     * Returns a <code>Mac</code> object that implements the
+     * Returns a {@code Mac} object that implements the
      * specified MAC algorithm.
      *
      * <p> A new Mac object encapsulating the
@@ -196,35 +206,38 @@ public class Mac implements Cloneable {
      *
      * @param algorithm the standard name of the requested MAC algorithm.
      * See the Mac section in the <a href=
-     *   "{@docRoot}/../technotes/guides/security/StandardNames.html#Mac">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     *   "{@docRoot}/../specs/security/standard-names.html#mac-algorithms">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard algorithm names.
      *
      * @param provider the name of the provider.
      *
-     * @return the new <code>Mac</code> object.
+     * @return the new {@code Mac} object
      *
-     * @exception NoSuchAlgorithmException if a MacSpi
-     *          implementation for the specified algorithm is not
-     *          available from the specified provider.
+     * @throws IllegalArgumentException if the {@code provider}
+     *         is {@code null} or empty
      *
-     * @exception NoSuchProviderException if the specified provider is not
-     *          registered in the security provider list.
+     * @throws NoSuchAlgorithmException if a {@code MacSpi}
+     *         implementation for the specified algorithm is not
+     *         available from the specified provider
      *
-     * @exception IllegalArgumentException if the <code>provider</code>
-     *          is null or empty.
+     * @throws NoSuchProviderException if the specified provider is not
+     *         registered in the security provider list
+     *
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final Mac getInstance(String algorithm, String provider)
             throws NoSuchAlgorithmException, NoSuchProviderException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         Instance instance = JceSecurity.getInstance
                 ("Mac", MacSpi.class, algorithm, provider);
         return new Mac((MacSpi)instance.impl, instance.provider, algorithm);
     }
 
     /**
-     * Returns a <code>Mac</code> object that implements the
+     * Returns a {@code Mac} object that implements the
      * specified MAC algorithm.
      *
      * <p> A new Mac object encapsulating the
@@ -234,25 +247,28 @@ public class Mac implements Cloneable {
      *
      * @param algorithm the standard name of the requested MAC algorithm.
      * See the Mac section in the <a href=
-     *   "{@docRoot}/../technotes/guides/security/StandardNames.html#Mac">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     *   "{@docRoot}/../specs/security/standard-names.html#mac-algorithms">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard algorithm names.
      *
      * @param provider the provider.
      *
-     * @return the new <code>Mac</code> object.
+     * @return the new {@code Mac} object
      *
-     * @exception NoSuchAlgorithmException if a MacSpi
-     *          implementation for the specified algorithm is not available
-     *          from the specified Provider object.
+     * @throws IllegalArgumentException if the {@code provider} is
+     *         {@code null}
      *
-     * @exception IllegalArgumentException if the <code>provider</code>
-     *          is null.
+     * @throws NoSuchAlgorithmException if a {@code MacSpi}
+     *         implementation for the specified algorithm is not available
+     *         from the specified {@code Provider} object
+     *
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final Mac getInstance(String algorithm, Provider provider)
             throws NoSuchAlgorithmException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         Instance instance = JceSecurity.getInstance
                 ("Mac", MacSpi.class, algorithm, provider);
         return new Mac((MacSpi)instance.impl, instance.provider, algorithm);
@@ -380,9 +396,9 @@ public class Mac implements Cloneable {
     }
 
     /**
-     * Returns the provider of this <code>Mac</code> object.
+     * Returns the provider of this {@code Mac} object.
      *
-     * @return the provider of this <code>Mac</code> object.
+     * @return the provider of this {@code Mac} object.
      */
     public final Provider getProvider() {
         chooseFirstProvider();
@@ -399,8 +415,12 @@ public class Mac implements Cloneable {
         return spi.engineGetMacLength();
     }
 
+    private String getProviderName() {
+        return (provider == null) ? "(no provider)" : provider.getName();
+    }
+
     /**
-     * Initializes this <code>Mac</code> object with the given key.
+     * Initializes this {@code Mac} object with the given key.
      *
      * @param key the key.
      *
@@ -421,12 +441,12 @@ public class Mac implements Cloneable {
 
         if (!skipDebug && pdebug != null) {
             pdebug.println("Mac." + algorithm + " algorithm from: " +
-                this.provider.getName());
+                getProviderName());
         }
     }
 
     /**
-     * Initializes this <code>Mac</code> object with the given key and
+     * Initializes this {@code Mac} object with the given key and
      * algorithm parameters.
      *
      * @param key the key.
@@ -448,7 +468,7 @@ public class Mac implements Cloneable {
 
         if (!skipDebug && pdebug != null) {
             pdebug.println("Mac." + algorithm + " algorithm from: " +
-                this.provider.getName());
+                getProviderName());
         }
     }
 
@@ -457,7 +477,7 @@ public class Mac implements Cloneable {
      *
      * @param input the input byte to be processed.
      *
-     * @exception IllegalStateException if this <code>Mac</code> has not been
+     * @exception IllegalStateException if this {@code Mac} has not been
      * initialized.
      */
     public final void update(byte input) throws IllegalStateException {
@@ -473,7 +493,7 @@ public class Mac implements Cloneable {
      *
      * @param input the array of bytes to be processed.
      *
-     * @exception IllegalStateException if this <code>Mac</code> has not been
+     * @exception IllegalStateException if this {@code Mac} has not been
      * initialized.
      */
     public final void update(byte[] input) throws IllegalStateException {
@@ -487,14 +507,14 @@ public class Mac implements Cloneable {
     }
 
     /**
-     * Processes the first <code>len</code> bytes in <code>input</code>,
-     * starting at <code>offset</code> inclusive.
+     * Processes the first {@code len} bytes in {@code input},
+     * starting at {@code offset} inclusive.
      *
      * @param input the input buffer.
-     * @param offset the offset in <code>input</code> where the input starts.
+     * @param offset the offset in {@code input} where the input starts.
      * @param len the number of bytes to process.
      *
-     * @exception IllegalStateException if this <code>Mac</code> has not been
+     * @exception IllegalStateException if this {@code Mac} has not been
      * initialized.
      */
     public final void update(byte[] input, int offset, int len)
@@ -512,14 +532,14 @@ public class Mac implements Cloneable {
     }
 
     /**
-     * Processes <code>input.remaining()</code> bytes in the ByteBuffer
-     * <code>input</code>, starting at <code>input.position()</code>.
+     * Processes {@code input.remaining()} bytes in the ByteBuffer
+     * {@code input}, starting at {@code input.position()}.
      * Upon return, the buffer's position will be equal to its limit;
      * its limit will not have changed.
      *
      * @param input the ByteBuffer
      *
-     * @exception IllegalStateException if this <code>Mac</code> has not been
+     * @exception IllegalStateException if this {@code Mac} has not been
      * initialized.
      * @since 1.5
      */
@@ -537,20 +557,20 @@ public class Mac implements Cloneable {
     /**
      * Finishes the MAC operation.
      *
-     * <p>A call to this method resets this <code>Mac</code> object to the
+     * <p>A call to this method resets this {@code Mac} object to the
      * state it was in when previously initialized via a call to
-     * <code>init(Key)</code> or
-     * <code>init(Key, AlgorithmParameterSpec)</code>.
+     * {@code init(Key)} or
+     * {@code init(Key, AlgorithmParameterSpec)}.
      * That is, the object is reset and available to generate another MAC from
-     * the same key, if desired, via new calls to <code>update</code> and
-     * <code>doFinal</code>.
-     * (In order to reuse this <code>Mac</code> object with a different key,
-     * it must be reinitialized via a call to <code>init(Key)</code> or
-     * <code>init(Key, AlgorithmParameterSpec)</code>.
+     * the same key, if desired, via new calls to {@code update} and
+     * {@code doFinal}.
+     * (In order to reuse this {@code Mac} object with a different key,
+     * it must be reinitialized via a call to {@code init(Key)} or
+     * {@code init(Key, AlgorithmParameterSpec)}.
      *
      * @return the MAC result.
      *
-     * @exception IllegalStateException if this <code>Mac</code> has not been
+     * @exception IllegalStateException if this {@code Mac} has not been
      * initialized.
      */
     public final byte[] doFinal() throws IllegalStateException {
@@ -566,27 +586,27 @@ public class Mac implements Cloneable {
     /**
      * Finishes the MAC operation.
      *
-     * <p>A call to this method resets this <code>Mac</code> object to the
+     * <p>A call to this method resets this {@code Mac} object to the
      * state it was in when previously initialized via a call to
-     * <code>init(Key)</code> or
-     * <code>init(Key, AlgorithmParameterSpec)</code>.
+     * {@code init(Key)} or
+     * {@code init(Key, AlgorithmParameterSpec)}.
      * That is, the object is reset and available to generate another MAC from
-     * the same key, if desired, via new calls to <code>update</code> and
-     * <code>doFinal</code>.
-     * (In order to reuse this <code>Mac</code> object with a different key,
-     * it must be reinitialized via a call to <code>init(Key)</code> or
-     * <code>init(Key, AlgorithmParameterSpec)</code>.
+     * the same key, if desired, via new calls to {@code update} and
+     * {@code doFinal}.
+     * (In order to reuse this {@code Mac} object with a different key,
+     * it must be reinitialized via a call to {@code init(Key)} or
+     * {@code init(Key, AlgorithmParameterSpec)}.
      *
-     * <p>The MAC result is stored in <code>output</code>, starting at
-     * <code>outOffset</code> inclusive.
+     * <p>The MAC result is stored in {@code output}, starting at
+     * {@code outOffset} inclusive.
      *
      * @param output the buffer where the MAC result is stored
-     * @param outOffset the offset in <code>output</code> where the MAC is
+     * @param outOffset the offset in {@code output} where the MAC is
      * stored
      *
      * @exception ShortBufferException if the given output buffer is too small
      * to hold the result
-     * @exception IllegalStateException if this <code>Mac</code> has not been
+     * @exception IllegalStateException if this {@code Mac} has not been
      * initialized.
      */
     public final void doFinal(byte[] output, int outOffset)
@@ -609,21 +629,21 @@ public class Mac implements Cloneable {
     /**
      * Processes the given array of bytes and finishes the MAC operation.
      *
-     * <p>A call to this method resets this <code>Mac</code> object to the
+     * <p>A call to this method resets this {@code Mac} object to the
      * state it was in when previously initialized via a call to
-     * <code>init(Key)</code> or
-     * <code>init(Key, AlgorithmParameterSpec)</code>.
+     * {@code init(Key)} or
+     * {@code init(Key, AlgorithmParameterSpec)}.
      * That is, the object is reset and available to generate another MAC from
-     * the same key, if desired, via new calls to <code>update</code> and
-     * <code>doFinal</code>.
-     * (In order to reuse this <code>Mac</code> object with a different key,
-     * it must be reinitialized via a call to <code>init(Key)</code> or
-     * <code>init(Key, AlgorithmParameterSpec)</code>.
+     * the same key, if desired, via new calls to {@code update} and
+     * {@code doFinal}.
+     * (In order to reuse this {@code Mac} object with a different key,
+     * it must be reinitialized via a call to {@code init(Key)} or
+     * {@code init(Key, AlgorithmParameterSpec)}.
      *
      * @param input data in bytes
      * @return the MAC result.
      *
-     * @exception IllegalStateException if this <code>Mac</code> has not been
+     * @exception IllegalStateException if this {@code Mac} has not been
      * initialized.
      */
     public final byte[] doFinal(byte[] input) throws IllegalStateException
@@ -637,18 +657,18 @@ public class Mac implements Cloneable {
     }
 
     /**
-     * Resets this <code>Mac</code> object.
+     * Resets this {@code Mac} object.
      *
-     * <p>A call to this method resets this <code>Mac</code> object to the
+     * <p>A call to this method resets this {@code Mac} object to the
      * state it was in when previously initialized via a call to
-     * <code>init(Key)</code> or
-     * <code>init(Key, AlgorithmParameterSpec)</code>.
+     * {@code init(Key)} or
+     * {@code init(Key, AlgorithmParameterSpec)}.
      * That is, the object is reset and available to generate another MAC from
-     * the same key, if desired, via new calls to <code>update</code> and
-     * <code>doFinal</code>.
-     * (In order to reuse this <code>Mac</code> object with a different key,
-     * it must be reinitialized via a call to <code>init(Key)</code> or
-     * <code>init(Key, AlgorithmParameterSpec)</code>.
+     * the same key, if desired, via new calls to {@code update} and
+     * {@code doFinal}.
+     * (In order to reuse this {@code Mac} object with a different key,
+     * it must be reinitialized via a call to {@code init(Key)} or
+     * {@code init(Key, AlgorithmParameterSpec)}.
      */
     public final void reset() {
         chooseFirstProvider();
@@ -661,7 +681,7 @@ public class Mac implements Cloneable {
      * @return a clone if the provider implementation is cloneable.
      *
      * @exception CloneNotSupportedException if this is called on a
-     * delegate that does not support <code>Cloneable</code>.
+     * delegate that does not support {@code Cloneable}.
      */
     public final Object clone() throws CloneNotSupportedException {
         chooseFirstProvider();

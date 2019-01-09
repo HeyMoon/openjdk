@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -112,6 +112,8 @@ public class ContextFactory {
                 "is not active.  Using JAXB's implementation");
         }
 
+        Boolean backupWithParentNamespace = getPropertyValue(properties, JAXBRIContext.BACKUP_WITH_PARENT_NAMESPACE, Boolean.class);
+
         RuntimeAnnotationReader ar = getPropertyValue(properties,JAXBRIContext.ANNOTATION_READER,RuntimeAnnotationReader.class);
 
         Collection<TypeReference> tr = getPropertyValue(properties, JAXBRIContext.TYPE_REFERENCES, Collection.class);
@@ -144,6 +146,7 @@ public class ContextFactory {
         builder.setSupressAccessorWarnings(supressAccessorWarnings);
         builder.setImprovedXsiTypeHandling(improvedXsiTypeHandling);
         builder.setDisableSecurityProcessing(disablesecurityProcessing);
+        builder.setBackupWithParentNamespace(backupWithParentNamespace);
         return builder.build();
     }
 
@@ -174,7 +177,7 @@ public class ContextFactory {
      * @param retainPropertyInfo
      * @return
      * @throws JAXBException
-     * @deprecated use createContext(Class[] classes, Map<String,Object> properties) method instead
+     * @deprecated use {@code createContext(Class[] classes, Map<String,Object> properties)} method instead
      */
     @Deprecated
     public static JAXBRIContext createContext( Class[] classes,
@@ -201,7 +204,7 @@ public class ContextFactory {
      * @param improvedXsiTypeHandling
      * @return
      * @throws JAXBException
-     * @deprecated use createContext( Class[] classes, Map<String,Object> properties) method instead
+     * @deprecated use {@code createContext( Class[] classes, Map<String,Object> properties)} method instead
      */
     @Deprecated
     public static JAXBRIContext createContext( Class[] classes,

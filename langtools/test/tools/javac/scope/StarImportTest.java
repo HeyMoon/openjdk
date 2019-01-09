@@ -23,10 +23,11 @@
 
 /*
  * @test
- * @bug 7004029
+ * @bug 7004029 8131915
  * @summary Basher for star-import scopes
  * @modules jdk.compiler/com.sun.tools.javac.code
  *          jdk.compiler/com.sun.tools.javac.file
+ *          jdk.compiler/com.sun.tools.javac.tree
  *          jdk.compiler/com.sun.tools.javac.util
  */
 
@@ -39,6 +40,7 @@ import com.sun.tools.javac.code.Scope.StarImportScope;
 import com.sun.tools.javac.code.Scope.WriteableScope;
 import com.sun.tools.javac.code.Symbol.*;
 import com.sun.tools.javac.file.JavacFileManager;
+import com.sun.tools.javac.tree.TreeMaker;
 import com.sun.tools.javac.util.*;
 
 import static com.sun.tools.javac.code.Kinds.Kind.*;
@@ -136,6 +138,7 @@ public class StarImportTest {
             log ("setup");
             context = new Context();
             JavacFileManager.preRegister(context); // required by ClassReader which is required by Symtab
+            make = TreeMaker.instance(context);
             names = Names.instance(context);       // Name.Table impls tied to an instance of Names
             symtab = Symtab.instance(context);
             types = Types.instance(context);
@@ -197,7 +200,7 @@ public class StarImportTest {
             Name name = names.fromString("c" + (++nextClassSerial));
             int count = rgen.nextInt(MAX_SETUP_CLASS_COUNT);
             log("setup: creating class " + name + " with " + count + " entries");
-            ClassSymbol c = createClass(name, symtab.unnamedPackage);
+            ClassSymbol c = createClass(name, symtab.unnamedModule.unnamedPackage);
 //            log("setup: created " + c);
             for (int i = 0; i < count; i++) {
                 ClassSymbol ic = createClass(names.fromString("Entry" + i), c);
@@ -227,7 +230,7 @@ public class StarImportTest {
                     public boolean accepts(Scope origin, Symbol t) {
                         return t.kind == TYP;
                     }
-                }, false);
+                }, make.Import(null, false), (i, cf) -> { throw new IllegalStateException(); });
 
                 for (Symbol sym : members.getSymbols()) {
                     starImportModel.enter(sym);
@@ -288,13 +291,14 @@ public class StarImportTest {
         ClassSymbol createClass(Name name, Symbol owner) {
             ClassSymbol sym = new ClassSymbol(0, name, owner);
             sym.members_field = WriteableScope.create(sym);
-            if (owner != symtab.unnamedPackage)
+            if (owner != symtab.unnamedModule.unnamedPackage)
                 owner.members().enter(sym);
             return sym;
         }
 
         Context context;
         Symtab symtab;
+        TreeMaker make;
         Names names;
         Types types;
         int nextNameSerial;

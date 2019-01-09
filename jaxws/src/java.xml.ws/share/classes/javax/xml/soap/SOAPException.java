@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2004, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -83,6 +83,9 @@ public class SOAPException extends Exception {
     /**
      * Constructs a {@code SOAPException} object initialized
      * with the given {@code Throwable} object.
+     *
+     * @param cause a {@code Throwable} object that is to
+     *        be embedded in this {@code SOAPException} object
      */
     public SOAPException(Throwable cause) {
         super(cause.toString());
@@ -103,6 +106,7 @@ public class SOAPException extends Exception {
      *         message of the embedded {@code Throwable} object,
      *         if there is one
      */
+    @Override
     public String getMessage() {
         String message = super.getMessage();
         if (message == null && cause != null) {
@@ -121,6 +125,7 @@ public class SOAPException extends Exception {
      *         if there is none
      */
 
+    @Override
     public Throwable getCause() {
         return cause;
     }
@@ -141,7 +146,7 @@ public class SOAPException extends Exception {
      * @param  cause the {@code Throwable} object that caused this
      *         {@code SOAPException} object to be thrown.  The value of this
      *         parameter is saved for later retrieval by the
-     *         {@link #getCause()} method.  A <tt>null</tt> value is
+     *         {@link #getCause()} method.  A {@code null} value is
      *         permitted and indicates that the cause is nonexistent or
      *         unknown.
      * @return  a reference to this {@code SOAPException} instance
@@ -151,6 +156,7 @@ public class SOAPException extends Exception {
      * @throws IllegalStateException if the cause for this {@code SOAPException} object
      *         has already been initialized
      */
+    @Override
     public synchronized Throwable initCause(Throwable cause) {
         if (this.cause != null) {
             throw new IllegalStateException("Can't override cause");

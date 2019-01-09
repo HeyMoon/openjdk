@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,11 +46,16 @@
 #include "sun_awt_windows_WCanvasPeer.h"
 
 #include <windowsx.h>
-
+#include <math.h>
 #if !defined(__int3264)
 typedef __int32 LONG_PTR;
 #endif // __int3264
 
+#if defined(_MSC_VER) && _MSC_VER >= 1800
+#  define ROUND_TO_INT(num)    ((int) round(num))
+#else
+#  define ROUND_TO_INT(num)    ((int) floor((num) + 0.5))
+#endif
 // Used for Swing's Menu/Tooltip animation Support
 const int UNSPECIFIED = 0;
 const int TOOLTIP = 1;
@@ -148,6 +153,16 @@ struct SetFullScreenExclusiveModeStateStruct {
     jboolean isFSEMState;
 };
 
+// struct for _WindowDPIChange() method
+struct ScaleStruct {
+    jobject window;
+    jint prevScreen;
+    jfloat prevScaleX;
+    jfloat prevScaleY;
+    jint screen;
+    jfloat scaleX;
+    jfloat scaleY;
+};
 
 /************************************************************************
  * AwtWindow fields
@@ -223,6 +238,10 @@ AwtWindow::AwtWindow() {
     m_alwaysOnTop = false;
 
     fullScreenExclusiveModeState = FALSE;
+    m_winSizeMove = FALSE;
+    prevScaleRec.screen = -1;
+    prevScaleRec.scaleX = -1.0f;
+    prevScaleRec.scaleY = -1.0f;
 }
 
 AwtWindow::~AwtWindow()
@@ -381,6 +400,9 @@ MsgRouting AwtWindow::WmWindowPosChanged(LPARAM windowPos) {
 
     if (wp->flags & SWP_HIDEWINDOW) {
         EnableTranslucency(FALSE);
+    }
+    if (wp->flags & SWP_SHOWWINDOW) {
+        EnableTranslucency(TRUE);
     }
 
     return mrDoDefault;
@@ -1151,6 +1173,7 @@ BOOL AwtWindow::IsOneOfOwnersOf(AwtWindow * wnd) {
 void AwtWindow::InitOwner(AwtWindow *owner)
 {
     DASSERT(owner != NULL);
+    AwtWindow *initialOwner = owner;
     while (owner != NULL && owner->IsSimpleWindow()) {
 
         HWND ownerOwnerHWND = ::GetWindow(owner->GetHWnd(), GW_OWNER);
@@ -1159,6 +1182,9 @@ void AwtWindow::InitOwner(AwtWindow *owner)
             break;
         }
         owner = (AwtWindow *)AwtComponent::GetComponent(ownerOwnerHWND);
+    }
+    if (!owner) {
+        owner = initialOwner->GetOwningFrameOrDialog();
     }
     m_owningFrameDialog = (AwtFrame *)owner;
 }
@@ -1407,19 +1433,19 @@ BOOL AwtWindow::UpdateInsets(jobject insets)
     /* Get insets into our peer directly */
     jobject peerInsets = (env)->GetObjectField(peer, AwtPanel::insets_ID);
     DASSERT(!safe_ExceptionOccurred(env));
+
     if (peerInsets != NULL) { // may have been called during creation
-        (env)->SetIntField(peerInsets, AwtInsets::topID, m_insets.top);
-        (env)->SetIntField(peerInsets, AwtInsets::bottomID,
-                           m_insets.bottom);
-        (env)->SetIntField(peerInsets, AwtInsets::leftID, m_insets.left);
-        (env)->SetIntField(peerInsets, AwtInsets::rightID, m_insets.right);
+        (env)->SetIntField(peerInsets, AwtInsets::topID, ScaleDownY(m_insets.top));
+        (env)->SetIntField(peerInsets, AwtInsets::bottomID, ScaleDownY(m_insets.bottom));
+        (env)->SetIntField(peerInsets, AwtInsets::leftID, ScaleDownX(m_insets.left));
+        (env)->SetIntField(peerInsets, AwtInsets::rightID, ScaleDownX(m_insets.right));
     }
     /* Get insets into the Inset object (if any) that was passed */
     if (insets != NULL) {
-        (env)->SetIntField(insets, AwtInsets::topID, m_insets.top);
-        (env)->SetIntField(insets, AwtInsets::bottomID, m_insets.bottom);
-        (env)->SetIntField(insets, AwtInsets::leftID, m_insets.left);
-        (env)->SetIntField(insets, AwtInsets::rightID, m_insets.right);
+        (env)->SetIntField(insets, AwtInsets::topID, ScaleDownY(m_insets.top));
+        (env)->SetIntField(insets, AwtInsets::bottomID, ScaleDownY(m_insets.bottom));
+        (env)->SetIntField(insets, AwtInsets::leftID, ScaleDownX(m_insets.left));
+        (env)->SetIntField(insets, AwtInsets::rightID, ScaleDownX(m_insets.right));
     }
     env->DeleteLocalRef(peerInsets);
 
@@ -1735,10 +1761,10 @@ MsgRouting AwtWindow::WmMove(int x, int y)
     RECT rect;
     ::GetWindowRect(GetHWnd(), &rect);
 
-    (env)->SetIntField(target, AwtComponent::xID, rect.left);
-    (env)->SetIntField(target, AwtComponent::yID, rect.top);
-    (env)->SetIntField(peer, AwtWindow::sysXID, rect.left);
-    (env)->SetIntField(peer, AwtWindow::sysYID, rect.top);
+    (env)->SetIntField(target, AwtComponent::xID, ScaleDownX(rect.left));
+    (env)->SetIntField(target, AwtComponent::yID, ScaleDownY(rect.top));
+    (env)->SetIntField(peer, AwtWindow::sysXID, ScaleDownX(rect.left));
+    (env)->SetIntField(peer, AwtWindow::sysYID, ScaleDownY(rect.top));
     SendComponentEvent(java_awt_event_ComponentEvent_COMPONENT_MOVED);
 
     env->DeleteLocalRef(target);
@@ -1780,6 +1806,19 @@ MsgRouting AwtWindow::WmSizing()
     return mrDoDefault;
 }
 
+MsgRouting AwtWindow::WmEnterSizeMove()
+{
+    m_winSizeMove = TRUE;
+    return mrDoDefault;
+}
+
+MsgRouting AwtWindow::WmExitSizeMove()
+{
+    m_winSizeMove = FALSE;
+    CheckWindowDPIChange();
+    return mrDoDefault;
+}
+
 /*
  * Override AwtComponent's size handling to first update the
  * java AWT target's dimension fields directly, since Windows
@@ -1803,12 +1842,12 @@ MsgRouting AwtWindow::WmSize(UINT type, int w, int h)
     int newWidth = w + m_insets.left + m_insets.right;
     int newHeight = h + m_insets.top + m_insets.bottom;
 
-    (env)->SetIntField(target, AwtComponent::widthID, newWidth);
-    (env)->SetIntField(target, AwtComponent::heightID, newHeight);
+    (env)->SetIntField(target, AwtComponent::widthID, ScaleDownX(newWidth));
+    (env)->SetIntField(target, AwtComponent::heightID, ScaleDownY(newHeight));
 
     jobject peer = GetPeer(env);
-    (env)->SetIntField(peer, AwtWindow::sysWID, newWidth);
-    (env)->SetIntField(peer, AwtWindow::sysHID, newHeight);
+    (env)->SetIntField(peer, AwtWindow::sysWID, ScaleDownX(newWidth));
+    (env)->SetIntField(peer, AwtWindow::sysHID, ScaleDownY(newHeight));
 
     if (!AwtWindow::IsResizing()) {
         WindowResized();
@@ -2060,6 +2099,67 @@ void AwtWindow::CheckIfOnNewScreen() {
 
         env->DeleteLocalRef(peerCls);
     }
+}
+
+void AwtWindow::CheckWindowDPIChange() {
+
+    if (prevScaleRec.screen != -1 ) {
+        float prevScaleX = prevScaleRec.scaleX;
+        float prevScaleY = prevScaleRec.scaleY;
+
+        if (prevScaleX >= 1 && prevScaleY >= 1) {
+            Devices::InstanceAccess devices;
+            AwtWin32GraphicsDevice* device = devices->GetDevice(m_screenNum);
+            if (device) {
+                float scaleX = device->GetScaleX();
+                float scaleY = device->GetScaleY();
+                if (prevScaleX != scaleX || prevScaleY != scaleY) {
+                    WindowDPIChange(prevScaleRec.screen, prevScaleX, prevScaleY,
+                                    m_screenNum, scaleX, scaleY);
+                }
+            }
+        }
+        prevScaleRec.screen = -1;
+    }
+}
+
+void AwtWindow::WindowDPIChange(int prevScreen,
+                                float prevScaleX, float prevScaleY,
+                                int screen, float scaleX,
+                                float scaleY)
+{
+    int x;
+    int y;
+    int w;
+    int h;
+    RECT rect;
+
+    if (prevScaleX == scaleX && prevScaleY == scaleY) {
+        return;
+    }
+
+    ::GetWindowRect(GetHWnd(), &rect);
+    x = rect.left;
+    y = rect.top;
+    w = (rect.right - rect.left) * scaleX / prevScaleX;
+    h = (rect.bottom - rect.top) * scaleY / prevScaleY;
+
+    if (prevScreen != screen) {
+        Devices::InstanceAccess devices;
+        AwtWin32GraphicsDevice* device = devices->GetDevice(screen);
+        if (device) {
+            RECT bounds;
+            if (MonitorBounds(device->GetMonitor(), &bounds)) {
+                x = x < bounds.left ? bounds.left : x;
+                y = y < bounds.top ? bounds.top : y;
+
+                x = (x + w > bounds.right) ? bounds.right - w : x;
+                y = (y + h > bounds.bottom) ? bounds.bottom - h : y;
+            }
+        }
+    }
+
+    ReshapeNoScale(x, y, w, h);
 }
 
 BOOL AwtWindow::IsFocusableWindow() {
@@ -3072,6 +3172,60 @@ void AwtWindow::_SetFullScreenExclusiveModeState(void *param)
     delete data;
 }
 
+void AwtWindow::_GetNativeWindowSize(void* param) {
+
+    JNIEnv *env = (JNIEnv *)JNU_GetEnv(jvm, JNI_VERSION_1_2);
+
+    SizeStruct *ss = (SizeStruct *)param;
+    jobject self = ss->window;
+    AwtWindow *window = NULL;
+    PDATA pData;
+    JNI_CHECK_PEER_RETURN(self);
+    window = (AwtWindow *)pData;
+
+    RECT rc;
+    ::GetWindowRect(window->GetHWnd(), &rc);
+    ss->w = rc.right - rc.left;
+    ss->h = rc.bottom - rc.top;
+
+    env->DeleteGlobalRef(self);
+}
+
+void AwtWindow::_WindowDPIChange(void* param)
+{
+    JNIEnv *env = (JNIEnv *)JNU_GetEnv(jvm, JNI_VERSION_1_2);
+
+    ScaleStruct *ss = (ScaleStruct *)param;
+    jobject self = ss->window;
+    jint prevScreen = ss->prevScreen;
+    jfloat prevScaleX = ss->prevScaleX;
+    jfloat prevScaleY = ss->prevScaleY;
+    jint screen = ss->screen;
+    jfloat scaleX = ss->scaleX;
+    jfloat scaleY = ss->scaleY;
+
+    PDATA pData;
+    JNI_CHECK_PEER_GOTO(self, ret);
+    AwtWindow *window = (AwtWindow *)pData;
+
+    if (window->m_winSizeMove) {
+        if (window->prevScaleRec.screen == -1) {
+            window->prevScaleRec.screen = prevScreen;
+            window->prevScaleRec.scaleX = prevScaleX;
+            window->prevScaleRec.scaleY = prevScaleY;
+        }
+    }
+    else {
+        window->WindowDPIChange(prevScreen, prevScaleX, prevScaleY,
+                                screen, scaleX, scaleY);
+    }
+
+ret:
+    env->DeleteGlobalRef(self);
+    delete ss;
+}
+
+extern "C" int getSystemMetricValue(int msgType);
 extern "C" {
 
 /*
@@ -3303,6 +3457,46 @@ Java_sun_awt_windows_WWindowPeer_reshapeFrame(JNIEnv *env, jobject self,
 
 /*
  * Class:     sun_awt_windows_WWindowPeer
+* Method:    getNativeWindowSize
+* Signature: ()Ljava/awt/Dimension;
+*/
+JNIEXPORT jobject JNICALL Java_sun_awt_windows_WWindowPeer_getNativeWindowSize
+(JNIEnv *env, jobject self) {
+
+    jobject res = NULL;
+    TRY;
+    SizeStruct *ss = new SizeStruct;
+    ss->window = env->NewGlobalRef(self);
+
+    AwtToolkit::GetInstance().SyncCall(AwtWindow::_GetNativeWindowSize, ss);
+
+    int w = ss->w;
+    int h = ss->h;
+
+    delete ss;
+    // global ref is deleted in _GetNativeWindowSize()
+
+    static jmethodID dimMID = NULL;
+    static jclass dimClassID = NULL;
+    if (dimClassID == NULL) {
+        jclass dimClassIDLocal = env->FindClass("java/awt/Dimension");
+        CHECK_NULL_RETURN(dimClassIDLocal, NULL);
+        dimClassID = (jclass)env->NewGlobalRef(dimClassIDLocal);
+        env->DeleteLocalRef(dimClassIDLocal);
+    }
+
+    if (dimMID == NULL) {
+        dimMID = env->GetMethodID(dimClassID, "<init>", "(II)V");
+        CHECK_NULL_RETURN(dimMID, NULL);
+    }
+
+    return env->NewObject(dimClassID, dimMID, w, h);
+
+    CATCH_BAD_ALLOC_RET(NULL);
+}
+
+/*
+ * Class:     sun_awt_windows_WWindowPeer
  * Method:    getSysMinWidth
  * Signature: ()I
  */
@@ -3341,7 +3535,7 @@ Java_sun_awt_windows_WWindowPeer_getSysIconHeight(JNIEnv *env, jclass self)
 {
     TRY;
 
-    return ::GetSystemMetrics(SM_CYICON);
+    return getSystemMetricValue(SM_CYICON);
 
     CATCH_BAD_ALLOC_RET(0);
 }
@@ -3356,7 +3550,7 @@ Java_sun_awt_windows_WWindowPeer_getSysIconWidth(JNIEnv *env, jclass self)
 {
     TRY;
 
-    return ::GetSystemMetrics(SM_CXICON);
+    return getSystemMetricValue(SM_CXICON);
 
     CATCH_BAD_ALLOC_RET(0);
 }
@@ -3371,7 +3565,7 @@ Java_sun_awt_windows_WWindowPeer_getSysSmIconHeight(JNIEnv *env, jclass self)
 {
     TRY;
 
-    return ::GetSystemMetrics(SM_CYSMICON);
+    return getSystemMetricValue(SM_CYSMICON);
 
     CATCH_BAD_ALLOC_RET(0);
 }
@@ -3386,9 +3580,42 @@ Java_sun_awt_windows_WWindowPeer_getSysSmIconWidth(JNIEnv *env, jclass self)
 {
     TRY;
 
-    return ::GetSystemMetrics(SM_CXSMICON);
+    return getSystemMetricValue(SM_CXSMICON);
 
     CATCH_BAD_ALLOC_RET(0);
+}
+
+int getSystemMetricValue(int msgType) {
+    int value = 1;
+    int logPixels = LOGPIXELSX;
+    switch (msgType) {
+        case SM_CXICON:
+            value = ::GetSystemMetrics(SM_CXICON);
+            break;
+        case SM_CYICON:
+            value = ::GetSystemMetrics(SM_CYICON);
+            logPixels = LOGPIXELSY;
+            break;
+        case SM_CXSMICON:
+            value = ::GetSystemMetrics(SM_CXSMICON);
+            break;
+        case SM_CYSMICON:
+            value = ::GetSystemMetrics(SM_CYSMICON);
+            logPixels = LOGPIXELSY;
+            break;
+    }
+    static int dpi = -1;
+    if (dpi == -1) {
+        HWND hWnd = ::GetDesktopWindow();
+        HDC hDC = ::GetDC(hWnd);
+        dpi = GetDeviceCaps(hDC, logPixels);
+        ::ReleaseDC(hWnd, hDC);
+    }
+    if(dpi != 0 && dpi != 96) {
+        float invScaleX = 96.0f / dpi;
+        value = (int) ROUND_TO_INT(value * invScaleX);
+    }
+    return value;
 }
 
 /*
@@ -3696,4 +3923,30 @@ Java_sun_awt_windows_WWindowPeer_repositionSecurityWarning(JNIEnv *env,
     CATCH_BAD_ALLOC;
 }
 
+/*
+* Class:     sun_awt_windows_WWindowPeer
+* Method:    windowDPIChange
+* Signature: (IFFIFF)V
+*/
+JNIEXPORT void JNICALL
+Java_sun_awt_windows_WWindowPeer_windowDPIChange(JNIEnv *env, jobject self,
+    jint prevScreen, jfloat prevScaleX, jfloat prevScaleY,
+    jint screen, jfloat scaleX, jfloat scaleY)
+{
+    TRY;
+
+    ScaleStruct *ss = new ScaleStruct;
+    ss->window = env->NewGlobalRef(self);
+    ss->prevScreen = prevScreen;
+    ss->prevScaleX = prevScaleX;
+    ss->prevScaleY = prevScaleY;
+    ss->screen = screen;
+    ss->scaleX = scaleX;
+    ss->scaleY = scaleY;
+
+    AwtToolkit::GetInstance().InvokeFunction(AwtWindow::_WindowDPIChange, ss);
+    // global refs and ss are deleted in _WindowDPIChange
+
+    CATCH_BAD_ALLOC;
+}
 } /* extern "C" */

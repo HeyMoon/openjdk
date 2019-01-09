@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -105,7 +105,6 @@ public class SynthButtonUI extends BasicButtonUI implements
             }
 
         }
-        context.dispose();
     }
 
     /**
@@ -125,7 +124,6 @@ public class SynthButtonUI extends BasicButtonUI implements
         SynthContext context = getContext(b, ENABLED);
 
         style.uninstallDefaults(context);
-        context.dispose();
         style = null;
     }
 
@@ -226,7 +224,6 @@ public class SynthButtonUI extends BasicButtonUI implements
         else {
             baseline = textRect.y + fm.getAscent();
         }
-        context.dispose();
         return baseline;
     }
 
@@ -253,7 +250,6 @@ public class SynthButtonUI extends BasicButtonUI implements
         SynthLookAndFeel.update(context, g);
         paintBackground(context, g, c);
         paint(context, g);
-        context.dispose();
     }
 
     /**
@@ -270,7 +266,6 @@ public class SynthButtonUI extends BasicButtonUI implements
         SynthContext context = getContext(c);
 
         paint(context, g);
-        context.dispose();
     }
 
     /**
@@ -321,7 +316,6 @@ public class SynthButtonUI extends BasicButtonUI implements
     protected Icon getDefaultIcon(AbstractButton b) {
         SynthContext context = getContext(b);
         Icon icon = context.getStyle().getIcon(context, getPropertyPrefix() + "icon");
-        context.dispose();
         return icon;
     }
 
@@ -357,7 +351,7 @@ public class SynthButtonUI extends BasicButtonUI implements
      * This method will return the icon that should be used for a button.  We
      * only want to use the synth icon defined by the style if the specific
      * icon has not been defined for the button state and the backup icon is a
-     * UIResource (we set it, not the developer).
+     * UIResource (we set it, not the developer) or {@code null}.
      *
      * @param b button
      * @param specificIcon icon returned from the button for the specific state
@@ -368,7 +362,7 @@ public class SynthButtonUI extends BasicButtonUI implements
             int state) {
         Icon icon = specificIcon;
         if (icon == null) {
-            if (defaultIcon instanceof UIResource) {
+            if (defaultIcon == null || defaultIcon instanceof UIResource) {
                 icon = getSynthIcon(b, state);
                 if (icon == null) {
                     icon = defaultIcon;
@@ -397,16 +391,8 @@ public class SynthButtonUI extends BasicButtonUI implements
     }
 
     private Icon getRolloverIcon(AbstractButton b, Icon defaultIcon) {
-        ButtonModel model = b.getModel();
-        Icon icon;
-        if (model.isSelected()) {
-            icon = getIcon(b, b.getRolloverSelectedIcon(), defaultIcon,
-                    SynthConstants.MOUSE_OVER | SynthConstants.SELECTED);
-        } else {
-            icon = getIcon(b, b.getRolloverIcon(), defaultIcon,
-                    SynthConstants.MOUSE_OVER);
-        }
-        return icon;
+        return getSpecificIcon(b, b.getRolloverSelectedIcon(), b.getRolloverIcon(),
+                               defaultIcon, SynthConstants.MOUSE_OVER);
     }
 
     private Icon getPressedIcon(AbstractButton b, Icon defaultIcon) {
@@ -415,16 +401,44 @@ public class SynthButtonUI extends BasicButtonUI implements
     }
 
     private Icon getSynthDisabledIcon(AbstractButton b, Icon defaultIcon) {
-        ButtonModel model = b.getModel();
-        Icon icon;
-        if (model.isSelected()) {
-            icon = getIcon(b, b.getDisabledSelectedIcon(), defaultIcon,
-                    SynthConstants.DISABLED | SynthConstants.SELECTED);
-        } else {
-            icon = getIcon(b, b.getDisabledIcon(), defaultIcon,
-                    SynthConstants.DISABLED);
+        return getSpecificIcon(b, b.getDisabledSelectedIcon(), b.getDisabledIcon(),
+                               defaultIcon, SynthConstants.DISABLED);
+    }
+
+    private Icon getSpecificIcon(AbstractButton b, Icon specificSelectedIcon,
+                                 Icon specificIcon, Icon defaultIcon,
+                                 int state) {
+        boolean selected = b.getModel().isSelected();
+        Icon icon = null;
+
+        if (selected) {
+            icon = specificSelectedIcon;
+            if (icon == null) {
+                icon = b.getSelectedIcon();
+            }
         }
-        return icon;
+
+        if (icon == null) {
+            icon = specificIcon;
+        }
+
+        if (icon != null) {
+            return icon;
+        }
+
+        if (defaultIcon == null || defaultIcon instanceof UIResource) {
+            if (selected) {
+                icon = getSynthIcon(b, state | SynthConstants.SELECTED);
+                if (icon == null) {
+                    icon = getSynthIcon(b, SynthConstants.SELECTED);
+                }
+            }
+            if (icon == null) {
+                icon = getSynthIcon(b, state);
+            }
+        }
+
+        return icon != null ? icon : defaultIcon;
     }
 
     /**
@@ -463,7 +477,6 @@ public class SynthButtonUI extends BasicButtonUI implements
                b.getVerticalTextPosition(), b.getIconTextGap(),
                b.getDisplayedMnemonicIndex());
 
-        ss.dispose();
         return size;
     }
 
@@ -484,7 +497,6 @@ public class SynthButtonUI extends BasicButtonUI implements
                b.getVerticalTextPosition(), b.getIconTextGap(),
                b.getDisplayedMnemonicIndex());
 
-        ss.dispose();
         return size;
     }
 
@@ -506,7 +518,6 @@ public class SynthButtonUI extends BasicButtonUI implements
                b.getVerticalTextPosition(), b.getIconTextGap(),
                b.getDisplayedMnemonicIndex());
 
-        ss.dispose();
         return size;
     }
 

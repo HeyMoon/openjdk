@@ -33,9 +33,8 @@ package jdk.nashorn.api.tree;
  * {@linkplain TreeVisitor tree visitor} to indicate that the
  * visitor was created for a prior version of the language.
  *
- * @since 1.9
+ * @since 9
  */
-@jdk.Exported
 public class UnknownTreeException extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
@@ -53,7 +52,7 @@ public class UnknownTreeException extends RuntimeException {
      * @param t the unknown tree, may be {@code null}
      * @param p an additional parameter, may be {@code null}
      */
-    public UnknownTreeException(Tree t, Object p) {
+    public UnknownTreeException(final Tree t, final Object p) {
         super("Unknown tree: " + t);
         this.tree = t;
         this.parameter = p;

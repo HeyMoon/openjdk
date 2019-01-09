@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -56,7 +56,9 @@ class NTLM {
     private final Mac hmac;
     private final MessageDigest md5;
     private static final boolean DEBUG =
-            System.getProperty("ntlm.debug") != null;
+            java.security.AccessController.doPrivileged(
+                    new sun.security.action.GetBooleanAction("ntlm.debug"))
+                        .booleanValue();
 
     final Version v;
 
@@ -116,7 +118,7 @@ class NTLM {
     public void debug(byte[] bytes) {
         if (DEBUG) {
             try {
-                new sun.misc.HexDumpEncoder().encodeBuffer(bytes, System.out);
+                new sun.security.util.HexDumpEncoder().encodeBuffer(bytes, System.out);
             } catch (IOException ioe) {
                 // Impossible
             }
@@ -167,7 +169,7 @@ class NTLM {
 
         byte[] readSecurityBuffer(int offset) throws NTLMException {
             int pos = readInt(offset+4);
-            if (pos == 0) return null;
+            if (pos == 0) return new byte[0];
             try {
                 return Arrays.copyOfRange(
                         internal, pos, pos + readShort(offset));

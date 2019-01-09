@@ -3,13 +3,14 @@
  * DO NOT REMOVE OR ALTER!
  */
 /*
- * Copyright 1999-2004 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,9 +18,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * $Id: XMLErrorResources_ja.java /st_wptg_1.8.0.0.0jdk/2 2013/09/12 17:39:58 gmolloy Exp $
- */
+
 package com.sun.org.apache.xml.internal.res;
 
 
@@ -230,7 +229,7 @@ public class XMLErrorResources_ja extends ListResourceBundle
       "\u4E0D\u660E\u306A\u8EF8\u30C8\u30E9\u30D0\u30FC\u30B9\u30FB\u30BF\u30A4\u30D7\u3067\u3059: {0}"},
 
     { ER_AXIS_NOT_SUPPORTED,
-      "\u8EF8traverser\u6A5F\u80FD\u306F\u30B5\u30DD\u30FC\u30C8\u3055\u308C\u3066\u3044\u307E\u305B\u3093: {0}"},
+      "\u8EF8\u30C8\u30E9\u30D0\u30FC\u30B5\u6A5F\u80FD\u306F\u30B5\u30DD\u30FC\u30C8\u3055\u308C\u3066\u3044\u307E\u305B\u3093: {0}"},
 
     { ER_NO_DTMIDS_AVAIL,
       "DTM ID\u306F\u3053\u308C\u4EE5\u4E0A\u4F7F\u7528\u3067\u304D\u307E\u305B\u3093"},
@@ -329,7 +328,7 @@ public class XMLErrorResources_ja extends ListResourceBundle
       "XMLReader\u306FstartParse\u30EA\u30AF\u30A8\u30B9\u30C8\u3088\u308A\u524D\u306B\u3067\u304D\u307E\u305B\u3093"},
 
     { ER_AXIS_TRAVERSER_NOT_SUPPORTED,
-      "\u8EF8traverser\u6A5F\u80FD\u306F\u30B5\u30DD\u30FC\u30C8\u3055\u308C\u3066\u3044\u307E\u305B\u3093: {0}"},
+      "\u8EF8\u30C8\u30E9\u30D0\u30FC\u30B5\u6A5F\u80FD\u306F\u30B5\u30DD\u30FC\u30C8\u3055\u308C\u3066\u3044\u307E\u305B\u3093: {0}"},
 
     { ER_ERRORHANDLER_CREATED_WITH_NULL_PRINTWRITER,
       "null PrintWriter\u306B\u3088\u3063\u3066ListingErrorHandler\u304C\u4F5C\u6210\u3055\u308C\u307E\u3057\u305F\u3002"},

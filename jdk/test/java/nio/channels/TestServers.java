@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -80,13 +80,12 @@ public class TestServers {
             return address;
         }
 
-        public static RefusingServer startNewServer() throws IOException {
-            ServerSocket socket = new ServerSocket(0, 100,
-                    InetAddress.getLocalHost());
-            RefusingServer server = new RefusingServer(socket.getInetAddress(),
-                    socket.getLocalPort());
-            socket.close();
-            return server;
+        public static RefusingServer newRefusingServer() throws IOException {
+            // The port 1 is reserved for TCPMUX(RFC 1078), which is seldom used,
+            // and it's not used on all the test platform through JPRT.
+            // So we choose to use it as a refusing "server"'s "listen" port,
+            // it's much more stable than "open->close a server socket".
+            return new RefusingServer(InetAddress.getLocalHost(), 1);
         }
     }
 
@@ -341,7 +340,7 @@ public class TestServers {
      * exactly matches the RFC - the only purpose of this server is to have
      * something that responds to nio tests...
      */
-    static final class EchoServer extends AbstractTcpServer {
+    static class EchoServer extends AbstractTcpServer {
 
         public EchoServer() {
             this(0L);
@@ -397,6 +396,21 @@ public class TestServers {
             final EchoServer echoServer = new EchoServer(linger);
             echoServer.start();
             return echoServer;
+        }
+    }
+
+    /**
+     * A small TCP Server that accept connections but does not response to any input.
+     */
+    static final class NoResponseServer extends EchoServer {
+        public NoResponseServer() {
+            super(Long.MAX_VALUE);
+        }
+
+        public static NoResponseServer startNewServer() throws IOException {
+            final NoResponseServer noResponseServer = new NoResponseServer();
+            noResponseServer.start();
+            return noResponseServer;
         }
     }
 

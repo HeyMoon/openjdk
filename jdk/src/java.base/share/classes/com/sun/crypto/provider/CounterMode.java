@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,9 @@
 package com.sun.crypto.provider;
 
 import java.security.InvalidKeyException;
+import java.util.Objects;
 
+import jdk.internal.HotSpotIntrinsicCandidate;
 
 /**
  * This class represents ciphers in counter (CTR) mode.
@@ -40,10 +42,10 @@ import java.security.InvalidKeyException;
  * @author Andreas Sterbenz
  * @since 1.4.2
  */
-final class CounterMode extends FeedbackCipher {
+class CounterMode extends FeedbackCipher {
 
     // current counter value
-    private final byte[] counter;
+    final byte[] counter;
 
     // encrypted bytes of the previous counter value
     private final byte[] encryptedCounter;
@@ -138,7 +140,7 @@ final class CounterMode extends FeedbackCipher {
      * <code>cipherOffset</code>.
      *
      * @param in the buffer with the input data to be encrypted
-     * @param inOffset the offset in <code>plain</code>
+     * @param inOff the offset in <code>plain</code>
      * @param len the length of the input data
      * @param out the buffer for the result
      * @param outOff the offset in <code>cipher</code>
@@ -170,6 +172,17 @@ final class CounterMode extends FeedbackCipher {
      * are encrypted on demand.
      */
     private int crypt(byte[] in, int inOff, int len, byte[] out, int outOff) {
+        if (len == 0) {
+            return 0;
+        }
+        Objects.checkFromIndexSize(inOff, len, in.length);
+        Objects.checkFromIndexSize(outOff, len, out.length);
+        return implCrypt(in, inOff, len, out, outOff);
+    }
+
+    // Implementation of crpyt() method. Possibly replaced with a compiler intrinsic.
+    @HotSpotIntrinsicCandidate
+    private int implCrypt(byte[] in, int inOff, int len, byte[] out, int outOff) {
         int result = len;
         while (len-- > 0) {
             if (used >= blockSize) {
@@ -181,4 +194,5 @@ final class CounterMode extends FeedbackCipher {
         }
         return result;
     }
+
 }

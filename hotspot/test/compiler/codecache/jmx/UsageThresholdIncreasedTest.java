@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,25 +21,34 @@
  * questions.
  */
 
-import jdk.test.lib.Asserts;
-import java.lang.management.MemoryPoolMXBean;
-import sun.hotspot.code.BlobType;
-
 /*
  * @test UsageThresholdIncreasedTest
- * @library /testlibrary /../../test/lib
- * @modules java.base/sun.misc
- *          java.management
- * @build UsageThresholdIncreasedTest
- * @run main ClassFileInstaller sun.hotspot.WhiteBox
- *     sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
- *     -XX:+WhiteBoxAPI -XX:+SegmentedCodeCache -XX:-UseCodeCacheFlushing
- *     -XX:-MethodFlushing -XX:CompileCommand=compileonly,null::*
- *     UsageThresholdIncreasedTest
  * @summary verifying that threshold hasn't been hit after allocation smaller
  *     than threshold value and that threshold value can be changed
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ *          java.management
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *                                sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *     -XX:+WhiteBoxAPI -XX:-UseCodeCacheFlushing  -XX:-MethodFlushing
+ *     -XX:CompileCommand=compileonly,null::*
+ *     -XX:-SegmentedCodeCache
+ *     compiler.codecache.jmx.UsageThresholdIncreasedTest
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *     -XX:+WhiteBoxAPI -XX:-UseCodeCacheFlushing  -XX:-MethodFlushing
+ *     -XX:CompileCommand=compileonly,null::*
+ *     -XX:+SegmentedCodeCache
+ *     compiler.codecache.jmx.UsageThresholdIncreasedTest
  */
+
+package compiler.codecache.jmx;
+
+import sun.hotspot.code.BlobType;
+
+import java.lang.management.MemoryPoolMXBean;
+
 public class UsageThresholdIncreasedTest {
 
     private static final int ALLOCATION_STEP = 5;
@@ -67,7 +76,7 @@ public class UsageThresholdIncreasedTest {
 
     protected void runTest() {
         long headerSize = CodeCacheUtils.getHeaderSize(btype);
-        long allocationUnit = CodeCacheUtils.MIN_ALLOCATION - headerSize;
+        long allocationUnit = Math.max(0, CodeCacheUtils.MIN_ALLOCATION - headerSize);
         MemoryPoolMXBean bean = btype.getMemoryPool();
         long initialCount = bean.getUsageThresholdCount();
         long initialSize = bean.getUsage().getUsed();

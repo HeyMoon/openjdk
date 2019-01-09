@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +22,6 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package javax.swing;
 
 import java.awt.BorderLayout;
@@ -35,6 +34,8 @@ import java.awt.Frame;
 import java.awt.Point;
 import java.awt.HeadlessException;
 import java.awt.Window;
+import java.beans.JavaBean;
+import java.beans.BeanProperty;
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.awt.event.WindowListener;
@@ -47,6 +48,7 @@ import java.io.InvalidObjectException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
+import java.util.Arrays;
 import java.util.Vector;
 import javax.swing.plaf.OptionPaneUI;
 import javax.swing.event.InternalFrameEvent;
@@ -71,12 +73,15 @@ import sun.awt.AWTAccessor;
  * <code>showXxxDialog</code> methods shown below:
  * <blockquote>
  *
- *
- * <table border=1 summary="Common JOptionPane method names and their descriptions">
+ * <table class="striped">
+ * <caption>Common JOptionPane method names and their descriptions</caption>
+ * <thead>
  * <tr>
  *    <th>Method Name</th>
  *    <th>Description</th>
  * </tr>
+ * </thead>
+ * <tbody>
  * <tr>
  *    <td>showConfirmDialog</td>
  *    <td>Asks a confirming question, like yes/no/cancel.</td>
@@ -93,6 +98,7 @@ import sun.awt.AWTAccessor;
  *   <td>showOptionDialog</td>
  *   <td>The Grand Unification of the above three.</td>
  * </tr>
+ * </tbody>
  * </table>
  *
  * </blockquote>
@@ -105,7 +111,8 @@ import sun.awt.AWTAccessor;
  * All dialogs are modal. Each <code>showXxxDialog</code> method blocks
  * the caller until the user's interaction is complete.
  *
- * <table cellspacing=6 cellpadding=4 border=0 style="float:right" summary="layout">
+ * <table class="borderless">
+ * <caption>Common dialog</caption>
  * <tr>
  *  <td style="background-color:#FFe0d0" rowspan=2>icon</td>
  *  <td style="background-color:#FFe0d0">message</td>
@@ -119,7 +126,7 @@ import sun.awt.AWTAccessor;
  * </table>
  *
  * The basic appearance of one of these dialog boxes is generally
- * similar to the picture at the right, although the various
+ * similar to the picture above, although the various
  * look-and-feels are
  * ultimately responsible for the final result.  In particular, the
  * look-and-feels will adjust the layout to accommodate the option pane's
@@ -141,7 +148,7 @@ import sun.awt.AWTAccessor;
  * in which case a default <code>Frame</code> is used as the parent,
  * and the dialog will be
  * centered on the screen (depending on the {@literal L&F}).
- * <dt><a name=message>message</a><dd>
+ * <dt><a id=message>message</a><dd>
  * A descriptive message to be placed in the dialog box.
  * In the most common usage, message is just a <code>String</code> or
  * <code>String</code> constant.
@@ -301,14 +308,12 @@ import sun.awt.AWTAccessor;
  *
  * @see JInternalFrame
  *
- * @beaninfo
- *      attribute: isContainer true
- *    description: A component which implements standard dialog box controls.
- *
  * @author James Gosling
  * @author Scott Violet
  * @since 1.2
  */
+@JavaBean(defaultProperty = "UI", description = "A component which implements standard dialog box controls.")
+@SwingContainer
 @SuppressWarnings("serial") // Same-version serialization only
 public class JOptionPane extends JComponent implements Accessible
 {
@@ -394,13 +399,13 @@ public class JOptionPane extends JComponent implements Accessible
     public static final String      WANTS_INPUT_PROPERTY = "wantsInput";
 
     /** Icon used in pane. */
-    transient protected Icon                  icon;
+    protected transient Icon                  icon;
     /** Message to display. */
-    transient protected Object                message;
+    protected transient Object                message;
     /** Options to display to the user. */
-    transient protected Object[]              options;
+    protected transient Object[]              options;
     /** Value that should be initially selected in <code>options</code>. */
-    transient protected Object                initialValue;
+    protected transient Object                initialValue;
     /** Message type. */
     protected int                   messageType;
     /**
@@ -412,7 +417,7 @@ public class JOptionPane extends JComponent implements Accessible
     protected int                   optionType;
     /** Currently selected value, will be a valid option, or
      * <code>UNINITIALIZED_VALUE</code> or <code>null</code>. */
-    transient protected Object                value;
+    protected transient Object                value;
     /** Array of values the user can choose from. Look and feel will
      * provide the UI component to choose this from. */
     protected transient Object[]              selectionValues;
@@ -1813,7 +1818,7 @@ public class JOptionPane extends JComponent implements Accessible
                        Icon icon, Object[] options, Object initialValue) {
 
         this.message = message;
-        this.options = options;
+        this.options = options == null ? null : Arrays.copyOf(options, options.length);
         this.initialValue = initialValue;
         this.icon = icon;
         setMessageType(messageType);
@@ -1828,11 +1833,9 @@ public class JOptionPane extends JComponent implements Accessible
      *
      * @param ui  the <code>OptionPaneUI</code> {@literal L&F} object
      * @see UIDefaults#getUI
-     * @beaninfo
-     *       bound: true
-     *      hidden: true
-     * description: The UI object that implements the optionpane's LookAndFeel
      */
+    @BeanProperty(hidden = true, description
+            = "The UI object that implements the optionpane's LookAndFeel")
     public void setUI(OptionPaneUI ui) {
         if (this.ui != ui) {
             super.setUI(ui);
@@ -1869,6 +1872,7 @@ public class JOptionPane extends JComponent implements Accessible
      * @see JComponent#getUIClassID
      * @see UIDefaults#getUI
      */
+    @BeanProperty(bound = false)
     public String getUIClassID() {
         return uiClassID;
     }
@@ -1878,12 +1882,9 @@ public class JOptionPane extends JComponent implements Accessible
      * Sets the option pane's message-object.
      * @param newMessage the <code>Object</code> to display
      * @see #getMessage
-     *
-     * @beaninfo
-     *   preferred: true
-     *   bound: true
-     * description: The optionpane's message object.
      */
+    @BeanProperty(preferred = true, description
+            = "The optionpane's message object.")
     public void setMessage(Object newMessage) {
         Object           oldMessage = message;
 
@@ -1907,11 +1908,9 @@ public class JOptionPane extends JComponent implements Accessible
      * @param newIcon the <code>Icon</code> to display
      *
      * @see #getIcon
-     * @beaninfo
-     *   preferred: true
-     *       bound: true
-     * description: The option pane's type icon.
      */
+    @BeanProperty(preferred = true, description
+            = "The option pane's type icon.")
     public void setIcon(Icon newIcon) {
         Object              oldIcon = icon;
 
@@ -1934,11 +1933,9 @@ public class JOptionPane extends JComponent implements Accessible
      * @param newValue  the chosen value
      *
      * @see #getValue
-     * @beaninfo
-     *   preferred: true
-     *       bound: true
-     * description: The option pane's value object.
      */
+    @BeanProperty(preferred = true, description
+            = "The option pane's value object.")
     public void setValue(Object newValue) {
         Object               oldValue = value;
 
@@ -1975,14 +1972,15 @@ public class JOptionPane extends JComponent implements Accessible
      *          <code>Components</code> to add to the pane
      *
      * @see #getOptions
-     * @beaninfo
-     *       bound: true
-     * description: The option pane's options objects.
      */
+    @BeanProperty(description
+            = "The option pane's options objects.")
     public void setOptions(Object[] newOptions) {
         Object[]           oldOptions = options;
 
-        options = newOptions;
+        options = newOptions == null
+                ? null
+                : Arrays.copyOf(newOptions, newOptions.length);
         firePropertyChange(OPTIONS_PROPERTY, oldOptions, options);
     }
 
@@ -1993,14 +1991,7 @@ public class JOptionPane extends JComponent implements Accessible
      * @see #setOptions
      */
     public Object[] getOptions() {
-        if(options != null) {
-            int             optionCount = options.length;
-            Object[]        retOptions = new Object[optionCount];
-
-            System.arraycopy(options, 0, retOptions, 0, optionCount);
-            return retOptions;
-        }
-        return options;
+        return options == null ? null : Arrays.copyOf(options, options.length);
     }
 
     /**
@@ -2012,11 +2003,9 @@ public class JOptionPane extends JComponent implements Accessible
      *                         keyboard focus
      *
      * @see #getInitialValue
-     * @beaninfo
-     *   preferred: true
-     *       bound: true
-     * description: The option pane's initial value object.
      */
+    @BeanProperty(preferred = true, description
+            = "The option pane's initial value object.")
     public void setInitialValue(Object newInitialValue) {
         Object            oldIV = initialValue;
 
@@ -2048,11 +2037,9 @@ public class JOptionPane extends JComponent implements Accessible
      *          legal values listed above
 
      * @see #getMessageType
-     * @beaninfo
-     *   preferred: true
-     *       bound: true
-     * description: The option pane's message type.
      */
+    @BeanProperty(preferred = true, description
+            = "The option pane's message type.")
     public void setMessageType(int newType) {
         checkMessageType(newType);
         int           oldType = messageType;
@@ -2097,11 +2084,9 @@ public class JOptionPane extends JComponent implements Accessible
      *
      * @see #getOptionType
      * @see #setOptions
-     * @beaninfo
-     *   preferred: true
-     *       bound: true
-     * description: The option pane's option type.
       */
+    @BeanProperty(preferred = true, description
+            = "The option pane's option type.")
     public void setOptionType(int newType) {
         checkOptionType(newType);
         int            oldType = optionType;
@@ -2149,14 +2134,15 @@ public class JOptionPane extends JComponent implements Accessible
      * @see #setWantsInput
      * @see #setInitialSelectionValue
      * @see #getSelectionValues
-     * @beaninfo
-     *       bound: true
-     * description: The option pane's selection values.
      */
+    @BeanProperty(description
+            = "The option pane's selection values.")
     public void setSelectionValues(Object[] newValues) {
         Object[]           oldValues = selectionValues;
 
-        selectionValues = newValues;
+        selectionValues = newValues == null
+                ? null
+                : Arrays.copyOf(newValues, newValues.length);
         firePropertyChange(SELECTION_VALUES_PROPERTY, oldValues, newValues);
         if(selectionValues != null)
             setWantsInput(true);
@@ -2169,7 +2155,9 @@ public class JOptionPane extends JComponent implements Accessible
      * @see #setSelectionValues
      */
     public Object[] getSelectionValues() {
-        return selectionValues;
+        return selectionValues == null
+                ? null
+                : Arrays.copyOf(selectionValues, selectionValues.length);
     }
 
     /**
@@ -2178,10 +2166,9 @@ public class JOptionPane extends JComponent implements Accessible
      * @param newValue the initially selected value
      * @see #setSelectionValues
      * @see #getInitialSelectionValue
-     * @beaninfo
-     *       bound: true
-     * description: The option pane's initial selection value object.
      */
+    @BeanProperty(description
+            = "The option pane's initial selection value object.")
     public void setInitialSelectionValue(Object newValue) {
         Object          oldValue = initialSelectionValue;
 
@@ -2215,11 +2202,9 @@ public class JOptionPane extends JComponent implements Accessible
      * @see #setInitialSelectionValue
      * @see #setWantsInput
      * @see #getInputValue
-     * @beaninfo
-     *   preferred: true
-     *       bound: true
-     * description: The option pane's input value object.
      */
+    @BeanProperty(preferred = true, description
+            = "The option pane's input value object.")
     public void setInputValue(Object newValue) {
         Object              oldValue = inputValue;
 
@@ -2251,6 +2236,7 @@ public class JOptionPane extends JComponent implements Accessible
      *
      * @return an integer giving the maximum number of characters on a line
      */
+    @BeanProperty(bound = false)
     public int getMaxCharactersPerLineCount() {
         return Integer.MAX_VALUE;
     }
@@ -2271,11 +2257,9 @@ public class JOptionPane extends JComponent implements Accessible
      *                 is provided to allow the user to input a value.
      * @see #setSelectionValues
      * @see #setInputValue
-     * @beaninfo
-     *   preferred: true
-     *       bound: true
-     * description: Flag which allows the user to input a value.
      */
+    @BeanProperty(preferred = true, description
+            = "Flag which allows the user to input a value.")
     public void setWantsInput(boolean newValue) {
         boolean            oldValue = wantsInput;
 
@@ -2525,10 +2509,9 @@ public class JOptionPane extends JComponent implements Accessible
      *
      * @return an AccessibleJOptionPane that serves as the
      *         AccessibleContext of this AccessibleJOptionPane
-     * @beaninfo
-     *       expert: true
-     *  description: The AccessibleContext associated with this option pane
      */
+    @BeanProperty(bound = false, expert = true, description
+            = "The AccessibleContext associated with this option pane")
     public AccessibleContext getAccessibleContext() {
         if (accessibleContext == null) {
             accessibleContext = new AccessibleJOptionPane();

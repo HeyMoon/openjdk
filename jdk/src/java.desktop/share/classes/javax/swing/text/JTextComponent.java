@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,8 @@ import com.sun.beans.util.Cache;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 
+import java.beans.JavaBean;
+import java.beans.BeanProperty;
 import java.beans.Transient;
 import java.util.HashMap;
 import java.util.Hashtable;
@@ -47,6 +49,8 @@ import java.awt.im.InputContext;
 import java.awt.im.InputMethodRequests;
 import java.awt.font.TextHitInfo;
 import java.awt.font.TextAttribute;
+import java.awt.geom.Point2D;
+import java.awt.geom.Rectangle2D;
 
 import java.awt.print.Printable;
 import java.awt.print.PrinterException;
@@ -68,7 +72,6 @@ import javax.print.attribute.*;
 import sun.awt.AppContext;
 
 
-import sun.misc.ManagedLocalsThread;
 import sun.swing.PrintingStatus;
 import sun.swing.SwingUtilities2;
 import sun.swing.text.TextComponentPrintable;
@@ -132,7 +135,7 @@ import sun.swing.SwingAccessor;
  * the action (In the case that the <code>ActionEvent</code>
  * sent to the action doesn't contain the target text component as its source).
  * <p>
- * The <a href="../../../../technotes/guides/imf/spec.html">input method framework</a>
+ * The {@extLink imf_overview Input Method Framework}
  * lets text components interact with input methods, separate software
  * components that preprocess events to let users enter thousands of
  * different characters using keyboards with far fewer keys.
@@ -154,11 +157,15 @@ import sun.swing.SwingAccessor;
  * Keyboard event and input method events are handled in the following stages,
  * with each stage capable of consuming the event:
  *
- * <table border=1 summary="Stages of keyboard and input method event handling">
+ * <table class="striped">
+ * <caption>Stages of keyboard and input method event handling</caption>
+ * <thead>
  * <tr>
- * <th id="stage"><p style="text-align:left">Stage</p></th>
- * <th id="ke"><p style="text-align:left">KeyEvent</p></th>
- * <th id="ime"><p style="text-align:left">InputMethodEvent</p></th></tr>
+ * <th id="stage">Stage</th>
+ * <th id="ke">KeyEvent</th>
+ * <th id="ime">InputMethodEvent</th></tr>
+ * </thead>
+ * <tbody>
  * <tr><td headers="stage">1.   </td>
  *     <td headers="ke">input methods </td>
  *     <td headers="ime">(generated here)</td></tr>
@@ -178,6 +185,7 @@ import sun.swing.SwingAccessor;
  *     <td headers="stage">5.   </td><td headers="ke ime" colspan=2>keymap handling using the current keymap</td></tr>
  * <tr><td headers="stage">6.   </td><td headers="ke">keyboard handling in JComponent (e.g. accelerators, component navigation, etc.)</td>
  *     <td headers="ime"></td></tr>
+ * </tbody>
  * </table>
  *
  * <p>
@@ -276,9 +284,6 @@ import sun.swing.SwingAccessor;
  * has been added to the <code>java.beans</code> package.
  * Please see {@link java.beans.XMLEncoder}.
  *
- * @beaninfo
- *     attribute: isContainer false
- *
  * @author  Timothy Prinzing
  * @author Igor Kushnirskiy (printing support)
  * @see Document
@@ -291,6 +296,8 @@ import sun.swing.SwingAccessor;
  * @see View
  * @see ViewFactory
  */
+@JavaBean(defaultProperty = "UI")
+@SwingContainer(false)
 @SuppressWarnings("serial") // Same-version serialization only
 public abstract class JTextComponent extends JComponent implements Scrollable, Accessible
 {
@@ -375,6 +382,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *
      * @since 1.4
      */
+    @BeanProperty(bound = false)
     public CaretListener[] getCaretListeners() {
         return listenerList.getListeners(CaretListener.class);
     }
@@ -409,11 +417,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *
      * @param doc  the document to display/edit
      * @see #getDocument
-     * @beaninfo
-     *  description: the text document model
-     *        bound: true
-     *       expert: true
      */
+    @BeanProperty(expert = true, description
+            = "the text document model")
     public void setDocument(Document doc) {
         Document old = model;
 
@@ -496,6 +502,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *
      * @return the command list
      */
+    @BeanProperty(bound = false)
     public Action[] getActions() {
         return getUI().getEditorKit(this).getActions();
     }
@@ -511,10 +518,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * A PropertyChange event ("margin") is sent to all listeners.
      *
      * @param m the space between the border and the text
-     * @beaninfo
-     *  description: desired space between the border and text area
-     *        bound: true
      */
+    @BeanProperty(description
+            = "desired space between the border and text area")
     public void setMargin(Insets m) {
         Insets old = margin;
         margin = m;
@@ -576,11 +582,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *
      * @param c the caret
      * @see #getCaret
-     * @beaninfo
-     *  description: the caret used to select/navigate
-     *        bound: true
-     *       expert: true
      */
+    @BeanProperty(expert = true, description
+            = "the caret used to select/navigate")
     public void setCaret(Caret c) {
         if (caret != null) {
             caret.removeChangeListener(caretEvent);
@@ -614,11 +618,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *
      * @param h the highlighter
      * @see #getHighlighter
-     * @beaninfo
-     *  description: object responsible for background highlights
-     *        bound: true
-     *       expert: true
      */
+    @BeanProperty(expert = true, description
+            = "object responsible for background highlights")
     public void setHighlighter(Highlighter h) {
         if (highlighter != null) {
             highlighter.deinstall(this);
@@ -640,10 +642,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *
      * @param map the keymap
      * @see #getKeymap
-     * @beaninfo
-     *  description: set of key event to action bindings to use
-     *        bound: true
      */
+    @BeanProperty(description
+            = "set of key event to action bindings to use")
     public void setKeymap(Keymap map) {
         Keymap old = keymap;
         keymap = map;
@@ -679,11 +680,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * @see #setTransferHandler
      * @see TransferHandler
      * @since 1.4
-     *
-     * @beaninfo
-     *  description: determines whether automatic drag handling is enabled
-     *        bound: false
      */
+    @BeanProperty(bound = false, description
+            = "determines whether automatic drag handling is enabled")
     public void setDragEnabled(boolean b) {
         checkDragEnabled(b);
         dragEnabled = b;
@@ -791,6 +790,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * @param p the point to calculate a drop location for
      * @return the drop location, or <code>null</code>
      */
+    @SuppressWarnings("deprecation")
     DropLocation dropLocationForPoint(Point p) {
         Position.Bias[] bias = new Position.Bias[1];
         int index = getUI().viewToModel(this, p, bias);
@@ -955,6 +955,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * @see TransferHandler#canImport(TransferHandler.TransferSupport)
      * @since 1.6
      */
+    @BeanProperty(bound = false)
     public final DropLocation getDropLocation() {
         return dropLocation;
     }
@@ -1220,11 +1221,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *
      * @param c the color
      * @see #getCaretColor
-     * @beaninfo
-     *  description: the color used to render the caret
-     *        bound: true
-     *    preferred: true
      */
+    @BeanProperty(preferred = true, description
+            = "the color used to render the caret")
     public void setCaretColor(Color c) {
         Color old = caretColor;
         caretColor = c;
@@ -1249,11 +1248,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *
      * @param c the color
      * @see #getSelectionColor
-     * @beaninfo
-     *  description: color used to render selection background
-     *        bound: true
-     *    preferred: true
      */
+    @BeanProperty(preferred = true, description
+            = "color used to render selection background")
     public void setSelectionColor(Color c) {
         Color old = selectionColor;
         selectionColor = c;
@@ -1278,11 +1275,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *
      * @param c the color
      * @see #getSelectedTextColor
-     * @beaninfo
-     *  description: color used to render selected text
-     *        bound: true
-     *    preferred: true
      */
+    @BeanProperty(preferred = true, description
+            = "color used to render selected text")
     public void setSelectedTextColor(Color c) {
         Color old = selectedTextColor;
         selectedTextColor = c;
@@ -1306,11 +1301,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *
      * @param c the color
      * @see #getDisabledTextColor
-     * @beaninfo
-     *  description: color used to render disabled text
-     *        bound: true
-     *    preferred: true
      */
+    @BeanProperty(preferred = true, description
+            = "color used to render disabled text")
     public void setDisabledTextColor(Color c) {
         Color old = disabledTextColor;
         disabledTextColor = c;
@@ -1385,9 +1378,35 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * @exception BadLocationException if the given position does not
      *   represent a valid location in the associated document
      * @see TextUI#modelToView
+     *
+     * @deprecated replaced by
+     *     {@link #modelToView2D(int)}
      */
+    @Deprecated(since = "9")
     public Rectangle modelToView(int pos) throws BadLocationException {
         return getUI().modelToView(this, pos);
+    }
+
+    /**
+     * Converts the given location in the model to a place in
+     * the view coordinate system.
+     * The component must have a positive size for
+     * this translation to be computed (i.e. layout cannot
+     * be computed until the component has been sized).  The
+     * component does not have to be visible or painted.
+     *
+     * @param pos the position {@code >= 0}
+     * @return the coordinates as a rectangle, with (r.x, r.y) as the location
+     *   in the coordinate system, or null if the component does
+     *   not yet have a positive size.
+     * @exception BadLocationException if the given position does not
+     *   represent a valid location in the associated document
+     * @see TextUI#modelToView2D
+     *
+     * @since 9
+     */
+    public Rectangle2D modelToView2D(int pos) throws BadLocationException {
+        return getUI().modelToView2D(this, pos, Position.Bias.Forward);
     }
 
     /**
@@ -1403,9 +1422,33 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *   or -1 if the component does not yet have a positive
      *   size.
      * @see TextUI#viewToModel
+     *
+     * @deprecated replaced by
+     *     {@link #viewToModel2D(Point2D)}
      */
+    @Deprecated(since = "9")
     public int viewToModel(Point pt) {
         return getUI().viewToModel(this, pt);
+    }
+
+    /**
+     * Converts the given place in the view coordinate system
+     * to the nearest representative location in the model.
+     * The component must have a positive size for
+     * this translation to be computed (i.e. layout cannot
+     * be computed until the component has been sized).  The
+     * component does not have to be visible or painted.
+     *
+     * @param pt the location in the view to translate
+     * @return the offset {@code >= 0} from the start of the document,
+     *   or {@code -1} if the component does not yet have a positive
+     *   size.
+     * @see TextUI#viewToModel2D
+     *
+     * @since 9
+     */
+    public int viewToModel2D(Point2D pt) {
+        return getUI().viewToModel2D(this, pt, new Position.Bias[1]);
     }
 
     /**
@@ -1535,10 +1578,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *
      * @param aKey the key
      * @see #getFocusAccelerator
-     * @beaninfo
-     *  description: accelerator character used to grab focus
-     *        bound: true
      */
+    @BeanProperty(description
+            = "accelerator character used to grab focus")
     public void setFocusAccelerator(char aKey) {
         aKey = Character.toUpperCase(aKey);
         char old = focusAccelerator;
@@ -1632,9 +1674,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * @exception    IllegalArgumentException if the value supplied
      *               for <code>position</code> is less than zero or greater
      *               than the component's text length
-     * @beaninfo
-     * description: the caret position
      */
+    @BeanProperty(bound = false, description
+            = "the caret position")
     public void setCaretPosition(int position) {
         Document doc = getDocument();
         if (doc != null) {
@@ -1672,9 +1714,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * @param t the new text to be set
      * @see #getText
      * @see DefaultCaret
-     * @beaninfo
-     * description: the text of this component
      */
+    @BeanProperty(bound = false, description
+            = "the text of this component")
     public void setText(String t) {
         try {
             Document doc = getDocument();
@@ -1724,6 +1766,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *  have a valid mapping into the document for some reason
      * @see #setText
      */
+    @BeanProperty(bound = false)
     public String getSelectedText() {
         String txt = null;
         int p0 = Math.min(caret.getDot(), caret.getMark());
@@ -1758,10 +1801,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *
      * @param b the boolean to be set
      * @see #isEditable
-     * @beaninfo
-     * description: specifies if the text can be edited
-     *       bound: true
      */
+    @BeanProperty(description
+            = "specifies if the text can be edited")
     public void setEditable(boolean b) {
         if (b != editable) {
             boolean oldVal = editable;
@@ -1795,9 +1837,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * implementation which is where the actual selection is maintained.
      *
      * @param selectionStart the start position of the text &ge; 0
-     * @beaninfo
-     * description: starting location of the selection.
      */
+    @BeanProperty(bound = false, description
+            = "starting location of the selection.")
     public void setSelectionStart(int selectionStart) {
         /* Route through select method to enforce consistent policy
          * between selectionStart and selectionEnd.
@@ -1828,9 +1870,9 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * implementation which is where the actual selection is maintained.
      *
      * @param selectionEnd the end position of the text &ge; 0
-     * @beaninfo
-     * description: ending location of the selection.
      */
+    @BeanProperty(bound = false, description
+            = "ending location of the selection.")
     public void setSelectionEnd(int selectionEnd) {
         /* Route through select method to enforce consistent policy
          * between selectionStart and selectionEnd.
@@ -1923,6 +1965,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * @see javax.swing.plaf.TextUI#getToolTipText
      * @see javax.swing.ToolTipManager#registerComponent
      */
+    @SuppressWarnings("deprecation")
     public String getToolTipText(MouseEvent event) {
         String retValue = super.getToolTipText(event);
 
@@ -1946,6 +1989,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * @return the <code>preferredSize</code> of a <code>JViewport</code>
      * whose view is this <code>Scrollable</code>
      */
+    @BeanProperty(bound = false)
     public Dimension getPreferredScrollableViewportSize() {
         return getPreferredSize();
     }
@@ -2029,6 +2073,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * @return true if a viewport should force the <code>Scrollable</code>s
      *   width to match its own
      */
+    @BeanProperty(bound = false)
     public boolean getScrollableTracksViewportWidth() {
         Container parent = SwingUtilities.getUnwrappedParent(this);
         if (parent instanceof JViewport) {
@@ -2050,6 +2095,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      * @return true if a viewport should force the Scrollables height
      *   to match its own
      */
+    @BeanProperty(bound = false)
     public boolean getScrollableTracksViewportHeight() {
         Container parent = SwingUtilities.getUnwrappedParent(this);
         if (parent instanceof JViewport) {
@@ -2365,7 +2411,8 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
             runnablePrinting.run();
         } else {
             if (isEventDispatchThread) {
-                new ManagedLocalsThread(runnablePrinting).start();
+                new Thread(null, runnablePrinting,
+                           "JTextComponentPrint", 0, false ).start();
                 printingStatus.showModal(true);
             } else {
                 printingStatus.showModal(false);
@@ -2484,6 +2531,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
      *         <code>AccessibleContext</code> of this
      *         <code>JTextComponent</code>
      */
+    @BeanProperty(bound = false)
     public AccessibleContext getAccessibleContext() {
         if (accessibleContext == null) {
             accessibleContext = new AccessibleJTextComponent();
@@ -2591,7 +2639,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
          * @param e the DocumentEvent
          */
         public void insertUpdate(DocumentEvent e) {
-            final Integer pos = new Integer (e.getOffset());
+            final Integer pos = e.getOffset();
             if (SwingUtilities.isEventDispatchThread()) {
                 firePropertyChange(ACCESSIBLE_TEXT_PROPERTY, null, pos);
             } else {
@@ -2613,7 +2661,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
          * @param e the DocumentEvent
          */
         public void removeUpdate(DocumentEvent e) {
-            final Integer pos = new Integer (e.getOffset());
+            final Integer pos = e.getOffset();
             if (SwingUtilities.isEventDispatchThread()) {
                 firePropertyChange(ACCESSIBLE_TEXT_PROPERTY, null, pos);
             } else {
@@ -2635,7 +2683,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
          * @param e the DocumentEvent
          */
         public void changedUpdate(DocumentEvent e) {
-            final Integer pos = new Integer (e.getOffset());
+            final Integer pos = e.getOffset();
             if (SwingUtilities.isEventDispatchThread()) {
                 firePropertyChange(ACCESSIBLE_TEXT_PROPERTY, null, pos);
             } else {
@@ -4060,6 +4108,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
             get(FOCUSED_COMPONENT);
     }
 
+    @SuppressWarnings("deprecation")
     private int getCurrentEventModifiers() {
         int modifiers = 0;
         AWTEvent currentEvent = EventQueue.getCurrentEvent();
@@ -4539,6 +4588,7 @@ public abstract class JTextComponent extends JComponent implements Scrollable, A
     //
     // Overrides this method to become an active input method client.
     //
+    @BeanProperty(bound = false)
     public InputMethodRequests getInputMethodRequests() {
         if (inputMethodRequestsHandler == null) {
             inputMethodRequestsHandler = new InputMethodRequestsHandler();

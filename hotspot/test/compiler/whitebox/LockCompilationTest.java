@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,26 +23,43 @@
 
 /*
  * @test LockCompilationTest
- * @bug 8059624
- * @library /testlibrary /../../test/lib
- * @modules java.management
- * @build LockCompilationTest
- * @run main ClassFileInstaller sun.hotspot.WhiteBox
- *                              sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main/othervm/timeout=600 -Xbootclasspath/a:. -Xmixed -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:CompileCommand=compileonly,SimpleTestCase$Helper::* LockCompilationTest
+ * @bug 8059624 8152169
  * @summary testing of WB::lock/unlockCompilation()
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ *          java.management
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *                                sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @run main/othervm -Xbootclasspath/a:. -Xmixed -XX:+UnlockDiagnosticVMOptions
+ *                   -XX:+WhiteBoxAPI -XX:-UseCounterDecay
+ *                   compiler.whitebox.LockCompilationTest
  */
 
-import java.io.OutputStream;
-import java.io.PrintWriter;
-import java.util.concurrent.BrokenBarrierException;
-import java.util.concurrent.CyclicBarrier;
+package compiler.whitebox;
 
 import jdk.test.lib.Asserts;
 
 public class LockCompilationTest extends CompilerWhiteBoxTest {
+
     public static void main(String[] args) throws Exception {
-        CompilerWhiteBoxTest.main(LockCompilationTest::new, args);
+        // This case waits for 5 seconds and verifies that the method hasn't been
+        // compiled during that time. Only do that for one of the test cases.
+
+        // Only compile SimpleTestCaseHelper.method and exclude all other to ensure no
+        // contention on the compile queue causes problems.
+        String directive =
+                "[{ match:\"*SimpleTestCaseHelper.method\", Exclude:false}, " +
+                " { match:\"*.*\", Exclude:true}]";
+        if (WHITE_BOX.addCompilerDirective(directive) != 2) {
+            throw new RuntimeException("Could not add directive");
+        }
+        try {
+            CompilerWhiteBoxTest.main(LockCompilationTest::new, new String[] {"METHOD_TEST"});
+        } finally {
+            WHITE_BOX.removeCompilerDirective(2);
+        }
+
     }
 
     private LockCompilationTest(TestCase testCase) {
@@ -63,7 +80,9 @@ public class LockCompilationTest extends CompilerWhiteBoxTest {
             // to check if it works correctly w/ safepoints
             System.out.println("going to safepoint");
             WHITE_BOX.fullGC();
-            waitBackgroundCompilation();
+            // Sleep a while and then make sure the compile is still waiting
+            Thread.sleep(5000);
+
             Asserts.assertTrue(
                     WHITE_BOX.isMethodQueuedForCompilation(method),
                     method + " must be in queue");

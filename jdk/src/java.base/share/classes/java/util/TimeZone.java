@@ -42,6 +42,7 @@ import java.io.Serializable;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.time.ZoneId;
+import java.util.Properties;
 import sun.security.action.GetPropertyAction;
 import sun.util.calendar.ZoneInfo;
 import sun.util.calendar.ZoneInfoFile;
@@ -73,7 +74,7 @@ import sun.util.locale.provider.TimeZoneNameUtility;
  * produce a TimeZone. The syntax of a custom time zone ID is:
  *
  * <blockquote><pre>
- * <a name="CustomID"><i>CustomID:</i></a>
+ * <a id="CustomID"><i>CustomID:</i></a>
  *         <code>GMT</code> <i>Sign</i> <i>Hours</i> <code>:</code> <i>Minutes</i>
  *         <code>GMT</code> <i>Sign</i> <i>Hours</i> <i>Minutes</i>
  *         <code>GMT</code> <i>Sign</i> <i>Hours</i>
@@ -101,7 +102,7 @@ import sun.util.locale.provider.TimeZoneNameUtility;
  * When creating a <code>TimeZone</code>, the specified custom time
  * zone ID is normalized in the following syntax:
  * <blockquote><pre>
- * <a name="NormalizedCustomID"><i>NormalizedCustomID:</i></a>
+ * <a id="NormalizedCustomID"><i>NormalizedCustomID:</i></a>
  *         <code>GMT</code> <i>Sign</i> <i>TwoDigitHours</i> <code>:</code> <i>Minutes</i>
  * <i>Sign:</i> one of
  *         <code>+ -</code>
@@ -130,7 +131,7 @@ import sun.util.locale.provider.TimeZoneNameUtility;
  * @author       Mark Davis, David Goldsmith, Chen-Lieh Huang, Alan Liu
  * @since        1.1
  */
-abstract public class TimeZone implements Serializable, Cloneable {
+public abstract class TimeZone implements Serializable, Cloneable {
     /**
      * Sole constructor.  (For invocation by subclass constructors, typically
      * implicit.)
@@ -253,7 +254,7 @@ abstract public class TimeZone implements Serializable, Cloneable {
      *
      * @param offsetMillis the given base time zone offset to GMT.
      */
-    abstract public void setRawOffset(int offsetMillis);
+    public abstract void setRawOffset(int offsetMillis);
 
     /**
      * Returns the amount of time in milliseconds to add to UTC to get
@@ -500,7 +501,7 @@ abstract public class TimeZone implements Serializable, Cloneable {
      * @return {@code true} if the given date is in Daylight Saving Time,
      *         {@code false}, otherwise.
      */
-    abstract public boolean inDaylightTime(Date date);
+    public abstract boolean inDaylightTime(Date date);
 
     /**
      * Gets the <code>TimeZone</code> for the given ID.
@@ -660,14 +661,13 @@ abstract public class TimeZone implements Serializable, Cloneable {
     private static synchronized TimeZone setDefaultZone() {
         TimeZone tz;
         // get the time zone ID from the system properties
-        String zoneID = AccessController.doPrivileged(
-                new GetPropertyAction("user.timezone"));
+        Properties props = GetPropertyAction.privilegedGetProperties();
+        String zoneID = props.getProperty("user.timezone");
 
         // if the time zone ID is not set (yet), perform the
         // platform to Java time zone ID mapping.
         if (zoneID == null || zoneID.isEmpty()) {
-            String javaHome = AccessController.doPrivileged(
-                    new GetPropertyAction("java.home"));
+            String javaHome = props.getProperty("java.home");
             try {
                 zoneID = getSystemTimeZoneID(javaHome);
                 if (zoneID == null) {
@@ -695,13 +695,7 @@ abstract public class TimeZone implements Serializable, Cloneable {
         assert tz != null;
 
         final String id = zoneID;
-        AccessController.doPrivileged(new PrivilegedAction<>() {
-            @Override
-                public Void run() {
-                    System.setProperty("user.timezone", id);
-                    return null;
-                }
-            });
+        props.setProperty("user.timezone", id);
 
         defaultTimeZone = tz;
         return tz;

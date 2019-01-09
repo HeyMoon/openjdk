@@ -25,9 +25,6 @@
 
 package jdk.nashorn.internal.ir.debug;
 
-import static jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor.CALLSITE_PROGRAM_POINT_SHIFT;
-import static jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor.FLAGS_MASK;
-
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
@@ -48,6 +45,8 @@ import jdk.internal.org.objectweb.asm.signature.SignatureReader;
 import jdk.internal.org.objectweb.asm.util.Printer;
 import jdk.internal.org.objectweb.asm.util.TraceSignatureVisitor;
 import jdk.nashorn.internal.runtime.ScriptEnvironment;
+import jdk.nashorn.internal.runtime.linker.Bootstrap;
+import jdk.nashorn.internal.runtime.linker.NameCodec;
 import jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor;
 
 /**
@@ -55,6 +54,7 @@ import jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor;
  * Also supports dot formats if --print-code has arguments
  */
 public final class NashornTextifier extends Printer {
+    private static final String BOOTSTRAP_CLASS_NAME = Bootstrap.class.getName().replace('.', '/');
 
     private String currentClassName;
     private Iterator<Label> labelIter;
@@ -498,7 +498,17 @@ public final class NashornTextifier extends Printer {
         final StringBuilder sb = new StringBuilder();
 
         appendOpcode(sb, Opcodes.INVOKEDYNAMIC).append(' ');
-        sb.append(name);
+        final boolean isNashornBootstrap = isNashornBootstrap(bsm);
+        final boolean isNashornMathBootstrap = isNashornMathBootstrap(bsm);
+        if (isNashornBootstrap) {
+            sb.append(NashornCallSiteDescriptor.getOperationName((Integer)bsmArgs[0]));
+            final String decodedName = NameCodec.decode(name);
+            if (!decodedName.isEmpty()) {
+                sb.append(':').append(decodedName);
+            }
+        } else {
+            sb.append(name);
+        }
         appendDescriptor(sb, METHOD_DESCRIPTOR, desc);
         final int len = sb.length();
         for (int i = 0; i < 80 - len ; i++) {
@@ -516,13 +526,10 @@ public final class NashornTextifier extends Printer {
                     sb.append(((Type)cst).getDescriptor()).append(".class");
                 } else if (cst instanceof Handle) {
                     appendHandle(sb, (Handle)cst);
-                } else if (cst instanceof Integer) {
-                    final int c = (Integer)cst;
-                    final int pp = c >> CALLSITE_PROGRAM_POINT_SHIFT;
-                    if (pp != 0) {
-                        sb.append(" pp=").append(pp);
-                    }
-                    sb.append(NashornCallSiteDescriptor.toString(c & FLAGS_MASK));
+                } else if (cst instanceof Integer && isNashornBootstrap) {
+                    NashornCallSiteDescriptor.appendFlags((Integer) cst, sb);
+                } else if (cst instanceof Integer && isNashornMathBootstrap) {
+                    sb.append(" pp=").append(cst);
                 } else {
                     sb.append(cst);
                 }
@@ -533,6 +540,14 @@ public final class NashornTextifier extends Printer {
 
         sb.append("]\n");
         addText(sb);
+    }
+
+    private static boolean isNashornBootstrap(final Handle bsm) {
+        return "bootstrap".equals(bsm.getName()) && BOOTSTRAP_CLASS_NAME.equals(bsm.getOwner());
+    }
+
+    private static boolean isNashornMathBootstrap(final Handle bsm) {
+        return "mathBootstrap".equals(bsm.getName()) && BOOTSTRAP_CLASS_NAME.equals(bsm.getOwner());
     }
 
     private static boolean noFallThru(final int opcode) {

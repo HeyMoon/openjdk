@@ -19,7 +19,6 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
 package p;
@@ -34,7 +33,7 @@ package p;
  * m.
  *
  */
-public abstract class F implements p.I {
+public abstract class F implements I {
        final public int m() {
            return 2;
        }

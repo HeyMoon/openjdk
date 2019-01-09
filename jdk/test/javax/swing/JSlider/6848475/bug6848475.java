@@ -21,10 +21,13 @@
  * questions.
  */
 
-/* @test
+/*
+ * @test
+ * @key headful
  * @bug 6848475
  * @summary JSlider does not display the correct value of its BoundedRangeModel
  * @author Pavel Porvatov
+ * @modules java.desktop/javax.swing.plaf.basic:open
  * @run main bug6848475
  */
 

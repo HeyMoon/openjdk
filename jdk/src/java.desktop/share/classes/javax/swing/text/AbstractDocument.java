@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,6 +36,7 @@ import javax.swing.tree.TreeNode;
 
 import sun.font.BidiUtils;
 import sun.swing.SwingUtilities2;
+import sun.swing.text.UndoableEditLockSupport;
 
 /**
  * An implementation of the document interface to serve as a
@@ -275,6 +276,11 @@ public abstract class AbstractDocument implements Document, Serializable {
      * @see EventListenerList
      */
     protected void fireUndoableEditUpdate(UndoableEditEvent e) {
+        if (e.getEdit() instanceof DefaultDocumentEvent) {
+            e = new UndoableEditEvent(e.getSource(),
+                    new DefaultDocumentEventUndoableWrapper(
+                            (DefaultDocumentEvent)e.getEdit()));
+        }
         // Guaranteed to return a non-null array
         Object[] listeners = listenerList.getListenerList();
         // Process the listeners last to first, notifying
@@ -695,6 +701,9 @@ public abstract class AbstractDocument implements Document, Serializable {
     public void insertString(int offs, String str, AttributeSet a) throws BadLocationException {
         if ((str == null) || (str.length() == 0)) {
             return;
+        }
+        if (offs > getLength()) {
+            throw new BadLocationException("Invalid insert", getLength());
         }
         DocumentFilter filter = getDocumentFilter();
 
@@ -1300,7 +1309,7 @@ public abstract class AbstractDocument implements Document, Serializable {
      * @return the thread actively modifying the document
      *  or <code>null</code> if there are no modifications in progress
      */
-    protected synchronized final Thread getCurrentWriter() {
+    protected final synchronized Thread getCurrentWriter() {
         return currWriter;
     }
 
@@ -1329,7 +1338,7 @@ public abstract class AbstractDocument implements Document, Serializable {
      *  where order of delivery is not guaranteed and all listeners
      *  should be notified before further mutations are allowed.
      */
-    protected synchronized final void writeLock() {
+    protected final synchronized void writeLock() {
         try {
             while ((numReaders > 0) || (currWriter != null)) {
                 if (Thread.currentThread() == currWriter) {
@@ -1359,7 +1368,7 @@ public abstract class AbstractDocument implements Document, Serializable {
      *
      * @see #writeLock
      */
-    protected synchronized final void writeUnlock() {
+    protected final synchronized void writeUnlock() {
         if (--numWriters <= 0) {
             numWriters = 0;
             currWriter = null;
@@ -1378,7 +1387,7 @@ public abstract class AbstractDocument implements Document, Serializable {
      *
      * @see #readUnlock
      */
-    public synchronized final void readLock() {
+    public final synchronized void readLock() {
         try {
             while (currWriter != null) {
                 if (currWriter == Thread.currentThread()) {
@@ -1412,7 +1421,7 @@ public abstract class AbstractDocument implements Document, Serializable {
      *
      * @see #readLock
      */
-    public synchronized final void readUnlock() {
+    public final synchronized void readUnlock() {
         if (currWriter == Thread.currentThread()) {
             // writer has full read access.... may try to acquire
             // lock in notification
@@ -2950,6 +2959,88 @@ public abstract class AbstractDocument implements Document, Serializable {
         private Hashtable<Element, ElementChange> changeLookup;
         private DocumentEvent.EventType type;
 
+    }
+
+    static class DefaultDocumentEventUndoableWrapper implements
+            UndoableEdit, UndoableEditLockSupport
+    {
+        final DefaultDocumentEvent dde;
+        public DefaultDocumentEventUndoableWrapper(DefaultDocumentEvent dde) {
+            this.dde = dde;
+        }
+
+        @Override
+        public void undo() throws CannotUndoException {
+            dde.undo();
+        }
+
+        @Override
+        public boolean canUndo() {
+            return dde.canUndo();
+        }
+
+        @Override
+        public void redo() throws CannotRedoException {
+            dde.redo();
+        }
+
+        @Override
+        public boolean canRedo() {
+            return dde.canRedo();
+        }
+
+        @Override
+        public void die() {
+            dde.die();
+        }
+
+        @Override
+        public boolean addEdit(UndoableEdit anEdit) {
+            return dde.addEdit(anEdit);
+        }
+
+        @Override
+        public boolean replaceEdit(UndoableEdit anEdit) {
+            return dde.replaceEdit(anEdit);
+        }
+
+        @Override
+        public boolean isSignificant() {
+            return dde.isSignificant();
+        }
+
+        @Override
+        public String getPresentationName() {
+            return dde.getPresentationName();
+        }
+
+        @Override
+        public String getUndoPresentationName() {
+            return dde.getUndoPresentationName();
+        }
+
+        @Override
+        public String getRedoPresentationName() {
+            return dde.getRedoPresentationName();
+        }
+
+        /**
+         * {@inheritDoc}
+         * @since 9
+         */
+        @Override
+        public void lockEdit() {
+            ((AbstractDocument)dde.getDocument()).writeLock();
+        }
+
+        /**
+         * {@inheritDoc}
+         * @since 9
+         */
+        @Override
+        public void unlockEdit() {
+            ((AbstractDocument)dde.getDocument()).writeUnlock();
+        }
     }
 
     /**

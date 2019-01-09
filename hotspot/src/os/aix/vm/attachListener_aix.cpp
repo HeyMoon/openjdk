@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,7 +40,7 @@
 #define UNIX_PATH_MAX   sizeof(((struct sockaddr_un *)0)->sun_path)
 #endif
 
-// The attach mechanism on Linux uses a UNIX domain socket. An attach listener
+// The attach mechanism on AIX  uses a UNIX domain socket. An attach listener
 // thread is created at startup or is created on-demand via a signal from
 // the client tool. The attach listener creates a socket and binds it to a file
 // in the filesystem. The attach listener then acts as a simple (single-
@@ -225,7 +225,7 @@ int AixAttachListener::init() {
   // We must call bind with the actual socketaddr length. This is obligatory for AS400.
   int res = ::bind(listener, (struct sockaddr*)&addr, SUN_LEN(&addr));
   if (res == -1) {
-    RESTARTABLE(::close(listener), res);
+    ::close(listener);
     return -1;
   }
 
@@ -238,7 +238,7 @@ int AixAttachListener::init() {
       }
   }
   if (res == -1) {
-    RESTARTABLE(::close(listener), res);
+    ::close(listener);
     ::unlink(initial_path);
     return -1;
   }
@@ -349,7 +349,7 @@ AixAttachOperation* AixAttachListener::read_request(int s) {
 
 // Dequeue an operation
 //
-// In the Linux implementation there is only a single operation and clients
+// In the Aix implementation there is only a single operation and clients
 // cannot queue commands (except at the socket level).
 //
 AixAttachOperation* AixAttachListener::dequeue() {
@@ -383,24 +383,21 @@ AixAttachOperation* AixAttachListener::dequeue() {
     struct peercred_struct cred_info;
     socklen_t optlen = sizeof(cred_info);
     if (::getsockopt(s, SOL_SOCKET, SO_PEERID, (void*)&cred_info, &optlen) == -1) {
-      int res;
-      RESTARTABLE(::close(s), res);
+      ::close(s);
       continue;
     }
     uid_t euid = geteuid();
     gid_t egid = getegid();
 
     if (cred_info.euid != euid || cred_info.egid != egid) {
-      int res;
-      RESTARTABLE(::close(s), res);
+      ::close(s);
       continue;
     }
 
     // peer credential look okay so we read the request
     AixAttachOperation* op = read_request(s);
     if (op == NULL) {
-      int res;
-      RESTARTABLE(::close(s), res);
+      ::close(s);
       continue;
     } else {
       return op;
@@ -452,7 +449,7 @@ void AixAttachOperation::complete(jint result, bufferedStream* st) {
   }
 
   // done
-  RESTARTABLE(::close(this->socket()), rc);
+  ::close(this->socket());
 
   // were we externally suspended while we were waiting?
   thread->check_and_wait_while_suspended();
@@ -497,7 +494,7 @@ void AttachListener::vm_start() {
   if (ret == 0) {
     ret = ::unlink(fn);
     if (ret == -1) {
-      debug_only(warning("failed to remove stale attach pid file at %s", fn));
+      log_debug(attach)("Failed to remove stale attach pid file at %s", fn);
     }
   }
 }
@@ -540,16 +537,23 @@ bool AttachListener::is_init_trigger() {
   struct stat64 st;
   RESTARTABLE(::stat64(fn, &st), ret);
   if (ret == -1) {
+    log_trace(attach)("Failed to find attach file: %s, trying alternate", fn);
     snprintf(fn, sizeof(fn), "%s/.attach_pid%d",
              os::get_temp_directory(), os::current_process_id());
     RESTARTABLE(::stat64(fn, &st), ret);
+    if (ret == -1) {
+      log_debug(attach)("Failed to find attach file: %s", fn);
+    }
   }
   if (ret == 0) {
     // simple check to avoid starting the attach mechanism when
     // a bogus user creates the file
     if (st.st_uid == geteuid()) {
       init();
+      log_trace(attach)("Attach trigerred by %s", fn);
       return true;
+    } else {
+      log_debug(attach)("File %s has wrong user id %d (vs %d). Attach is not triggered", fn, st.st_uid, geteuid());
     }
   }
   return false;

@@ -27,6 +27,7 @@ package jdk.nashorn.internal.runtime;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodType;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -34,6 +35,9 @@ import java.util.List;
  * This is used for example for bound functions and builtins.
  */
 final class FinalScriptFunctionData extends ScriptFunctionData {
+
+    // documentation key for this function, may be null
+    private String docKey;
 
     private static final long serialVersionUID = -930632846167768864L;
 
@@ -72,8 +76,20 @@ final class FinalScriptFunctionData extends ScriptFunctionData {
     }
 
     @Override
-    boolean isRecompilable() {
-        return false;
+    String getDocumentationKey() {
+        return docKey;
+    }
+
+    @Override
+    void setDocumentationKey(final String docKey) {
+        this.docKey = docKey;
+    }
+
+    @Override
+    String getDocumentation() {
+        final String doc = docKey != null?
+            FunctionDocumentation.getDoc(docKey) : null;
+        return doc != null? doc : super.getDocumentation();
     }
 
     @Override
@@ -90,6 +106,25 @@ final class FinalScriptFunctionData extends ScriptFunctionData {
             }
         }
         return true;
+    }
+
+    @Override
+    CompiledFunction getBest(final MethodType callSiteType, final ScriptObject runtimeScope, final Collection<CompiledFunction> forbidden, final boolean linkLogicOkay) {
+        assert isValidCallSite(callSiteType) : callSiteType;
+
+        CompiledFunction best = null;
+        for (final CompiledFunction candidate: code) {
+            if (!linkLogicOkay && candidate.hasLinkLogic()) {
+                // Skip! Version with no link logic is desired, but this one has link logic!
+                continue;
+            }
+
+            if (!forbidden.contains(candidate) && candidate.betterThanFinal(best, callSiteType)) {
+                best = candidate;
+            }
+        }
+
+        return best;
     }
 
     @Override

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,22 +30,27 @@ import org.xml.sax.InputSource;
 
 /**
  * {@code XPathExpression} provides access to compiled XPath expressions.
+ * The XPath evaluation is affected by the factors described in the following table.
  *
- * <a name="XPathExpression-evaluation"></a>
- * <table border="1" cellpadding="2">
- *   <thead>
- *     <tr>
- *       <th colspan="2">Evaluation of XPath Expressions.</th>
- *     </tr>
- *   </thead>
- *   <tbody>
- *     <tr>
- *       <td>context</td>
- *       <td>
- *         If a request is made to evaluate the expression in the absence
- * of a context item, an empty document node will be used for the context.
- * For the purposes of evaluating XPath expressions, a DocumentFragment
- * is treated like a Document node.
+ * <a id="XPathExpression-evaluation"></a>
+ * <table class="striped">
+ *    <caption>Evaluation of XPath Expressions</caption>
+ *    <thead>
+ *      <tr>
+ *        <th>Factor</th>
+ *        <th>Behavior</th>
+ *      </tr>
+ *    </thead>
+ *    <tbody>
+ *    <tr>
+ *      <td>context</td>
+ *      <td>
+ *        The type of the context is implementation-dependent. If the value is
+ *        null, the operation must have no dependency on the context, otherwise
+ *        an XPathExpressionException will be thrown.
+ *
+ *        For the purposes of evaluating XPath expressions, a DocumentFragment
+ *        is treated like a Document node.
  *      </td>
  *    </tr>
  *    <tr>
@@ -246,7 +251,7 @@ public interface XPathExpression {
      * {@link XPathEvaluationResult.XPathResultType#ANY ANY} type is not available.
      * @throws NullPointerException If {@code type} is {@code null}.
      *
-     * @since 1.9
+     * @since 9
      */
     default <T>T evaluateExpression(Object item, Class<T> type)
         throws XPathExpressionException
@@ -292,7 +297,7 @@ public interface XPathExpression {
      * does not support the
      * {@link XPathEvaluationResult.XPathResultType#ANY ANY} type.
      *
-     * @since 1.9
+     * @since 9
      */
     default XPathEvaluationResult<?> evaluateExpression(Object item)
         throws XPathExpressionException
@@ -338,7 +343,7 @@ public interface XPathExpression {
      * is not available.
      * @throws NullPointerException If {@code source or type} is {@code null}.
      *
-     * @since 1.9
+     * @since 9
      */
     default <T>T evaluateExpression(InputSource source, Class<T> type)
         throws XPathExpressionException
@@ -377,7 +382,7 @@ public interface XPathExpression {
      * {@link XPathEvaluationResult.XPathResultType#ANY ANY} type.
      * @throws NullPointerException If {@code source} is {@code null}.
      *
-     * @since 1.9
+     * @since 9
      */
     default XPathEvaluationResult<?> evaluateExpression(InputSource source)
         throws XPathExpressionException

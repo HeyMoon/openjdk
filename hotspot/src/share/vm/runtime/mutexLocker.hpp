@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,7 +32,7 @@
 
 extern Mutex*   Patching_lock;                   // a lock used to guard code patching of compiled code
 extern Monitor* SystemDictionary_lock;           // a lock on the system dictionary
-extern Mutex*   PackageTable_lock;               // a lock on the class loader package table
+extern Mutex*   Module_lock;                     // a lock on module and package related data structures
 extern Mutex*   CompiledIC_lock;                 // a lock used to guard compiled IC patching and access
 extern Mutex*   InlineCacheBuffer_lock;          // a lock used to guard the InlineCacheBuffer
 extern Mutex*   VMStatistic_lock;                // a lock used to guard statistics count increment
@@ -43,7 +43,6 @@ extern Mutex*   JmethodIdCreation_lock;          // a lock on creating JNI metho
 extern Mutex*   JfieldIdCreation_lock;           // a lock on creating JNI static field identifiers
 extern Monitor* JNICritical_lock;                // a lock used while entering and exiting JNI critical regions, allows GC to sometimes get in
 extern Mutex*   JvmtiThreadState_lock;           // a lock on modification of JVMTI thread data
-extern Monitor* JvmtiPendingEvent_lock;          // a lock on the JVMTI pending events list
 extern Monitor* Heap_lock;                       // a lock on the heap
 extern Mutex*   ExpandHeap_lock;                 // a lock on expanding the heap
 extern Mutex*   AdapterHandlerLibrary_lock;      // a lock on the AdapterHandlerLibrary
@@ -55,6 +54,7 @@ extern Monitor* StringDedupQueue_lock;           // a lock on the string dedupli
 extern Mutex*   StringDedupTable_lock;           // a lock on the string deduplication table
 extern Monitor* CodeCache_lock;                  // a lock on the CodeCache, rank is special, use MutexLockerEx
 extern Mutex*   MethodData_lock;                 // a lock on installation of method data
+extern Mutex*   TouchedMethodLog_lock;           // a lock on allocation of LogExecutedMethods info
 extern Mutex*   RetData_lock;                    // a lock on installation of RetData inside method data
 extern Mutex*   DerivedPointerTableGC_lock;      // a lock to protect the derived pointer table
 extern Monitor* VMOperationQueue_lock;           // a lock on queue of vm_operations waiting to execute
@@ -65,10 +65,7 @@ extern Monitor* Threads_lock;                    // a lock on the Threads table 
 extern Monitor* CGC_lock;                        // used for coordination between
                                                  // fore- & background GC threads.
 extern Monitor* STS_lock;                        // used for joining/leaving SuspendibleThreadSet.
-extern Monitor* SLT_lock;                        // used in CMS GC for acquiring PLL
 extern Monitor* FullGCCount_lock;                // in support of "concurrent" full gc
-extern Monitor* CMark_lock;                      // used for concurrent mark thread coordination
-extern Mutex*   CMRegionStack_lock;              // used for protecting accesses to the CM region stack
 extern Mutex*   SATB_Q_FL_lock;                  // Protects SATB Q
                                                  // buffer free list.
 extern Monitor* SATB_Q_CBL_mon;                  // Protects SATB Q
@@ -84,25 +81,23 @@ extern Monitor* DirtyCardQ_CBL_mon;              // Protects dirty card Q
 extern Mutex*   Shared_DirtyCardQ_lock;          // Lock protecting dirty card
                                                  // queue shared by
                                                  // non-Java threads.
-                                                 // (see option ExplicitGCInvokesConcurrent)
+extern Mutex*   MarkStackFreeList_lock;          // Protects access to the global mark stack free list.
+extern Mutex*   MarkStackChunkList_lock;         // Protects access to the global mark stack chunk list.
 extern Mutex*   ParGCRareEvent_lock;             // Synchronizes various (rare) parallel GC ops.
-extern Mutex*   EvacFailureStack_lock;           // guards the evac failure scan stack
 extern Mutex*   Compile_lock;                    // a lock held when Compilation is updating code (used to block CodeCache traversal, CHA updates, etc)
 extern Monitor* MethodCompileQueue_lock;         // a lock held when method compilations are enqueued, dequeued
 extern Monitor* CompileThread_lock;              // a lock held by compile threads during compilation system initialization
 extern Monitor* Compilation_lock;                // a lock used to pause compilation
 extern Mutex*   CompileTaskAlloc_lock;           // a lock held when CompileTasks are allocated
 extern Mutex*   CompileStatistics_lock;          // a lock held when updating compilation statistics
+extern Mutex*   DirectivesStack_lock;            // a lock held when mutating the dirstack and ref counting directives
 extern Mutex*   MultiArray_lock;                 // a lock used to guard allocation of multi-dim arrays
 extern Monitor* Terminator_lock;                 // a lock used to guard termination of the vm
 extern Monitor* BeforeExit_lock;                 // a lock used to guard cleanups and shutdown hooks
 extern Monitor* Notify_lock;                     // a lock used to synchronize the start-up of the vm
-extern Monitor* Interrupt_lock;                  // a lock used for condition variable mediated interrupt processing
-extern Monitor* ProfileVM_lock;                  // a lock used for profiling the VMThread
 extern Mutex*   ProfilePrint_lock;               // a lock used to serialize the printing of profiles
 extern Mutex*   ExceptionCache_lock;             // a lock used to synchronize exception cache updates
 extern Mutex*   OsrList_lock;                    // a lock used to serialize access to OSR queues
-extern Mutex*   ImageFileReaderTable_lock;       // a lock used to synchronize image readers open/close
 
 #ifndef PRODUCT
 extern Mutex*   FullGCALot_lock;                 // a lock to make FullGCALot MT safe
@@ -127,6 +122,7 @@ extern Mutex*   MMUTracker_lock;                 // protects the MMU
 extern Mutex*   Management_lock;                 // a lock used to serialize JVM management
 extern Monitor* Service_lock;                    // a lock used for service thread operation
 extern Monitor* PeriodicTask_lock;               // protects the periodic task structure
+extern Monitor* RedefineClasses_lock;            // locks classes from parallel redefinition
 
 #ifdef INCLUDE_TRACE
 extern Mutex*   JfrStacktrace_lock;              // used to guard access to the JFR stacktrace table

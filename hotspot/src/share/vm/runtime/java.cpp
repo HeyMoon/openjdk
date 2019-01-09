@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
  */
 
 #include "precompiled.hpp"
+#include "aot/aotLoader.hpp"
 #include "classfile/classLoader.hpp"
 #include "classfile/stringTable.hpp"
 #include "classfile/systemDictionary.hpp"
@@ -31,7 +32,13 @@
 #include "compiler/compilerOracle.hpp"
 #include "gc/shared/genCollectedHeap.hpp"
 #include "interpreter/bytecodeHistogram.hpp"
+#if INCLUDE_JVMCI
+#include "jvmci/jvmciCompiler.hpp"
+#include "jvmci/jvmciRuntime.hpp"
+#endif
+#include "logging/log.hpp"
 #include "memory/oopFactory.hpp"
+#include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
 #include "oops/constantPool.hpp"
 #include "oops/generateOopMap.hpp"
@@ -45,6 +52,7 @@
 #include "runtime/arguments.hpp"
 #include "runtime/biasedLocking.hpp"
 #include "runtime/compilationPolicy.hpp"
+#include "runtime/deoptimization.hpp"
 #include "runtime/fprofiler.hpp"
 #include "runtime/init.hpp"
 #include "runtime/interfaceSupport.hpp"
@@ -58,6 +66,7 @@
 #include "runtime/timer.hpp"
 #include "runtime/vm_operations.hpp"
 #include "services/memTracker.hpp"
+#include "trace/traceMacros.hpp"
 #include "trace/tracing.hpp"
 #include "utilities/dtrace.hpp"
 #include "utilities/globalDefinitions.hpp"
@@ -79,8 +88,6 @@
 #include "opto/indexSet.hpp"
 #include "opto/runtime.hpp"
 #endif
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 GrowableArray<Method*>* collected_profiled_methods;
 
@@ -159,7 +166,7 @@ void print_method_invocation_histogram() {
   collected_invoked_methods->sort(&compare_methods);
   //
   tty->cr();
-  tty->print_cr("Histogram Over MethodOop Invocation Counters (cutoff = %d):", MethodHistogramCutoff);
+  tty->print_cr("Histogram Over MethodOop Invocation Counters (cutoff = " INTX_FORMAT "):", MethodHistogramCutoff);
   tty->cr();
   tty->print_cr("____Count_(I+C)____Method________________________Module_________________");
   unsigned total = 0, int_total = 0, comp_total = 0, static_total = 0, final_total = 0,
@@ -236,7 +243,6 @@ void print_statistics() {
     Runtime1::print_statistics();
     Deoptimization::print_statistics();
     SharedRuntime::print_statistics();
-    nmethod::print_statistics();
   }
 #endif /* COMPILER1 */
 
@@ -246,7 +252,6 @@ void print_statistics() {
     Compile::print_statistics();
 #ifndef COMPILER1
     Deoptimization::print_statistics();
-    nmethod::print_statistics();
     SharedRuntime::print_statistics();
 #endif //COMPILER1
     os::print_statistics();
@@ -264,7 +269,25 @@ void print_statistics() {
     IndexSet::print_statistics();
   }
 #endif // ASSERT
-#endif // COMPILER2
+#else
+#ifdef INCLUDE_JVMCI
+#ifndef COMPILER1
+  if ((TraceDeoptimization || LogVMOutput || LogCompilation) && UseCompiler) {
+    FlagSetting fs(DisplayVMOutput, DisplayVMOutput && TraceDeoptimization);
+    Deoptimization::print_statistics();
+    SharedRuntime::print_statistics();
+  }
+#endif
+#endif
+#endif
+
+  if (PrintAOTStatistics) {
+    AOTLoader::print_statistics();
+  }
+
+  if (PrintNMethodStatistics) {
+    nmethod::print_statistics();
+  }
   if (CountCompiledCalls) {
     print_method_invocation_histogram();
   }
@@ -304,13 +327,6 @@ void print_statistics() {
     CodeCache::print_internals();
   }
 
-  if (PrintClassStatistics) {
-    SystemDictionary::print_class_statistics();
-  }
-  if (PrintMethodStatistics) {
-    SystemDictionary::print_method_statistics();
-  }
-
   if (PrintVtableStats) {
     klassVtable::print_statistics();
     klassItable::print_statistics();
@@ -330,18 +346,14 @@ void print_statistics() {
     SystemDictionary::print();
   }
 
+  if (LogTouchedMethods && PrintTouchedMethodsAtExit) {
+    Method::print_touched_methods(tty);
+  }
+
   if (PrintBiasedLockingStatistics) {
     BiasedLocking::print_counters();
   }
 
-#ifdef ENABLE_ZAP_DEAD_LOCALS
-#ifdef COMPILER2
-  if (ZapDeadCompiledLocals) {
-    tty->print_cr("Compile::CompiledZap_count = %d", Compile::CompiledZap_count);
-    tty->print_cr("OptoRuntime::ZapDeadCompiledLocals_count = %d", OptoRuntime::ZapDeadCompiledLocals_count);
-  }
-#endif // COMPILER2
-#endif // ENABLE_ZAP_DEAD_LOCALS
   // Native memory tracking data
   if (PrintNMTStatistics) {
     MemTracker::final_report(tty);
@@ -382,6 +394,10 @@ void print_statistics() {
   if (PrintNMTStatistics) {
     MemTracker::final_report(tty);
   }
+
+  if (LogTouchedMethods && PrintTouchedMethodsAtExit) {
+    Method::print_touched_methods(tty);
+  }
 }
 
 #endif
@@ -389,7 +405,7 @@ void print_statistics() {
 // Note: before_exit() can be executed only once, if more than one threads
 //       are trying to shutdown the VM at the same time, only one thread
 //       can run before_exit() and all other threads must wait.
-void before_exit(JavaThread * thread) {
+void before_exit(JavaThread* thread) {
   #define BEFORE_EXIT_NOT_RUN 0
   #define BEFORE_EXIT_RUNNING 1
   #define BEFORE_EXIT_DONE    2
@@ -412,14 +428,36 @@ void before_exit(JavaThread * thread) {
       assert(_before_exit_status == BEFORE_EXIT_DONE, "invalid state");
       return;
     case BEFORE_EXIT_DONE:
-      return;
+      // need block to avoid SS compiler bug
+      {
+        return;
+      }
     }
   }
+
+#if INCLUDE_JVMCI
+  // We are not using CATCH here because we want the exit to continue normally.
+  Thread* THREAD = thread;
+  JVMCIRuntime::shutdown(THREAD);
+  if (HAS_PENDING_EXCEPTION) {
+    Handle exception(THREAD, PENDING_EXCEPTION);
+    CLEAR_PENDING_EXCEPTION;
+    java_lang_Throwable::java_printStackTrace(exception, THREAD);
+  }
+#endif
 
   // Hang forever on exit if we're reporting an error.
   if (ShowMessageBoxOnError && is_error_reported()) {
     os::infinite_sleep();
   }
+
+  EventThreadEnd event;
+  if (event.should_commit()) {
+    event.set_thread(THREAD_TRACE_ID(thread));
+    event.commit();
+  }
+
+  TRACE_VM_EXIT();
 
   // Stop the WatcherThread. We do this before disenrolling various
   // PeriodicTasks to reduce the likelihood of races.
@@ -441,13 +479,15 @@ void before_exit(JavaThread * thread) {
   Universe::heap()->stop();
 
   // Print GC/heap related information.
-  if (PrintGCDetails) {
-    Universe::print();
-    AdaptiveSizePolicyOutput(0);
-    if (Verbose) {
-      ClassLoaderDataGraph::dump_on(gclog_or_tty);
+  Log(gc, heap, exit) log;
+  if (log.is_info()) {
+    ResourceMark rm;
+    Universe::print_on(log.info_stream());
+    if (log.is_trace()) {
+      ClassLoaderDataGraph::dump_on(log.trace_stream());
     }
   }
+  AdaptiveSizePolicyOutput::print();
 
   if (PrintBytecodeHistogram) {
     BytecodeHistogram::print();
@@ -455,13 +495,6 @@ void before_exit(JavaThread * thread) {
 
   if (JvmtiExport::should_post_thread_life()) {
     JvmtiExport::post_thread_end(thread);
-  }
-
-
-  EventThreadEnd event;
-  if (event.should_commit()) {
-      event.set_javalangthread(java_lang_Thread::thread_id(thread->threadObj()));
-      event.commit();
   }
 
   // Always call even when there are not JVMTI environments yet, since environments
@@ -500,10 +533,10 @@ void before_exit(JavaThread * thread) {
 }
 
 void vm_exit(int code) {
-  Thread* thread = ThreadLocalStorage::is_initialized() ?
-    ThreadLocalStorage::get_thread_slow() : NULL;
+  Thread* thread =
+      ThreadLocalStorage::is_initialized() ? Thread::current_or_null() : NULL;
   if (thread == NULL) {
-    // we have serious problems -- just exit
+    // very early initialization failure -- just exit
     vm_direct_exit(code);
   }
 
@@ -539,8 +572,7 @@ void vm_perform_shutdown_actions() {
   // Calling 'exit_globals()' will disable thread-local-storage and cause all
   // kinds of assertions to trigger in debug mode.
   if (is_init_completed()) {
-    Thread* thread = ThreadLocalStorage::is_initialized() ?
-                     ThreadLocalStorage::get_thread_slow() : NULL;
+    Thread* thread = Thread::current_or_null();
     if (thread != NULL && thread->is_Java_thread()) {
       // We are leaving the VM, set state to native (in case any OS exit
       // handlers call back to the VM)
@@ -564,6 +596,11 @@ void vm_shutdown()
 void vm_abort(bool dump_core) {
   vm_perform_shutdown_actions();
   os::wait_for_keypress_at_exit();
+
+  // Flush stdout and stderr before abort.
+  fflush(stdout);
+  fflush(stderr);
+
   os::abort(dump_core);
   ShouldNotReachHere();
 }
@@ -584,18 +621,23 @@ void vm_notify_during_shutdown(const char* error, const char* message) {
   }
 }
 
+void vm_exit_during_initialization() {
+  vm_notify_during_shutdown(NULL, NULL);
+
+  // Failure during initialization, we don't want to dump core
+  vm_abort(false);
+}
+
 void vm_exit_during_initialization(Handle exception) {
   tty->print_cr("Error occurred during initialization of VM");
   // If there are exceptions on this thread it must be cleared
   // first and here. Any future calls to EXCEPTION_MARK requires
   // that no pending exceptions exist.
-  Thread *THREAD = Thread::current();
+  Thread *THREAD = Thread::current(); // can't be NULL
   if (HAS_PENDING_EXCEPTION) {
     CLEAR_PENDING_EXCEPTION;
   }
-  java_lang_Throwable::print(exception, tty);
-  tty->cr();
-  java_lang_Throwable::print_stack_trace(exception(), tty);
+  java_lang_Throwable::print_stack_trace(exception, tty);
   tty->cr();
   vm_notify_during_shutdown(NULL, NULL);
 
@@ -635,47 +677,23 @@ void JDK_Version::initialize() {
   jdk_version_info_fn_t func = CAST_TO_FN_PTR(jdk_version_info_fn_t,
      os::dll_lookup(lib_handle, "JDK_GetVersionInfo0"));
 
-  if (func == NULL) {
-    // JDK older than 1.6
-    _current._partially_initialized = true;
-  } else {
-    (*func)(&info, sizeof(info));
+  assert(func != NULL, "Support for JDK 1.5 or older has been removed after JEP-223");
 
-    int major = JDK_VERSION_MAJOR(info.jdk_version);
-    int minor = JDK_VERSION_MINOR(info.jdk_version);
-    int micro = JDK_VERSION_MICRO(info.jdk_version);
-    int build = JDK_VERSION_BUILD(info.jdk_version);
-    if (major == 1 && minor > 4) {
-      // We represent "1.5.0" as "5.0", but 1.4.2 as itself.
-      major = minor;
-      minor = micro;
-      micro = 0;
-    }
-    // Incompatible with pre-4243978 JDK.
-    if (info.pending_list_uses_discovered_field == 0) {
-      vm_exit_during_initialization(
-        "Incompatible JDK is not using Reference.discovered field for pending list");
-    }
-    _current = JDK_Version(major, minor, micro, info.update_version,
-                           info.special_update_version, build,
-                           info.thread_park_blocker == 1,
-                           info.post_vm_init_hook_enabled == 1);
-  }
-}
+  (*func)(&info, sizeof(info));
 
-void JDK_Version::fully_initialize(
-    uint8_t major, uint8_t minor, uint8_t micro, uint8_t update) {
-  // This is only called when current is less than 1.6 and we've gotten
-  // far enough in the initialization to determine the exact version.
-  assert(major < 6, "not needed for JDK version >= 6");
-  assert(is_partially_initialized(), "must not initialize");
-  if (major < 5) {
-    // JDK verison sequence: 1.2.x, 1.3.x, 1.4.x, 5.0.x, 6.0.x, etc.
-    micro = minor;
-    minor = major;
-    major = 1;
+  int major = JDK_VERSION_MAJOR(info.jdk_version);
+  int minor = JDK_VERSION_MINOR(info.jdk_version);
+  int security = JDK_VERSION_SECURITY(info.jdk_version);
+  int build = JDK_VERSION_BUILD(info.jdk_version);
+
+  // Incompatible with pre-4243978 JDK.
+  if (info.pending_list_uses_discovered_field == 0) {
+    vm_exit_during_initialization(
+      "Incompatible JDK is not using Reference.discovered field for pending list");
   }
-  _current = JDK_Version(major, minor, micro, update);
+  _current = JDK_Version(major, minor, security, info.patch_version, build,
+                         info.thread_park_blocker == 1,
+                         info.post_vm_init_hook_enabled == 1);
 }
 
 void JDK_Version_init() {
@@ -684,29 +702,18 @@ void JDK_Version_init() {
 
 static int64_t encode_jdk_version(const JDK_Version& v) {
   return
-    ((int64_t)v.major_version()          << (BitsPerByte * 5)) |
-    ((int64_t)v.minor_version()          << (BitsPerByte * 4)) |
-    ((int64_t)v.micro_version()          << (BitsPerByte * 3)) |
-    ((int64_t)v.update_version()         << (BitsPerByte * 2)) |
-    ((int64_t)v.special_update_version() << (BitsPerByte * 1)) |
+    ((int64_t)v.major_version()          << (BitsPerByte * 4)) |
+    ((int64_t)v.minor_version()          << (BitsPerByte * 3)) |
+    ((int64_t)v.security_version()       << (BitsPerByte * 2)) |
+    ((int64_t)v.patch_version()          << (BitsPerByte * 1)) |
     ((int64_t)v.build_number()           << (BitsPerByte * 0));
 }
 
 int JDK_Version::compare(const JDK_Version& other) const {
   assert(is_valid() && other.is_valid(), "Invalid version (uninitialized?)");
-  if (!is_partially_initialized() && other.is_partially_initialized()) {
-    return -(other.compare(*this)); // flip the comparators
-  }
-  assert(!other.is_partially_initialized(), "Not initialized yet");
-  if (is_partially_initialized()) {
-    assert(other.major_version() >= 6,
-           "Invalid JDK version comparison during initialization");
-    return -1;
-  } else {
-    uint64_t e = encode_jdk_version(*this);
-    uint64_t o = encode_jdk_version(other);
-    return (e > o) ? 1 : ((e == o) ? 0 : -1);
-  }
+  uint64_t e = encode_jdk_version(*this);
+  uint64_t o = encode_jdk_version(other);
+  return (e > o) ? 1 : ((e == o) ? 0 : -1);
 }
 
 void JDK_Version::to_string(char* buffer, size_t buflen) const {
@@ -715,28 +722,21 @@ void JDK_Version::to_string(char* buffer, size_t buflen) const {
 
   if (!is_valid()) {
     jio_snprintf(buffer, buflen, "%s", "(uninitialized)");
-  } else if (is_partially_initialized()) {
-    jio_snprintf(buffer, buflen, "%s", "(uninitialized) pre-1.6.0");
   } else {
     int rc = jio_snprintf(
         &buffer[index], buflen - index, "%d.%d", _major, _minor);
     if (rc == -1) return;
     index += rc;
-    if (_micro > 0) {
-      rc = jio_snprintf(&buffer[index], buflen - index, ".%d", _micro);
+    if (_security > 0) {
+      rc = jio_snprintf(&buffer[index], buflen - index, ".%d", _security);
     }
-    if (_update > 0) {
-      rc = jio_snprintf(&buffer[index], buflen - index, "_%02d", _update);
-      if (rc == -1) return;
-      index += rc;
-    }
-    if (_special > 0) {
-      rc = jio_snprintf(&buffer[index], buflen - index, "%c", _special);
+    if (_patch > 0) {
+      rc = jio_snprintf(&buffer[index], buflen - index, ".%d", _patch);
       if (rc == -1) return;
       index += rc;
     }
     if (_build > 0) {
-      rc = jio_snprintf(&buffer[index], buflen - index, "-b%02d", _build);
+      rc = jio_snprintf(&buffer[index], buflen - index, "+%d", _build);
       if (rc == -1) return;
       index += rc;
     }

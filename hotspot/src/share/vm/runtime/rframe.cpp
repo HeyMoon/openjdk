@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -81,7 +81,7 @@ DeoptimizedRFrame::DeoptimizedRFrame(frame fr, JavaThread* thread, RFrame*const 
 : InterpretedRFrame(fr, thread, callee) {}
 
 RFrame* RFrame::new_RFrame(frame fr, JavaThread* thread, RFrame*const  callee) {
-  RFrame* rf;
+  RFrame* rf = NULL;
   int dist = callee ? callee->distance() : -1;
   if (fr.is_interpreted_frame()) {
     rf = new InterpretedRFrame(fr, thread, callee);
@@ -93,8 +93,10 @@ RFrame* RFrame::new_RFrame(frame fr, JavaThread* thread, RFrame*const  callee) {
   } else {
     assert(false, "Unhandled frame type");
   }
-  rf->set_distance(dist);
-  rf->init();
+  if (rf != NULL) {
+    rf->set_distance(dist);
+    rf->init();
+  }
   return rf;
 }
 
@@ -125,7 +127,7 @@ int InterpretedRFrame::cost() const {
 }
 
 int CompiledRFrame::cost() const {
-  nmethod* nm = top_method()->code();
+  CompiledMethod* nm = top_method()->code();
   if (nm != NULL) {
     return nm->insts_size();
   } else {
@@ -137,7 +139,7 @@ void CompiledRFrame::init() {
   RegisterMap map(thread(), false);
   vframe* vf = vframe::new_vframe(&_fr, &map, thread());
   assert(vf->is_compiled_frame(), "must be compiled");
-  _nm = compiledVFrame::cast(vf)->code();
+  _nm = compiledVFrame::cast(vf)->code()->as_nmethod();
   vf = vf->top();
   _vf = javaVFrame::cast(vf);
   _method = CodeCache::find_nmethod(_fr.pc())->method();
@@ -153,7 +155,7 @@ void InterpretedRFrame::init() {
 
 void RFrame::print(const char* kind) {
 #ifndef PRODUCT
-#ifdef COMPILER2
+#if defined(COMPILER2) || INCLUDE_JVMCI
   int cnt = top_method()->interpreter_invocation_count();
 #else
   int cnt = top_method()->invocation_count();

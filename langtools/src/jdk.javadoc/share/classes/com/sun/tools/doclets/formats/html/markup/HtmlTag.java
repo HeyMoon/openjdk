@@ -37,6 +37,7 @@ import com.sun.tools.javac.util.StringUtils;
  *
  * @author Bhavesh Patel
  */
+@Deprecated
 public enum HtmlTag {
     A(BlockType.INLINE, EndTag.END),
     BLOCKQUOTE,
@@ -66,6 +67,7 @@ public enum HtmlTag {
     I(BlockType.INLINE, EndTag.END),
     IFRAME(BlockType.OTHER, EndTag.END),
     IMG(BlockType.INLINE, EndTag.NOEND),
+    INPUT(BlockType.BLOCK, EndTag.NOEND),
     LI,
     LISTING,
     LINK(BlockType.OTHER, EndTag.NOEND),

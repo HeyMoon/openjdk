@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,8 +32,7 @@
 
 package org.xml.sax.helpers;
 
-import java.lang.reflect.Method;
-import java.lang.reflect.InvocationTargetException;
+import java.util.Objects;
 
 /**
  * Create a new instance of a class by name.
@@ -58,15 +57,24 @@ import java.lang.reflect.InvocationTargetException;
  */
 class NewInstance {
     private static final String DEFAULT_PACKAGE = "com.sun.org.apache.xerces.internal";
+    private static final String DEFAULT_CLASS = "com.sun.org.apache.xerces.internal.parsers.SAXParser";
     /**
      * Creates a new instance of the specified class name
      *
      * Package private so this code is not exposed at the API level.
      */
-    static Object newInstance (ClassLoader classLoader, String className)
+    static <T> T newInstance (Class<T> type, ClassLoader loader, String clsName)
         throws ClassNotFoundException, IllegalAccessException,
             InstantiationException
     {
+        ClassLoader classLoader = Objects.requireNonNull(loader);
+        String className = Objects.requireNonNull(clsName);
+
+        // Instantiate directly for the SAX default parser
+        if (className.equals(DEFAULT_CLASS)) {
+            return type.cast(new com.sun.org.apache.xerces.internal.parsers.SAXParser());
+        }
+
         // make sure we have access to restricted packages
         boolean internal = false;
         if (System.getSecurityManager() != null) {
@@ -75,13 +83,14 @@ class NewInstance {
             }
         }
 
-        Class driverClass;
+        Class<?> driverClass;
         if (classLoader == null || internal) {
             driverClass = Class.forName(className);
         } else {
             driverClass = classLoader.loadClass(className);
         }
-        return driverClass.newInstance();
+
+        return type.cast(driverClass.newInstance());
     }
 
 }

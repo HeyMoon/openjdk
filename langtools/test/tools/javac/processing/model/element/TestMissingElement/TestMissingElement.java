@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,7 +21,6 @@
  * questions.
  */
 
-
 /*
  * @test
  * @bug 6639645 7026414 7025809
@@ -30,7 +29,7 @@
  * @modules jdk.compiler/com.sun.tools.javac.processing
  *          jdk.compiler/com.sun.tools.javac.util
  * @build JavacTestingAbstractProcessor TestMissingElement
- * @compile/fail/ref=TestMissingElement.ref -proc:only -XprintRounds -XDrawDiagnostics -processor TestMissingElement InvalidSource.java
+ * @compile/fail/ref=TestMissingElement.ref -XDaccessInternalAPI -proc:only -XprintRounds -XDrawDiagnostics -processor TestMissingElement InvalidSource.java
  */
 
 import java.io.PrintWriter;
@@ -50,7 +49,7 @@ public class TestMissingElement extends JavacTestingAbstractProcessor {
     @Override
     public void init(ProcessingEnvironment env) {
         super.init(env);
-        out = ((JavacProcessingEnvironment) env).getContext().get(Log.outKey);
+        out = ((JavacProcessingEnvironment) env).getContext().get(Log.logKey).getWriter(Log.WriterKind.STDERR);
     }
 
     @Override

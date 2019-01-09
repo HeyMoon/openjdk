@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,6 +44,8 @@ import java.util.logging.Logger;
  * @bug 8027670 8029281
  * @summary Deadlock in drainLoggerRefQueueBounded / readConfiguration
  *          caused by synchronization issues in Logger and LogManager.
+ * @modules java.logging
+ *          java.management
  * @run main/othervm TestLogConfigurationDeadLockWithConf
  * @author danielfuchs
  * @key randomness
@@ -219,7 +221,7 @@ public class TestLogConfigurationDeadLockWithConf {
         }
     }
 
-    final static class ReadConf extends DaemonThread {
+    static final class ReadConf extends DaemonThread {
         @Override
         public void run() {
             while (goOn) {
@@ -234,7 +236,7 @@ public class TestLogConfigurationDeadLockWithConf {
         }
     }
 
-    final static class AddLogger extends DaemonThread {
+    static final class AddLogger extends DaemonThread {
         @Override
         public void run() {
             try {
@@ -254,7 +256,7 @@ public class TestLogConfigurationDeadLockWithConf {
         }
     }
 
-    final static class DeadlockDetector extends Thread {
+    static final class DeadlockDetector extends Thread {
 
         final Set<Long> deadlocked = Collections.synchronizedSet(new HashSet<Long>());
 

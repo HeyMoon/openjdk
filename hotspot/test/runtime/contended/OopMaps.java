@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,8 +35,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import sun.misc.Unsafe;
-import sun.misc.Contended;
+import jdk.internal.vm.annotation.Contended;
 
 /*
  * @test
@@ -44,7 +43,7 @@ import sun.misc.Contended;
  * @bug     8015493
  * @summary \@Contended: fix multiple issues in the layout code
  *
- * @modules java.base/sun.misc
+ * @modules java.base/jdk.internal.vm.annotation
  * @run main/othervm -XX:-RestrictContended -XX:ContendedPaddingWidth=128 -Xmx128m OopMaps
  */
 public class OopMaps {

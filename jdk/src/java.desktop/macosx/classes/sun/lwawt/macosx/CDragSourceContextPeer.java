@@ -44,7 +44,6 @@ import sun.awt.dnd.*;
 import sun.lwawt.LWComponentPeer;
 import sun.lwawt.LWWindowPeer;
 import sun.lwawt.PlatformWindow;
-import sun.misc.ManagedLocalsThread;
 
 
 public final class CDragSourceContextPeer extends SunDragSourceContextPeer {
@@ -94,6 +93,7 @@ public final class CDragSourceContextPeer extends SunDragSourceContextPeer {
         InputEvent         triggerEvent = trigger.getTriggerEvent();
 
         Point dragOrigin = new Point(trigger.getDragOrigin());
+        @SuppressWarnings("deprecation")
         int extModifiers = (triggerEvent.getModifiers() | triggerEvent.getModifiersEx());
         long timestamp   = triggerEvent.getWhen();
         int clickCount   = ((triggerEvent instanceof MouseEvent) ? (((MouseEvent) triggerEvent).getClickCount()) : 1);
@@ -181,7 +181,7 @@ public final class CDragSourceContextPeer extends SunDragSourceContextPeer {
                     }
                 }
             };
-            new ManagedLocalsThread(dragRunnable).start();
+            new Thread(null, dragRunnable, "Drag", 0, false).start();
         } catch (Exception e) {
             final long nativeDragSource = getNativeContext();
             setNativeContext(0);
@@ -215,6 +215,7 @@ public final class CDragSourceContextPeer extends SunDragSourceContextPeer {
             this.setDefaultDragImage();
     }
 
+    @SuppressWarnings("deprecation")
     private void setDefaultDragImage(JTextComponent component) {
         DragGestureEvent trigger = getTrigger();
         int selectionStart = component.getSelectionStart();

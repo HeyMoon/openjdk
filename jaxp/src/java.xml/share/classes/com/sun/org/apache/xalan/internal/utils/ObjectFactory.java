@@ -3,13 +3,14 @@
  * DO NOT REMOVE OR ALTER!
  */
 /*
- * Copyright 2001-2004 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,11 +18,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * $Id: ObjectFactory.java,v 1.2.4.1 2005/09/15 02:39:54 jeffsuttor Exp $
- */
 
 package com.sun.org.apache.xalan.internal.utils;
+
+import java.util.function.Supplier;
 
 /**
  * This class is duplicated for each JAXP subpackage so keep it in sync.
@@ -46,9 +46,9 @@ public class ObjectFactory {
 
 
     /** Prints a message to standard error if debugging is enabled. */
-    private static void debugPrintln(String msg) {
+    private static void debugPrintln(Supplier<String> msgGen) {
         if (DEBUG) {
-            System.err.println("JAXP: " + msg);
+            System.err.println("JAXP: " + msgGen.get());
         }
     } // debugPrintln(String)
 
@@ -125,8 +125,8 @@ public class ObjectFactory {
         try{
             Class providerClass = findProviderClass(className, cl, doFallback);
             Object instance = providerClass.newInstance();
-            if (DEBUG) debugPrintln("created new instance of " + providerClass +
-                   " using ClassLoader: " + cl);
+            debugPrintln(()->"created new instance of " + providerClass +
+                             " using ClassLoader: " + cl);
             return instance;
         } catch (ClassNotFoundException x) {
             throw new ConfigurationError(

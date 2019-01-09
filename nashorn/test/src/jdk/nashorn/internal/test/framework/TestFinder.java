@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -68,7 +68,7 @@ import javax.xml.xpath.XPath;
 import javax.xml.xpath.XPathConstants;
 import javax.xml.xpath.XPathExpressionException;
 import javax.xml.xpath.XPathFactory;
-import jdk.nashorn.internal.runtime.ScriptingFunctions;
+import jdk.nashorn.tools.Shell;
 import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
 
@@ -224,8 +224,8 @@ public final class TestFinder {
 
         boolean explicitOptimistic = false;
 
-        String allContent = new String(Files.readAllBytes(testFile));
-        Iterator<String> scanner = ScriptingFunctions.tokenizeString(allContent).iterator();
+        final String allContent = new String(Files.readAllBytes(testFile));
+        final Iterator<String> scanner = Shell.tokenizeString(allContent).iterator();
         while (scanner.hasNext()) {
             // TODO: Scan for /ref=file qualifiers, etc, to determine run
             // behavior
@@ -392,7 +392,7 @@ public final class TestFinder {
         if (hasOptimisticOverride()) {
             final List<String> newList = new ArrayList<>(Arrays.asList(args));
             newList.add("--optimistic-types=" + OPTIMISTIC_OVERRIDE);
-            return newList.toArray(new String[newList.size()]);
+            return newList.toArray(new String[0]);
         }
         return args;
     }

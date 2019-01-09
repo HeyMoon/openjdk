@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,14 +29,14 @@
  *          jdk.compiler/com.sun.tools.javac.file
  *          jdk.compiler/com.sun.tools.javac.main
  *          jdk.compiler/com.sun.tools.javac.util
- * @build Tester
+ * @build OptionModesTester
  * @run main SourceTargetTest
  */
 
 import com.sun.tools.javac.main.Main;
 import java.io.IOException;
 
-public class SourceTargetTest extends Tester {
+public class SourceTargetTest extends OptionModesTester {
     public static void main(String... args) throws Exception {
         SourceTargetTest t = new SourceTargetTest();
         t.runTests();
@@ -45,7 +45,10 @@ public class SourceTargetTest extends Tester {
     @Test
     void testSourceTarget() throws IOException {
         String v = System.getProperty("java.specification.version");
-        String latest = v.substring(v.lastIndexOf(".") + 1);
+        String[] va = v.split("\\.");
+        int major = Integer.parseInt(va[0]);
+        boolean newVersion = major > 8;
+        String latest = (newVersion) ? va[0] : va[1];
         String prev = String.valueOf(Integer.valueOf(latest) - 1);
 
         writeFile("C.java", "class C { }");

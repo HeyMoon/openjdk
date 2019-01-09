@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -8,7 +8,7 @@
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.    See the GNU General Public License
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
  * version 2 for more details (a copy is included in the LICENSE file that
  * accompanied this code).
  *
@@ -25,20 +25,21 @@
  * @test
  * @bug 8048933
  * @summary TraceExceptions output should have the exception message - useful for ClassNotFoundExceptions especially
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 
 public class TraceExceptionsTest {
     public static void main(String[] args) throws Exception {
 
         ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(
-            "-XX:+TraceExceptions", "NoClassFound");
+            "-Xlog:exceptions=info", "NoClassFound");
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
-        output.shouldContain("<a 'java/lang/ClassNotFoundException': NoClassFound>");
+        output.shouldContain("<a 'java/lang/ClassNotFoundException'").shouldContain(": NoClassFound>");
         output.shouldNotContain("<a 'java/lang/ClassNotFoundException'>");
         output.shouldHaveExitValue(1);
     }

@@ -1,4 +1,5 @@
-/* Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+/*
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -488,7 +489,8 @@ class CompileReplay : public StackObj {
     int comp_level = parse_int(comp_level_label);
     // old version w/o comp_level
     if (had_error() && (error_message() == comp_level_label)) {
-      comp_level = CompLevel_full_optimization;
+      // use highest available tier
+      comp_level = TieredCompilation ? TieredStopAtLevel : CompLevel_highest_tier;
     }
     if (!is_valid_comp_level(comp_level)) {
       return;
@@ -530,27 +532,27 @@ class CompileReplay : public StackObj {
     if (_imethod != NULL) {
       return; // Replay Inlining
     }
-    Klass* k = method->method_holder();
-    ((InstanceKlass*)k)->initialize(THREAD);
+    InstanceKlass* ik = method->method_holder();
+    ik->initialize(THREAD);
     if (HAS_PENDING_EXCEPTION) {
       oop throwable = PENDING_EXCEPTION;
       java_lang_Throwable::print(throwable, tty);
       tty->cr();
       if (ReplayIgnoreInitErrors) {
         CLEAR_PENDING_EXCEPTION;
-        ((InstanceKlass*)k)->set_init_state(InstanceKlass::fully_initialized);
+        ik->set_init_state(InstanceKlass::fully_initialized);
       } else {
         return;
       }
     }
     // Make sure the existence of a prior compile doesn't stop this one
-    nmethod* nm = (entry_bci != InvocationEntryBci) ? method->lookup_osr_nmethod_for(entry_bci, comp_level, true) : method->code();
+    CompiledMethod* nm = (entry_bci != InvocationEntryBci) ? method->lookup_osr_nmethod_for(entry_bci, comp_level, true) : method->code();
     if (nm != NULL) {
       nm->make_not_entrant();
     }
     replay_state = this;
     CompileBroker::compile_method(method, entry_bci, comp_level,
-                                  methodHandle(), 0, "replay", THREAD);
+                                  methodHandle(), 0, CompileTask::Reason_Replay, THREAD);
     replay_state = NULL;
     reset();
   }
@@ -574,9 +576,7 @@ class CompileReplay : public StackObj {
     Method* method = parse_method(CHECK);
     if (had_error()) return;
     /* just copied from Method, to build interpret data*/
-    if (InstanceRefKlass::owns_pending_list_lock((JavaThread*)THREAD)) {
-      return;
-    }
+
     // To be properly initialized, some profiling in the MDO needs the
     // method to be rewritten (number of arguments at a call for
     // instance)
@@ -730,7 +730,7 @@ class CompileReplay : public StackObj {
           if (parsed_two_word == i) continue;
 
         default:
-          fatal(err_msg_res("Unexpected tag: %d", cp->tag_at(i).value()));
+          fatal("Unexpected tag: %d", cp->tag_at(i).value());
           break;
       }
 
@@ -821,7 +821,7 @@ class CompileReplay : public StackObj {
         int value = atoi(string_value);
         java_mirror->short_field_put(fd.offset(), value);
       } else if (strcmp(field_signature, "Z") == 0) {
-        int value = atol(string_value);
+        int value = atoi(string_value);
         java_mirror->bool_field_put(fd.offset(), value);
       } else if (strcmp(field_signature, "J") == 0) {
         jlong value;
@@ -842,7 +842,7 @@ class CompileReplay : public StackObj {
       } else if (field_signature[0] == 'L') {
         Symbol* klass_name = SymbolTable::lookup(field_signature, (int)strlen(field_signature), CHECK);
         KlassHandle kelem = resolve_klass(field_signature, CHECK);
-        oop value = ((InstanceKlass*)kelem())->allocate_instance(CHECK);
+        oop value = InstanceKlass::cast(kelem())->allocate_instance(CHECK);
         java_mirror->obj_field_put(fd.offset(), value);
       } else {
         report_error("unhandled staticfield");
@@ -1040,10 +1040,8 @@ void* ciReplay::load_inline_data(ciMethod* method, int entry_bci, int comp_level
   }
   void* data = rp.process_inline(method, method->get_Method(), entry_bci, comp_level, THREAD);
   if (HAS_PENDING_EXCEPTION) {
-    oop throwable = PENDING_EXCEPTION;
+    Handle throwable(THREAD, PENDING_EXCEPTION);
     CLEAR_PENDING_EXCEPTION;
-    java_lang_Throwable::print(throwable, tty);
-    tty->cr();
     java_lang_Throwable::print_stack_trace(throwable, tty);
     tty->cr();
     return NULL;
@@ -1059,8 +1057,6 @@ void* ciReplay::load_inline_data(ciMethod* method, int entry_bci, int comp_level
 int ciReplay::replay_impl(TRAPS) {
   HandleMark hm;
   ResourceMark rm;
-  // Make sure we don't run with background compilation
-  BackgroundCompilation = false;
 
   if (ReplaySuppressInitializers > 2) {
     // ReplaySuppressInitializers > 2 means that we want to allow
@@ -1085,10 +1081,8 @@ int ciReplay::replay_impl(TRAPS) {
   }
 
   if (HAS_PENDING_EXCEPTION) {
-    oop throwable = PENDING_EXCEPTION;
+    Handle throwable(THREAD, PENDING_EXCEPTION);
     CLEAR_PENDING_EXCEPTION;
-    java_lang_Throwable::print(throwable, tty);
-    tty->cr();
     java_lang_Throwable::print_stack_trace(throwable, tty);
     tty->cr();
     exit_code = 2;

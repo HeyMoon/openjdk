@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,33 +29,32 @@
 #include "memory/allocation.inline.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/symbol.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/os.hpp"
 
 Symbol::Symbol(const u1* name, int length, int refcount) {
   _refcount = refcount;
   _length = length;
-  _identity_hash = os::random();
+  _identity_hash = (short)os::random();
   for (int i = 0; i < _length; i++) {
     byte_at_put(i, name[i]);
   }
 }
 
 void* Symbol::operator new(size_t sz, int len, TRAPS) throw() {
-  int alloc_size = size(len)*HeapWordSize;
+  int alloc_size = size(len)*wordSize;
   address res = (address) AllocateHeap(alloc_size, mtSymbol);
   return res;
 }
 
 void* Symbol::operator new(size_t sz, int len, Arena* arena, TRAPS) throw() {
-  int alloc_size = size(len)*HeapWordSize;
-  address res = (address)arena->Amalloc(alloc_size);
+  int alloc_size = size(len)*wordSize;
+  address res = (address)arena->Amalloc_4(alloc_size);
   return res;
 }
 
 void* Symbol::operator new(size_t sz, int len, ClassLoaderData* loader_data, TRAPS) throw() {
   address res;
-  int alloc_size = size(len)*HeapWordSize;
   res = (address) Metaspace::allocate(loader_data, size(len), true,
                                       MetaspaceObj::SymbolType, CHECK_NULL);
   return res;
@@ -154,10 +153,26 @@ char* Symbol::as_C_string_flexible_buffer(Thread* t,
   return as_C_string(str, buf_len);
 }
 
+void Symbol::print_utf8_on(outputStream* st) const {
+  st->print("%s", as_C_string());
+}
+
 void Symbol::print_symbol_on(outputStream* st) const {
-  ResourceMark rm;
+  char *s;
   st = st ? st : tty;
-  st->print("%s", as_quoted_ascii());
+  {
+    // ResourceMark may not affect st->print(). If st is a string
+    // stream it could resize, using the same resource arena.
+    ResourceMark rm;
+    s = as_quoted_ascii();
+    s = os::strdup(s);
+  }
+  if (s == NULL) {
+    st->print("(null)");
+  } else {
+    st->print("%s", s);
+    os::free(s);
+  }
 }
 
 char* Symbol::as_quoted_ascii() const {
@@ -214,24 +229,25 @@ unsigned int Symbol::new_hash(juint seed) {
 }
 
 void Symbol::increment_refcount() {
-  // Only increment the refcount if positive.  If negative either
+  // Only increment the refcount if non-negative.  If negative either
   // overflow has occurred or it is a permanent symbol in a read only
   // shared archive.
-  if (_refcount >= 0) {
+  if (_refcount >= 0) { // not a permanent symbol
     Atomic::inc(&_refcount);
     NOT_PRODUCT(Atomic::inc(&_total_count);)
   }
 }
 
 void Symbol::decrement_refcount() {
-  if (_refcount >= 0) {
-    Atomic::dec(&_refcount);
+  if (_refcount >= 0) { // not a permanent symbol
+    jshort new_value = Atomic::add(-1, &_refcount);
 #ifdef ASSERT
-    if (_refcount < 0) {
+    if (new_value == -1) { // we have transitioned from 0 -> -1
       print();
       assert(false, "reference count underflow for symbol");
     }
 #endif
+    (void)new_value;
   }
 }
 

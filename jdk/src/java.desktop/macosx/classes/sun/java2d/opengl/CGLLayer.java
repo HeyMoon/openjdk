@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -77,7 +77,7 @@ public class CGLLayer extends CFRetainedResource {
     }
 
     public Object getDestination() {
-        return peer;
+        return peer.getTarget();
     }
 
     public SurfaceData replaceSurfaceData() {
@@ -108,7 +108,7 @@ public class CGLLayer extends CFRetainedResource {
         OGLRenderQueue rq = OGLRenderQueue.getInstance();
         rq.lock();
         try {
-            validate(getPointer(), cglsd);
+            execute(ptr -> validate(ptr, cglsd));
         } finally {
             rq.unlock();
         }
@@ -124,7 +124,7 @@ public class CGLLayer extends CFRetainedResource {
     private void setScale(final int _scale) {
         if (scale != _scale) {
             scale = _scale;
-            nativeSetScale(getPointer(), scale);
+            execute(ptr -> nativeSetScale(ptr, scale));
         }
     }
 
@@ -138,7 +138,7 @@ public class CGLLayer extends CFRetainedResource {
         OGLRenderQueue rq = OGLRenderQueue.getInstance();
         rq.lock();
         try {
-            blitTexture(getPointer());
+            execute(ptr -> blitTexture(ptr));
         } finally {
             rq.unlock();
         }

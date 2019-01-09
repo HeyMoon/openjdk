@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,10 +28,11 @@
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
-import javax.sound.sampled.*;
-
-import com.sun.media.sound.*;
+import com.sun.media.sound.RIFFReader;
+import com.sun.media.sound.RIFFWriter;
 
 public class Skip {
 
@@ -42,6 +43,11 @@ public class Skip {
     }
 
     public static void main(String[] args) throws Exception {
+        test(false);
+        test(true);
+    }
+
+    private static void test(boolean customStream) throws Exception {
         RIFFWriter writer = null;
         RIFFReader reader = null;
         File tempfile = File.createTempFile("test",".riff");
@@ -53,15 +59,23 @@ public class Skip {
             chunk.write((byte)44);
             writer.close();
             writer = null;
-            FileInputStream fis = new FileInputStream(tempfile);
+            final FileInputStream fis;
+            if (customStream) {
+                fis = new FileInputStream(tempfile);
+            } else {
+                fis = new FileInputStream(tempfile) {
+                    @Override
+                    public long skip(long n) {
+                        return 0;
+                    }
+                };
+            }
             reader = new RIFFReader(fis);
             RIFFReader readchunk = reader.nextChunk();
             reader.skip(1);
             assertEquals(readchunk.read(), 44);
             fis.close();
             reader = null;
-
-
         }
         finally
         {
@@ -69,10 +83,7 @@ public class Skip {
                 writer.close();
             if(reader != null)
                 reader.close();
-
-            if(tempfile.exists())
-                if(!tempfile.delete())
-                    tempfile.deleteOnExit();
+            Files.delete(Paths.get(tempfile.getAbsolutePath()));
         }
     }
 }

@@ -43,6 +43,10 @@ typedef int (*fn_ippPort)(void);
 typedef http_t* (*fn_httpConnect)(const char *, int);
 typedef void (*fn_httpClose)(http_t *);
 typedef char* (*fn_cupsGetPPD)(const char *);
+typedef cups_dest_t* (*fn_cupsGetDest)(const char *name,
+    const char *instance, int num_dests, cups_dest_t *dests);
+typedef int (*fn_cupsGetDests)(cups_dest_t **dests);
+typedef void (*fn_cupsFreeDests)(int num_dests, cups_dest_t *dests);
 typedef ppd_file_t* (*fn_ppdOpenFile)(const char *);
 typedef void (*fn_ppdClose)(ppd_file_t *);
 typedef ppd_option_t* (*fn_ppdFindOption)(ppd_file_t *, const char *);
@@ -53,6 +57,9 @@ fn_ippPort j2d_ippPort;
 fn_httpConnect j2d_httpConnect;
 fn_httpClose j2d_httpClose;
 fn_cupsGetPPD j2d_cupsGetPPD;
+fn_cupsGetDest j2d_cupsGetDest;
+fn_cupsGetDests j2d_cupsGetDests;
+fn_cupsFreeDests j2d_cupsFreeDests;
 fn_ppdOpenFile j2d_ppdOpenFile;
 fn_ppdClose j2d_ppdClose;
 fn_ppdFindOption j2d_ppdFindOption;
@@ -102,6 +109,24 @@ Java_sun_print_CUPSPrinter_initIDs(JNIEnv *env,
 
   j2d_cupsGetPPD = (fn_cupsGetPPD)dlsym(handle, "cupsGetPPD");
   if (j2d_cupsGetPPD == NULL) {
+    dlclose(handle);
+    return JNI_FALSE;
+  }
+
+  j2d_cupsGetDest = (fn_cupsGetDest)dlsym(handle, "cupsGetDest");
+  if (j2d_cupsGetDest == NULL) {
+    dlclose(handle);
+    return JNI_FALSE;
+  }
+
+  j2d_cupsGetDests = (fn_cupsGetDests)dlsym(handle, "cupsGetDests");
+  if (j2d_cupsGetDests == NULL) {
+    dlclose(handle);
+    return JNI_FALSE;
+  }
+
+  j2d_cupsFreeDests = (fn_cupsFreeDests)dlsym(handle, "cupsFreeDests");
+  if (j2d_cupsFreeDests == NULL) {
     dlclose(handle);
     return JNI_FALSE;
   }
@@ -168,6 +193,30 @@ Java_sun_print_CUPSPrinter_getCupsPort(JNIEnv *env,
     return (jint) port;
 }
 
+
+/*
+ * Gets CUPS default printer name.
+ *
+ */
+JNIEXPORT jstring JNICALL
+Java_sun_print_CUPSPrinter_getCupsDefaultPrinter(JNIEnv *env,
+                                                  jobject printObj)
+{
+    jstring cDefPrinter = NULL;
+    cups_dest_t *dests;
+    char *defaultPrinter = NULL;
+    int num_dests = j2d_cupsGetDests(&dests);
+    int i = 0;
+    cups_dest_t *dest = j2d_cupsGetDest(NULL, NULL, num_dests, dests);
+    if (dest != NULL) {
+        defaultPrinter = dest->name;
+        if (defaultPrinter != NULL) {
+            cDefPrinter = JNU_NewStringPlatform(env, defaultPrinter);
+        }
+    }
+    j2d_cupsFreeDests(num_dests, dests);
+    return cDefPrinter;
+}
 
 /*
  * Checks if connection can be made to the server.
@@ -322,6 +371,10 @@ Java_sun_print_CUPSPrinter_getPageSizes(JNIEnv *env,
     ppd_option_t *option;
     ppd_choice_t *choice;
     ppd_size_t *size;
+    const char *filename = NULL;
+    int i;
+    jobjectArray sizeArray = NULL;
+    jfloat *dims;
 
     const char *name = (*env)->GetStringUTFChars(env, printer, NULL);
     if (name == NULL) {
@@ -329,10 +382,6 @@ Java_sun_print_CUPSPrinter_getPageSizes(JNIEnv *env,
         JNU_ThrowOutOfMemoryError(env, "Could not create printer name");
         return NULL;
     }
-    const char *filename;
-    int i;
-    jobjectArray sizeArray = NULL;
-    jfloat *dims;
 
     // NOTE: cupsGetPPD returns a pointer to a filename of a temporary file.
     // unlink() must be called to remove the file after using it.
@@ -421,6 +470,8 @@ Java_sun_print_CUPSPrinter_getResolutions(JNIEnv *env,
     jclass intCls, cls;
     jmethodID intCtr, arrListAddMID;
     int i;
+    const char *name = NULL;
+    const char *filename = NULL;
 
     intCls = (*env)->FindClass(env, "java/lang/Integer");
     CHECK_NULL(intCls);
@@ -432,13 +483,13 @@ Java_sun_print_CUPSPrinter_getResolutions(JNIEnv *env,
         (*env)->GetMethodID(env, cls, "add", "(Ljava/lang/Object;)Z");
     CHECK_NULL(arrListAddMID);
 
-    const char *name = (*env)->GetStringUTFChars(env, printer, NULL);
+    name = (*env)->GetStringUTFChars(env, printer, NULL);
     if (name == NULL) {
         (*env)->ExceptionClear(env);
         JNU_ThrowOutOfMemoryError(env, "Could not create printer name");
         return;
     }
-    const char *filename;
+
 
     // NOTE: cupsGetPPD returns a pointer to a filename of a temporary file.
     // unlink() must be called to remove the file after using it.

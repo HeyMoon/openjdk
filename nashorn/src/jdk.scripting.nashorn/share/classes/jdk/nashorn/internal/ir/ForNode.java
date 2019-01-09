@@ -43,7 +43,7 @@ public final class ForNode extends LoopNode {
     private final JoinPredecessorExpression modify;
 
     /** Iterator symbol. */
-    private Symbol iterator;
+    private final Symbol iterator;
 
     /** Is this a normal for in loop? */
     public static final int IS_FOR_IN           = 1 << 0;
@@ -51,8 +51,11 @@ public final class ForNode extends LoopNode {
     /** Is this a normal for each in loop? */
     public static final int IS_FOR_EACH         = 1 << 1;
 
+    /** Is this a ES6 for-of loop? */
+    public static final int IS_FOR_OF           = 1 << 2;
+
     /** Does this loop need a per-iteration scope because its init contain a LET declaration? */
-    public static final int PER_ITERATION_SCOPE = 1 << 2;
+    public static final int PER_ITERATION_SCOPE = 1 << 3;
 
     private final int flags;
 
@@ -86,23 +89,22 @@ public final class ForNode extends LoopNode {
         this.flags  = flags;
         this.init = init;
         this.modify = modify;
-
+        this.iterator = null;
     }
 
     private ForNode(final ForNode forNode, final Expression init, final JoinPredecessorExpression test,
-            final Block body, final JoinPredecessorExpression modify, final int flags, final boolean controlFlowEscapes, final LocalVariableConversion conversion) {
+            final Block body, final JoinPredecessorExpression modify, final int flags,
+            final boolean controlFlowEscapes, final LocalVariableConversion conversion, final Symbol iterator) {
         super(forNode, test, body, controlFlowEscapes, conversion);
         this.init   = init;
         this.modify = modify;
         this.flags  = flags;
-        // Even if the for node gets cloned in try/finally, the symbol can be shared as only one branch of the finally
-        // is executed.
-        this.iterator = forNode.iterator;
+        this.iterator = iterator;
     }
 
     @Override
     public Node ensureUniqueLabels(final LexicalContext lc) {
-        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion));
+        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion, iterator));
     }
 
     @Override
@@ -127,6 +129,10 @@ public final class ForNode extends LoopNode {
             init.toString(sb, printTypes);
             sb.append(" in ");
             modify.toString(sb, printTypes);
+        } else if (isForOf()) {
+            init.toString(sb, printTypes);
+            sb.append(" of ");
+            modify.toString(sb, printTypes);
         } else {
             if (init != null) {
                 init.toString(sb, printTypes);
@@ -146,12 +152,12 @@ public final class ForNode extends LoopNode {
 
     @Override
     public boolean hasGoto() {
-        return !isForIn() && test == null;
+        return !isForInOrOf() && test == null;
     }
 
     @Override
     public boolean mustEnter() {
-        if (isForIn()) {
+        if (isForInOrOf()) {
             return false; //may be an empty set to iterate over, then we skip the loop
         }
         return test == null;
@@ -175,7 +181,7 @@ public final class ForNode extends LoopNode {
         if (this.init == init) {
             return this;
         }
-        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion));
+        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion, iterator));
     }
 
     /**
@@ -185,6 +191,23 @@ public final class ForNode extends LoopNode {
     public boolean isForIn() {
         return (flags & IS_FOR_IN) != 0;
     }
+
+    /**
+     * Is this a for-of loop?
+     * @return true if this is a for-of loop
+     */
+    public boolean isForOf() {
+        return (flags & IS_FOR_OF) != 0;
+    }
+
+    /**
+     * Is this a for-in or for-of statement?
+     * @return true if this is a for-in or for-of loop
+     */
+    public boolean isForInOrOf() {
+        return isForIn() || isForOf();
+    }
+
     /**
      * Is this a for each construct, known from e.g. Rhino. This will be a for of construct
      * in ECMAScript 6
@@ -204,10 +227,15 @@ public final class ForNode extends LoopNode {
 
     /**
      * Assign an iterator symbol to this ForNode. Used for for in and for each constructs
+     * @param lc the current lexical context
      * @param iterator the iterator symbol
+     * @return a ForNode with the iterator set
      */
-    public void setIterator(final Symbol iterator) {
-        this.iterator = iterator;
+    public ForNode setIterator(final LexicalContext lc, final Symbol iterator) {
+        if (this.iterator == iterator) {
+            return this;
+        }
+        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion, iterator));
     }
 
     /**
@@ -228,7 +256,7 @@ public final class ForNode extends LoopNode {
         if (this.modify == modify) {
             return this;
         }
-        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion));
+        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion, iterator));
     }
 
     @Override
@@ -236,7 +264,7 @@ public final class ForNode extends LoopNode {
         if (this.test == test) {
             return this;
         }
-        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion));
+        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion, iterator));
     }
 
     @Override
@@ -249,7 +277,7 @@ public final class ForNode extends LoopNode {
         if (this.body == body) {
             return this;
         }
-        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion));
+        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion, iterator));
     }
 
     @Override
@@ -257,16 +285,27 @@ public final class ForNode extends LoopNode {
         if (this.controlFlowEscapes == controlFlowEscapes) {
             return this;
         }
-        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion));
+        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion, iterator));
     }
 
     @Override
     JoinPredecessor setLocalVariableConversionChanged(final LexicalContext lc, final LocalVariableConversion conversion) {
-        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion));
+        return Node.replaceInLexicalContext(lc, this, new ForNode(this, init, test, body, modify, flags, controlFlowEscapes, conversion, iterator));
     }
 
     @Override
     public boolean hasPerIterationScope() {
         return (flags & PER_ITERATION_SCOPE) != 0;
+    }
+
+    /**
+     * Returns true if this for-node needs the scope creator of its containing block to create
+     * per-iteration scope. This is only true for for-in loops with lexical declarations.
+     *
+     * @see Block#providesScopeCreator()
+     * @return true if the containing block's scope object creator is required in codegen
+     */
+    public boolean needsScopeCreator() {
+        return isForInOrOf() && hasPerIterationScope();
     }
 }

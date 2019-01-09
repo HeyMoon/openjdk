@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,47 +48,47 @@ class typeArrayOopDesc : public arrayOopDesc {
 
  public:
   jbyte* byte_at_addr(int which) const {
-    assert(is_within_bounds(which), "index out of bounds");
+    assert(is_within_bounds(which), "index %d out of bounds %d", which, length());
     return &byte_base()[which];
   }
 
   jboolean* bool_at_addr(int which) const {
-    assert(is_within_bounds(which), "index out of bounds");
+    assert(is_within_bounds(which), "index %d out of bounds %d", which, length());
     return &bool_base()[which];
   }
 
   jchar* char_at_addr(int which) const {
-    assert(is_within_bounds(which), "index out of bounds");
+    assert(is_within_bounds(which), "index %d out of bounds %d", which, length());
     return &char_base()[which];
   }
 
   jint* int_at_addr(int which) const {
-    assert(is_within_bounds(which), "index out of bounds");
+    assert(is_within_bounds(which), "index %d out of bounds %d", which, length());
     return &int_base()[which];
   }
 
   jshort* short_at_addr(int which) const {
-    assert(is_within_bounds(which), "index out of bounds");
+    assert(is_within_bounds(which), "index %d out of bounds %d", which, length());
     return &short_base()[which];
   }
 
   jushort* ushort_at_addr(int which) const {  // for field descriptor arrays
-    assert(is_within_bounds(which), "index out of bounds");
+    assert(is_within_bounds(which), "index %d out of bounds %d", which, length());
     return (jushort*) &short_base()[which];
   }
 
   jlong* long_at_addr(int which) const {
-    assert(is_within_bounds(which), "index out of bounds");
+    assert(is_within_bounds(which), "index %d out of bounds %d", which, length());
     return &long_base()[which];
   }
 
   jfloat* float_at_addr(int which) const {
-    assert(is_within_bounds(which), "index out of bounds");
+    assert(is_within_bounds(which), "index %d out of bounds %d", which, length());
     return &float_base()[which];
   }
 
   jdouble* double_at_addr(int which) const {
-    assert(is_within_bounds(which), "index out of bounds");
+    assert(is_within_bounds(which), "index %d out of bounds %d", which, length());
     return &double_base()[which];
   }
 
@@ -96,7 +96,7 @@ class typeArrayOopDesc : public arrayOopDesc {
   void byte_at_put(int which, jbyte contents)     { *byte_at_addr(which) = contents; }
 
   jboolean bool_at(int which) const               { return *bool_at_addr(which); }
-  void bool_at_put(int which, jboolean contents)  { *bool_at_addr(which) = contents; }
+  void bool_at_put(int which, jboolean contents)  { *bool_at_addr(which) = (((jint)contents) & 1); }
 
   jchar char_at(int which) const                  { return *char_at_addr(which); }
   void char_at_put(int which, jchar contents)     { *char_at_addr(which) = contents; }
@@ -129,7 +129,7 @@ class typeArrayOopDesc : public arrayOopDesc {
   Metadata* metadata_at(int which) const {
     return (Metadata*)*long_at_addr(which); }
   void metadata_at_put(int which, Metadata* contents) {
-    *long_at_addr(which) = (long)contents;
+    *long_at_addr(which) = (jlong)contents;
   }
 #else
   Metadata* metadata_at(int which) const {
@@ -160,10 +160,7 @@ class typeArrayOopDesc : public arrayOopDesc {
   }
 
  public:
-  int object_size() {
-    TypeArrayKlass* tk = TypeArrayKlass::cast(klass());
-    return object_size(tk->layout_helper(), length());
-  }
+  inline int object_size();
 };
 
 #endif // SHARE_VM_OOPS_TYPEARRAYOOP_HPP

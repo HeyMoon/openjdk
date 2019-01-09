@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -474,6 +474,7 @@ public final class LdapClient implements PooledConnection {
         }
     }
 
+    @SuppressWarnings("deprecation")
     protected void finalize() {
         if (debug > 0) System.err.println("LdapClient: finalize " + this);
         forceClose(pooled);
@@ -494,16 +495,14 @@ public final class LdapClient implements PooledConnection {
      */
     void processConnectionClosure() {
         // Notify listeners
-        synchronized (unsolicited) {
-            if (unsolicited.size() > 0) {
-                String msg;
-                if (conn != null) {
-                    msg = conn.host + ":" + conn.port + " connection closed";
-                } else {
-                    msg = "Connection closed";
-                }
-                notifyUnsolicited(new CommunicationException(msg));
+        if (unsolicited.size() > 0) {
+            String msg;
+            if (conn != null) {
+                msg = conn.host + ":" + conn.port + " connection closed";
+            } else {
+                msg = "Connection closed";
             }
+            notifyUnsolicited(new CommunicationException(msg));
         }
 
         // Remove from pool
@@ -1235,6 +1234,7 @@ public final class LdapClient implements PooledConnection {
     static final int LDAP_REF_FOLLOW = 0x01;            // follow referrals
     static final int LDAP_REF_THROW = 0x02;             // throw referral ex.
     static final int LDAP_REF_IGNORE = 0x03;            // ignore referrals
+    static final int LDAP_REF_FOLLOW_SCHEME = 0x04;     // follow referrals of the same scheme
 
     static final String LDAP_URL = "ldap://";           // LDAPv3
     static final String LDAPS_URL = "ldaps://";         // LDAPv3
@@ -1499,13 +1499,8 @@ public final class LdapClient implements PooledConnection {
         if (debug > 0) {
             System.err.println("LdapClient.removeUnsolicited" + ctx);
         }
-        synchronized (unsolicited) {
-            if (unsolicited.size() == 0) {
-                return;
-            }
             unsolicited.removeElement(ctx);
         }
-    }
 
     // NOTE: Cannot be synchronized because this is called asynchronously
     // by the reader thread in Connection. Instead, sync on 'unsolicited' Vector.
@@ -1513,30 +1508,35 @@ public final class LdapClient implements PooledConnection {
         if (debug > 0) {
             System.err.println("LdapClient.processUnsolicited");
         }
-        synchronized (unsolicited) {
-            try {
-                // Parse the response
-                LdapResult res = new LdapResult();
+        try {
+            // Parse the response
+            LdapResult res = new LdapResult();
 
-                ber.parseSeq(null); // init seq
-                ber.parseInt();             // msg id; should be 0; ignored
-                if (ber.parseByte() != LDAP_REP_EXTENSION) {
-                    throw new IOException(
-                        "Unsolicited Notification must be an Extended Response");
-                }
-                ber.parseLength();
-                parseExtResponse(ber, res);
+            ber.parseSeq(null); // init seq
+            ber.parseInt();             // msg id; should be 0; ignored
+            if (ber.parseByte() != LDAP_REP_EXTENSION) {
+                throw new IOException(
+                    "Unsolicited Notification must be an Extended Response");
+            }
+            ber.parseLength();
+            parseExtResponse(ber, res);
 
-                if (DISCONNECT_OID.equals(res.extensionId)) {
-                    // force closing of connection
-                    forceClose(pooled);
-                }
+            if (DISCONNECT_OID.equals(res.extensionId)) {
+                // force closing of connection
+                forceClose(pooled);
+            }
 
+            LdapCtx first = null;
+            UnsolicitedNotification notice = null;
+
+            synchronized (unsolicited) {
                 if (unsolicited.size() > 0) {
+                    first = unsolicited.elementAt(0);
+
                     // Create an UnsolicitedNotification using the parsed data
                     // Need a 'ctx' object because we want to use the context's
                     // list of provider control factories.
-                    UnsolicitedNotification notice = new UnsolicitedResponseImpl(
+                    notice = new UnsolicitedResponseImpl(
                         res.extensionId,
                         res.extensionValue,
                         res.referrals,
@@ -1544,42 +1544,45 @@ public final class LdapClient implements PooledConnection {
                         res.errorMessage,
                         res.matchedDN,
                         (res.resControls != null) ?
-                        unsolicited.elementAt(0).convertControls(res.resControls) :
+                        first.convertControls(res.resControls) :
                         null);
-
-                    // Fire UnsolicitedNotification events to listeners
-                    notifyUnsolicited(notice);
-
-                    // If "disconnect" notification,
-                    // notify unsolicited listeners via NamingException
-                    if (DISCONNECT_OID.equals(res.extensionId)) {
-                        notifyUnsolicited(
-                            new CommunicationException("Connection closed"));
-                    }
                 }
-            } catch (IOException e) {
-                if (unsolicited.size() == 0)
-                    return;  // no one registered; ignore
-
-                NamingException ne = new CommunicationException(
-                    "Problem parsing unsolicited notification");
-                ne.setRootCause(e);
-
-                notifyUnsolicited(ne);
-
-            } catch (NamingException e) {
-                notifyUnsolicited(e);
             }
+
+            if (notice != null) {
+                // Fire UnsolicitedNotification events to listeners
+                notifyUnsolicited(notice);
+
+                // If "disconnect" notification,
+                // notify unsolicited listeners via NamingException
+                if (DISCONNECT_OID.equals(res.extensionId)) {
+                    notifyUnsolicited(
+                        new CommunicationException("Connection closed"));
+                }
+            }
+        } catch (IOException e) {
+            NamingException ne = new CommunicationException(
+                "Problem parsing unsolicited notification");
+            ne.setRootCause(e);
+
+            notifyUnsolicited(ne);
+
+        } catch (NamingException e) {
+            notifyUnsolicited(e);
         }
     }
 
 
     private void notifyUnsolicited(Object e) {
-        for (int i = 0; i < unsolicited.size(); i++) {
-            unsolicited.elementAt(i).fireUnsolicited(e);
+        Vector<LdapCtx> unsolicitedCopy;
+        synchronized (unsolicited) {
+            unsolicitedCopy = new Vector<>(unsolicited);
+            if (e instanceof NamingException) {
+                unsolicited.setSize(0);  // no more listeners after exception
+            }
         }
-        if (e instanceof NamingException) {
-            unsolicited.setSize(0);  // no more listeners after exception
+        for (int i = 0; i < unsolicitedCopy.size(); i++) {
+            unsolicitedCopy.elementAt(i).fireUnsolicited(e);
         }
     }
 

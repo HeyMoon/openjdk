@@ -32,6 +32,7 @@ import javax.tools.JavaFileObject;
 
 import com.sun.tools.javac.code.Attribute.Array;
 import com.sun.tools.javac.code.Attribute.TypeCompound;
+import com.sun.tools.javac.code.Symbol.ClassSymbol;
 import com.sun.tools.javac.code.Symbol.TypeSymbol;
 import com.sun.tools.javac.code.Type.ArrayType;
 import com.sun.tools.javac.code.Type.CapturedType;
@@ -48,6 +49,7 @@ import com.sun.tools.javac.code.TypeAnnotationPosition.TypePathEntry;
 import com.sun.tools.javac.code.TypeAnnotationPosition.TypePathEntryKind;
 import com.sun.tools.javac.code.Symbol.VarSymbol;
 import com.sun.tools.javac.code.Symbol.MethodSymbol;
+import com.sun.tools.javac.code.Type.ModuleType;
 import com.sun.tools.javac.code.TypeMetadata.Entry.Kind;
 import com.sun.tools.javac.comp.Annotate;
 import com.sun.tools.javac.comp.Attr;
@@ -114,31 +116,23 @@ public class TypeAnnotations {
      * called from MemberEnter.
      */
     public void organizeTypeAnnotationsSignatures(final Env<AttrContext> env, final JCClassDecl tree) {
-        annotate.afterTypes(new Runnable() {
-            @Override
-            public void run() {
-                JavaFileObject oldSource = log.useSource(env.toplevel.sourcefile);
-
-                try {
-                    new TypeAnnotationPositions(true).scan(tree);
-                } finally {
-                    log.useSource(oldSource);
-                }
+        annotate.afterTypes(() -> {
+            JavaFileObject oldSource = log.useSource(env.toplevel.sourcefile);
+            try {
+                new TypeAnnotationPositions(true).scan(tree);
+            } finally {
+                log.useSource(oldSource);
             }
         });
     }
 
     public void validateTypeAnnotationsSignatures(final Env<AttrContext> env, final JCClassDecl tree) {
-        annotate.validate(new Runnable() { //validate annotations
-            @Override
-            public void run() {
-                JavaFileObject oldSource = log.useSource(env.toplevel.sourcefile);
-
-                try {
-                    attr.validateTypeAnnotations(tree, true);
-                } finally {
-                    log.useSource(oldSource);
-                }
+        annotate.validate(() -> { //validate annotations
+            JavaFileObject oldSource = log.useSource(env.toplevel.sourcefile);
+            try {
+                attr.validateTypeAnnotations(tree, true);
+            } finally {
+                log.useSource(oldSource);
             }
         });
     }
@@ -243,6 +237,9 @@ public class TypeAnnotations {
             // TYPE_PARAMETER doesn't aid in distinguishing between
             // Type annotations and declaration annotations on an
             // Element
+        } else if (e.value.name == names.MODULE) {
+            if (s.kind == MDL)
+                return AnnotationType.DECLARATION;
         } else {
             Assert.error("annotationTargetType(): unrecognized Attribute name " + e.value.name +
                     " (" + e.value.name.getClass() + ")");
@@ -356,7 +353,7 @@ public class TypeAnnotations {
 
             if (sym.getKind() == ElementKind.METHOD) {
                 sym.type.asMethodType().restype = type;
-            } else if (sym.getKind() == ElementKind.PARAMETER) {
+            } else if (sym.getKind() == ElementKind.PARAMETER && currentLambda == null) {
                 sym.type = type;
                 if (sym.getQualifiedName().equals(names._this)) {
                     sym.owner.type.asMethodType().recvtype = type;
@@ -388,8 +385,21 @@ public class TypeAnnotations {
                 sym.getKind() == ElementKind.RESOURCE_VARIABLE ||
                 sym.getKind() == ElementKind.EXCEPTION_PARAMETER) {
                 // Make sure all type annotations from the symbol are also
-                // on the owner.
-                sym.owner.appendUniqueTypeAttributes(sym.getRawTypeAttributes());
+                // on the owner. If the owner is an initializer block, propagate
+                // to the type.
+                final long ownerFlags = sym.owner.flags();
+                if ((ownerFlags & Flags.BLOCK) != 0) {
+                    // Store init and clinit type annotations with the ClassSymbol
+                    // to allow output in Gen.normalizeDefs.
+                    ClassSymbol cs = (ClassSymbol) sym.owner.owner;
+                    if ((ownerFlags & Flags.STATIC) != 0) {
+                        cs.appendClassInitTypeAttributes(typeAnnotations);
+                    } else {
+                        cs.appendInitTypeAttributes(typeAnnotations);
+                    }
+                } else {
+                    sym.owner.appendUniqueTypeAttributes(sym.getRawTypeAttributes());
+                }
             }
         }
 
@@ -642,6 +652,11 @@ public class TypeAnnotations {
 
                 @Override
                 public Type visitTypeVar(TypeVar t, List<TypeCompound> s) {
+                    return t.annotatedType(s);
+                }
+
+                @Override
+                public Type visitModuleType(ModuleType t, List<TypeCompound> s) {
                     return t.annotatedType(s);
                 }
 
@@ -1011,7 +1026,7 @@ public class TypeAnnotations {
                 case METHOD_INVOCATION: {
                     JCMethodInvocation invocation = (JCMethodInvocation)frame;
                     if (!invocation.typeargs.contains(tree)) {
-                        throw new AssertionError("{" + tree + "} is not an argument in the invocation: " + invocation);
+                        return TypeAnnotationPosition.unknown;
                     }
                     MethodSymbol exsym = (MethodSymbol) TreeInfo.symbol(invocation.getMethodSelect());
                     final int type_index = invocation.typeargs.indexOf(tree);
@@ -1320,7 +1335,9 @@ public class TypeAnnotations {
 
             scan(tree.encl);
             scan(tree.typeargs);
-            scan(tree.clazz);
+            if (tree.def == null) {
+                scan(tree.clazz);
+            } // else super type will already have been scanned in the context of the anonymous class.
             scan(tree.args);
 
             // The class body will already be scanned.

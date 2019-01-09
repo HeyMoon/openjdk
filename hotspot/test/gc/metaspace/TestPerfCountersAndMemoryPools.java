@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,26 +24,26 @@
 import java.util.List;
 import java.lang.management.*;
 
-import jdk.test.lib.*;
+import jdk.test.lib.Platform;
 import static jdk.test.lib.Asserts.*;
 
 /* @test TestPerfCountersAndMemoryPools
  * @bug 8023476
- * @library /testlibrary
- * @requires vm.gc=="Serial" | vm.gc=="null"
+ * @library /test/lib
+ * @requires vm.gc.Serial
  * @summary Tests that a MemoryPoolMXBeans and PerfCounters for metaspace
  *          report the same data.
- * @modules java.base/sun.misc
+ * @modules java.base/jdk.internal.misc
  *          java.management
- *          jdk.jvmstat/sun.jvmstat.monitor
- * @run main/othervm -XX:+IgnoreUnrecognizedVMOptions -XX:-UseCompressedOops -XX:-UseCompressedKlassPointers -XX:+UseSerialGC -XX:+UsePerfData -Xint TestPerfCountersAndMemoryPools
- * @run main/othervm -XX:+IgnoreUnrecognizedVMOptions -XX:+UseCompressedOops -XX:+UseCompressedKlassPointers -XX:+UseSerialGC -XX:+UsePerfData -Xint TestPerfCountersAndMemoryPools
+ *          jdk.internal.jvmstat/sun.jvmstat.monitor
+ * @run main/othervm -XX:+IgnoreUnrecognizedVMOptions -XX:-UseCompressedOops -XX:-UseCompressedClassPointers -XX:+UseSerialGC -XX:+UsePerfData -Xint TestPerfCountersAndMemoryPools
+ * @run main/othervm -XX:+IgnoreUnrecognizedVMOptions -XX:+UseCompressedOops -XX:+UseCompressedClassPointers -XX:+UseSerialGC -XX:+UsePerfData -Xint TestPerfCountersAndMemoryPools
  */
 public class TestPerfCountersAndMemoryPools {
     public static void main(String[] args) throws Exception {
         checkMemoryUsage("Metaspace", "sun.gc.metaspace");
 
-        if (InputArguments.contains("-XX:+UseCompressedKlassPointers") && Platform.is64bit()) {
+        if (InputArguments.contains("-XX:+UseCompressedClassPointers") && Platform.is64bit()) {
             checkMemoryUsage("Compressed Class Space", "sun.gc.compressedclassspace");
         }
     }
@@ -64,16 +64,24 @@ public class TestPerfCountersAndMemoryPools {
         throws Exception {
         MemoryPoolMXBean pool = getMemoryPool(memoryPoolName);
 
+        // First, call all the methods to let them allocate their own slab of metadata
+        getMinCapacity(perfNS);
+        getCapacity(perfNS);
+        getUsed(perfNS);
+        pool.getUsage().getInit();
+        pool.getUsage().getUsed();
+        pool.getUsage().getCommitted();
+        assertEQ(1L, 1L, "Make assert load");
+
         // Must do a GC to update performance counters
         System.gc();
-        assertEQ(getMinCapacity(perfNS), pool.getUsage().getInit());
+        assertEQ(getMinCapacity(perfNS), pool.getUsage().getInit(), "MinCapacity out of sync");
 
-        // Must do a second GC to update the perfomance counters again, since
-        // the call pool.getUsage().getInit() could have allocated some
-        // metadata.
+        // Adding a second GC due to metadata allocations caused by getting the
+        // initial size from the pool. This is needed when running with -Xcomp.
         System.gc();
-        assertEQ(getUsed(perfNS), pool.getUsage().getUsed());
-        assertEQ(getCapacity(perfNS), pool.getUsage().getCommitted());
+        assertEQ(getUsed(perfNS), pool.getUsage().getUsed(), "Used out of sync");
+        assertEQ(getCapacity(perfNS), pool.getUsage().getCommitted(), "Committed out of sync");
     }
 
     private static long getMinCapacity(String ns) throws Exception {

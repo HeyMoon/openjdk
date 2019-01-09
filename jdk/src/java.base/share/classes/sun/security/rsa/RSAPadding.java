@@ -85,13 +85,13 @@ public final class RSAPadding {
     // file. Do not change without coordinating the update
 
     // PKCS#1 v1.5 padding, blocktype 1 (signing)
-    public final static int PAD_BLOCKTYPE_1    = 1;
+    public static final int PAD_BLOCKTYPE_1    = 1;
     // PKCS#1 v1.5 padding, blocktype 2 (encryption)
-    public final static int PAD_BLOCKTYPE_2    = 2;
+    public static final int PAD_BLOCKTYPE_2    = 2;
     // nopadding. Does not do anything, but allows simpler RSACipher code
-    public final static int PAD_NONE           = 3;
+    public static final int PAD_NONE           = 3;
     // PKCS#1 v2.1 OAEP padding
-    public final static int PAD_OAEP_MGF1 = 4;
+    public static final int PAD_OAEP_MGF1 = 4;
 
     // type, one of PAD_*
     private final int type;
@@ -253,7 +253,8 @@ public final class RSAPadding {
     public byte[] pad(byte[] data) throws BadPaddingException {
         if (data.length > maxDataSize) {
             throw new BadPaddingException("Data must be shorter than "
-                + (maxDataSize + 1) + " bytes");
+                + (maxDataSize + 1) + " bytes but received "
+                + data.length + " bytes.");
         }
         switch (type) {
         case PAD_NONE:
@@ -281,7 +282,9 @@ public final class RSAPadding {
      */
     public byte[] unpad(byte[] padded) throws BadPaddingException {
         if (padded.length != paddedSize) {
-            throw new BadPaddingException("Decryption error");
+            throw new BadPaddingException("Decryption error." +
+                "The padded array length (" + padded.length +
+                ") is not the specified padded size (" + paddedSize + ")");
         }
         switch (type) {
         case PAD_NONE:
@@ -319,18 +322,17 @@ public final class RSAPadding {
             }
             // generate non-zero padding bytes
             // use a buffer to reduce calls to SecureRandom
-            byte[] r = new byte[64];
-            int i = -1;
-            while (psSize-- > 0) {
-                int b;
-                do {
-                    if (i < 0) {
-                        random.nextBytes(r);
-                        i = r.length - 1;
+            while (psSize > 0) {
+                // extra bytes to avoid zero bytes,
+                // number of zero bytes <= 4 in 98% cases
+                byte[] r = new byte[psSize + 4];
+                random.nextBytes(r);
+                for (int i = 0; i < r.length && psSize > 0; i++) {
+                    if (r[i] != 0) {
+                        padded[k++] = r[i];
+                        psSize--;
                     }
-                    b = r[i--] & 0xff;
-                } while (b == 0);
-                padded[k++] = (byte)b;
+                }
             }
         }
         return padded;

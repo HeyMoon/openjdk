@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,15 +23,19 @@
 
 package javax.xml.parsers.ptests;
 
+import static javax.xml.parsers.ptests.ParserTestConst.XML_DIR;
+import static jaxp.library.JAXPTestUtilities.tryRunWithTmpPermission;
+
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FilePermission;
 import java.io.IOException;
+import java.util.PropertyPermission;
+
 import javax.xml.parsers.SAXParser;
 import javax.xml.parsers.SAXParserFactory;
-import static javax.xml.parsers.ptests.ParserTestConst.XML_DIR;
-import jaxp.library.JAXPFileReadOnlyBaseTest;
+
 import org.testng.annotations.DataProvider;
+import org.testng.annotations.Listeners;
 import org.testng.annotations.Test;
 import org.xml.sax.HandlerBase;
 import org.xml.sax.InputSource;
@@ -41,7 +45,14 @@ import org.xml.sax.helpers.DefaultHandler;
 /**
  * Class contains the test cases for SAXParser API
  */
-public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
+/*
+ * @test
+ * @library /javax/xml/jaxp/libs
+ * @run testng/othervm -DrunSecMngr=true javax.xml.parsers.ptests.SAXParserTest
+ * @run testng/othervm javax.xml.parsers.ptests.SAXParserTest
+ */
+@Listeners({jaxp.library.FilePolicy.class})
+public class SAXParserTest {
     /**
      * Provide SAXParser.
      *
@@ -92,13 +103,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
     @Test(expectedExceptions = { SAXException.class },
             dataProvider = "parser-provider")
     public void testParse03(SAXParser saxparser) throws Exception {
-        String workingDir = getSystemProperty("user.dir");
-        setPermissions(new FilePermission(workingDir, "read"));
-        try {
-            saxparser.parse("", new HandlerBase());
-        } finally {
-            setPermissions();
-        }
+        saxparser.parse("", new HandlerBase());
     }
 
     /**
@@ -124,13 +129,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      */
     @Test(expectedExceptions = SAXException.class, dataProvider = "parser-provider")
     public void testParse05(SAXParser saxparser) throws Exception {
-        String workingDir = getSystemProperty("user.dir");
-        setPermissions(new FilePermission(workingDir, "read"));
-        try {
-            saxparser.parse(new File(""), new HandlerBase());
-        } finally {
-            setPermissions();
-        }
+        tryRunWithTmpPermission(() -> saxparser.parse(new File(""), new HandlerBase()), new PropertyPermission("user.dir", "read"));
     }
 
     /**
@@ -176,23 +175,17 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
     }
 
     /**
-     * Test with non-existence URI, parsing should fail and throw
-     * SAXException or IOException.
+     * Test with non-existence URI, parsing should fail and throw SAXException
+     * or IOException.
      *
-     * @param saxparser a SAXParser instance.
-     * @throws Exception If any errors occur.
+     * @param saxparser
+     *            a SAXParser instance.
+     * @throws Exception
+     *             If any errors occur.
      */
-    @Test(expectedExceptions = { SAXException.class, IOException.class },
-            dataProvider = "parser-provider")
+    @Test(expectedExceptions = { SAXException.class, IOException.class }, dataProvider = "parser-provider")
     public void testParse09(SAXParser saxparser) throws Exception {
-        String workingDir = getSystemProperty("user.dir");
-        setPermissions(new FilePermission(workingDir + "/../-", "read"));
-        String uri = " ";
-        try {
-            saxparser.parse(uri, new DefaultHandler());
-        } finally {
-            setPermissions();
-        }
+        saxparser.parse("no-such-file", new DefaultHandler());
     }
 
     /**
@@ -204,14 +197,8 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      */
     @Test(expectedExceptions = SAXException.class, dataProvider = "parser-provider")
     public void testParse10(SAXParser saxparser) throws Exception {
-        String workingDir = getSystemProperty("user.dir");
-        setPermissions(new FilePermission(workingDir, "read"));
         File file = new File("");
-        try {
-            saxparser.parse(file, new DefaultHandler());
-        } finally {
-            setPermissions();
-        }
+        tryRunWithTmpPermission(() -> saxparser.parse(file, new DefaultHandler()), new PropertyPermission("user.dir", "read"));
     }
 
     /**
@@ -248,7 +235,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, expectedExceptions = SAXException.class,
+    @Test(expectedExceptions = SAXException.class,
             dataProvider = "parser-provider")
     public void testParse13(SAXParser saxparser) throws Exception {
         try (FileInputStream instream = new FileInputStream(new File(
@@ -263,7 +250,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, dataProvider = "parser-provider")
+    @Test(dataProvider = "parser-provider")
     public void testParse14(SAXParser saxparser) throws Exception {
         saxparser.parse(new File(XML_DIR, "parsertest.xml"),
                 new HandlerBase());
@@ -276,7 +263,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, dataProvider = "parser-provider")
+    @Test(dataProvider = "parser-provider")
     public void testParse15(SAXParser saxparser) throws Exception {
         try (FileInputStream instream = new FileInputStream(new File(XML_DIR,
                 "correct.xml"))) {
@@ -291,7 +278,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, dataProvider = "parser-provider")
+    @Test(dataProvider = "parser-provider")
     public void testParse16(SAXParser saxparser) throws Exception {
         try (FileInputStream instream = new FileInputStream(
                 new File(XML_DIR, "parsertest.xml"))) {
@@ -306,7 +293,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, dataProvider = "parser-provider")
+    @Test(dataProvider = "parser-provider")
     public void testParse17(SAXParser saxparser) throws Exception {
         File file = new File(XML_DIR, "correct.xml");
         saxparser.parse(file.toURI().toASCIIString(), new HandlerBase());
@@ -319,7 +306,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, expectedExceptions = SAXException.class,
+    @Test(expectedExceptions = SAXException.class,
             dataProvider = "parser-provider")
     public void testParse18(SAXParser saxparser) throws Exception {
         saxparser.parse(new File(XML_DIR, "valid.xml"), new HandlerBase());
@@ -332,7 +319,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, dataProvider = "parser-provider")
+    @Test(dataProvider = "parser-provider")
     public void testParse19(SAXParser saxparser) throws Exception {
         saxparser.parse(new File(XML_DIR, "correct.xml"), new HandlerBase());
     }
@@ -344,7 +331,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, expectedExceptions = SAXException.class,
+    @Test(expectedExceptions = SAXException.class,
             dataProvider = "parser-provider")
     public void testParse20(SAXParser saxparser) throws Exception {
         try(FileInputStream instream = new FileInputStream(new File(XML_DIR,
@@ -360,7 +347,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, dataProvider = "parser-provider")
+    @Test(dataProvider = "parser-provider")
     public void testParse21(SAXParser saxparser) throws Exception {
         try (FileInputStream instream = new FileInputStream(new File(XML_DIR,
                 "correct.xml"))) {
@@ -375,7 +362,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, expectedExceptions = SAXException.class,
+    @Test(expectedExceptions = SAXException.class,
             dataProvider = "parser-provider")
     public void testParse22(SAXParser saxparser) throws Exception {
         try (FileInputStream instream = new FileInputStream(
@@ -391,7 +378,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, dataProvider = "parser-provider")
+    @Test(dataProvider = "parser-provider")
     public void testParse23(SAXParser saxparser) throws Exception {
         DefaultHandler handler = new DefaultHandler();
         saxparser.parse(new File(XML_DIR, "parsertest.xml"), handler);
@@ -404,7 +391,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, dataProvider = "parser-provider")
+    @Test(dataProvider = "parser-provider")
     public void testParse24(SAXParser saxparser) throws Exception {
         try (FileInputStream instream = new FileInputStream(new File(XML_DIR,
                 "correct.xml"))) {
@@ -420,7 +407,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, dataProvider = "parser-provider")
+    @Test(dataProvider = "parser-provider")
     public void testParse25(SAXParser saxparser) throws Exception {
         try (FileInputStream instream = new FileInputStream(
                 new File(XML_DIR, "parsertest.xml"))) {
@@ -435,7 +422,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, dataProvider = "parser-provider")
+    @Test(dataProvider = "parser-provider")
     public void testParse26(SAXParser saxparser) throws Exception {
         File file = new File(XML_DIR, "correct.xml");
         saxparser.parse(file.toURI().toASCIIString(), new DefaultHandler());
@@ -448,7 +435,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, expectedExceptions = SAXException.class,
+    @Test(expectedExceptions = SAXException.class,
             dataProvider = "parser-provider")
     public void testParse27(SAXParser saxparser) throws Exception {
         saxparser.parse(new File(XML_DIR, "valid.xml"), new DefaultHandler());
@@ -461,7 +448,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, dataProvider = "parser-provider")
+    @Test(dataProvider = "parser-provider")
     public void testParse28(SAXParser saxparser) throws Exception {
         saxparser.parse(new File(XML_DIR, "correct.xml"), new DefaultHandler());
     }
@@ -472,7 +459,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, expectedExceptions = SAXException.class,
+    @Test(expectedExceptions = SAXException.class,
             dataProvider = "parser-provider")
     public void testParse29(SAXParser saxparser) throws Exception {
         try (FileInputStream instream = new FileInputStream(
@@ -487,7 +474,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      * @param saxparser a SAXParser instance.
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"}, dataProvider = "parser-provider")
+    @Test(dataProvider = "parser-provider")
     public void testParse30(SAXParser saxparser) throws Exception {
         try (FileInputStream instream = new FileInputStream(
                 new File(XML_DIR, "correct.xml"))) {
@@ -500,7 +487,7 @@ public class SAXParserTest extends JAXPFileReadOnlyBaseTest {
      *
      * @throws Exception If any errors occur.
      */
-    @Test(groups = {"readLocalFiles"})
+    @Test
     public void testParse31() throws Exception {
         try (FileInputStream instream = new FileInputStream(
                 new File(XML_DIR, "ns4.xml"))) {

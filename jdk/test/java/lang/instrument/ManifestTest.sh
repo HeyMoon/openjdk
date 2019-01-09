@@ -26,7 +26,7 @@
 # @summary JLI JAR manifest processing should ignore leading and trailing white space.
 # @author Daniel D. Daugherty
 #
-# @modules java.instrument
+# @key intermittent
 # @run build ManifestTestApp ExampleForBootClassPath
 # @run shell/timeout=900 ManifestTest.sh
 #

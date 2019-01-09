@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -57,9 +57,7 @@ import com.sun.imageio.plugins.common.I18N;
  * a WBMP format.
  *
  * The encoding process may clip, subsample using the parameters
- * specified in the <code>ImageWriteParam</code>.
- *
- * @see com.sun.media.imageio.plugins.WBMPImageWriteParam
+ * specified in the {@code ImageWriteParam}.
  */
 public class WBMPImageWriter extends ImageWriter {
     /** The output stream to write into */
@@ -92,8 +90,8 @@ public class WBMPImageWriter extends ImageWriter {
         return multiBytes;
     }
 
-    /** Constructs <code>WBMPImageWriter</code> based on the provided
-     *  <code>ImageWriterSpi</code>.
+    /** Constructs {@code WBMPImageWriter} based on the provided
+     *  {@code ImageWriterSpi}.
      */
     public WBMPImageWriter(ImageWriterSpi originator) {
         super(originator);

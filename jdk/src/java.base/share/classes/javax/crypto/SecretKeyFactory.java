@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,7 +38,7 @@ import sun.security.jca.GetInstance.Instance;
  * This class represents a factory for secret keys.
  *
  * <P> Key factories are used to convert <I>keys</I> (opaque
- * cryptographic keys of type <code>Key</code>) into <I>key specifications</I>
+ * cryptographic keys of type {@code Key}) into <I>key specifications</I>
  * (transparent representations of the underlying key material), and vice
  * versa.
  * Secret key factories operate only on secret (symmetric) keys.
@@ -53,21 +53,21 @@ import sun.security.jca.GetInstance.Instance;
  * {@link #getKeySpec(javax.crypto.SecretKey, java.lang.Class) getKeySpec}
  * methods.
  * For example, the DES secret-key factory supplied by the "SunJCE" provider
- * supports <code>DESKeySpec</code> as a transparent representation of DES
+ * supports {@code DESKeySpec} as a transparent representation of DES
  * keys, and that provider's secret-key factory for Triple DES keys supports
- * <code>DESedeKeySpec</code> as a transparent representation of Triple DES
+ * {@code DESedeKeySpec} as a transparent representation of Triple DES
  * keys.
  *
  * <p> Every implementation of the Java platform is required to support the
- * following standard <code>SecretKeyFactory</code> algorithms:
+ * following standard {@code SecretKeyFactory} algorithms:
  * <ul>
- * <li><tt>DES</tt></li>
- * <li><tt>DESede</tt></li>
+ * <li>{@code DES}</li>
+ * <li>{@code DESede}</li>
  * </ul>
  * These algorithms are described in the <a href=
- * "{@docRoot}/../technotes/guides/security/StandardNames.html#SecretKeyFactory">
+ * "{@docRoot}/../specs/security/standard-names.html#secretkeyfactory-algorithms">
  * SecretKeyFactory section</a> of the
- * Java Cryptography Architecture Standard Algorithm Name Documentation.
+ * Java Security Standard Algorithm Names Specification.
  * Consult the release documentation for your implementation to see if any
  * other algorithms are supported.
  *
@@ -125,7 +125,7 @@ public class SecretKeyFactory {
     }
 
     /**
-     * Returns a <code>SecretKeyFactory</code> object that converts
+     * Returns a {@code SecretKeyFactory} object that converts
      * secret keys of the specified algorithm.
      *
      * <p> This method traverses the list of registered security Providers,
@@ -137,31 +137,39 @@ public class SecretKeyFactory {
      * <p> Note that the list of registered providers may be retrieved via
      * the {@link Security#getProviders() Security.getProviders()} method.
      *
+     * @implNote
+     * The JDK Reference Implementation additionally uses the
+     * {@code jdk.security.provider.preferred}
+     * {@link Security#getProperty(String) Security} property to determine
+     * the preferred provider order for the specified algorithm. This
+     * may be different than the order of providers returned by
+     * {@link Security#getProviders() Security.getProviders()}.
+     *
      * @param algorithm the standard name of the requested secret-key
      * algorithm.
      * See the SecretKeyFactory section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#SecretKeyFactory">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#secretkeyfactory-algorithms">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard algorithm names.
      *
-     * @return the new <code>SecretKeyFactory</code> object.
+     * @return the new {@code SecretKeyFactory} object
      *
-     * @exception NullPointerException if the specified algorithm
-     *          is null.
+     * @throws NoSuchAlgorithmException if no {@code Provider} supports a
+     *         {@code SecretKeyFactorySpi} implementation for the
+     *         specified algorithm
      *
-     * @exception NoSuchAlgorithmException if no Provider supports a
-     *          SecretKeyFactorySpi implementation for the
-     *          specified algorithm.
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final SecretKeyFactory getInstance(String algorithm)
             throws NoSuchAlgorithmException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         return new SecretKeyFactory(algorithm);
     }
 
     /**
-     * Returns a <code>SecretKeyFactory</code> object that converts
+     * Returns a {@code SecretKeyFactory} object that converts
      * secret keys of the specified algorithm.
      *
      * <p> A new SecretKeyFactory object encapsulating the
@@ -175,32 +183,32 @@ public class SecretKeyFactory {
      * @param algorithm the standard name of the requested secret-key
      * algorithm.
      * See the SecretKeyFactory section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#SecretKeyFactory">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#secretkeyfactory-algorithms">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard algorithm names.
      *
      * @param provider the name of the provider.
      *
-     * @return the new <code>SecretKeyFactory</code> object.
+     * @return the new {@code SecretKeyFactory} object
      *
-     * @exception NoSuchAlgorithmException if a SecretKeyFactorySpi
-     *          implementation for the specified algorithm is not
-     *          available from the specified provider.
+     * @throws IllegalArgumentException if the {@code provider}
+     *         is {@code null} or empty
      *
-     * @exception NullPointerException if the specified algorithm
-     *          is null.
+     * @throws NoSuchAlgorithmException if a {@code SecretKeyFactorySpi}
+     *         implementation for the specified algorithm is not
+     *         available from the specified provider
      *
      * @throws NoSuchProviderException if the specified provider is not
-     *          registered in the security provider list.
+     *         registered in the security provider list
      *
-     * @exception IllegalArgumentException if the <code>provider</code>
-     *          is null or empty.
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final SecretKeyFactory getInstance(String algorithm,
             String provider) throws NoSuchAlgorithmException,
             NoSuchProviderException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         Instance instance = JceSecurity.getInstance("SecretKeyFactory",
                 SecretKeyFactorySpi.class, algorithm, provider);
         return new SecretKeyFactory((SecretKeyFactorySpi)instance.impl,
@@ -208,7 +216,7 @@ public class SecretKeyFactory {
     }
 
     /**
-     * Returns a <code>SecretKeyFactory</code> object that converts
+     * Returns a {@code SecretKeyFactory} object that converts
      * secret keys of the specified algorithm.
      *
      * <p> A new SecretKeyFactory object encapsulating the
@@ -219,28 +227,28 @@ public class SecretKeyFactory {
      * @param algorithm the standard name of the requested secret-key
      * algorithm.
      * See the SecretKeyFactory section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#SecretKeyFactory">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#secretkeyfactory-algorithms">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard algorithm names.
      *
      * @param provider the provider.
      *
-     * @return the new <code>SecretKeyFactory</code> object.
+     * @return the new {@code SecretKeyFactory} object
      *
-     * @exception NullPointerException if the specified algorithm
-     * is null.
+     * @throws IllegalArgumentException if the {@code provider}
+     *         is {@code null}
      *
-     * @exception NoSuchAlgorithmException if a SecretKeyFactorySpi
-     *          implementation for the specified algorithm is not available
-     *          from the specified Provider object.
+     * @throws NoSuchAlgorithmException if a {@code SecretKeyFactorySpi}
+     *         implementation for the specified algorithm is not available
+     *         from the specified {@code Provider} object
      *
-     * @exception IllegalArgumentException if the <code>provider</code>
-     *          is null.
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final SecretKeyFactory getInstance(String algorithm,
             Provider provider) throws NoSuchAlgorithmException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         Instance instance = JceSecurity.getInstance("SecretKeyFactory",
                 SecretKeyFactorySpi.class, algorithm, provider);
         return new SecretKeyFactory((SecretKeyFactorySpi)instance.impl,
@@ -248,9 +256,9 @@ public class SecretKeyFactory {
     }
 
     /**
-     * Returns the provider of this <code>SecretKeyFactory</code> object.
+     * Returns the provider of this {@code SecretKeyFactory} object.
      *
-     * @return the provider of this <code>SecretKeyFactory</code> object
+     * @return the provider of this {@code SecretKeyFactory} object
      */
     public final Provider getProvider() {
         synchronized (lock) {
@@ -261,13 +269,13 @@ public class SecretKeyFactory {
     }
 
     /**
-     * Returns the algorithm name of this <code>SecretKeyFactory</code> object.
+     * Returns the algorithm name of this {@code SecretKeyFactory} object.
      *
      * <p>This is the same name that was specified in one of the
-     * <code>getInstance</code> calls that created this
-     * <code>SecretKeyFactory</code> object.
+     * {@code getInstance} calls that created this
+     * {@code SecretKeyFactory} object.
      *
-     * @return the algorithm name of this <code>SecretKeyFactory</code>
+     * @return the algorithm name of this {@code SecretKeyFactory}
      * object.
      */
     public final String getAlgorithm() {
@@ -314,7 +322,7 @@ public class SecretKeyFactory {
     }
 
     /**
-     * Generates a <code>SecretKey</code> object from the provided key
+     * Generates a {@code SecretKey} object from the provided key
      * specification (key material).
      *
      * @param keySpec the specification (key material) of the secret key
@@ -361,9 +369,9 @@ public class SecretKeyFactory {
      *
      * @exception InvalidKeySpecException if the requested key specification is
      * inappropriate for the given key (e.g., the algorithms associated with
-     * <code>key</code> and <code>keySpec</code> do not match, or
-     * <code>key</code> references a key on a cryptographic hardware device
-     * whereas <code>keySpec</code> is the specification of a software-based
+     * {@code key} and {@code keySpec} do not match, or
+     * {@code key} references a key on a cryptographic hardware device
+     * whereas {@code keySpec} is the specification of a software-based
      * key), or the given key cannot be dealt with
      * (e.g., the given key has an algorithm or format not supported by this
      * secret-key factory).

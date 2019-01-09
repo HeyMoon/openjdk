@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,9 +25,11 @@
 
 package java.lang.instrument;
 
-import  java.io.File;
-import  java.io.IOException;
-import  java.util.jar.JarFile;
+import java.security.ProtectionDomain;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.jar.JarFile;
 
 /*
  * Copyright 2003 Wily Technology, Inc.
@@ -74,9 +76,8 @@ public interface Instrumentation {
      * The transformer is called when classes are loaded, when they are
      * {@linkplain #redefineClasses redefined}. and if <code>canRetransform</code> is true,
      * when they are {@linkplain #retransformClasses retransformed}.
-     * See {@link java.lang.instrument.ClassFileTransformer#transform
-     * ClassFileTransformer.transform} for the order
-     * of transform calls.
+     * {@link ClassFileTransformer} defines the order of transform calls.
+     *
      * If a transformer throws
      * an exception during execution, the JVM will still call the other registered
      * transformers in order. The same transformer may be added more than once,
@@ -163,18 +164,16 @@ public interface Instrumentation {
      *    </li>
      *    <li>for each transformer that was added with <code>canRetransform</code>
      *      false, the bytes returned by
-     *      {@link java.lang.instrument.ClassFileTransformer#transform transform}
-     *      during the last class load or redefine are
+     *      {@link ClassFileTransformer#transform(Module,ClassLoader,String,Class,ProtectionDomain,byte[])
+     *      transform} during the last class load or redefine are
      *      reused as the output of the transformation; note that this is
      *      equivalent to reapplying the previous transformation, unaltered;
-     *      except that
-     *      {@link java.lang.instrument.ClassFileTransformer#transform transform}
-     *      is not called
+     *      except that {@code transform} method is not called.
      *    </li>
      *    <li>for each transformer that was added with <code>canRetransform</code>
      *      true, the
-     *      {@link java.lang.instrument.ClassFileTransformer#transform transform}
-     *      method is called in these transformers
+     *      {@link ClassFileTransformer#transform(Module,ClassLoader,String,Class,ProtectionDomain,byte[])
+     *      transform} method is called in these transformers
      *    </li>
      *    <li>the transformed class file bytes are installed as the new
      *      definition of the class
@@ -182,10 +181,9 @@ public interface Instrumentation {
      *  </ul>
      * <P>
      *
-     * The order of transformation is described in the
-     * {@link java.lang.instrument.ClassFileTransformer#transform transform} method.
-     * This same order is used in the automatic reapplication of retransformation
-     * incapable transforms.
+     * The order of transformation is described in {@link ClassFileTransformer}.
+     * This same order is used in the automatic reapplication of
+     * retransformation incapable transforms.
      * <P>
      *
      * The initial class file bytes represent the bytes passed to
@@ -347,7 +345,7 @@ public interface Instrumentation {
 
 
     /**
-     * Determines whether a class is modifiable by
+     * Tests whether a class is modifiable by
      * {@linkplain #retransformClasses retransformation}
      * or {@linkplain #redefineClasses redefinition}.
      * If a class is modifiable then this method returns <code>true</code>.
@@ -662,4 +660,84 @@ public interface Instrumentation {
      */
     void
     setNativeMethodPrefix(ClassFileTransformer transformer, String prefix);
+
+    /**
+     * Redefine a module to expand the set of modules that it reads, the set of
+     * packages that it exports or opens, or the services that it uses or
+     * provides. This method facilitates the instrumentation of code in named
+     * modules where that instrumentation requires changes to the set of modules
+     * that are read, the packages that are exported or open, or the services
+     * that are used or provided.
+     *
+     * <p> This method cannot reduce the set of modules that a module reads, nor
+     * reduce the set of packages that it exports or opens, nor reduce the set
+     * of services that it uses or provides. This method is a no-op when invoked
+     * to redefine an unnamed module. </p>
+     *
+     * <p> When expanding the services that a module uses or provides then the
+     * onus is on the agent to ensure that the service type will be accessible at
+     * each instrumentation site where the service type is used. This method
+     * does not check if the service type is a member of the module or in a
+     * package exported to the module by another module that it reads. </p>
+     *
+     * <p> The {@code extraExports} parameter is the map of additional packages
+     * to export. The {@code extraOpens} parameter is the map of additional
+     * packages to open. In both cases, the map key is the fully-qualified name
+     * of the package as defined in section 6.5.3 of
+     * <cite>The Java&trade; Language Specification </cite>, for example, {@code
+     * "java.lang"}. The map value is the non-empty set of modules that the
+     * package should be exported or opened to. </p>
+     *
+     * <p> The {@code extraProvides} parameter is the additional service providers
+     * for the module to provide. The map key is the service type. The map value
+     * is the non-empty list of implementation types, each of which is a member
+     * of the module and an implementation of the service. </p>
+     *
+     * <p> This method is safe for concurrent use and so allows multiple agents
+     * to instrument and update the same module at around the same time. </p>
+     *
+     * @param module the module to redefine
+     * @param extraReads the possibly-empty set of additional modules to read
+     * @param extraExports the possibly-empty map of additional packages to export
+     * @param extraOpens the possibly-empty map of additional packages to open
+     * @param extraUses the possibly-empty set of additional services to use
+     * @param extraProvides the possibly-empty map of additional services to provide
+     *
+     * @throws IllegalArgumentException
+     *         If {@code extraExports} or {@code extraOpens} contains a key
+     *         that is not a package in the module; if {@code extraExports} or
+     *         {@code extraOpens} maps a key to an empty set; if a value in the
+     *         {@code extraProvides} map contains a service provider type that
+     *         is not a member of the module or an implementation of the service;
+     *         or {@code extraProvides} maps a key to an empty list
+     * @throws UnmodifiableModuleException if the module cannot be modified
+     * @throws NullPointerException if any of the arguments are {@code null} or
+     *         any of the Sets or Maps contains a {@code null} key or value
+     *
+     * @see #isModifiableModule(Module)
+     * @since 9
+     * @spec JPMS
+     */
+    void redefineModule(Module module,
+                        Set<Module> extraReads,
+                        Map<String, Set<Module>> extraExports,
+                        Map<String, Set<Module>> extraOpens,
+                        Set<Class<?>> extraUses,
+                        Map<Class<?>, List<Class<?>>> extraProvides);
+
+    /**
+     * Tests whether a module can be modified with {@link #redefineModule
+     * redefineModule}. If a module is modifiable then this method returns
+     * {@code true}. If a module is not modifiable then this method returns
+     * {@code false}. This method always returns {@code true} when the module
+     * is an unnamed module (as redefining an unnamed module is a no-op).
+     *
+     * @param module the module to test if it can be modified
+     * @return {@code true} if the module is modifiable, otherwise {@code false}
+     * @throws NullPointerException if the module is {@code null}
+     *
+     * @since 9
+     * @spec JPMS
+     */
+    boolean isModifiableModule(Module module);
 }

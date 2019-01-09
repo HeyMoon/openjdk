@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,7 +31,6 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
-import java.io.PrintStream;
 import java.io.Writer;
 import java.net.URI;
 import java.util.ArrayList;
@@ -42,9 +41,9 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 
+import com.sun.tools.sjavac.comp.CompilationService;
 import com.sun.tools.sjavac.options.Options;
 import com.sun.tools.sjavac.pubapi.PubApi;
-import com.sun.tools.sjavac.server.Sjavac;
 
 /**
  * The clean properties transform should not be necessary.
@@ -64,10 +63,9 @@ public class CleanProperties implements Transformer {
         // Any extra information is ignored for clean properties.
     }
 
-    public boolean transform(Sjavac sjavac,
+    public boolean transform(CompilationService sjavac,
                              Map<String,Set<URI>> pkgSrcs,
                              Set<URI>             visibleSrcs,
-                             Map<URI,Set<String>> visibleClasses,
                              Map<String,Set<String>> oldPackageDependencies,
                              URI destRoot,
                              Map<String,Set<URI>>    packageArtifacts,
@@ -77,9 +75,7 @@ public class CleanProperties implements Transformer {
                              Map<String, PubApi> dependencyPublicApis,
                              int debugLevel,
                              boolean incremental,
-                             int numCores,
-                             PrintStream out,
-                             PrintStream err) {
+                             int numCores) {
         boolean rc = true;
         for (String pkgName : pkgSrcs.keySet()) {
             String pkgNameF = pkgName.replace('.',File.separatorChar);

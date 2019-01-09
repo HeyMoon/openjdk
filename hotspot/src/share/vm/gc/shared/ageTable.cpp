@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,18 +23,19 @@
  */
 
 #include "precompiled.hpp"
-#include "gc/shared/ageTable.hpp"
+#include "gc/shared/ageTable.inline.hpp"
+#include "gc/shared/ageTableTracer.hpp"
 #include "gc/shared/collectedHeap.hpp"
 #include "gc/shared/collectorPolicy.hpp"
-#include "gc/shared/gcPolicyCounters.hpp"
 #include "memory/resourceArea.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "logging/log.hpp"
+#include "oops/oop.inline.hpp"
 #include "utilities/copy.hpp"
 
-/* Copyright (c) 1992, 2015, Oracle and/or its affiliates, and Stanford University.
+/* Copyright (c) 1992, 2016, Oracle and/or its affiliates, and Stanford University.
    See the LICENSE file for license information. */
 
-ageTable::ageTable(bool global) {
+AgeTable::AgeTable(bool global) {
 
   clear();
 
@@ -61,31 +62,24 @@ ageTable::ageTable(bool global) {
   }
 }
 
-void ageTable::clear() {
+void AgeTable::clear() {
   for (size_t* p = sizes; p < sizes + table_size; ++p) {
     *p = 0;
   }
 }
 
-void ageTable::merge(ageTable* subTable) {
+void AgeTable::merge(AgeTable* subTable) {
   for (int i = 0; i < table_size; i++) {
     sizes[i]+= subTable->sizes[i];
   }
 }
 
-void ageTable::merge_par(ageTable* subTable) {
-  for (int i = 0; i < table_size; i++) {
-    Atomic::add_ptr(subTable->sizes[i], &sizes[i]);
-  }
-}
-
-uint ageTable::compute_tenuring_threshold(size_t survivor_capacity, GCPolicyCounters* gc_counters) {
-  size_t desired_survivor_size = (size_t)((((double) survivor_capacity)*TargetSurvivorRatio)/100);
+uint AgeTable::compute_tenuring_threshold(size_t desired_survivor_size) {
   uint result;
 
   if (AlwaysTenure || NeverTenure) {
     assert(MaxTenuringThreshold == 0 || MaxTenuringThreshold == markOopDesc::max_age + 1,
-        err_msg("MaxTenuringThreshold should be 0 or markOopDesc::max_age + 1, but is " UINTX_FORMAT, MaxTenuringThreshold));
+           "MaxTenuringThreshold should be 0 or markOopDesc::max_age + 1, but is " UINTX_FORMAT, MaxTenuringThreshold);
     result = MaxTenuringThreshold;
   } else {
     size_t total = 0;
@@ -101,36 +95,33 @@ uint ageTable::compute_tenuring_threshold(size_t survivor_capacity, GCPolicyCoun
     result = age < MaxTenuringThreshold ? age : MaxTenuringThreshold;
   }
 
-  if (PrintTenuringDistribution || UsePerfData) {
 
-    if (PrintTenuringDistribution) {
-      gclog_or_tty->cr();
-      gclog_or_tty->print_cr("Desired survivor size " SIZE_FORMAT " bytes, new threshold "
-        UINTX_FORMAT " (max threshold " UINTX_FORMAT ")",
-        desired_survivor_size*oopSize, (uintx) result, MaxTenuringThreshold);
-    }
+  log_debug(gc, age)("Desired survivor size " SIZE_FORMAT " bytes, new threshold " UINTX_FORMAT " (max threshold " UINTX_FORMAT ")",
+                     desired_survivor_size * oopSize, (uintx) result, MaxTenuringThreshold);
+
+  return result;
+}
+
+void AgeTable::print_age_table(uint tenuring_threshold) {
+  if (log_is_enabled(Trace, gc, age) || UsePerfData || AgeTableTracer::is_tenuring_distribution_event_enabled()) {
+    log_trace(gc, age)("Age table with threshold %u (max threshold " UINTX_FORMAT ")",
+                       tenuring_threshold, MaxTenuringThreshold);
 
     size_t total = 0;
     uint age = 1;
     while (age < table_size) {
-      total += sizes[age];
-      if (sizes[age] > 0) {
-        if (PrintTenuringDistribution) {
-          gclog_or_tty->print_cr("- age %3u: " SIZE_FORMAT_W(10) " bytes, " SIZE_FORMAT_W(10) " total",
-                                        age,    sizes[age]*oopSize,          total*oopSize);
-        }
+      size_t wordSize = sizes[age];
+      total += wordSize;
+      if (wordSize > 0) {
+        log_trace(gc, age)("- age %3u: " SIZE_FORMAT_W(10) " bytes, " SIZE_FORMAT_W(10) " total",
+                            age, wordSize * oopSize, total * oopSize);
       }
+      AgeTableTracer::send_tenuring_distribution_event(age, wordSize * oopSize);
       if (UsePerfData) {
-        _perf_sizes[age]->set_value(sizes[age]*oopSize);
+        _perf_sizes[age]->set_value(wordSize * oopSize);
       }
       age++;
     }
-    if (UsePerfData) {
-      gc_counters->tenuring_threshold()->set_value(result);
-      gc_counters->desired_survivor_size()->set_value(
-        desired_survivor_size*oopSize);
-    }
   }
-
-  return result;
 }
+

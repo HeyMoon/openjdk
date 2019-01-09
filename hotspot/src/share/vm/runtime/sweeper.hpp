@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,9 @@
 
 class WhiteBox;
 
+#include "code/codeCache.hpp"
 #include "utilities/ticks.hpp"
+
 // An NmethodSweeper is an incremental cleaner for:
 //    - cleanup inline caches
 //    - reclamation of nmethods
@@ -43,12 +45,12 @@ class WhiteBox;
 //     and sweep_code_cache() cannot execute at the same time.
 //     To reclaim memory, nmethods are first marked as 'not-entrant'. Methods can
 //     be made not-entrant by (i) the sweeper, (ii) deoptimization, (iii) dependency
-//     invalidation, and (iv) being replaced be a different method version (tiered
-//     compilation). Not-entrant nmethod cannot be called by Java threads, but they
-//     can still be active on the stack. To ensure that active nmethod are not reclaimed,
+//     invalidation, and (iv) being replaced by a different method version (tiered
+//     compilation). Not-entrant nmethods cannot be called by Java threads, but they
+//     can still be active on the stack. To ensure that active nmethods are not reclaimed,
 //     we have to wait until the next marking phase has completed. If a not-entrant
 //     nmethod was NOT marked as active, it can be converted to 'zombie' state. To safely
-//     remove the nmethod, all inline caches (IC) that point to the the nmethod must be
+//     remove the nmethod, all inline caches (IC) that point to the nmethod must be
 //     cleared. After that, the nmethod can be evicted from the code cache. Each nmethod's
 //     state change happens during separate sweeps. It may take at least 3 sweeps before an
 //     nmethod's space is freed.
@@ -58,14 +60,13 @@ class NMethodSweeper : public AllStatic {
   enum MethodStateChange {
     None,
     MadeZombie,
-    MarkedForReclamation,
     Flushed
   };
   static long      _traversals;                   // Stack scan count, also sweep ID.
   static long      _total_nof_code_cache_sweeps;  // Total number of full sweeps of the code cache
   static long      _time_counter;                 // Virtual time used to periodically invoke sweeper
   static long      _last_sweep;                   // Value of _time_counter when the last sweep happened
-  static NMethodIterator _current;                // Current nmethod
+  static CompiledMethodIterator _current;         // Current compiled method
   static int       _seen;                         // Nof. nmethod we have currently processed in current pass of CodeCache
 
   static volatile int  _sweep_started;            // Flag to control conc sweeper
@@ -74,7 +75,6 @@ class NMethodSweeper : public AllStatic {
   static volatile int _bytes_changed;             // Counts the total nmethod size if the nmethod changed from:
                                                   //   1) alive       -> not_entrant
                                                   //   2) not_entrant -> zombie
-                                                  //   3) zombie      -> marked_for_reclamation
   // Stat counters
   static long      _total_nof_methods_reclaimed;    // Accumulated nof methods flushed
   static long      _total_nof_c2_methods_reclaimed; // Accumulated nof C2-compiled methods flushed
@@ -88,8 +88,8 @@ class NMethodSweeper : public AllStatic {
 
   static Monitor*  _stat_lock;
 
-  static MethodStateChange process_nmethod(nmethod *nm);
-  static void              release_nmethod(nmethod* nm);
+  static MethodStateChange process_compiled_method(CompiledMethod *nm);
+  static void              release_compiled_method(CompiledMethod* nm);
 
   static void init_sweeper_log() NOT_DEBUG_RETURN;
   static bool wait_for_stack_scanning();
@@ -107,9 +107,8 @@ class NMethodSweeper : public AllStatic {
 
 
 #ifdef ASSERT
-  static bool is_sweeping(nmethod* which) { return _current.method() == which; }
   // Keep track of sweeper activity in the ring buffer
-  static void record_sweep(nmethod* nm, int line);
+  static void record_sweep(CompiledMethod* nm, int line);
   static void report_events(int id, address entry);
   static void report_events();
 #endif

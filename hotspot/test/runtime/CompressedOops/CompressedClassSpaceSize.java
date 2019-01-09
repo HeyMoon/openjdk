@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,12 +25,14 @@
  * @test
  * @bug 8022865
  * @summary Tests for the -XX:CompressedClassSpaceSize command line option
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  * @run main CompressedClassSpaceSize
  */
-import jdk.test.lib.*;
+import jdk.test.lib.Platform;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 
 public class CompressedClassSpaceSize {
 
@@ -64,7 +66,7 @@ public class CompressedClassSpaceSize {
             // Make sure the minimum size is set correctly and printed
             pb = ProcessTools.createJavaProcessBuilder("-XX:+UnlockDiagnosticVMOptions",
                                                        "-XX:CompressedClassSpaceSize=1m",
-                                                       "-XX:+PrintCompressedOopsMode",
+                                                       "-Xlog:gc+metaspace=trace",
                                                        "-version");
             output = new OutputAnalyzer(pb.start());
             output.shouldContain("Compressed class space size: 1048576")
@@ -74,7 +76,7 @@ public class CompressedClassSpaceSize {
             // Make sure the maximum size is set correctly and printed
             pb = ProcessTools.createJavaProcessBuilder("-XX:+UnlockDiagnosticVMOptions",
                                                        "-XX:CompressedClassSpaceSize=3g",
-                                                       "-XX:+PrintCompressedOopsMode",
+                                                       "-Xlog:gc+metaspace=trace",
                                                        "-version");
             output = new OutputAnalyzer(pb.start());
             output.shouldContain("Compressed class space size: 3221225472")

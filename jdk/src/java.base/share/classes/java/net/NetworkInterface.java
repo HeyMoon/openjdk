@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -130,7 +130,7 @@ public final class NetworkInterface {
      *
      * @return a Stream object with all or a subset of the InetAddresses
      * bound to this network interface
-     * @since 1.9
+     * @since 9
      */
     public Stream<InetAddress> inetAddresses() {
         return streamFromArray(getCheckedInetAddresses());
@@ -175,14 +175,16 @@ public final class NetworkInterface {
      */
     public java.util.List<InterfaceAddress> getInterfaceAddresses() {
         java.util.List<InterfaceAddress> lst = new java.util.ArrayList<>(1);
-        SecurityManager sec = System.getSecurityManager();
-        for (int j=0; j<bindings.length; j++) {
-            try {
-                if (sec != null) {
-                    sec.checkConnect(bindings[j].getAddress().getHostAddress(), -1);
-                }
-                lst.add(bindings[j]);
-            } catch (SecurityException e) { }
+        if (bindings != null) {
+            SecurityManager sec = System.getSecurityManager();
+            for (int j=0; j<bindings.length; j++) {
+                try {
+                    if (sec != null) {
+                        sec.checkConnect(bindings[j].getAddress().getHostAddress(), -1);
+                    }
+                    lst.add(bindings[j]);
+                } catch (SecurityException e) { }
+            }
         }
         return lst;
     }
@@ -208,7 +210,7 @@ public final class NetworkInterface {
      *
      * @return a Stream object with all of the subinterfaces
      * of this network interface
-     * @since 1.9
+     * @since 9
      */
     public Stream<NetworkInterface> subInterfaces() {
         return streamFromArray(childs);
@@ -335,15 +337,19 @@ public final class NetworkInterface {
      * {@link #getInetAddresses()} to obtain all IP addresses for this node
      *
      * @return an Enumeration of NetworkInterfaces found on this machine
-     * @exception  SocketException  if an I/O error occurs.
+     * @exception  SocketException  if an I/O error occurs,
+     *             or if the platform does not have at least one configured
+     *             network interface.
      * @see #networkInterfaces()
      */
     public static Enumeration<NetworkInterface> getNetworkInterfaces()
         throws SocketException {
         NetworkInterface[] netifs = getAll();
-        assert netifs != null && netifs.length > 0;
-
-        return enumerationFromArray(netifs);
+        if (netifs != null && netifs.length > 0) {
+            return enumerationFromArray(netifs);
+        } else {
+            throw new SocketException("No network interfaces configured");
+        }
     }
 
     /**
@@ -361,15 +367,19 @@ public final class NetworkInterface {
      * }</pre>
      *
      * @return a Stream of NetworkInterfaces found on this machine
-     * @exception  SocketException  if an I/O error occurs.
-     * @since 1.9
+     * @exception  SocketException  if an I/O error occurs,
+     *             or if the platform does not have at least one configured
+     *             network interface.
+     * @since 9
      */
     public static Stream<NetworkInterface> networkInterfaces()
         throws SocketException {
         NetworkInterface[] netifs = getAll();
-        assert netifs != null && netifs.length > 0;
-
-        return streamFromArray(netifs);
+        if (netifs != null && netifs.length > 0) {
+            return streamFromArray(netifs);
+        }  else {
+            throw new SocketException("No network interfaces configured");
+        }
     }
 
     private static <T> Enumeration<T> enumerationFromArray(T[] a) {
@@ -400,16 +410,16 @@ public final class NetworkInterface {
                 false);
     }
 
-    private native static NetworkInterface[] getAll()
+    private static native NetworkInterface[] getAll()
         throws SocketException;
 
-    private native static NetworkInterface getByName0(String name)
+    private static native NetworkInterface getByName0(String name)
         throws SocketException;
 
-    private native static NetworkInterface getByIndex0(int index)
+    private static native NetworkInterface getByIndex0(int index)
         throws SocketException;
 
-    private native static NetworkInterface getByInetAddress0(InetAddress addr)
+    private static native NetworkInterface getByInetAddress0(InetAddress addr)
         throws SocketException;
 
     /**
@@ -525,12 +535,12 @@ public final class NetworkInterface {
         return virtual;
     }
 
-    private native static boolean isUp0(String name, int ind) throws SocketException;
-    private native static boolean isLoopback0(String name, int ind) throws SocketException;
-    private native static boolean supportsMulticast0(String name, int ind) throws SocketException;
-    private native static boolean isP2P0(String name, int ind) throws SocketException;
-    private native static byte[] getMacAddr0(byte[] inAddr, String name, int ind) throws SocketException;
-    private native static int getMTU0(String name, int ind) throws SocketException;
+    private static native boolean isUp0(String name, int ind) throws SocketException;
+    private static native boolean isLoopback0(String name, int ind) throws SocketException;
+    private static native boolean supportsMulticast0(String name, int ind) throws SocketException;
+    private static native boolean isP2P0(String name, int ind) throws SocketException;
+    private static native byte[] getMacAddr0(byte[] inAddr, String name, int ind) throws SocketException;
+    private static native int getMTU0(String name, int ind) throws SocketException;
 
     /**
      * Compares this object against the specified object.

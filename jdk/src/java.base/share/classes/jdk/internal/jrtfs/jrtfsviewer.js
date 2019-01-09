@@ -25,6 +25,13 @@
  * questions.
  */
 
+/*
+ * @implNote This script needs to maintain JDK 8 source compatibility.
+ *
+ * It is used internally in the JDK to implement jimage/jrtfs access,
+ * but also compiled and delivered as part of the jrtfs.jar to support access
+ * to the jimage file provided by the shipped JDK by tools running on JDK 8.
+ */
 function usage() {
     print("Usage:");
     print("jdk9+: jjs -fx jrtfsviewer.js");
@@ -46,6 +53,7 @@ var FileSystems = Java.type("java.nio.file.FileSystems");
 var Files = Java.type("java.nio.file.Files");
 var System = Java.type("java.lang.System");
 var URI = Java.type("java.net.URI");
+var Collections = Java.type("java.util.Collections");
 
 // JavaFX classes used
 var StackPane = Java.type("javafx.scene.layout.StackPane");
@@ -93,7 +101,7 @@ function getJrtFileSystem() {
             print("did you miss specifying jrt-fs.jar with -cp option?");
             usage();
         }
-        return FileSystems.newFileSystem(uri, null, cls.classLoader);
+        return FileSystems.newFileSystem(uri, Collections.emptyMap(), cls.classLoader);
     }
 }
 

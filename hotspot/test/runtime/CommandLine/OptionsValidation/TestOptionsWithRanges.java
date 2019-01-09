@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,12 +24,12 @@
 /*
  * @test
  * @summary Test VM Options with ranges
- * @library /testlibrary /runtime/CommandLine/OptionsValidation/common
- * @modules java.base/sun.misc
+ * @library /test/lib /runtime/CommandLine/OptionsValidation/common
+ * @modules java.base/jdk.internal.misc
  *          java.management
- *          jdk.attach
- *          jdk.management/sun.tools.attach
- * @run main/othervm/timeout=600 TestOptionsWithRanges
+ *          jdk.attach/sun.tools.attach
+ *          jdk.internal.jvmstat/sun.jvmstat.monitor
+ * @run main/othervm/timeout=900 TestOptionsWithRanges
  */
 
 import java.util.ArrayList;
@@ -41,15 +41,92 @@ import optionsvalidation.JVMOptionsUtils;
 
 public class TestOptionsWithRanges {
 
+    private static Map<String, JVMOption> allOptionsAsMap;
+
+    private static void excludeTestMaxRange(String optionName) {
+        JVMOption option = allOptionsAsMap.get(optionName);
+
+        if (option != null) {
+            option.excludeTestMaxRange();
+        }
+    }
+
+    private static void excludeTestMinRange(String optionName) {
+        JVMOption option = allOptionsAsMap.get(optionName);
+
+        if (option != null) {
+            option.excludeTestMinRange();
+        }
+    }
+
+    private static void excludeTestRange(String optionName) {
+        allOptionsAsMap.remove(optionName);
+    }
+
+    private static void setAllowedExitCodes(String optionName, Integer... allowedExitCodes) {
+        JVMOption option = allOptionsAsMap.get(optionName);
+
+        if (option != null) {
+            option.setAllowedExitCodes(allowedExitCodes);
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         int failedTests;
-        Map<String, JVMOption> allOptionsAsMap = JVMOptionsUtils.getOptionsWithRangeAsMap();
         List<JVMOption> allOptions;
+
+        allOptionsAsMap = JVMOptionsUtils.getOptionsWithRangeAsMap(origin -> (!(origin.contains("develop") || origin.contains("notproduct"))));
+
+        /* Shared flags can cause JVM to exit with error code 2 */
+        setAllowedExitCodes("SharedReadWriteSize", 2);
+        setAllowedExitCodes("SharedReadOnlySize", 2);
+        setAllowedExitCodes("SharedMiscDataSize", 2);
+        setAllowedExitCodes("SharedMiscCodeSize", 2);
 
         /*
          * Remove CICompilerCount from testing because currently it can hang system
          */
-        allOptionsAsMap.remove("CICompilerCount");
+        excludeTestMaxRange("CICompilerCount");
+
+        /*
+         * Exclude MallocMaxTestWords as it is expected to exit VM at small values (>=0)
+         */
+        excludeTestMinRange("MallocMaxTestWords");
+
+        /*
+         * Exclude below options as their maximum value would consume too much memory
+         * and would affect other tests that run in parallel.
+         */
+        excludeTestMaxRange("ConcGCThreads");
+        excludeTestMaxRange("G1ConcRefinementThreads");
+        excludeTestMaxRange("G1RSetRegionEntries");
+        excludeTestMaxRange("G1RSetSparseRegionEntries");
+        excludeTestMaxRange("G1UpdateBufferSize");
+        excludeTestMaxRange("InitialBootClassLoaderMetaspaceSize");
+        excludeTestMaxRange("InitialHeapSize");
+        excludeTestMaxRange("MaxHeapSize");
+        excludeTestMaxRange("MaxRAM");
+        excludeTestMaxRange("NewSize");
+        excludeTestMaxRange("OldSize");
+        excludeTestMaxRange("ParallelGCThreads");
+
+        /*
+         * Remove parameters controlling the code cache. As these
+         * parameters have implications on the physical memory
+         * reserved by the VM, setting them to large values may hang
+         * the system and/or may cause concurrently executed tests to
+         * fail. These parameters are rigorously checked when the code
+         * cache is initialized (see
+         * hotspot/src/shared/vm/code/codeCache.cpp), therefore
+         * omitting testing for them does not pose a problem.
+         */
+        excludeTestMaxRange("InitialCodeCacheSize");
+        excludeTestMaxRange("CodeCacheMinimumUseSpace");
+        excludeTestMaxRange("ReservedCodeCacheSize");
+        excludeTestMaxRange("NonProfiledCodeHeapSize");
+        excludeTestMaxRange("ProfiledCodeHeapSize");
+        excludeTestMaxRange("NonNMethodCodeHeapSize");
+        excludeTestMaxRange("CodeCacheExpansionSize");
 
         allOptions = new ArrayList<>(allOptionsAsMap.values());
 

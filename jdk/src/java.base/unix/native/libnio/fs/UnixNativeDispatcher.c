@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,8 +29,6 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <unistd.h>
-#include <pwd.h>
-#include <grp.h>
 #include <errno.h>
 #include <dlfcn.h>
 #include <sys/types.h>
@@ -43,8 +41,19 @@
 #endif
 #include <sys/time.h>
 
+/* For POSIX-compliant getpwuid_r, getgrgid_r on Solaris */
+#if defined(__solaris__)
+#define _POSIX_PTHREAD_SEMANTICS
+#endif
+#include <pwd.h>
+#include <grp.h>
+
 #ifdef __solaris__
 #include <strings.h>
+#endif
+
+#ifdef __linux__
+#include <sys/syscall.h>
 #endif
 
 #if defined(__linux__) || defined(_AIX)
@@ -71,6 +80,12 @@
 #include "jlong.h"
 
 #include "sun_nio_fs_UnixNativeDispatcher.h"
+
+#if defined(_AIX)
+  #define DIR DIR64
+  #define opendir opendir64
+  #define closedir closedir64
+#endif
 
 /**
  * Size of password or group entry when not available via sysconf
@@ -152,14 +167,11 @@ static int fstatat64_wrapper(int dfd, const char *path,
 }
 #endif
 
-#if defined(__linux__) && defined(__x86_64__)
+#if defined(__linux__) && defined(_LP64) && defined(__NR_newfstatat)
 #define FSTATAT64_SYSCALL_AVAILABLE
 static int fstatat64_wrapper(int dfd, const char *path,
                              struct stat64 *statbuf, int flag)
 {
-    #ifndef __NR_newfstatat
-    #define __NR_newfstatat  262
-    #endif
     return syscall(__NR_newfstatat, dfd, path, statbuf, flag);
 }
 #endif
@@ -258,7 +270,11 @@ Java_sun_nio_fs_UnixNativeDispatcher_init(JNIEnv* env, jclass this)
     my_unlinkat_func = (unlinkat_func*) dlsym(RTLD_DEFAULT, "unlinkat");
     my_renameat_func = (renameat_func*) dlsym(RTLD_DEFAULT, "renameat");
     my_futimesat_func = (futimesat_func*) dlsym(RTLD_DEFAULT, "futimesat");
+#if defined(_AIX)
+    my_fdopendir_func = (fdopendir_func*) dlsym(RTLD_DEFAULT, "fdopendir64");
+#else
     my_fdopendir_func = (fdopendir_func*) dlsym(RTLD_DEFAULT, "fdopendir");
+#endif
 
 #if defined(FSTATAT64_SYSCALL_AVAILABLE)
     /* fstatat64 missing from glibc */
@@ -315,21 +331,15 @@ Java_sun_nio_fs_UnixNativeDispatcher_getcwd(JNIEnv* env, jclass this) {
 JNIEXPORT jbyteArray
 Java_sun_nio_fs_UnixNativeDispatcher_strerror(JNIEnv* env, jclass this, jint error)
 {
-    char* msg;
+    char tmpbuf[1024];
     jsize len;
     jbyteArray bytes;
 
-#ifdef _AIX
-    /* strerror() is not thread-safe on AIX so we have to use strerror_r() */
-    char buffer[256];
-    msg = (strerror_r((int)error, buffer, 256) == 0) ? buffer : "Error while calling strerror_r";
-#else
-    msg = strerror((int)error);
-#endif
-    len = strlen(msg);
+    getErrorString((int)errno, tmpbuf, sizeof(tmpbuf));
+    len = strlen(tmpbuf);
     bytes = (*env)->NewByteArray(env, len);
     if (bytes != NULL) {
-        (*env)->SetByteArrayRegion(env, bytes, 0, len, (jbyte*)msg);
+        (*env)->SetByteArrayRegion(env, bytes, 0, len, (jbyte*)tmpbuf);
     }
     return bytes;
 }
@@ -414,7 +424,7 @@ Java_sun_nio_fs_UnixNativeDispatcher_openat0(JNIEnv* env, jclass this, jint dfd,
 }
 
 JNIEXPORT void JNICALL
-Java_sun_nio_fs_UnixNativeDispatcher_close(JNIEnv* env, jclass this, jint fd) {
+Java_sun_nio_fs_UnixNativeDispatcher_close0(JNIEnv* env, jclass this, jint fd) {
     int err;
     /* TDB - need to decide if EIO and other errors should cause exception */
     RESTARTABLE(close((int)fd), err);
@@ -486,6 +496,20 @@ Java_sun_nio_fs_UnixNativeDispatcher_stat0(JNIEnv* env, jclass this,
         throwUnixException(env, errno);
     } else {
         prepAttributes(env, &buf, attrs);
+    }
+}
+
+JNIEXPORT jint JNICALL
+Java_sun_nio_fs_UnixNativeDispatcher_stat1(JNIEnv* env, jclass this, jlong pathAddress) {
+    int err;
+    struct stat64 buf;
+    const char* path = (const char*)jlong_to_ptr(pathAddress);
+
+    RESTARTABLE(stat64(path, &buf), err);
+    if (err == -1) {
+        return 0;
+    } else {
+        return (jint)buf.st_mode;
     }
 }
 
@@ -903,6 +927,14 @@ Java_sun_nio_fs_UnixNativeDispatcher_access0(JNIEnv* env, jclass this,
     }
 }
 
+JNIEXPORT jboolean JNICALL
+Java_sun_nio_fs_UnixNativeDispatcher_exists0(JNIEnv* env, jclass this, jlong pathAddress) {
+    int err;
+    const char* path = (const char*)jlong_to_ptr(pathAddress);
+    RESTARTABLE(access(path, F_OK), err);
+    return (err == 0) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL
 Java_sun_nio_fs_UnixNativeDispatcher_statvfs0(JNIEnv* env, jclass this,
     jlong pathAddress, jobject attrs)
@@ -1006,11 +1038,7 @@ Java_sun_nio_fs_UnixNativeDispatcher_getpwuid(JNIEnv* env, jclass this, jint uid
         int res = 0;
 
         errno = 0;
-        #ifdef __solaris__
-            RESTARTABLE_RETURN_PTR(getpwuid_r((uid_t)uid, &pwent, pwbuf, (size_t)buflen), p);
-        #else
-            RESTARTABLE(getpwuid_r((uid_t)uid, &pwent, pwbuf, (size_t)buflen, &p), res);
-        #endif
+        RESTARTABLE(getpwuid_r((uid_t)uid, &pwent, pwbuf, (size_t)buflen, &p), res);
 
         if (res != 0 || p == NULL || p->pw_name == NULL || *(p->pw_name) == '\0') {
             /* not found or error */
@@ -1055,11 +1083,7 @@ Java_sun_nio_fs_UnixNativeDispatcher_getgrgid(JNIEnv* env, jclass this, jint gid
         }
 
         errno = 0;
-        #ifdef __solaris__
-            RESTARTABLE_RETURN_PTR(getgrgid_r((gid_t)gid, &grent, grbuf, (size_t)buflen), g);
-        #else
-            RESTARTABLE(getgrgid_r((gid_t)gid, &grent, grbuf, (size_t)buflen, &g), res);
-        #endif
+        RESTARTABLE(getgrgid_r((gid_t)gid, &grent, grbuf, (size_t)buflen, &g), res);
 
         retry = 0;
         if (res != 0 || g == NULL || g->gr_name == NULL || *(g->gr_name) == '\0') {
@@ -1110,11 +1134,7 @@ Java_sun_nio_fs_UnixNativeDispatcher_getpwnam0(JNIEnv* env, jclass this,
         const char* name = (const char*)jlong_to_ptr(nameAddress);
 
         errno = 0;
-        #ifdef __solaris__
-            RESTARTABLE_RETURN_PTR(getpwnam_r(name, &pwent, pwbuf, (size_t)buflen), p);
-        #else
-            RESTARTABLE(getpwnam_r(name, &pwent, pwbuf, (size_t)buflen, &p), res);
-        #endif
+        RESTARTABLE(getpwnam_r(name, &pwent, pwbuf, (size_t)buflen, &p), res);
 
         if (res != 0 || p == NULL || p->pw_name == NULL || *(p->pw_name) == '\0') {
             /* not found or error */
@@ -1155,11 +1175,7 @@ Java_sun_nio_fs_UnixNativeDispatcher_getgrnam0(JNIEnv* env, jclass this,
         }
 
         errno = 0;
-        #ifdef __solaris__
-            RESTARTABLE_RETURN_PTR(getgrnam_r(name, &grent, grbuf, (size_t)buflen), g);
-        #else
-            RESTARTABLE(getgrnam_r(name, &grent, grbuf, (size_t)buflen, &g), res);
-        #endif
+        RESTARTABLE(getgrnam_r(name, &grent, grbuf, (size_t)buflen, &g), res);
 
         retry = 0;
         if (res != 0 || g == NULL || g->gr_name == NULL || *(g->gr_name) == '\0') {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@
 #include "code/oopRecorder.hpp"
 #include "code/relocInfo.hpp"
 #include "utilities/debug.hpp"
+#include "utilities/macros.hpp"
 
 class CodeStrings;
 class PhaseCFG;
@@ -91,6 +92,7 @@ class CodeSection VALUE_OBJ_CLASS_SPEC {
   address     _locs_point;      // last relocated position (grows upward)
   bool        _locs_own;        // did I allocate the locs myself?
   bool        _frozen;          // no more expansion of this section
+  bool        _scratch_emit;    // Buffer is used for scratch emit, don't relocate.
   char        _index;           // my section number (SECT_INST, etc.)
   CodeBuffer* _outer;           // enclosing CodeBuffer
 
@@ -107,6 +109,7 @@ class CodeSection VALUE_OBJ_CLASS_SPEC {
     _locs_point    = NULL;
     _locs_own      = false;
     _frozen        = false;
+    _scratch_emit  = false;
     debug_only(_index = (char)-1);
     debug_only(_outer = (CodeBuffer*)badAddress);
   }
@@ -165,6 +168,10 @@ class CodeSection VALUE_OBJ_CLASS_SPEC {
   bool        is_frozen() const     { return _frozen; }
   bool        has_locs() const      { return _locs_end != NULL; }
 
+  // Mark scratch buffer.
+  void        set_scratch_emit()    { _scratch_emit = true; }
+  bool        scratch_emit()        { return _scratch_emit; }
+
   CodeBuffer* outer() const         { return _outer; }
 
   // is a given address in this section?  (2nd version is end-inclusive)
@@ -173,7 +180,7 @@ class CodeSection VALUE_OBJ_CLASS_SPEC {
   bool allocates(address pc) const  { return pc >= _start && pc <  _limit; }
   bool allocates2(address pc) const { return pc >= _start && pc <= _limit; }
 
-  void    set_end(address pc)       { assert(allocates2(pc), err_msg("not in CodeBuffer memory: " INTPTR_FORMAT " <= " INTPTR_FORMAT " <= " INTPTR_FORMAT, p2i(_start), p2i(pc), p2i(_limit))); _end = pc; }
+  void    set_end(address pc)       { assert(allocates2(pc), "not in CodeBuffer memory: " INTPTR_FORMAT " <= " INTPTR_FORMAT " <= " INTPTR_FORMAT, p2i(_start), p2i(pc), p2i(_limit)); _end = pc; }
   void    set_mark(address pc)      { assert(contains2(pc), "not in codeBuffer");
                                       _mark = pc; }
   void    set_mark_off(int offset)  { assert(contains2(offset+_start),"not in codeBuffer");
@@ -209,10 +216,7 @@ class CodeSection VALUE_OBJ_CLASS_SPEC {
 
   // Emit a relocation.
   void relocate(address at, RelocationHolder const& rspec, int format = 0);
-  void relocate(address at,    relocInfo::relocType rtype, int format = 0) {
-    if (rtype != relocInfo::none)
-      relocate(at, Relocation::spec_simple(rtype), format);
-  }
+  void relocate(address at,    relocInfo::relocType rtype, int format = 0, jint method_index = 0);
 
   // alignment requirement for starting offset
   // Requirements are that the instruction area and the
@@ -375,6 +379,8 @@ class CodeBuffer: public StackObj {
   OopRecorder  _default_oop_recorder;  // override with initialize_oop_recorder
   Arena*       _overflow_arena;
 
+  address      _last_membar;     // used to merge consecutive memory barriers
+
   address      _decode_begin;   // start address for decode
   address      decode_begin();
 
@@ -388,6 +394,7 @@ class CodeBuffer: public StackObj {
     _decode_begin    = NULL;
     _overflow_arena  = NULL;
     _code_strings    = CodeStrings();
+    _last_membar     = NULL;
   }
 
   void initialize(address code_start, csize_t code_size) {
@@ -452,7 +459,6 @@ class CodeBuffer: public StackObj {
     initialize_misc(name);
   }
 
-
   // (4) code buffer allocating codeBlob memory for code & relocation
   // info.  The name must be something informative and code_size must
   // include both code and stubs sizes.
@@ -469,9 +475,11 @@ class CodeBuffer: public StackObj {
   // construction.
   void initialize(csize_t code_size, csize_t locs_size);
 
-  CodeSection* consts()            { return &_consts; }
-  CodeSection* insts()             { return &_insts; }
-  CodeSection* stubs()             { return &_stubs; }
+  CodeSection* consts() { return &_consts; }
+  CodeSection* insts() { return &_insts; }
+  CodeSection* stubs() { return &_stubs; }
+
+  const CodeSection* insts() const { return &_insts; }
 
   // present sections in order; return NULL at end; consts is #0, etc.
   CodeSection* code_section(int n) {
@@ -539,7 +547,7 @@ class CodeBuffer: public StackObj {
   bool insts_contains2(address pc) const { return _insts.contains2(pc); }
 
   // Record any extra oops required to keep embedded metadata alive
-  void finalize_oop_references(methodHandle method);
+  void finalize_oop_references(const methodHandle& method);
 
   // Allocated size in all sections, when aligned and concatenated
   // (this is the eventual state of the content in its final
@@ -548,10 +556,12 @@ class CodeBuffer: public StackObj {
 
   // Combined offset (relative to start of first section) of given
   // section, as eventually found in the final CodeBlob.
-  csize_t total_offset_of(CodeSection* cs) const;
+  csize_t total_offset_of(const CodeSection* cs) const;
 
   // allocated size of all relocation data, including index, rounded up
   csize_t total_relocation_size() const;
+
+  csize_t copy_relocations_to(address buf, csize_t buf_limit, bool only_inst) const;
 
   // allocated size of any and all recorded oops
   csize_t total_oop_size() const {
@@ -575,6 +585,10 @@ class CodeBuffer: public StackObj {
 
   OopRecorder* oop_recorder() const   { return _oop_recorder; }
   CodeStrings& strings()              { return _code_strings; }
+
+  address last_membar() const { return _last_membar; }
+  void set_last_membar(address a) { _last_membar = a; }
+  void clear_last_membar() { set_last_membar(NULL); }
 
   void free_strings() {
     if (!_code_strings.is_null()) {
@@ -626,24 +640,7 @@ class CodeBuffer: public StackObj {
 
 
   // The following header contains architecture-specific implementations
-#ifdef TARGET_ARCH_x86
-# include "codeBuffer_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "codeBuffer_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "codeBuffer_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "codeBuffer_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "codeBuffer_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "codeBuffer_aarch64.hpp"
-#endif
+#include CPU_HEADER(codeBuffer)
 
 };
 

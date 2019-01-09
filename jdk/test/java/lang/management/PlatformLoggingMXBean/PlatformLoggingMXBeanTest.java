@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,13 +24,10 @@
 /*
  * @test
  * @bug     6876135 7024172 7067691
- *
  * @summary Test PlatformLoggingMXBean
  *          This test performs similar testing as
  *          java/util/logging/LoggingMXBeanTest.
  *
- * @modules java.management
- *          jdk.management
  * @build PlatformLoggingMXBeanTest
  * @run main PlatformLoggingMXBeanTest
  */
@@ -271,8 +268,7 @@ public class PlatformLoggingMXBeanTest
         // Calling getMBeanInfo will throw exception if not found.
         platformMBS.getMBeanInfo(objName);
 
-        if (!platformMBS.isInstanceOf(objName, "java.lang.management.PlatformLoggingMXBean") ||
-            !platformMBS.isInstanceOf(objName, "java.util.logging.LoggingMXBean")) {
+        if (!platformMBS.isInstanceOf(objName, "java.lang.management.PlatformLoggingMXBean")) {
             throw new RuntimeException(objName + " is of unexpected type");
         }
 

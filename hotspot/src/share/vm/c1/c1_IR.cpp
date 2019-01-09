@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@
 #include "c1/c1_IR.hpp"
 #include "c1/c1_InstructionPrinter.hpp"
 #include "c1/c1_Optimizer.hpp"
+#include "memory/resourceArea.hpp"
 #include "utilities/bitMap.inline.hpp"
 
 
@@ -143,12 +144,11 @@ IRScope::IRScope(Compilation* compilation, IRScope* caller, int caller_bci, ciMe
   _monitor_pairing_ok = method->has_balanced_monitors();
   _wrote_final        = false;
   _wrote_fields       = false;
+  _wrote_volatile     = false;
   _start              = NULL;
 
-  if (osr_bci == -1) {
-    _requires_phi_function.clear();
-  } else {
-        // selective creation of phi functions is not possibel in osr-methods
+  if (osr_bci != -1) {
+    // selective creation of phi functions is not possibel in osr-methods
     _requires_phi_function.set_range(0, method->max_locals());
   }
 
@@ -458,14 +458,14 @@ class ComputeLinearScanOrder : public StackObj {
 
   BlockList* _linear_scan_order;   // the resulting list of blocks in correct order
 
-  BitMap     _visited_blocks;      // used for recursive processing of blocks
-  BitMap     _active_blocks;       // used for recursive processing of blocks
-  BitMap     _dominator_blocks;    // temproary BitMap used for computation of dominator
-  intArray   _forward_branches;    // number of incoming forward branches for each block
-  BlockList  _loop_end_blocks;     // list of all loop end blocks collected during count_edges
-  BitMap2D   _loop_map;            // two-dimensional bit set: a bit is set if a block is contained in a loop
-  BlockList  _work_list;           // temporary list (used in mark_loops and compute_order)
-  BlockList  _loop_headers;
+  ResourceBitMap _visited_blocks;   // used for recursive processing of blocks
+  ResourceBitMap _active_blocks;    // used for recursive processing of blocks
+  ResourceBitMap _dominator_blocks; // temproary BitMap used for computation of dominator
+  intArray       _forward_branches; // number of incoming forward branches for each block
+  BlockList      _loop_end_blocks;  // list of all loop end blocks collected during count_edges
+  BitMap2D       _loop_map;         // two-dimensional bit set: a bit is set if a block is contained in a loop
+  BlockList      _work_list;        // temporary list (used in mark_loops and compute_order)
+  BlockList      _loop_headers;
 
   Compilation* _compilation;
 
@@ -529,16 +529,15 @@ ComputeLinearScanOrder::ComputeLinearScanOrder(Compilation* c, BlockBegin* start
   _visited_blocks(_max_block_id),
   _active_blocks(_max_block_id),
   _dominator_blocks(_max_block_id),
-  _forward_branches(_max_block_id, 0),
+  _forward_branches(_max_block_id, _max_block_id, 0),
   _loop_end_blocks(8),
   _work_list(8),
   _linear_scan_order(NULL), // initialized later with correct size
-  _loop_map(0, 0),          // initialized later with correct size
+  _loop_map(0),             // initialized later with correct size
   _compilation(c)
 {
   TRACE_LINEAR_SCAN(2, tty->print_cr("***** computing linear-scan block order"));
 
-  init_visited();
   count_edges(start_block, NULL);
 
   if (compilation()->is_profiling()) {
@@ -578,10 +577,7 @@ void ComputeLinearScanOrder::count_edges(BlockBegin* cur, BlockBegin* parent) {
     assert(is_visited(cur), "block must be visisted when block is active");
     assert(parent != NULL, "must have parent");
 
-    cur->set(BlockBegin::linear_scan_loop_header_flag);
     cur->set(BlockBegin::backward_branch_target_flag);
-
-    parent->set(BlockBegin::linear_scan_loop_end_flag);
 
     // When a loop header is also the start of an exception handler, then the backward branch is
     // an exception edge. Because such edges are usually critical edges which cannot be split, the
@@ -591,6 +587,10 @@ void ComputeLinearScanOrder::count_edges(BlockBegin* cur, BlockBegin* parent) {
       _iterative_dominators = true;
       return;
     }
+
+    cur->set(BlockBegin::linear_scan_loop_header_flag);
+    parent->set(BlockBegin::linear_scan_loop_end_flag);
+
     assert(parent->number_of_sux() == 1 && parent->sux_at(0) == cur,
            "loop end blocks must have one successor (critical edges are split)");
 
@@ -643,7 +643,6 @@ void ComputeLinearScanOrder::mark_loops() {
   TRACE_LINEAR_SCAN(3, tty->print_cr("----- marking loops"));
 
   _loop_map = BitMap2D(_num_loops, _max_block_id);
-  _loop_map.clear();
 
   for (int i = _loop_end_blocks.length() - 1; i >= 0; i--) {
     BlockBegin* loop_end   = _loop_end_blocks.at(i);
@@ -846,13 +845,13 @@ bool ComputeLinearScanOrder::ready_for_processing(BlockBegin* cur) {
     return false;
   }
 
-  assert(_linear_scan_order->index_of(cur) == -1, "block already processed (block can be ready only once)");
-  assert(_work_list.index_of(cur) == -1, "block already in work-list (block can be ready only once)");
+  assert(_linear_scan_order->find(cur) == -1, "block already processed (block can be ready only once)");
+  assert(_work_list.find(cur) == -1, "block already in work-list (block can be ready only once)");
   return true;
 }
 
 void ComputeLinearScanOrder::sort_into_work_list(BlockBegin* cur) {
-  assert(_work_list.index_of(cur) == -1, "block already in work list");
+  assert(_work_list.find(cur) == -1, "block already in work list");
 
   int cur_weight = compute_weight(cur);
 
@@ -888,7 +887,7 @@ void ComputeLinearScanOrder::sort_into_work_list(BlockBegin* cur) {
 
 void ComputeLinearScanOrder::append_block(BlockBegin* cur) {
   TRACE_LINEAR_SCAN(3, tty->print_cr("appending block B%d (weight 0x%6x) to linear-scan order", cur->block_id(), cur->linear_scan_number()));
-  assert(_linear_scan_order->index_of(cur) == -1, "cannot add the same block twice");
+  assert(_linear_scan_order->find(cur) == -1, "cannot add the same block twice");
 
   // currently, the linear scan order and code emit order are equal.
   // therefore the linear_scan_number and the weight of a block must also
@@ -1113,13 +1112,13 @@ void ComputeLinearScanOrder::verify() {
     BlockBegin* cur = _linear_scan_order->at(i);
 
     assert(cur->linear_scan_number() == i, "incorrect linear_scan_number");
-    assert(cur->linear_scan_number() >= 0 && cur->linear_scan_number() == _linear_scan_order->index_of(cur), "incorrect linear_scan_number");
+    assert(cur->linear_scan_number() >= 0 && cur->linear_scan_number() == _linear_scan_order->find(cur), "incorrect linear_scan_number");
 
     int j;
     for (j = cur->number_of_sux() - 1; j >= 0; j--) {
       BlockBegin* sux = cur->sux_at(j);
 
-      assert(sux->linear_scan_number() >= 0 && sux->linear_scan_number() == _linear_scan_order->index_of(sux), "incorrect linear_scan_number");
+      assert(sux->linear_scan_number() >= 0 && sux->linear_scan_number() == _linear_scan_order->find(sux), "incorrect linear_scan_number");
       if (!sux->is_set(BlockBegin::backward_branch_target_flag)) {
         assert(cur->linear_scan_number() < sux->linear_scan_number(), "invalid order");
       }
@@ -1131,7 +1130,7 @@ void ComputeLinearScanOrder::verify() {
     for (j = cur->number_of_preds() - 1; j >= 0; j--) {
       BlockBegin* pred = cur->pred_at(j);
 
-      assert(pred->linear_scan_number() >= 0 && pred->linear_scan_number() == _linear_scan_order->index_of(pred), "incorrect linear_scan_number");
+      assert(pred->linear_scan_number() >= 0 && pred->linear_scan_number() == _linear_scan_order->find(pred), "incorrect linear_scan_number");
       if (!cur->is_set(BlockBegin::backward_branch_target_flag)) {
         assert(cur->linear_scan_number() > pred->linear_scan_number(), "invalid order");
       }
@@ -1253,8 +1252,7 @@ void IR::print(bool cfg_only, bool live_only) {
 }
 
 
-define_array(BlockListArray, BlockList*)
-define_stack(BlockListList, BlockListArray)
+typedef GrowableArray<BlockList*> BlockListList;
 
 class PredecessorValidator : public BlockClosure {
  private:
@@ -1268,7 +1266,7 @@ class PredecessorValidator : public BlockClosure {
  public:
   PredecessorValidator(IR* hir) {
     ResourceMark rm;
-    _predecessors = new BlockListList(BlockBegin::number_of_blocks(), NULL);
+    _predecessors = new BlockListList(BlockBegin::number_of_blocks(), BlockBegin::number_of_blocks(), NULL);
     _blocks = new BlockList();
 
     int i;

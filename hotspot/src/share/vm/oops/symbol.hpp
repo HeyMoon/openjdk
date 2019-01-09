@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,9 +25,10 @@
 #ifndef SHARE_VM_OOPS_SYMBOL_HPP
 #define SHARE_VM_OOPS_SYMBOL_HPP
 
-#include "utilities/utf8.hpp"
 #include "memory/allocation.hpp"
-#include "runtime/atomic.hpp"
+#include "utilities/exceptions.hpp"
+#include "utilities/macros.hpp"
+#include "utilities/utf8.hpp"
 
 // A Symbol is a canonicalized string.
 // All Symbols reside in global SymbolTable and are reference counted.
@@ -90,35 +91,28 @@
 // The allocation (or lookup) of K increments the reference count for K
 // and the destructor decrements the reference count.
 //
-// Another example of TempNewSymbol usage is parsed_name used in
-// ClassFileParser::parseClassFile() where parsed_name is used in the cleanup
-// after a failed attempt to load a class.  Here parsed_name is a
-// TempNewSymbol (passed in as a parameter) so the reference count on its symbol
-// will be decremented when it goes out of scope.
-
-
 // This cannot be inherited from ResourceObj because it cannot have a vtable.
 // Since sometimes this is allocated from Metadata, pick a base allocation
 // type without virtual functions.
 class ClassLoaderData;
 
-// We separate the fields in SymbolBase from Symbol::_body so that
-// Symbol::size(int) can correctly calculate the space needed.
-class SymbolBase : public MetaspaceObj {
- public:
+// Set _refcount to PERM_REFCOUNT to prevent the Symbol from being GC'ed.
+#ifndef PERM_REFCOUNT
+#define PERM_REFCOUNT -1
+#endif
+
+class Symbol : public MetaspaceObj {
+  friend class VMStructs;
+  friend class SymbolTable;
+  friend class MoveSymbols;
+
+ private:
   ATOMIC_SHORT_PAIR(
     volatile short _refcount,  // needs atomic operation
     unsigned short _length     // number of UTF8 characters in the symbol (does not need atomic op)
   );
-  int            _identity_hash;
-};
-
-class Symbol : private SymbolBase {
-  friend class VMStructs;
-  friend class SymbolTable;
-  friend class MoveSymbols;
- private:
-  jbyte _body[1];
+  short _identity_hash;
+  jbyte _body[2];
 
   enum {
     // max_symbol_length is constrained by type of _length
@@ -126,8 +120,8 @@ class Symbol : private SymbolBase {
   };
 
   static int size(int length) {
-    size_t sz = heap_word_size(sizeof(SymbolBase) + (length > 0 ? length : 0));
-    return align_object_size(sz);
+    // minimum number of natural words needed to hold these bits (no non-heap version)
+    return (int)heap_word_size(sizeof(Symbol) + (length > 2 ? length - 2 : 0));
   }
 
   void byte_at_put(int index, int value) {
@@ -149,9 +143,12 @@ class Symbol : private SymbolBase {
   int size()                { return size(utf8_length()); }
 
   // Returns the largest size symbol we can safely hold.
-  static int max_length()   { return max_symbol_length; }
-
-  int identity_hash()       { return _identity_hash; }
+  static int max_length() { return max_symbol_length; }
+  unsigned identity_hash() const {
+    unsigned addr_bits = (unsigned)((uintptr_t)this >> (LogMinObjAlignmentInBytes + 3));
+    return ((unsigned)_identity_hash & 0xffff) |
+           ((addr_bits ^ (_length << 8) ^ (( _body[0] << 8) | _body[1])) << 16);
+  }
 
   // For symbol table alternate hashing
   unsigned int new_hash(juint seed);
@@ -160,6 +157,13 @@ class Symbol : private SymbolBase {
   int refcount() const      { return _refcount; }
   void increment_refcount();
   void decrement_refcount();
+  // Set _refcount non zero to avoid being reclaimed by GC.
+  void set_permanent() {
+    assert(LogTouchedMethods, "Should not be called with LogTouchedMethods off");
+    if (_refcount != PERM_REFCOUNT) {
+      _refcount = PERM_REFCOUNT;
+    }
+  }
 
   int byte_at(int index) const {
     assert(index >=0 && index < _length, "symbol index overflow");
@@ -188,7 +192,7 @@ class Symbol : private SymbolBase {
 
   // Three-way compare for sorting; returns -1/0/1 if receiver is </==/> than arg
   // note that the ordering is not alfabetical
-  inline int fast_compare(Symbol* other) const;
+  inline int fast_compare(const Symbol* other) const;
 
   // Returns receiver converted to null-terminated UTF-8 string; string is
   // allocated in resource area, or in the char buffer provided by caller.
@@ -216,6 +220,7 @@ class Symbol : private SymbolBase {
 
   // Printing
   void print_symbol_on(outputStream* st = NULL) const;
+  void print_utf8_on(outputStream* st) const;
   void print_on(outputStream* st) const;         // First level print
   void print_value_on(outputStream* st) const;   // Second level print.
 
@@ -236,7 +241,7 @@ class Symbol : private SymbolBase {
 // what order it defines, as long as it is a total, time-invariant order
 // Since Symbol*s are in C_HEAP, their relative order in memory never changes,
 // so use address comparison for speed
-int Symbol::fast_compare(Symbol* other) const {
+int Symbol::fast_compare(const Symbol* other) const {
  return (((uintptr_t)this < (uintptr_t)other) ? -1
    : ((uintptr_t)this == (uintptr_t) other) ? 0 : 1);
 }

@@ -38,10 +38,10 @@ public class StreamEncoder extends Writer
 
     private static final int DEFAULT_BYTE_BUFFER_SIZE = 8192;
 
-    private volatile boolean isOpen = true;
+    private volatile boolean closed;
 
     private void ensureOpen() throws IOException {
-        if (!isOpen)
+        if (closed)
             throw new IOException("Stream closed");
     }
 
@@ -135,6 +135,18 @@ public class StreamEncoder extends Writer
         write(cbuf, 0, len);
     }
 
+    public void write(CharBuffer cb) throws IOException {
+        int position = cb.position();
+        try {
+            synchronized (lock) {
+                ensureOpen();
+                implWrite(cb);
+            }
+        } finally {
+            cb.position(position);
+        }
+    }
+
     public void flush() throws IOException {
         synchronized (lock) {
             ensureOpen();
@@ -144,15 +156,15 @@ public class StreamEncoder extends Writer
 
     public void close() throws IOException {
         synchronized (lock) {
-            if (!isOpen)
+            if (closed)
                 return;
             implClose();
-            isOpen = false;
+            closed = true;
         }
     }
 
     private boolean isOpen() {
-        return isOpen;
+        return !closed;
     }
 
 
@@ -266,9 +278,15 @@ public class StreamEncoder extends Writer
         throws IOException
     {
         CharBuffer cb = CharBuffer.wrap(cbuf, off, len);
+        implWrite(cb);
+    }
 
-        if (haveLeftoverChar)
+    void implWrite(CharBuffer cb)
+        throws IOException
+    {
+        if (haveLeftoverChar) {
             flushLeftoverChar(cb, false);
+        }
 
         while (cb.hasRemaining()) {
             CoderResult cr = encoder.encode(cb, bb, false);

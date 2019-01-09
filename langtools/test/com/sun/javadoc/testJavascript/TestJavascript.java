@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2004, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,7 +23,7 @@
 
 /*
  * @test
- * @bug      4665566 4855876 7025314 8012375 8015997 8016328 8024756
+ * @bug      4665566 4855876 7025314 8012375 8015997 8016328 8024756 8151921
  * @summary  Verify that the output has the right javascript.
  * @author   jamieh
  * @library  ../lib
@@ -54,11 +54,12 @@ public class TestJavascript extends JavadocTester {
 
         checkOutput("index.html", true,
                 "<script type=\"text/javascript\">\n"
-                + "    targetPage = \"\" + window.location.search;\n"
-                + "    if (targetPage != \"\" && targetPage != \"undefined\")\n"
-                + "        targetPage = targetPage.substring(1);\n"
-                + "    if (targetPage.indexOf(\":\") != -1 || (targetPage != \"\" && !validURL(targetPage)))\n"
-                + "        targetPage = \"undefined\";\n"
+                + "    tmpTargetPage = \"\" + window.location.search;\n"
+                + "    if (tmpTargetPage != \"\" && tmpTargetPage != \"undefined\")\n"
+                + "        tmpTargetPage = tmpTargetPage.substring(1);\n"
+                + "    if (tmpTargetPage.indexOf(\":\") != -1 || (tmpTargetPage != \"\" && !validURL(tmpTargetPage)))\n"
+                + "        tmpTargetPage = \"undefined\";\n"
+                + "    targetPage = tmpTargetPage;\n"
                 + "    function validURL(url) {\n"
                 + "        try {\n"
                 + "            url = decodeURIComponent(url);\n"
@@ -100,7 +101,14 @@ public class TestJavascript extends JavadocTester {
                 + "        }\n"
                 + "        return true;\n"
                 + "    }\n"
+                + "    function loadFrames() {\n"
+                + "        if (targetPage != \"\" && targetPage != \"undefined\")\n"
+                + "             top.classFrame.location = top.targetPage;\n"
+                + "    }\n"
                 + "</script>");
+
+        checkOutput("index.html", true,
+                "<body onload=\"loadFrames()\"");
 
         //Make sure title javascript only runs if is-external is not true
         checkOutput("pkg/C.html", true,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -72,9 +72,12 @@ import java.security.Permission;
  * separated by '/' characters. <i>path</i> may also be empty. The path is specified
  * in a similar way to the path in {@link java.io.FilePermission}. There are
  * three different ways as the following examples show:
- * <table border>
+ * <table class="plain">
  * <caption>URL Examples</caption>
+ * <thead>
  * <tr><th>Example url</th><th>Description</th></tr>
+ * </thead>
+ * <tbody>
  * <tr><td style="white-space:nowrap;">http://www.oracle.com/a/b/c.html</td>
  *   <td>A url which identifies a specific (single) resource</td>
  * </tr>
@@ -90,6 +93,7 @@ import java.security.Permission;
  *       example).
  *   </td>
  * </tr>
+ * </tbody>
  * </table>
  * <p>
  * The '*' and '-' may only be specified in the final segment of a path and must be
@@ -170,7 +174,8 @@ public final class URLPermission extends Permission {
         parseURI(getName());
         int colon = actions.indexOf(':');
         if (actions.lastIndexOf(':') != colon) {
-            throw new IllegalArgumentException("invalid actions string");
+            throw new IllegalArgumentException(
+                "Invalid actions string: \"" + actions + "\"");
         }
 
         String methods, headers;
@@ -216,7 +221,7 @@ public final class URLPermission extends Permission {
      * where method-names is the list of methods separated by commas
      * and header-names is the list of permitted headers separated by commas.
      * There is no white space in the returned String. If header-names is empty
-     * then the colon separator will not be present.
+     * then the colon separator may not be present.
      */
     public String getActions() {
         return actions;
@@ -245,9 +250,12 @@ public final class URLPermission extends Permission {
      * <li>otherwise, return false</li>
      * </ul>
      * <p>Some examples of how paths are matched are shown below:
-     * <table border>
+     * <table class="plain">
      * <caption>Examples of Path Matching</caption>
+     * <thead>
      * <tr><th>this's path</th><th>p's path</th><th>match</th></tr>
+     * </thead>
+     * <tbody>
      * <tr><td>/a/b</td><td>/a/b</td><td>yes</td></tr>
      * <tr><td>/a/b/*</td><td>/a/b/c</td><td>yes</td></tr>
      * <tr><td>/a/b/*</td><td>/a/b/c/d</td><td>no</td></tr>
@@ -255,6 +263,7 @@ public final class URLPermission extends Permission {
      * <tr><td>/a/b/-</td><td>/a/b/c/d/e</td><td>yes</td></tr>
      * <tr><td>/a/b/-</td><td>/a/b/c/*</td><td>yes</td></tr>
      * <tr><td>/a/b/*</td><td>/a/b/c/-</td><td>no</td></tr>
+     * </tbody>
      * </table>
      */
     public boolean implies(Permission p) {
@@ -264,8 +273,14 @@ public final class URLPermission extends Permission {
 
         URLPermission that = (URLPermission)p;
 
-        if (!this.methods.get(0).equals("*") &&
-                Collections.indexOfSubList(this.methods, that.methods) == -1) {
+        if (this.methods.isEmpty() && !that.methods.isEmpty()) {
+            return false;
+        }
+
+        if (!this.methods.isEmpty() &&
+            !this.methods.get(0).equals("*") &&
+            Collections.indexOfSubList(this.methods,
+                                       that.methods) == -1) {
             return false;
         }
 
@@ -371,7 +386,8 @@ public final class URLPermission extends Permission {
                     l.add(s);
                 b = new StringBuilder();
             } else if (c == ' ' || c == '\t') {
-                throw new IllegalArgumentException("white space not allowed");
+                throw new IllegalArgumentException(
+                    "White space not allowed in methods: \"" + methods + "\"");
             } else {
                 if (c >= 'a' && c <= 'z') {
                     c += 'A' - 'a';
@@ -398,7 +414,8 @@ public final class URLPermission extends Permission {
                 }
                 b.append(c);
             } else if (c == ' ' || c == '\t') {
-                throw new IllegalArgumentException("white space not allowed");
+                throw new IllegalArgumentException(
+                    "White space not allowed in headers: \"" + headers + "\"");
             } else if (c == '-') {
                     capitalizeNext = true;
                 b.append(c);
@@ -423,14 +440,16 @@ public final class URLPermission extends Permission {
         int len = url.length();
         int delim = url.indexOf(':');
         if (delim == -1 || delim + 1 == len) {
-            throw new IllegalArgumentException("invalid URL string");
+            throw new IllegalArgumentException(
+                "Invalid URL string: \"" + url + "\"");
         }
         scheme = url.substring(0, delim).toLowerCase();
         this.ssp = url.substring(delim + 1);
 
         if (!ssp.startsWith("//")) {
             if (!ssp.equals("*")) {
-                throw new IllegalArgumentException("invalid URL string");
+                throw new IllegalArgumentException(
+                    "Invalid URL string: \"" + url + "\"");
             }
             this.authority = new Authority(scheme, "*");
             return;
@@ -450,15 +469,10 @@ public final class URLPermission extends Permission {
     }
 
     private String actions() {
-        StringBuilder b = new StringBuilder();
-        for (String s : methods) {
-            b.append(s);
-        }
-        b.append(":");
-        for (String s : requestHeaders) {
-            b.append(s);
-        }
-        return b.toString();
+        // The colon separator is optional when the request headers list is
+        // empty.This implementation chooses to include it even when the request
+        // headers list is empty.
+        return String.join(",", methods) + ":" + String.join(",", requestHeaders);
     }
 
     /**

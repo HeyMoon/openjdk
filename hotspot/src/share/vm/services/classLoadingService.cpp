@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #include "precompiled.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "memory/allocation.hpp"
+#include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/mutexLocker.hpp"
@@ -33,6 +34,8 @@
 #include "utilities/dtrace.hpp"
 #include "utilities/macros.hpp"
 #include "utilities/defaultStream.hpp"
+#include "logging/log.hpp"
+#include "logging/logConfiguration.hpp"
 
 #ifdef DTRACE_ENABLED
 
@@ -135,9 +138,9 @@ void ClassLoadingService::notify_class_unloaded(InstanceKlass* k) {
     }
   }
 
-  if (TraceClassUnloading) {
+  if (log_is_enabled(Info, class, unload)) {
     ResourceMark rm;
-    tty->print_cr("[Unloading class %s " INTPTR_FORMAT "]", k->external_name(), p2i(k));
+    log_info(class, unload)("unloading class %s " INTPTR_FORMAT , k->external_name(), p2i(k));
   }
 }
 
@@ -164,7 +167,7 @@ size_t ClassLoadingService::compute_class_size(InstanceKlass* k) {
 
   class_size += k->size();
 
-  if (k->oop_is_instance()) {
+  if (k->is_instance_klass()) {
     class_size += k->methods()->size();
     // FIXME: Need to count the contents of methods
     class_size += k->constants()->size();
@@ -179,12 +182,10 @@ size_t ClassLoadingService::compute_class_size(InstanceKlass* k) {
 
 bool ClassLoadingService::set_verbose(bool verbose) {
   MutexLocker m(Management_lock);
-
   // verbose will be set to the previous value
-  Flag::Error error = CommandLineFlags::boolAtPut("TraceClassLoading", &verbose, Flag::MANAGEMENT);
-  assert(error==Flag::SUCCESS, err_msg("Setting TraceClassLoading flag failed with error %s", Flag::flag_error_str(error)));
+  LogLevelType level = verbose ? LogLevel::Info : LogLevel::Off;
+  LogConfiguration::configure_stdout(level, false, LOG_TAGS(class, load));
   reset_trace_class_unloading();
-
   return verbose;
 }
 
@@ -192,8 +193,8 @@ bool ClassLoadingService::set_verbose(bool verbose) {
 void ClassLoadingService::reset_trace_class_unloading() {
   assert(Management_lock->owned_by_self(), "Must own the Management_lock");
   bool value = MemoryService::get_verbose() || ClassLoadingService::get_verbose();
-  Flag::Error error = CommandLineFlags::boolAtPut("TraceClassUnloading", &value, Flag::MANAGEMENT);
-  assert(error==Flag::SUCCESS, err_msg("Setting TraceClassUnLoading flag failed with error %s", Flag::flag_error_str(error)));
+  LogLevelType level = value ? LogLevel::Info : LogLevel::Off;
+  LogConfiguration::configure_stdout(level, false, LOG_TAGS(class, unload));
 }
 
 GrowableArray<KlassHandle>* LoadedClassesEnumerator::_loaded_classes = NULL;

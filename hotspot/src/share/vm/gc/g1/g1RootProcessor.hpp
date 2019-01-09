@@ -32,8 +32,10 @@
 class CLDClosure;
 class CodeBlobClosure;
 class G1CollectedHeap;
+class G1EvacuationRootClosures;
 class G1GCPhaseTimes;
 class G1ParPushHeapRSClosure;
+class G1RootClosures;
 class Monitor;
 class OopClosure;
 class SubTasksDone;
@@ -45,7 +47,7 @@ class SubTasksDone;
 // worker thread call the process_roots methods.
 class G1RootProcessor : public StackObj {
   G1CollectedHeap* _g1h;
-  SubTasksDone* _process_strong_tasks;
+  SubTasksDone _process_strong_tasks;
   StrongRootsScope _srs;
 
   // Used to implement the Thread work barrier.
@@ -62,6 +64,7 @@ class G1RootProcessor : public StackObj {
     G1RP_PS_ClassLoaderDataGraph_oops_do,
     G1RP_PS_jvmti_oops_do,
     G1RP_PS_CodeCache_oops_do,
+    G1RP_PS_aot_oops_do,
     G1RP_PS_filter_satb_buffers,
     G1RP_PS_refProcessor_oops_do,
     // Leave this one last.
@@ -71,18 +74,26 @@ class G1RootProcessor : public StackObj {
   void worker_has_discovered_all_strong_classes();
   void wait_until_all_strong_classes_discovered();
 
-  void process_java_roots(OopClosure* scan_non_heap_roots,
-                          CLDClosure* thread_stack_clds,
-                          CLDClosure* scan_strong_clds,
-                          CLDClosure* scan_weak_clds,
-                          CodeBlobClosure* scan_strong_code,
+  void process_all_roots(OopClosure* oops,
+                         CLDClosure* clds,
+                         CodeBlobClosure* blobs,
+                         bool process_string_table);
+
+  void process_java_roots(G1RootClosures* closures,
                           G1GCPhaseTimes* phase_times,
                           uint worker_i);
 
-  void process_vm_roots(OopClosure* scan_non_heap_roots,
-                        OopClosure* scan_non_heap_weak_roots,
+  void process_vm_roots(G1RootClosures* closures,
                         G1GCPhaseTimes* phase_times,
                         uint worker_i);
+
+  void process_string_table_roots(G1RootClosures* closures,
+                                  G1GCPhaseTimes* phase_times,
+                                  uint worker_i);
+
+  void process_code_cache_roots(CodeBlobClosure* code_closure,
+                                G1GCPhaseTimes* phase_times,
+                                uint worker_i);
 
 public:
   G1RootProcessor(G1CollectedHeap* g1h, uint n_workers);
@@ -90,12 +101,7 @@ public:
   // Apply closures to the strongly and weakly reachable roots in the system
   // in a single pass.
   // Record and report timing measurements for sub phases using the worker_i
-  void evacuate_roots(OopClosure* scan_non_heap_roots,
-                      OopClosure* scan_non_heap_weak_roots,
-                      CLDClosure* scan_strong_clds,
-                      CLDClosure* scan_weak_clds,
-                      bool trace_metadata,
-                      uint worker_i);
+  void evacuate_roots(G1EvacuationRootClosures* closures, uint worker_i);
 
   // Apply oops, clds and blobs to all strongly reachable roots in the system
   void process_strong_roots(OopClosure* oops,
@@ -107,12 +113,12 @@ public:
                          CLDClosure* clds,
                          CodeBlobClosure* blobs);
 
-  // Apply scan_rs to all locations in the union of the remembered sets for all
-  // regions in the collection set
-  // (having done "set_region" to indicate the region in which the root resides),
-  void scan_remembered_sets(G1ParPushHeapRSClosure* scan_rs,
-                            OopClosure* scan_non_heap_weak_roots,
-                            uint worker_i);
+  // Apply oops, clds and blobs to strongly and weakly reachable roots in the system,
+  // the only thing different from process_all_roots is that we skip the string table
+  // to avoid keeping every string live when doing class unloading.
+  void process_all_roots_no_string_table(OopClosure* oops,
+                                         CLDClosure* clds,
+                                         CodeBlobClosure* blobs);
 
   // Number of worker threads used by the root processor.
   uint n_workers() const;

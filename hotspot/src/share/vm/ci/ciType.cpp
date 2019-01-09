@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 #include "ci/ciType.hpp"
 #include "ci/ciUtilities.hpp"
 #include "classfile/systemDictionary.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
 
 ciType* ciType::_basic_types[T_CONFLICT+1];
@@ -45,7 +46,7 @@ ciType::ciType(BasicType basic_type) : ciMetadata() {
 }
 
 ciType::ciType(KlassHandle k) : ciMetadata(k()) {
-  _basic_type = k()->oop_is_array() ? T_ARRAY : T_OBJECT;
+  _basic_type = k()->is_array_klass() ? T_ARRAY : T_OBJECT;
 }
 
 

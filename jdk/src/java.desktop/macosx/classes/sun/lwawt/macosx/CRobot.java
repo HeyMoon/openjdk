@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -73,7 +73,7 @@ class CRobot implements RobotPeer {
      * Presses one or more mouse buttons.
      *
      * @param buttons the button mask (combination of
-     * <code>InputEvent.BUTTON1/2/3_MASK</code>)
+     * {@code InputEvent.BUTTON1/2/3_MASK})
      */
     @Override
     public void mousePress(int buttons) {
@@ -87,7 +87,7 @@ class CRobot implements RobotPeer {
      * Releases one or more mouse buttons.
      *
      * @param buttons the button mask (combination of
-     * <code>InputEvent.BUTTON1/2/3_MASK</code>)
+     * {@code InputEvent.BUTTON1/2/3_MASK})
      */
     @Override
     public void mouseRelease(int buttons) {
@@ -133,14 +133,14 @@ class CRobot implements RobotPeer {
      * Presses a given key.
      * <p>
      * Key codes that have more than one physical key associated with them
-     * (e.g. <code>KeyEvent.VK_SHIFT</code> could mean either the
+     * (e.g. {@code KeyEvent.VK_SHIFT} could mean either the
      * left or right shift key) will map to the left key.
      * <p>
      * Assumes that the
      * peer implementations will throw an exception for other bogus
      * values e.g. -1, 999999
      *
-     * @param keycode the key to press (e.g. <code>KeyEvent.VK_A</code>)
+     * @param keycode the key to press (e.g. {@code KeyEvent.VK_A})
      */
     @Override
     public void keyPress(final int keycode) {
@@ -151,14 +151,14 @@ class CRobot implements RobotPeer {
      * Releases a given key.
      * <p>
      * Key codes that have more than one physical key associated with them
-     * (e.g. <code>KeyEvent.VK_SHIFT</code> could mean either the
+     * (e.g. {@code KeyEvent.VK_SHIFT} could mean either the
      * left or right shift key) will map to the left key.
      * <p>
      * Assumes that the
      * peer implementations will throw an exception for other bogus
      * values e.g. -1, 999999
      *
-     * @param keycode the key to release (e.g. <code>KeyEvent.VK_A</code>)
+     * @param keycode the key to release (e.g. {@code KeyEvent.VK_A})
      */
     @Override
     public void keyRelease(final int keycode) {
@@ -174,7 +174,8 @@ class CRobot implements RobotPeer {
     @Override
     public int getRGBPixel(int x, int y) {
         int c[] = new int[1];
-        getScreenPixels(new Rectangle(x, y, 1, 1), c);
+        double scale = fDevice.getScaleFactor();
+        getScreenPixels(new Rectangle(x, y, (int) scale, (int) scale), c);
         return c[0];
     }
 
@@ -198,7 +199,8 @@ class CRobot implements RobotPeer {
                                    boolean isMouseMove);
     private native void keyEvent(int javaKeyCode, boolean keydown);
     private void getScreenPixels(Rectangle r, int[] pixels){
-        nativeGetScreenPixels(r.x, r.y, r.width, r.height, pixels);
+        double scale = fDevice.getScaleFactor();
+        nativeGetScreenPixels(r.x, r.y, r.width, r.height, scale, pixels);
     }
-    private native void nativeGetScreenPixels(int x, int y, int width, int height, int[] pixels);
+    private native void nativeGetScreenPixels(int x, int y, int width, int height, double scale, int[] pixels);
 }

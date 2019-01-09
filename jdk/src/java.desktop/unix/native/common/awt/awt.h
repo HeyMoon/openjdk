@@ -35,7 +35,9 @@
 #include "debug_util.h"
 
 #if !defined(HEADLESS) && !defined(MACOSX)
-#include <X11/Intrinsic.h>
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+typedef char Boolean;
 #endif /* !HEADLESS && !MACOSX */
 
 
@@ -82,7 +84,12 @@ extern void awt_output_flush();
     } while (0)
 
 #define AWT_LOCK_IMPL() \
-    (*env)->CallStaticVoidMethod(env, tkClass, awtLockMID)
+    do { \
+        (*env)->CallStaticVoidMethod(env, tkClass, awtLockMID); \
+        if ((*env)->ExceptionCheck(env)) { \
+            (*env)->ExceptionClear(env); \
+        } \
+    } while(0)
 
 #define AWT_NOFLUSH_UNLOCK_IMPL() \
     do { \
@@ -91,11 +98,10 @@ extern void awt_output_flush();
          (*env)->ExceptionClear(env); \
       } \
       (*env)->CallStaticVoidMethod(env, tkClass, awtUnlockMID); \
+      if ((*env)->ExceptionCheck(env)) { \
+         (*env)->ExceptionClear(env); \
+      } \
       if (pendingException) { \
-         if ((*env)->ExceptionCheck(env)) { \
-            (*env)->ExceptionDescribe(env); \
-            (*env)->ExceptionClear(env); \
-         } \
          (*env)->Throw(env, pendingException); \
       } \
     } while (0)

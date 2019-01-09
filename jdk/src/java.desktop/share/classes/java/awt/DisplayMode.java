@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,8 +28,8 @@ package java.awt;
 import java.lang.annotation.Native;
 
 /**
- * The <code>DisplayMode</code> class encapsulates the bit depth, height,
- * width, and refresh rate of a <code>GraphicsDevice</code>. The ability to
+ * The {@code DisplayMode} class encapsulates the bit depth, height,
+ * width, and refresh rate of a {@code GraphicsDevice}. The ability to
  * change graphics device's display mode is platform- and
  * configuration-dependent and may not always be available
  * (see {@link GraphicsDevice#isDisplayChangeSupported}).
@@ -57,10 +57,10 @@ public final class DisplayMode {
      * @param width the width of the display, in pixels
      * @param height the height of the display, in pixels
      * @param bitDepth the bit depth of the display, in bits per
-     *        pixel.  This can be <code>BIT_DEPTH_MULTI</code> if multiple
+     *        pixel.  This can be {@code BIT_DEPTH_MULTI} if multiple
      *        bit depths are available.
      * @param refreshRate the refresh rate of the display, in hertz.
-     *        This can be <code>REFRESH_RATE_UNKNOWN</code> if the
+     *        This can be {@code REFRESH_RATE_UNKNOWN} if the
      *        information is not available.
      * @see #BIT_DEPTH_MULTI
      * @see #REFRESH_RATE_UNKNOWN
@@ -92,11 +92,11 @@ public final class DisplayMode {
      * display mode.
      * @see #getBitDepth
      */
-    @Native public final static int BIT_DEPTH_MULTI = -1;
+    @Native public static final int BIT_DEPTH_MULTI = -1;
 
     /**
      * Returns the bit depth of the display, in bits per pixel.  This may be
-     * <code>BIT_DEPTH_MULTI</code> if multiple bit depths are supported in
+     * {@code BIT_DEPTH_MULTI} if multiple bit depths are supported in
      * this display mode.
      *
      * @return the bit depth of the display, in bits per pixel.
@@ -110,11 +110,11 @@ public final class DisplayMode {
      * Value of the refresh rate if not known.
      * @see #getRefreshRate
      */
-    @Native public final static int REFRESH_RATE_UNKNOWN = 0;
+    @Native public static final int REFRESH_RATE_UNKNOWN = 0;
 
     /**
      * Returns the refresh rate of the display, in hertz.  This may be
-     * <code>REFRESH_RATE_UNKNOWN</code> if the information is not available.
+     * {@code REFRESH_RATE_UNKNOWN} if the information is not available.
      *
      * @return the refresh rate of the display, in hertz.
      * @see #REFRESH_RATE_UNKNOWN
@@ -142,6 +142,7 @@ public final class DisplayMode {
     /**
      * {@inheritDoc}
      */
+    @Override
     public boolean equals(Object dm) {
         if (dm instanceof DisplayMode) {
             return equals((DisplayMode)dm);
@@ -153,9 +154,20 @@ public final class DisplayMode {
     /**
      * {@inheritDoc}
      */
+    @Override
     public int hashCode() {
         return getWidth() + getHeight() + getBitDepth() * 7
             + getRefreshRate() * 13;
     }
 
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public String toString() {
+        return getWidth() + "x" + getHeight() + "x" +
+               (getBitDepth() > 0 ? getBitDepth() + "bpp": "[Multi depth]")
+               + "@" + (getRefreshRate() > 0 ? getRefreshRate() + "Hz" :
+               "[Unknown refresh rate]");
+    }
 }

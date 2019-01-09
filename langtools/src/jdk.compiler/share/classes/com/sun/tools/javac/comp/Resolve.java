@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,13 +35,13 @@ import com.sun.tools.javac.comp.Check.CheckContext;
 import com.sun.tools.javac.comp.DeferredAttr.AttrMode;
 import com.sun.tools.javac.comp.DeferredAttr.DeferredAttrContext;
 import com.sun.tools.javac.comp.DeferredAttr.DeferredType;
-import com.sun.tools.javac.comp.Infer.InferenceContext;
 import com.sun.tools.javac.comp.Infer.FreeTypeListener;
 import com.sun.tools.javac.comp.Resolve.MethodResolutionContext.Candidate;
 import com.sun.tools.javac.comp.Resolve.MethodResolutionDiagHelper.Template;
 import com.sun.tools.javac.comp.Resolve.ReferenceLookupResult.StaticKind;
 import com.sun.tools.javac.jvm.*;
 import com.sun.tools.javac.main.Option;
+import com.sun.tools.javac.resources.CompilerProperties.Fragments;
 import com.sun.tools.javac.tree.*;
 import com.sun.tools.javac.tree.JCTree.*;
 import com.sun.tools.javac.tree.JCTree.JCMemberReference.ReferenceKind;
@@ -55,10 +55,15 @@ import com.sun.tools.javac.util.JCDiagnostic.DiagnosticType;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 import javax.lang.model.element.ElementVisitor;
@@ -71,6 +76,7 @@ import static com.sun.tools.javac.code.Kinds.Kind.*;
 import static com.sun.tools.javac.code.TypeTag.*;
 import static com.sun.tools.javac.comp.Resolve.MethodResolutionPhase.*;
 import static com.sun.tools.javac.tree.JCTree.Tag.*;
+import static com.sun.tools.javac.util.Iterators.createCompoundIterator;
 
 /** Helper class for name resolution, used mostly by the attribution phase.
  *
@@ -90,12 +96,13 @@ public class Resolve {
     Check chk;
     Infer infer;
     ClassFinder finder;
+    ModuleFinder moduleFinder;
     Types types;
     JCDiagnostic.Factory diags;
     public final boolean allowMethodHandles;
     public final boolean allowFunctionalInterfaceMostSpecific;
+    public final boolean allowModules;
     public final boolean checkVarargsAccessAfterResolution;
-    private final boolean debugResolve;
     private final boolean compactMethodDiags;
     final EnumSet<VerboseResolutionMode> verboseResolutionMode;
 
@@ -117,11 +124,11 @@ public class Resolve {
         chk = Check.instance(context);
         infer = Infer.instance(context);
         finder = ClassFinder.instance(context);
+        moduleFinder = ModuleFinder.instance(context);
         types = Types.instance(context);
         diags = JCDiagnostic.Factory.instance(context);
         Source source = Source.instance(context);
         Options options = Options.instance(context);
-        debugResolve = options.isSet("debugresolve");
         compactMethodDiags = options.isSet(Option.XDIAGS, "compact") ||
                 options.isUnset(Option.XDIAGS) && options.isUnset("rawDiagnostics");
         verboseResolutionMode = VerboseResolutionMode.getVerboseResolutionMode(options);
@@ -133,6 +140,8 @@ public class Resolve {
         polymorphicSignatureScope = WriteableScope.create(syms.noSymbol);
 
         inapplicableMethodException = new InapplicableMethodException(diags);
+
+        allowModules = source.allowModules();
     }
 
     /** error symbols, which are returned when resolution fails
@@ -174,7 +183,7 @@ public class Resolve {
         }
 
         static EnumSet<VerboseResolutionMode> getVerboseResolutionMode(Options opts) {
-            String s = opts.get("verboseResolution");
+            String s = opts.get("debug.verboseResolution");
             EnumSet<VerboseResolutionMode> res = EnumSet.noneOf(VerboseResolutionMode.class);
             if (s == null) return res;
             if (s.contains("all")) {
@@ -291,6 +300,18 @@ public class Resolve {
     }
 
     public boolean isAccessible(Env<AttrContext> env, TypeSymbol c, boolean checkInner) {
+
+        /* 15.9.5.1: Note that it is possible for the signature of the anonymous constructor
+           to refer to an inaccessible type
+        */
+        if (env.enclMethod != null && (env.enclMethod.mods.flags & ANONCONSTR) != 0)
+            return true;
+
+        if (env.info.visitingServiceImplementation &&
+            env.toplevel.modle == c.packge().modle) {
+            return true;
+        }
+
         boolean isAccessible = false;
         switch ((short)(c.flags() & AccessFlags)) {
             case PRIVATE:
@@ -302,17 +323,24 @@ public class Resolve {
                 isAccessible =
                     env.toplevel.packge == c.owner // fast special case
                     ||
-                    env.toplevel.packge == c.packge()
-                    ||
-                    // Hack: this case is added since synthesized default constructors
-                    // of anonymous classes should be allowed to access
-                    // classes which would be inaccessible otherwise.
-                    env.enclMethod != null &&
-                    (env.enclMethod.mods.flags & ANONCONSTR) != 0;
+                    env.toplevel.packge == c.packge();
                 break;
             default: // error recovery
-            case PUBLIC:
                 isAccessible = true;
+                break;
+            case PUBLIC:
+                if (allowModules) {
+                    ModuleSymbol currModule = env.toplevel.modle;
+                    currModule.complete();
+                    PackageSymbol p = c.packge();
+                    isAccessible =
+                        currModule == p.modle ||
+                        currModule.visiblePackages.get(p.fullname) == p ||
+                        p == syms.rootPackage ||
+                        (p.modle == syms.unnamedModule && currModule.readModules.contains(p.modle));
+                } else {
+                    isAccessible = true;
+                }
                 break;
             case PROTECTED:
                 isAccessible =
@@ -362,6 +390,18 @@ public class Resolve {
     }
     public boolean isAccessible(Env<AttrContext> env, Type site, Symbol sym, boolean checkInner) {
         if (sym.name == names.init && sym.owner != site.tsym) return false;
+
+        /* 15.9.5.1: Note that it is possible for the signature of the anonymous constructor
+           to refer to an inaccessible type
+        */
+        if (env.enclMethod != null && (env.enclMethod.mods.flags & ANONCONSTR) != 0)
+            return true;
+
+        if (env.info.visitingServiceImplementation &&
+            env.toplevel.modle == sym.packge().modle) {
+            return true;
+        }
+
         switch ((short)(sym.flags() & AccessFlags)) {
         case PRIVATE:
             return
@@ -472,7 +512,7 @@ public class Resolve {
         public Void visitClassType(ClassType t, Env<AttrContext> env) {
             visit(t.getTypeArguments(), env);
             if (!isAccessible(env, t, true)) {
-                accessBase(new AccessError(t.tsym), env.tree.pos(), env.enclClass.sym, t, t.tsym.name, true);
+                accessBase(new AccessError(env, null, t.tsym), env.tree.pos(), env.enclClass.sym, t, t.tsym.name, true);
             }
             return null;
         }
@@ -529,7 +569,8 @@ public class Resolve {
         } else if (mt.hasTag(FORALL) && typeargtypes.nonEmpty()) {
             ForAll pmt = (ForAll) mt;
             if (typeargtypes.length() != pmt.tvars.length())
-                throw inapplicableMethodException.setMessage("arg.length.mismatch"); // not enough args
+                 // not enough args
+                throw inapplicableMethodException.setMessage("wrong.number.type.args", Integer.toString(pmt.tvars.length()));
             // Check type arguments are within bounds
             List<Type> formals = pmt.tvars;
             List<Type> actuals = typeargtypes;
@@ -589,7 +630,8 @@ public class Resolve {
         MethodResolutionContext prevContext = currentResolutionContext;
         try {
             currentResolutionContext = new MethodResolutionContext();
-            currentResolutionContext.attrMode = DeferredAttr.AttrMode.CHECK;
+            currentResolutionContext.attrMode = (resultInfo.pt == Infer.anyPoly) ?
+                    AttrMode.SPECULATIVE : DeferredAttr.AttrMode.CHECK;
             if (env.tree.hasTag(JCTree.Tag.REFERENCE)) {
                 //method/constructor references need special check class
                 //to handle inference variables in 'argtypes' (might happen
@@ -714,7 +756,8 @@ public class Resolve {
                                     Warner warn) {
             //should we expand formals?
             boolean useVarargs = deferredAttrContext.phase.isVarargsRequired();
-            List<JCExpression> trees = TreeInfo.args(env.tree);
+            JCTree callTree = treeForDiagnostics(env);
+            List<JCExpression> trees = TreeInfo.args(callTree);
 
             //inference context used during this method check
             InferenceContext inferenceContext = deferredAttrContext.inferenceContext;
@@ -723,7 +766,7 @@ public class Resolve {
 
             if (varargsFormal == null &&
                     argtypes.size() != formals.size()) {
-                reportMC(env.tree, MethodCheckDiag.ARITY_MISMATCH, inferenceContext); // not enough args
+                reportMC(callTree, MethodCheckDiag.ARITY_MISMATCH, inferenceContext); // not enough args
             }
 
             while (argtypes.nonEmpty() && formals.head != varargsFormal) {
@@ -735,7 +778,7 @@ public class Resolve {
             }
 
             if (formals.head != varargsFormal) {
-                reportMC(env.tree, MethodCheckDiag.ARITY_MISMATCH, inferenceContext); // not enough args
+                reportMC(callTree, MethodCheckDiag.ARITY_MISMATCH, inferenceContext); // not enough args
             }
 
             if (useVarargs) {
@@ -750,6 +793,11 @@ public class Resolve {
                 }
             }
         }
+
+            // where
+            private JCTree treeForDiagnostics(Env<AttrContext> env) {
+                return env.info.preferredTreeForDiagnostics != null ? env.info.preferredTreeForDiagnostics : env.tree;
+            }
 
         /**
          * Does the actual argument conforms to the corresponding formal?
@@ -848,12 +896,8 @@ public class Resolve {
          */
         private void varargsAccessible(final Env<AttrContext> env, final Type t, final InferenceContext inferenceContext) {
             if (inferenceContext.free(t)) {
-                inferenceContext.addFreeTypeListener(List.of(t), new FreeTypeListener() {
-                    @Override
-                    public void typesInferred(InferenceContext inferenceContext) {
-                        varargsAccessible(env, inferenceContext.asInstType(t), inferenceContext);
-                    }
-                });
+                inferenceContext.addFreeTypeListener(List.of(t),
+                        solvedContext -> varargsAccessible(env, solvedContext.asInstType(t), solvedContext));
             } else {
                 if (!isAccessible(env, types.erasure(t))) {
                     Symbol location = env.enclClass.sym;
@@ -1033,6 +1077,11 @@ public class Resolve {
         protected ResultInfo dup(CheckContext newContext) {
             return new MethodResultInfo(pt, newContext);
         }
+
+        @Override
+        protected ResultInfo dup(Type newPt, CheckContext newContext) {
+            return new MethodResultInfo(newPt, newContext);
+        }
     }
 
     /**
@@ -1093,10 +1142,9 @@ public class Resolve {
                         unrelatedFunctionalInterfaces(found, req) &&
                         (actual != null && actual.getTag() == DEFERRED)) {
                     DeferredType dt = (DeferredType) actual;
-                    DeferredType.SpeculativeCache.Entry e =
-                            dt.speculativeCache.get(deferredAttrContext.msym, deferredAttrContext.phase);
-                    if (e != null && e.speculativeTree != deferredAttr.stuckTree) {
-                        return functionalInterfaceMostSpecific(found, req, e.speculativeTree);
+                    JCTree speculativeTree = dt.speculativeTree(deferredAttrContext);
+                    if (speculativeTree != deferredAttr.stuckTree) {
+                        return functionalInterfaceMostSpecific(found, req, speculativeTree);
                     }
                 }
                 return compatibleBySubtyping(found, req);
@@ -1113,13 +1161,94 @@ public class Resolve {
             private boolean unrelatedFunctionalInterfaces(Type t, Type s) {
                 return types.isFunctionalInterface(t.tsym) &&
                        types.isFunctionalInterface(s.tsym) &&
-                       types.asSuper(t, s.tsym) == null &&
-                       types.asSuper(s, t.tsym) == null;
+                       unrelatedInterfaces(t, s);
+            }
+
+            /** Whether {@code t} and {@code s} are unrelated interface types; recurs on intersections. **/
+            private boolean unrelatedInterfaces(Type t, Type s) {
+                if (t.isCompound()) {
+                    for (Type ti : types.interfaces(t)) {
+                        if (!unrelatedInterfaces(ti, s)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                } else if (s.isCompound()) {
+                    for (Type si : types.interfaces(s)) {
+                        if (!unrelatedInterfaces(t, si)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                } else {
+                    return types.asSuper(t, s.tsym) == null && types.asSuper(s, t.tsym) == null;
+                }
             }
 
             /** Parameters {@code t} and {@code s} are unrelated functional interface types. */
             private boolean functionalInterfaceMostSpecific(Type t, Type s, JCTree tree) {
-                FunctionalInterfaceMostSpecificChecker msc = new FunctionalInterfaceMostSpecificChecker(t, s);
+                Type tDesc = types.findDescriptorType(types.capture(t));
+                Type tDescNoCapture = types.findDescriptorType(t);
+                Type sDesc = types.findDescriptorType(s);
+                final List<Type> tTypeParams = tDesc.getTypeArguments();
+                final List<Type> tTypeParamsNoCapture = tDescNoCapture.getTypeArguments();
+                final List<Type> sTypeParams = sDesc.getTypeArguments();
+
+                // compare type parameters
+                if (tDesc.hasTag(FORALL) && !types.hasSameBounds((ForAll) tDesc, (ForAll) tDescNoCapture)) {
+                    return false;
+                }
+                // can't use Types.hasSameBounds on sDesc because bounds may have ivars
+                List<Type> tIter = tTypeParams;
+                List<Type> sIter = sTypeParams;
+                while (tIter.nonEmpty() && sIter.nonEmpty()) {
+                    Type tBound = tIter.head.getUpperBound();
+                    Type sBound = types.subst(sIter.head.getUpperBound(), sTypeParams, tTypeParams);
+                    if (tBound.containsAny(tTypeParams) && inferenceContext().free(sBound)) {
+                        return false;
+                    }
+                    if (!types.isSameType(tBound, inferenceContext().asUndetVar(sBound))) {
+                        return false;
+                    }
+                    tIter = tIter.tail;
+                    sIter = sIter.tail;
+                }
+                if (!tIter.isEmpty() || !sIter.isEmpty()) {
+                    return false;
+                }
+
+                // compare parameters
+                List<Type> tParams = tDesc.getParameterTypes();
+                List<Type> tParamsNoCapture = tDescNoCapture.getParameterTypes();
+                List<Type> sParams = sDesc.getParameterTypes();
+                while (tParams.nonEmpty() && tParamsNoCapture.nonEmpty() && sParams.nonEmpty()) {
+                    Type tParam = tParams.head;
+                    Type tParamNoCapture = types.subst(tParamsNoCapture.head, tTypeParamsNoCapture, tTypeParams);
+                    Type sParam = types.subst(sParams.head, sTypeParams, tTypeParams);
+                    if (tParam.containsAny(tTypeParams) && inferenceContext().free(sParam)) {
+                        return false;
+                    }
+                    if (!types.isSubtype(inferenceContext().asUndetVar(sParam), tParam)) {
+                        return false;
+                    }
+                    if (!types.isSameType(tParamNoCapture, inferenceContext().asUndetVar(sParam))) {
+                        return false;
+                    }
+                    tParams = tParams.tail;
+                    tParamsNoCapture = tParamsNoCapture.tail;
+                    sParams = sParams.tail;
+                }
+                if (!tParams.isEmpty() || !tParamsNoCapture.isEmpty() || !sParams.isEmpty()) {
+                    return false;
+                }
+
+                // compare returns
+                Type tRet = tDesc.getReturnType();
+                Type sRet = types.subst(sDesc.getReturnType(), sTypeParams, tTypeParams);
+                if (tRet.containsAny(tTypeParams) && inferenceContext().free(sRet)) {
+                    return false;
+                }
+                MostSpecificFunctionReturnChecker msc = new MostSpecificFunctionReturnChecker(tRet, sRet);
                 msc.scan(tree);
                 return msc.result;
             }
@@ -1128,16 +1257,16 @@ public class Resolve {
              * Tests whether one functional interface type can be considered more specific
              * than another unrelated functional interface type for the scanned expression.
              */
-            class FunctionalInterfaceMostSpecificChecker extends DeferredAttr.PolyScanner {
+            class MostSpecificFunctionReturnChecker extends DeferredAttr.PolyScanner {
 
-                final Type t;
-                final Type s;
+                final Type tRet;
+                final Type sRet;
                 boolean result;
 
                 /** Parameters {@code t} and {@code s} are unrelated functional interface types. */
-                FunctionalInterfaceMostSpecificChecker(Type t, Type s) {
-                    this.t = t;
-                    this.s = s;
+                MostSpecificFunctionReturnChecker(Type tRet, Type sRet) {
+                    this.tRet = tRet;
+                    this.sRet = sRet;
                     result = true;
                 }
 
@@ -1148,66 +1277,52 @@ public class Resolve {
 
                 @Override
                 public void visitConditional(JCConditional tree) {
-                    scan(tree.truepart);
-                    scan(tree.falsepart);
+                    scan(asExpr(tree.truepart));
+                    scan(asExpr(tree.falsepart));
                 }
 
                 @Override
                 public void visitReference(JCMemberReference tree) {
-                    Type desc_t = types.findDescriptorType(t);
-                    Type desc_s = types.findDescriptorType(s);
-                    // use inference variables here for more-specific inference (18.5.4)
-                    if (!types.isSameTypes(desc_t.getParameterTypes(),
-                            inferenceContext().asUndetVars(desc_s.getParameterTypes()))) {
+                    if (sRet.hasTag(VOID)) {
+                        result &= true;
+                    } else if (tRet.hasTag(VOID)) {
                         result &= false;
+                    } else if (tRet.isPrimitive() != sRet.isPrimitive()) {
+                        boolean retValIsPrimitive =
+                                tree.refPolyKind == PolyKind.STANDALONE &&
+                                tree.sym.type.getReturnType().isPrimitive();
+                        result &= (retValIsPrimitive == tRet.isPrimitive()) &&
+                                  (retValIsPrimitive != sRet.isPrimitive());
                     } else {
-                        // compare return types
-                        Type ret_t = desc_t.getReturnType();
-                        Type ret_s = desc_s.getReturnType();
-                        if (ret_s.hasTag(VOID)) {
-                            result &= true;
-                        } else if (ret_t.hasTag(VOID)) {
-                            result &= false;
-                        } else if (ret_t.isPrimitive() != ret_s.isPrimitive()) {
-                            boolean retValIsPrimitive =
-                                    tree.refPolyKind == PolyKind.STANDALONE &&
-                                    tree.sym.type.getReturnType().isPrimitive();
-                            result &= (retValIsPrimitive == ret_t.isPrimitive()) &&
-                                      (retValIsPrimitive != ret_s.isPrimitive());
-                        } else {
-                            result &= compatibleBySubtyping(ret_t, ret_s);
-                        }
+                        result &= compatibleBySubtyping(tRet, sRet);
                     }
                 }
 
                 @Override
+                public void visitParens(JCParens tree) {
+                    scan(asExpr(tree.expr));
+                }
+
+                @Override
                 public void visitLambda(JCLambda tree) {
-                    Type desc_t = types.findDescriptorType(t);
-                    Type desc_s = types.findDescriptorType(s);
-                    // use inference variables here for more-specific inference (18.5.4)
-                    if (!types.isSameTypes(desc_t.getParameterTypes(),
-                            inferenceContext().asUndetVars(desc_s.getParameterTypes()))) {
+                    if (sRet.hasTag(VOID)) {
+                        result &= true;
+                    } else if (tRet.hasTag(VOID)) {
                         result &= false;
                     } else {
-                        // compare return types
-                        Type ret_t = desc_t.getReturnType();
-                        Type ret_s = desc_s.getReturnType();
-                        if (ret_s.hasTag(VOID)) {
-                            result &= true;
-                        } else if (ret_t.hasTag(VOID)) {
-                            result &= false;
-                        } else if (unrelatedFunctionalInterfaces(ret_t, ret_s)) {
-                            for (JCExpression expr : lambdaResults(tree)) {
-                                result &= functionalInterfaceMostSpecific(ret_t, ret_s, expr);
+                        List<JCExpression> lambdaResults = lambdaResults(tree);
+                        if (!lambdaResults.isEmpty() && unrelatedFunctionalInterfaces(tRet, sRet)) {
+                            for (JCExpression expr : lambdaResults) {
+                                result &= functionalInterfaceMostSpecific(tRet, sRet, expr);
                             }
-                        } else if (ret_t.isPrimitive() != ret_s.isPrimitive()) {
-                            for (JCExpression expr : lambdaResults(tree)) {
+                        } else if (!lambdaResults.isEmpty() && tRet.isPrimitive() != sRet.isPrimitive()) {
+                            for (JCExpression expr : lambdaResults) {
                                 boolean retValIsPrimitive = expr.isStandalone() && expr.type.isPrimitive();
-                                result &= (retValIsPrimitive == ret_t.isPrimitive()) &&
-                                          (retValIsPrimitive != ret_s.isPrimitive());
+                                result &= (retValIsPrimitive == tRet.isPrimitive()) &&
+                                        (retValIsPrimitive != sRet.isPrimitive());
                             }
                         } else {
-                            result &= compatibleBySubtyping(ret_t, ret_s);
+                            result &= compatibleBySubtyping(tRet, sRet);
                         }
                     }
                 }
@@ -1215,7 +1330,7 @@ public class Resolve {
 
                 private List<JCExpression> lambdaResults(JCLambda lambda) {
                     if (lambda.getBodyKind() == JCTree.JCLambda.BodyKind.EXPRESSION) {
-                        return List.of((JCExpression) lambda.body);
+                        return List.of(asExpr((JCExpression) lambda.body));
                     } else {
                         final ListBuffer<JCExpression> buffer = new ListBuffer<>();
                         DeferredAttr.LambdaReturnScanner lambdaScanner =
@@ -1223,13 +1338,23 @@ public class Resolve {
                                     @Override
                                     public void visitReturn(JCReturn tree) {
                                         if (tree.expr != null) {
-                                            buffer.append(tree.expr);
+                                            buffer.append(asExpr(tree.expr));
                                         }
                                     }
                                 };
                         lambdaScanner.scan(lambda.body);
                         return buffer.toList();
                     }
+                }
+
+                private JCExpression asExpr(JCExpression expr) {
+                    if (expr.type.hasTag(DEFERRED)) {
+                        JCTree speculativeTree = ((DeferredType)expr.type).speculativeTree(deferredAttrContext);
+                        if (speculativeTree != deferredAttr.stuckTree) {
+                            expr = (JCExpression)speculativeTree;
+                        }
+                    }
+                    return expr;
                 }
             }
 
@@ -1437,6 +1562,7 @@ public class Resolve {
         }
         Assert.check(!sym.kind.isResolutionError());
         try {
+            types.noWarnings.clear();
             Type mt = rawInstantiate(env, site, sym, null, argtypes, typeargtypes,
                                allowBoxing, useVarargs, types.noWarnings);
             currentResolutionContext.addApplicableCandidate(sym, mt);
@@ -1574,28 +1700,6 @@ public class Resolve {
             return newArgs;
         } else {
             return args;
-        }
-    }
-    //where
-    Type mostSpecificReturnType(Type mt1, Type mt2) {
-        Type rt1 = mt1.getReturnType();
-        Type rt2 = mt2.getReturnType();
-
-        if (mt1.hasTag(FORALL) && mt2.hasTag(FORALL)) {
-            //if both are generic methods, adjust return type ahead of subtyping check
-            rt1 = types.subst(rt1, mt1.getTypeArguments(), mt2.getTypeArguments());
-        }
-        //first use subtyping, then return type substitutability
-        if (types.isSubtype(rt1, rt2)) {
-            return mt1;
-        } else if (types.isSubtype(rt2, rt1)) {
-            return mt2;
-        } else if (types.returnTypeSubstitutable(mt1, mt2)) {
-            return mt1;
-        } else if (types.returnTypeSubstitutable(mt2, mt1)) {
-            return mt2;
-        } else {
-            return null;
         }
     }
     //where
@@ -1758,47 +1862,43 @@ public class Resolve {
      * errors if some of the not-needed supertypes are missing/ill-formed).
      */
     Iterable<TypeSymbol> superclasses(final Type intype) {
-        return new Iterable<TypeSymbol>() {
-            public Iterator<TypeSymbol> iterator() {
-                return new Iterator<TypeSymbol>() {
+        return () -> new Iterator<TypeSymbol>() {
 
-                    List<TypeSymbol> seen = List.nil();
-                    TypeSymbol currentSym = symbolFor(intype);
-                    TypeSymbol prevSym = null;
+            List<TypeSymbol> seen = List.nil();
+            TypeSymbol currentSym = symbolFor(intype);
+            TypeSymbol prevSym = null;
 
-                    public boolean hasNext() {
-                        if (currentSym == syms.noSymbol) {
-                            currentSym = symbolFor(types.supertype(prevSym.type));
-                        }
-                        return currentSym != null;
-                    }
+            public boolean hasNext() {
+                if (currentSym == syms.noSymbol) {
+                    currentSym = symbolFor(types.supertype(prevSym.type));
+                }
+                return currentSym != null;
+            }
 
-                    public TypeSymbol next() {
-                        prevSym = currentSym;
-                        currentSym = syms.noSymbol;
-                        Assert.check(prevSym != null || prevSym != syms.noSymbol);
-                        return prevSym;
-                    }
+            public TypeSymbol next() {
+                prevSym = currentSym;
+                currentSym = syms.noSymbol;
+                Assert.check(prevSym != null || prevSym != syms.noSymbol);
+                return prevSym;
+            }
 
-                    public void remove() {
-                        throw new UnsupportedOperationException();
-                    }
+            public void remove() {
+                throw new UnsupportedOperationException();
+            }
 
-                    TypeSymbol symbolFor(Type t) {
-                        if (!t.hasTag(CLASS) &&
-                                !t.hasTag(TYPEVAR)) {
-                            return null;
-                        }
-                        t = types.skipTypeVars(t, false);
-                        if (seen.contains(t.tsym)) {
-                            //degenerate case in which we have a circular
-                            //class hierarchy - because of ill-formed classfiles
-                            return null;
-                        }
-                        seen = seen.prepend(t.tsym);
-                        return t.tsym;
-                    }
-                };
+            TypeSymbol symbolFor(Type t) {
+                if (!t.hasTag(CLASS) &&
+                        !t.hasTag(TYPEVAR)) {
+                    return null;
+                }
+                t = types.skipTypeVars(t, false);
+                if (seen.contains(t.tsym)) {
+                    //degenerate case in which we have a circular
+                    //class hierarchy - because of ill-formed classfiles
+                    return null;
+                }
+                seen = seen.prepend(t.tsym);
+                return t.tsym;
             }
         };
     }
@@ -1819,17 +1919,23 @@ public class Resolve {
         boolean staticOnly = false;
         while (env1.outer != null) {
             if (isStatic(env1)) staticOnly = true;
-            Symbol sym = findMethod(
-                env1, env1.enclClass.sym.type, name, argtypes, typeargtypes,
-                allowBoxing, useVarargs);
-            if (sym.exists()) {
-                if (staticOnly &&
-                    sym.kind == MTH &&
-                    sym.owner.kind == TYP &&
-                    (sym.flags() & STATIC) == 0) return new StaticError(sym);
-                else return sym;
-            } else {
-                bestSoFar = bestOf(bestSoFar, sym);
+            Assert.check(env1.info.preferredTreeForDiagnostics == null);
+            env1.info.preferredTreeForDiagnostics = env.tree;
+            try {
+                Symbol sym = findMethod(
+                    env1, env1.enclClass.sym.type, name, argtypes, typeargtypes,
+                    allowBoxing, useVarargs);
+                if (sym.exists()) {
+                    if (staticOnly &&
+                        sym.kind == MTH &&
+                        sym.owner.kind == TYP &&
+                        (sym.flags() & STATIC) == 0) return new StaticError(sym);
+                    else return sym;
+                } else {
+                    bestSoFar = bestOf(bestSoFar, sym);
+                }
+            } finally {
+                env1.info.preferredTreeForDiagnostics = null;
             }
             if ((env1.enclClass.sym.flags() & STATIC) != 0) staticOnly = true;
             env1 = env1.outer;
@@ -1877,17 +1983,172 @@ public class Resolve {
      *  @param env       The current environment.
      *  @param name      The fully qualified name of the class to be loaded.
      */
-    Symbol loadClass(Env<AttrContext> env, Name name) {
+    Symbol loadClass(Env<AttrContext> env, Name name, RecoveryLoadClass recoveryLoadClass) {
         try {
-            ClassSymbol c = finder.loadClass(name);
-            return isAccessible(env, c) ? c : new AccessError(c);
+            ClassSymbol c = finder.loadClass(env.toplevel.modle, name);
+            return isAccessible(env, c) ? c : new AccessError(env, null, c);
         } catch (ClassFinder.BadClassFile err) {
             throw err;
         } catch (CompletionFailure ex) {
+            Symbol candidate = recoveryLoadClass.loadClass(env, name);
+
+            if (candidate != null) {
+                return candidate;
+            }
+
             return typeNotFound;
         }
     }
 
+    public interface RecoveryLoadClass {
+        Symbol loadClass(Env<AttrContext> env, Name name);
+    }
+
+    private final RecoveryLoadClass noRecovery = (env, name) -> null;
+
+    private final RecoveryLoadClass doRecoveryLoadClass = new RecoveryLoadClass() {
+        @Override public Symbol loadClass(Env<AttrContext> env, Name name) {
+            List<Name> candidates = Convert.classCandidates(name);
+            return lookupInvisibleSymbol(env, name,
+                                         n -> () -> createCompoundIterator(candidates,
+                                                                           c -> syms.getClassesForName(c)
+                                                                                    .iterator()),
+                                         (ms, n) -> {
+                for (Name candidate : candidates) {
+                    try {
+                        return finder.loadClass(ms, candidate);
+                    } catch (CompletionFailure cf) {
+                        //ignore
+                    }
+                }
+                return null;
+            }, sym -> sym.kind == Kind.TYP, false, typeNotFound);
+        }
+    };
+
+    private final RecoveryLoadClass namedImportScopeRecovery = (env, name) -> {
+        Scope importScope = env.toplevel.namedImportScope;
+        Symbol existing = importScope.findFirst(Convert.shortName(name),
+                                                sym -> sym.kind == TYP && sym.flatName() == name);
+
+        if (existing != null) {
+            return new InvisibleSymbolError(env, true, existing);
+        }
+        return null;
+    };
+
+    private final RecoveryLoadClass starImportScopeRecovery = (env, name) -> {
+        Scope importScope = env.toplevel.starImportScope;
+        Symbol existing = importScope.findFirst(Convert.shortName(name),
+                                                sym -> sym.kind == TYP && sym.flatName() == name);
+
+        if (existing != null) {
+            try {
+                existing = finder.loadClass(existing.packge().modle, name);
+
+                return new InvisibleSymbolError(env, true, existing);
+            } catch (CompletionFailure cf) {
+                //ignore
+            }
+        }
+
+        return null;
+    };
+
+    Symbol lookupPackage(Env<AttrContext> env, Name name) {
+        PackageSymbol pack = syms.lookupPackage(env.toplevel.modle, name);
+
+        if (allowModules && isImportOnDemand(env, name)) {
+            pack.complete();
+            if (!pack.exists()) {
+                Name nameAndDot = name.append('.', names.empty);
+                boolean prefixOfKnown =
+                        env.toplevel.modle.visiblePackages.values()
+                                                          .stream()
+                                                          .anyMatch(p -> p.fullname.startsWith(nameAndDot));
+
+                return lookupInvisibleSymbol(env, name, syms::getPackagesForName, syms::enterPackage, sym -> {
+                    sym.complete();
+                    return sym.exists();
+                }, prefixOfKnown, pack);
+            }
+        }
+
+        return pack;
+    }
+
+    private boolean isImportOnDemand(Env<AttrContext> env, Name name) {
+        if (!env.tree.hasTag(IMPORT))
+            return false;
+
+        JCTree qualid = ((JCImport) env.tree).qualid;
+
+        if (!qualid.hasTag(SELECT))
+            return false;
+
+        if (TreeInfo.name(qualid) != names.asterisk)
+            return false;
+
+        return TreeInfo.fullName(((JCFieldAccess) qualid).selected) == name;
+    }
+
+    private <S extends Symbol> Symbol lookupInvisibleSymbol(Env<AttrContext> env,
+                                                            Name name,
+                                                            Function<Name, Iterable<S>> get,
+                                                            BiFunction<ModuleSymbol, Name, S> load,
+                                                            Predicate<S> validate,
+                                                            boolean suppressError,
+                                                            Symbol defaultResult) {
+        //even if a class/package cannot be found in the current module and among packages in modules
+        //it depends on that are exported for any or this module, the class/package may exist internally
+        //in some of these modules, or may exist in a module on which this module does not depend.
+        //Provide better diagnostic in such cases by looking for the class in any module:
+        Iterable<? extends S> candidates = get.apply(name);
+
+        for (S sym : candidates) {
+            if (validate.test(sym))
+                return createInvisibleSymbolError(env, suppressError, sym);
+        }
+
+        Set<ModuleSymbol> recoverableModules = new HashSet<>(syms.getAllModules());
+
+        recoverableModules.remove(env.toplevel.modle);
+
+        for (ModuleSymbol ms : recoverableModules) {
+            //avoid overly eager completing classes from source-based modules, as those
+            //may not be completable with the current compiler settings:
+            if (ms.sourceLocation == null) {
+                if (ms.classLocation == null) {
+                    ms = moduleFinder.findModule(ms);
+                }
+
+                if (ms.kind != ERR) {
+                    S sym = load.apply(ms, name);
+
+                    if (sym != null && validate.test(sym)) {
+                        return createInvisibleSymbolError(env, suppressError, sym);
+                    }
+                }
+            }
+        }
+
+        return defaultResult;
+    }
+
+    private Symbol createInvisibleSymbolError(Env<AttrContext> env, boolean suppressError, Symbol sym) {
+        if (symbolPackageVisible(env, sym)) {
+            return new AccessError(env, null, sym);
+        } else {
+            return new InvisibleSymbolError(env, suppressError, sym);
+        }
+    }
+
+    private boolean symbolPackageVisible(Env<AttrContext> env, Symbol sym) {
+        ModuleSymbol envMod = env.toplevel.modle;
+        PackageSymbol symPack = sym.packge();
+        return envMod == symPack.modle ||
+               envMod.visiblePackages.containsKey(symPack.fullname);
+    }
 
     /**
      * Find a type declared in a scope (not inherited).  Return null
@@ -1975,10 +2236,10 @@ public class Resolve {
      *  @param scope     The scope in which to look for the type.
      *  @param name      The type's name.
      */
-    Symbol findGlobalType(Env<AttrContext> env, Scope scope, Name name) {
+    Symbol findGlobalType(Env<AttrContext> env, Scope scope, Name name, RecoveryLoadClass recoveryLoadClass) {
         Symbol bestSoFar = typeNotFound;
         for (Symbol s : scope.getSymbolsByName(name)) {
-            Symbol sym = loadClass(env, s.flatName());
+            Symbol sym = loadClass(env, s.flatName(), recoveryLoadClass);
             if (bestSoFar.kind == TYP && sym.kind == TYP &&
                 bestSoFar != sym)
                 return new AmbiguityError(bestSoFar, sym);
@@ -2049,15 +2310,15 @@ public class Resolve {
         }
 
         if (!env.tree.hasTag(IMPORT)) {
-            sym = findGlobalType(env, env.toplevel.namedImportScope, name);
+            sym = findGlobalType(env, env.toplevel.namedImportScope, name, namedImportScopeRecovery);
             if (sym.exists()) return sym;
             else bestSoFar = bestOf(bestSoFar, sym);
 
-            sym = findGlobalType(env, env.toplevel.packge.members(), name);
+            sym = findGlobalType(env, env.toplevel.packge.members(), name, noRecovery);
             if (sym.exists()) return sym;
             else bestSoFar = bestOf(bestSoFar, sym);
 
-            sym = findGlobalType(env, env.toplevel.starImportScope, name);
+            sym = findGlobalType(env, env.toplevel.starImportScope, name, starImportScopeRecovery);
             if (sym.exists()) return sym;
             else bestSoFar = bestOf(bestSoFar, sym);
         }
@@ -2089,7 +2350,7 @@ public class Resolve {
         }
 
         if (kind.contains(KindSelector.PCK))
-            return syms.enterPackage(name);
+            return lookupPackage(env, name);
         else return bestSoFar;
     }
 
@@ -2103,20 +2364,22 @@ public class Resolve {
                               Name name, KindSelector kind) {
         Name fullname = TypeSymbol.formFullName(name, pck);
         Symbol bestSoFar = typeNotFound;
-        PackageSymbol pack = null;
-        if (kind.contains(KindSelector.PCK)) {
-            pack = syms.enterPackage(fullname);
-            if (pack.exists()) return pack;
-        }
         if (kind.contains(KindSelector.TYP)) {
-            Symbol sym = loadClass(env, fullname);
+            RecoveryLoadClass recoveryLoadClass =
+                    allowModules && !kind.contains(KindSelector.PCK) &&
+                    !pck.exists() && !env.info.isSpeculative ?
+                        doRecoveryLoadClass : noRecovery;
+            Symbol sym = loadClass(env, fullname, recoveryLoadClass);
             if (sym.exists()) {
                 // don't allow programs to use flatnames
                 if (name == sym.name) return sym;
             }
             else bestSoFar = bestOf(bestSoFar, sym);
         }
-        return (pack != null) ? pack : bestSoFar;
+        if (kind.contains(KindSelector.PCK)) {
+            return lookupPackage(env, fullname);
+        }
+        return bestSoFar;
     }
 
     /** Find an identifier among the members of a given type `site'.
@@ -2225,7 +2488,7 @@ public class Resolve {
                   Type site,
                   Name name,
                   boolean qualified) {
-        return accessInternal(sym, pos, location, site, name, qualified, List.<Type>nil(), null, basicLogResolveHelper);
+        return accessInternal(sym, pos, location, site, name, qualified, List.nil(), null, basicLogResolveHelper);
     }
 
     /** Same as original accessBase(), but without location.
@@ -2393,20 +2656,28 @@ public class Resolve {
         Type mtype = infer.instantiatePolymorphicSignatureInstance(env,
                 (MethodSymbol)spMethod, currentResolutionContext, argtypes);
         for (Symbol sym : polymorphicSignatureScope.getSymbolsByName(spMethod.name)) {
-            if (types.isSameType(mtype, sym.type)) {
-               return sym;
+            // Check that there is already a method symbol for the method
+            // type and owner
+            if (types.isSameType(mtype, sym.type) &&
+                spMethod.owner == sym.owner) {
+                return sym;
             }
         }
 
-        // create the desired method
-        long flags = ABSTRACT | HYPOTHETICAL | spMethod.flags() & Flags.AccessFlags;
+        // Create the desired method
+        // Retain static modifier is to support invocations to
+        // MethodHandle.linkTo* methods
+        long flags = ABSTRACT | HYPOTHETICAL |
+                     spMethod.flags() & (Flags.AccessFlags | Flags.STATIC);
         Symbol msym = new MethodSymbol(flags, spMethod.name, mtype, spMethod.owner) {
             @Override
             public Symbol baseSymbol() {
                 return spMethod;
             }
         };
-        polymorphicSignatureScope.enter(msym);
+        if (!mtype.isErroneous()) { // Cache only if kosher.
+            polymorphicSignatureScope.enter(msym);
+        }
         return msym;
     }
 
@@ -2563,7 +2834,7 @@ public class Resolve {
                 (sym.flags_field & SYNTHETIC) == 0) {
                     List<Type> oldParams = sym.type.hasTag(FORALL) ?
                             ((ForAll)sym.type).tvars :
-                            List.<Type>nil();
+                            List.nil();
                     Type constrType = new ForAll(site.tsym.type.getTypeArguments().appendList(oldParams),
                                                  types.createMethodTypeWithReturn(sym.type.asMethodType(), site));
                     MethodSymbol newConstr = new MethodSymbol(sym.flags(), names.init, constrType, site.tsym) {
@@ -2591,7 +2862,7 @@ public class Resolve {
         site = types.capture(site);
 
         ReferenceLookupHelper lookupHelper = makeReferenceLookupHelper(
-                referenceTree, site, name, List.<Type>nil(), null, VARARITY);
+                referenceTree, site, name, List.nil(), null, VARARITY);
 
         Env<AttrContext> newEnv = env.dup(env.tree, env.info.dup());
         Symbol sym = lookupMethod(newEnv, env.tree.pos(), site.tsym,
@@ -2754,8 +3025,6 @@ public class Resolve {
                             .map(c -> StaticKind.from(c.sym))
                             .reduce(StaticKind::reduce)
                             .orElse(StaticKind.UNDEFINED);
-                case HIDDEN:
-                    return StaticKind.from(((AccessError)sym).sym);
                 default:
                     return StaticKind.UNDEFINED;
             }
@@ -3062,7 +3331,7 @@ public class Resolve {
             if (TreeInfo.isStaticSelector(referenceTree.expr, names)) {
                 if (argtypes.nonEmpty() &&
                         (argtypes.head.hasTag(NONE) ||
-                        types.isSubtypeUnchecked(inferenceContext.asUndetVar(argtypes.head), site))) {
+                        types.isSubtypeUnchecked(inferenceContext.asUndetVar(argtypes.head), originalSite))) {
                     return new UnboundMethodReferenceLookupHelper(referenceTree, name,
                             originalSite, argtypes, typeargtypes, maxPhase);
                 } else {
@@ -3147,7 +3416,7 @@ public class Resolve {
         protected Symbol lookup(Env<AttrContext> env, MethodResolutionPhase phase) {
             WriteableScope sc = WriteableScope.create(syms.arrayClass);
             MethodSymbol arrayConstr = new MethodSymbol(PUBLIC, name, null, site.tsym);
-            arrayConstr.type = new MethodType(List.<Type>of(syms.intType), site, List.<Type>nil(), syms.methodClass);
+            arrayConstr.type = new MethodType(List.of(syms.intType), site, List.nil(), syms.methodClass);
             sc.enter(arrayConstr);
             return findMethodInScope(env, site, name, argtypes, typeargtypes, sc, methodNotFound, phase.isBoxingRequired(), phase.isVarargsRequired(), false);
         }
@@ -3185,8 +3454,7 @@ public class Resolve {
                 findDiamond(env, site, argtypes, typeargtypes, phase.isBoxingRequired(), phase.isVarargsRequired()) :
                 findMethod(env, site, name, argtypes, typeargtypes,
                         phase.isBoxingRequired(), phase.isVarargsRequired());
-            return site.getEnclosingType().hasTag(CLASS) && !hasEnclosingInstance(env, site) ?
-                        new BadConstructorReferenceError(sym) : sym;
+            return enclosingInstanceMissing(env, site) ? new BadConstructorReferenceError(sym) : sym;
         }
 
         @Override
@@ -3268,8 +3536,8 @@ public class Resolve {
                             types.asSuper(env.enclClass.type, c), env.enclClass.sym);
                 }
             }
-            //find a direct superinterface that is a subtype of 'c'
-            for (Type i : types.interfaces(env.enclClass.type)) {
+            //find a direct super type that is a subtype of 'c'
+            for (Type i : types.directSupertypes(env.enclClass.type)) {
                 if (i.tsym.isSubClass(c, types) && i.tsym != c) {
                     log.error(pos, "illegal.default.super.call", c,
                             diags.fragment("redundant.supertype", c, i));
@@ -3286,7 +3554,7 @@ public class Resolve {
         ListBuffer<Type> result = new ListBuffer<>();
         for (Type t1 : types.interfaces(t)) {
             boolean shouldAdd = true;
-            for (Type t2 : types.interfaces(t)) {
+            for (Type t2 : types.directSupertypes(t)) {
                 if (t1 != t2 && types.isSubtypeNoCapture(t2, t1)) {
                     shouldAdd = false;
                 }
@@ -3319,9 +3587,12 @@ public class Resolve {
         }
     }
 
-    boolean hasEnclosingInstance(Env<AttrContext> env, Type type) {
-        Symbol encl = resolveSelfContainingInternal(env, type.tsym, false);
-        return encl != null && !encl.kind.isResolutionError();
+    boolean enclosingInstanceMissing(Env<AttrContext> env, Type type) {
+        if (type.hasTag(CLASS) && type.getEnclosingType().hasTag(CLASS)) {
+            Symbol encl = resolveSelfContainingInternal(env, type.tsym, false);
+            return encl == null || encl.kind.isResolutionError();
+        }
+        return false;
     }
 
     private Symbol resolveSelfContainingInternal(Env<AttrContext> env,
@@ -3333,7 +3604,7 @@ public class Resolve {
         if (env1 != null) {
             while (env1 != null && env1.outer != null) {
                 if (isStatic(env1)) staticOnly = true;
-                if (env1.enclClass.sym.isSubClass(member.owner, types)) {
+                if (env1.enclClass.sym.isSubClass(member.owner.enclClass(), types)) {
                     Symbol sym = env1.info.scope.findFirst(name);
                     if (sym != null) {
                         if (staticOnly) sym = new StaticError(sym);
@@ -3532,8 +3803,8 @@ public class Resolve {
                 Name name,
                 List<Type> argtypes,
                 List<Type> typeargtypes) {
-            argtypes = argtypes == null ? List.<Type>nil() : argtypes;
-            typeargtypes = typeargtypes == null ? List.<Type>nil() : typeargtypes;
+            argtypes = argtypes == null ? List.nil() : argtypes;
+            typeargtypes = typeargtypes == null ? List.nil() : typeargtypes;
             if (name == names.error)
                 return null;
 
@@ -3817,16 +4088,10 @@ public class Resolve {
         private Env<AttrContext> env;
         private Type site;
 
-        AccessError(Symbol sym) {
-            this(null, null, sym);
-        }
-
         AccessError(Env<AttrContext> env, Type site, Symbol sym) {
             super(HIDDEN, sym, "access error");
             this.env = env;
             this.site = site;
-            if (debugResolve)
-                log.error("proc.messager", sym + " @ " + site + " is inaccessible.");
         }
 
         @Override
@@ -3852,9 +4117,21 @@ public class Resolve {
             else if ((sym.flags() & PUBLIC) != 0
                 || (env != null && this.site != null
                     && !isAccessible(env, this.site))) {
-                return diags.create(dkind, log.currentSource(),
-                        pos, "not.def.access.class.intf.cant.access",
-                    sym, sym.location());
+                if (sym.owner.kind == PCK) {
+                    return diags.create(dkind, log.currentSource(),
+                            pos, "not.def.access.package.cant.access",
+                        sym, sym.location(), inaccessiblePackageReason(env, sym.packge()));
+                } else if (   sym.packge() != syms.rootPackage
+                           && !symbolPackageVisible(env, sym)) {
+                    return diags.create(dkind, log.currentSource(),
+                            pos, "not.def.access.class.intf.cant.access.reason",
+                            sym, sym.location(), sym.location().packge(),
+                            inaccessiblePackageReason(env, sym.packge()));
+                } else {
+                    return diags.create(dkind, log.currentSource(),
+                            pos, "not.def.access.class.intf.cant.access",
+                        sym, sym.location());
+                }
             }
             else if ((sym.flags() & (PRIVATE | PROTECTED)) != 0) {
                 return diags.create(dkind, log.currentSource(),
@@ -3865,6 +4142,112 @@ public class Resolve {
             else {
                 return diags.create(dkind, log.currentSource(),
                         pos, "not.def.public.cant.access", sym, sym.location());
+            }
+        }
+
+        private String toString(Type type) {
+            StringBuilder sb = new StringBuilder();
+            sb.append(type);
+            if (type != null) {
+                sb.append("[tsym:").append(type.tsym);
+                if (type.tsym != null)
+                    sb.append("packge:").append(type.tsym.packge());
+                sb.append("]");
+            }
+            return sb.toString();
+        }
+    }
+
+    class InvisibleSymbolError extends InvalidSymbolError {
+
+        private final Env<AttrContext> env;
+        private final boolean suppressError;
+
+        InvisibleSymbolError(Env<AttrContext> env, boolean suppressError, Symbol sym) {
+            super(HIDDEN, sym, "invisible class error");
+            this.env = env;
+            this.suppressError = suppressError;
+            this.name = sym.name;
+        }
+
+        @Override
+        JCDiagnostic getDiagnostic(JCDiagnostic.DiagnosticType dkind,
+                DiagnosticPosition pos,
+                Symbol location,
+                Type site,
+                Name name,
+                List<Type> argtypes,
+                List<Type> typeargtypes) {
+            if (suppressError)
+                return null;
+
+            if (sym.kind == PCK) {
+                JCDiagnostic details = inaccessiblePackageReason(env, sym.packge());
+                return diags.create(dkind, log.currentSource(),
+                        pos, "package.not.visible", sym, details);
+            }
+
+            JCDiagnostic details = inaccessiblePackageReason(env, sym.packge());
+
+            if (pos.getTree() != null) {
+                Symbol o = sym;
+                JCTree tree = pos.getTree();
+
+                while (o.kind != PCK && tree.hasTag(SELECT)) {
+                    o = o.owner;
+                    tree = ((JCFieldAccess) tree).selected;
+                }
+
+                if (o.kind == PCK) {
+                    pos = tree.pos();
+
+                    return diags.create(dkind, log.currentSource(),
+                            pos, "package.not.visible", o, details);
+                }
+            }
+
+            return diags.create(dkind, log.currentSource(),
+                    pos, "not.def.access.package.cant.access", sym, sym.packge(), details);
+        }
+    }
+
+    JCDiagnostic inaccessiblePackageReason(Env<AttrContext> env, PackageSymbol sym) {
+        //no dependency:
+        if (!env.toplevel.modle.readModules.contains(sym.modle)) {
+            //does not read:
+            if (sym.modle != syms.unnamedModule) {
+                if (env.toplevel.modle != syms.unnamedModule) {
+                    return diags.fragment(Fragments.NotDefAccessDoesNotRead(env.toplevel.modle,
+                                                                            sym,
+                                                                            sym.modle));
+                } else {
+                    return diags.fragment(Fragments.NotDefAccessDoesNotReadFromUnnamed(sym,
+                                                                                       sym.modle));
+                }
+            } else {
+                return diags.fragment(Fragments.NotDefAccessDoesNotReadUnnamed(sym,
+                                                                               env.toplevel.modle));
+            }
+        } else {
+            if (sym.packge().modle.exports.stream().anyMatch(e -> e.packge == sym)) {
+                //not exported to this module:
+                if (env.toplevel.modle != syms.unnamedModule) {
+                    return diags.fragment(Fragments.NotDefAccessNotExportedToModule(sym,
+                                                                                    sym.modle,
+                                                                                    env.toplevel.modle));
+                } else {
+                    return diags.fragment(Fragments.NotDefAccessNotExportedToModuleFromUnnamed(sym,
+                                                                                               sym.modle));
+                }
+            } else {
+                //not exported:
+                if (env.toplevel.modle != syms.unnamedModule) {
+                    return diags.fragment(Fragments.NotDefAccessNotExported(sym,
+                                                                            sym.modle));
+                } else {
+                    return diags.fragment(Fragments.NotDefAccessNotExportedFromUnnamed(sym,
+                                                                                       sym.modle));
+                }
             }
         }
     }
@@ -3957,38 +4340,7 @@ public class Resolve {
          */
         Symbol mergeAbstracts(Type site) {
             List<Symbol> ambiguousInOrder = ambiguousSyms.reverse();
-            for (Symbol s : ambiguousInOrder) {
-                Type mt = types.memberType(site, s);
-                boolean found = true;
-                List<Type> allThrown = mt.getThrownTypes();
-                for (Symbol s2 : ambiguousInOrder) {
-                    Type mt2 = types.memberType(site, s2);
-                    if ((s2.flags() & ABSTRACT) == 0 ||
-                        !types.overrideEquivalent(mt, mt2) ||
-                        !types.isSameTypes(s.erasure(types).getParameterTypes(),
-                                       s2.erasure(types).getParameterTypes())) {
-                        //ambiguity cannot be resolved
-                        return this;
-                    }
-                    Type mst = mostSpecificReturnType(mt, mt2);
-                    if (mst == null || mst != mt) {
-                        found = false;
-                        break;
-                    }
-                    allThrown = chk.intersect(allThrown, mt2.getThrownTypes());
-                }
-                if (found) {
-                    //all ambiguous methods were abstract and one method had
-                    //most specific return type then others
-                    return (allThrown == mt.getThrownTypes()) ?
-                            s : new MethodSymbol(
-                                s.flags(),
-                                s.name,
-                                types.createMethodTypeWithThrown(s.type, allThrown),
-                                s.owner);
-                }
-            }
-            return this;
+            return types.mergeAbstracts(ambiguousInOrder, site, true).orElse(this);
         }
 
         @Override
@@ -4154,7 +4506,11 @@ public class Resolve {
                     DiagnosticPosition preferedPos, DiagnosticSource preferredSource,
                     DiagnosticType preferredKind, JCDiagnostic d) {
                 JCDiagnostic cause = (JCDiagnostic)d.getArgs()[causeIndex];
-                return diags.create(preferredKind, preferredSource, d.getDiagnosticPosition(),
+                DiagnosticPosition pos = d.getDiagnosticPosition();
+                if (pos == null) {
+                    pos = preferedPos;
+                }
+                return diags.create(preferredKind, preferredSource, pos,
                         "prob.found.req", cause);
             }
         }

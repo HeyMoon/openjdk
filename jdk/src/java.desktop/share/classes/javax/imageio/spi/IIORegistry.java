@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -49,6 +49,8 @@ import com.sun.imageio.plugins.bmp.BMPImageReaderSpi;
 import com.sun.imageio.plugins.bmp.BMPImageWriterSpi;
 import com.sun.imageio.plugins.wbmp.WBMPImageReaderSpi;
 import com.sun.imageio.plugins.wbmp.WBMPImageWriterSpi;
+import com.sun.imageio.plugins.tiff.TIFFImageReaderSpi;
+import com.sun.imageio.plugins.tiff.TIFFImageWriterSpi;
 import sun.awt.AppContext;
 import java.util.ServiceLoader;
 import java.util.ServiceConfigurationError;
@@ -60,24 +62,24 @@ import java.util.ServiceConfigurationError;
  * inexpensive to load and inspect all available service provider
  * classes.  These classes may them be used to locate and instantiate
  * more heavyweight classes that will perform actual work, in this
- * case instances of <code>ImageReader</code>,
- * <code>ImageWriter</code>, <code>ImageTranscoder</code>,
- * <code>ImageInputStream</code>, and <code>ImageOutputStream</code>.
+ * case instances of {@code ImageReader},
+ * {@code ImageWriter}, {@code ImageTranscoder},
+ * {@code ImageInputStream}, and {@code ImageOutputStream}.
  *
  * Service providers found from the Java platform are automatically
  * loaded as soon as this class is instantiated.
  *
- * <p> When the <code>registerApplicationClasspathSpis</code> method
+ * <p> When the {@code registerApplicationClasspathSpis} method
  * is called, service provider instances declared in the
  * meta-information section of JAR files on the application class path
- * are loaded.  To declare a service provider, a <code>services</code>
- * subdirectory is placed within the <code>META-INF</code> directory
+ * are loaded.  To declare a service provider, a {@code services}
+ * subdirectory is placed within the {@code META-INF} directory
  * that is present in every JAR file.  This directory contains a file
  * for each service provider interface that has one or more
  * implementation classes present in the JAR file.  For example, if
  * the JAR file contained a class named
- * <code>com.mycompany.imageio.MyFormatReaderSpi</code> which
- * implements the <code>ImageReaderSpi</code> interface, the JAR file
+ * {@code com.mycompany.imageio.MyFormatReaderSpi} which
+ * implements the {@code ImageReaderSpi} interface, the JAR file
  * would contain a file named:
  *
  * <pre>
@@ -97,20 +99,18 @@ import java.util.ServiceConfigurationError;
  *
  * <p> It is also possible to manually add service providers not found
  * automatically, as well as to remove those that are using the
- * interfaces of the <code>ServiceRegistry</code> class.  Thus
+ * interfaces of the {@code ServiceRegistry} class.  Thus
  * the application may customize the contents of the registry as it
  * sees fit.
  *
  * <p> For more details on declaring service providers, and the JAR
- * format in general, see the <a
- * href="{@docRoot}/../technotes/guides/jar/jar.html">
- * JAR File Specification</a>.
- *
+ * format in general, see the
+ * <a href="{@docRoot}/../specs/jar/jar.html">JAR File Specification</a>.
  */
 public final class IIORegistry extends ServiceRegistry {
 
     /**
-     * A <code>Vector</code> containing the valid IIO registry
+     * A {@code Vector} containing the valid IIO registry
      * categories (superinterfaces) to be used in the constructor.
      */
     private static final Vector<Class<?>> initialCategories = new Vector<>(5);
@@ -137,16 +137,16 @@ public final class IIORegistry extends ServiceRegistry {
     }
 
     /**
-     * Returns the default <code>IIORegistry</code> instance used by
+     * Returns the default {@code IIORegistry} instance used by
      * the Image I/O API.  This instance should be used for all
      * registry functions.
      *
-     * <p> Each <code>ThreadGroup</code> will receive its own
-     * instance; this allows different <code>Applet</code>s in the
+     * <p> Each {@code ThreadGroup} will receive its own
+     * instance; this allows different {@code Applet}s in the
      * same browser (for example) to each have their own registry.
      *
      * @return the default registry for the current
-     * <code>ThreadGroup</code>.
+     * {@code ThreadGroup}.
      */
     public static IIORegistry getDefaultInstance() {
         AppContext context = AppContext.getAppContext();
@@ -168,6 +168,8 @@ public final class IIORegistry extends ServiceRegistry {
         registerServiceProvider(new BMPImageWriterSpi());
         registerServiceProvider(new WBMPImageReaderSpi());
         registerServiceProvider(new WBMPImageWriterSpi());
+        registerServiceProvider(new TIFFImageReaderSpi());
+        registerServiceProvider(new TIFFImageWriterSpi());
         registerServiceProvider(new PNGImageReaderSpi());
         registerServiceProvider(new PNGImageWriterSpi());
         registerServiceProvider(new JPEGImageReaderSpi());
@@ -185,8 +187,8 @@ public final class IIORegistry extends ServiceRegistry {
     /**
      * Registers all available service providers found on the
      * application class path, using the default
-     * <code>ClassLoader</code>.  This method is typically invoked by
-     * the <code>ImageIO.scanForPlugins</code> method.
+     * {@code ClassLoader}.  This method is typically invoked by
+     * the {@code ImageIO.scanForPlugins} method.
      *
      * @see javax.imageio.ImageIO#scanForPlugins
      * @see ClassLoader#getResources

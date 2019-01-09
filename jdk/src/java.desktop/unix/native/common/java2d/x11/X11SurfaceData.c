@@ -270,7 +270,6 @@ Java_sun_java2d_x11_XSurfaceData_initOps(JNIEnv *env, jobject xsd,
     xsdo->sdOps.Dispose = X11SD_Dispose;
     xsdo->GetPixmapWithBg = X11SD_GetPixmapWithBg;
     xsdo->ReleasePixmapWithBg = X11SD_ReleasePixmapWithBg;
-    xsdo->widget = NULL;
     if (peer != NULL) {
         xsdo->drawable = JNU_CallMethodByName(env, &hasException, peer, "getWindow", "()J").j;
         if (hasException) {
@@ -438,6 +437,15 @@ jboolean XShared_initSurface(JNIEnv *env, X11SDOps *xsdo, jint depth, jint width
         xsdo->drawable = drawable;
         xsdo->isPixmap = JNI_FALSE;
     } else {
+        /*
+         * width , height must be nonzero otherwise XCreatePixmap
+         * generates BadValue in error_handler
+         */
+        if (width <= 0 || height <= 0 || width > 32767 || height > 32767) {
+            JNU_ThrowOutOfMemoryError(env,
+                                  "Can't create offscreen surface");
+            return JNI_FALSE;
+        }
         xsdo->isPixmap = JNI_TRUE;
         /* REMIND: workaround for bug 4420220 on pgx32 boards:
            don't use DGA with pixmaps unless USE_DGA_PIXMAPS is set.
@@ -1078,7 +1086,7 @@ static int
 X11SD_ClipToRoot(SurfaceDataBounds *b, SurfaceDataBounds *bounds,
                  X11SDOps *xsdo)
 {
-    Position x1=0, y1=0, x2=0, y2=0;
+    short x1=0, y1=0, x2=0, y2=0;
     int tmpx, tmpy;
     Window tmpchild;
 

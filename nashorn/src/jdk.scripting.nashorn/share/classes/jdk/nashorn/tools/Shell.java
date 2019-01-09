@@ -25,7 +25,28 @@
 
 package jdk.nashorn.tools;
 
-import static jdk.nashorn.internal.runtime.Source.sourceFor;
+import jdk.nashorn.api.scripting.NashornException;
+import jdk.nashorn.internal.codegen.Compiler;
+import jdk.nashorn.internal.codegen.Compiler.CompilationPhases;
+import jdk.nashorn.internal.ir.Expression;
+import jdk.nashorn.internal.ir.FunctionNode;
+import jdk.nashorn.internal.ir.debug.ASTWriter;
+import jdk.nashorn.internal.ir.debug.PrintVisitor;
+import jdk.nashorn.internal.objects.Global;
+import jdk.nashorn.internal.objects.NativeSymbol;
+import jdk.nashorn.internal.parser.Parser;
+import jdk.nashorn.internal.runtime.Context;
+import jdk.nashorn.internal.runtime.ErrorManager;
+import jdk.nashorn.internal.runtime.JSType;
+import jdk.nashorn.internal.runtime.Property;
+import jdk.nashorn.internal.runtime.ScriptEnvironment;
+import jdk.nashorn.internal.runtime.ScriptFunction;
+import jdk.nashorn.internal.runtime.ScriptObject;
+import jdk.nashorn.internal.runtime.ScriptRuntime;
+import jdk.nashorn.internal.runtime.ScriptingFunctions;
+import jdk.nashorn.internal.runtime.Symbol;
+import jdk.nashorn.internal.runtime.arrays.ArrayLikeIterator;
+import jdk.nashorn.internal.runtime.options.Options;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -36,30 +57,24 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.PrintWriter;
+import java.io.StreamTokenizer;
+import java.io.StringReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.ResourceBundle;
-import jdk.nashorn.api.scripting.NashornException;
-import jdk.nashorn.internal.codegen.Compiler;
-import jdk.nashorn.internal.codegen.Compiler.CompilationPhases;
-import jdk.nashorn.internal.ir.FunctionNode;
-import jdk.nashorn.internal.ir.debug.ASTWriter;
-import jdk.nashorn.internal.ir.debug.PrintVisitor;
-import jdk.nashorn.internal.objects.Global;
-import jdk.nashorn.internal.parser.Parser;
-import jdk.nashorn.internal.runtime.Context;
-import jdk.nashorn.internal.runtime.ErrorManager;
-import jdk.nashorn.internal.runtime.JSType;
-import jdk.nashorn.internal.runtime.Property;
-import jdk.nashorn.internal.runtime.ScriptEnvironment;
-import jdk.nashorn.internal.runtime.ScriptFunction;
-import jdk.nashorn.internal.runtime.ScriptRuntime;
-import jdk.nashorn.internal.runtime.options.Options;
+
+import static jdk.nashorn.internal.runtime.Source.sourceFor;
 
 /**
  * Command line Shell for processing JavaScript files.
  */
-public class Shell {
+public class Shell implements PartialParser {
 
     /**
      * Resource name for properties file
@@ -68,7 +83,7 @@ public class Shell {
     /**
      * Shell message bundle.
      */
-    private static final ResourceBundle bundle = ResourceBundle.getBundle(MESSAGE_RESOURCE, Locale.getDefault());
+    protected static final ResourceBundle bundle = ResourceBundle.getBundle(MESSAGE_RESOURCE, Locale.getDefault());
 
     /**
      * Exit code for command line tool - successful
@@ -195,7 +210,8 @@ public class Shell {
         // parse options
         if (args != null) {
             try {
-                options.process(args);
+                final String[] prepArgs = preprocessArgs(args);
+                options.process(prepArgs);
             } catch (final IllegalArgumentException e) {
                 werr.println(bundle.getString("shell.usage"));
                 options.displayHelp(e);
@@ -223,6 +239,113 @@ public class Shell {
         }
 
         return new Context(options, errors, wout, werr, Thread.currentThread().getContextClassLoader());
+    }
+
+    /**
+     * Preprocess the command line arguments passed in by the shell. This method checks, for the first non-option
+     * argument, whether the file denoted by it begins with a shebang line. If so, it is assumed that execution in
+     * shebang mode is intended. The consequence of this is that the identified script file will be treated as the
+     * <em>only</em> script file, and all subsequent arguments will be regarded as arguments to the script.
+     * <p>
+     * This method canonicalizes the command line arguments to the form {@code <options> <script> -- <arguments>} if a
+     * shebang script is identified. On platforms that pass shebang arguments as single strings, the shebang arguments
+     * will be broken down into single arguments; whitespace is used as separator.
+     * <p>
+     * Shebang mode is entered regardless of whether the script is actually run directly from the shell, or indirectly
+     * via the {@code jjs} executable. It is the user's / script author's responsibility to ensure that the arguments
+     * given on the shebang line do not lead to a malformed argument sequence. In particular, the shebang arguments
+     * should not contain any whitespace for purposes other than separating arguments, as the different platforms deal
+     * with whitespace in different and incompatible ways.
+     * <p>
+     * @implNote Example:<ul>
+     * <li>Shebang line in {@code script.js}: {@code #!/path/to/jjs --language=es6}</li>
+     * <li>Command line: {@code ./script.js arg2}</li>
+     * <li>{@code args} array passed to Nashorn: {@code --language=es6,./script.js,arg}</li>
+     * <li>Required canonicalized arguments array: {@code --language=es6,./script.js,--,arg2}</li>
+     * </ul>
+     *
+     * @param args the command line arguments as passed into Nashorn.
+     * @return the passed and possibly canonicalized argument list
+     */
+    private static String[] preprocessArgs(final String[] args) {
+        if (args.length == 0) {
+            return args;
+        }
+
+        final List<String> processedArgs = new ArrayList<>();
+        processedArgs.addAll(Arrays.asList(args));
+
+        // Nashorn supports passing multiple shebang arguments. On platforms that pass anything following the
+        // shebang interpreter notice as one argument, the first element of the argument array needs to be special-cased
+        // as it might actually contain several arguments. Mac OS X splits shebang arguments, other platforms don't.
+        // This special handling is also only necessary if the first argument actually starts with an option.
+        if (args[0].startsWith("-") && !System.getProperty("os.name", "generic").startsWith("Mac OS X")) {
+            processedArgs.addAll(0, tokenizeString(processedArgs.remove(0)));
+        }
+
+        int shebangFilePos = -1; // -1 signifies "none found"
+        // identify a shebang file and its position in the arguments array (if any)
+        for (int i = 0; i < processedArgs.size(); ++i) {
+            final String a = processedArgs.get(i);
+            if (!a.startsWith("-")) {
+                final Path p = Paths.get(a);
+                String l = "";
+                try (final BufferedReader r = Files.newBufferedReader(p)) {
+                    l = r.readLine();
+                } catch (final IOException ioe) {
+                    // ignore
+                }
+                if (l.startsWith("#!")) {
+                    shebangFilePos = i;
+                }
+                // We're only checking the first non-option argument. If it's not a shebang file, we're in normal
+                // execution mode.
+                break;
+            }
+        }
+        if (shebangFilePos != -1) {
+            // Insert the argument separator after the shebang script file.
+            processedArgs.add(shebangFilePos + 1, "--");
+        }
+        return processedArgs.stream().toArray(String[]::new);
+    }
+
+    public static List<String> tokenizeString(final String str) {
+        final StreamTokenizer tokenizer = new StreamTokenizer(new StringReader(str));
+        tokenizer.resetSyntax();
+        tokenizer.wordChars(0, 255);
+        tokenizer.whitespaceChars(0, ' ');
+        tokenizer.commentChar('#');
+        tokenizer.quoteChar('"');
+        tokenizer.quoteChar('\'');
+        final List<String> tokenList = new ArrayList<>();
+        final StringBuilder toAppend = new StringBuilder();
+        while (nextToken(tokenizer) != StreamTokenizer.TT_EOF) {
+            final String s = tokenizer.sval;
+            // The tokenizer understands about honoring quoted strings and recognizes
+            // them as one token that possibly contains multiple space-separated words.
+            // It does not recognize quoted spaces, though, and will split after the
+            // escaping \ character. This is handled here.
+            if (s.endsWith("\\")) {
+                // omit trailing \, append space instead
+                toAppend.append(s.substring(0, s.length() - 1)).append(' ');
+            } else {
+                tokenList.add(toAppend.append(s).toString());
+                toAppend.setLength(0);
+            }
+        }
+        if (toAppend.length() != 0) {
+            tokenList.add(toAppend.toString());
+        }
+        return tokenList;
+    }
+
+    private static int nextToken(final StreamTokenizer tokenizer) {
+        try {
+            return tokenizer.nextToken();
+        } catch (final IOException ioe) {
+            return StreamTokenizer.TT_EOF;
+        }
     }
 
     /**
@@ -254,12 +377,9 @@ public class Shell {
                     return COMPILATION_ERROR;
                 }
 
-                new Compiler(
+                Compiler.forNoInstallerCompilation(
                        context,
-                       env,
-                       null, //null - pass no code installer - this is compile only
                        functionNode.getSource(),
-                       context.getErrorManager(),
                        env._strict | functionNode.isStrict()).
                        compile(functionNode, CompilationPhases.COMPILE_ALL_NO_INSTALL);
 
@@ -318,6 +438,9 @@ public class Shell {
                 final File file = new File(fileName);
                 final ScriptFunction script = context.compileScript(sourceFor(fileName, file), global);
                 if (script == null || errors.getNumberOfErrors() != 0) {
+                    if (context.getEnv()._parse_only && !errors.hasErrors()) {
+                        continue; // No error, continue to consume all files in list
+                    }
                     return COMPILATION_ERROR;
                 }
 
@@ -397,13 +520,49 @@ public class Shell {
     }
 
     /**
+     * Parse potentially partial code and keep track of the start of last expression.
+     * This 'partial' parsing support is meant to be used for code-completion.
+     *
+     * @param context the nashorn context
+     * @param code code that is to be parsed
+     * @return the start index of the last expression parsed in the (incomplete) code.
+     */
+    @Override
+    public final int getLastExpressionStart(final Context context, final String code) {
+        final int[] exprStart = { -1 };
+
+        final Parser p = new Parser(context.getEnv(), sourceFor("<partial_code>", code),new Context.ThrowErrorManager()) {
+            @Override
+            protected Expression expression() {
+                exprStart[0] = this.start;
+                return super.expression();
+            }
+
+            @Override
+            protected Expression assignmentExpression(final boolean noIn) {
+                exprStart[0] = this.start;
+                return super.assignmentExpression(noIn);
+            }
+        };
+
+        try {
+            p.parse();
+        } catch (final Exception ignored) {
+            // throw any parser exception, but we are partial parsing anyway
+        }
+
+        return exprStart[0];
+    }
+
+
+    /**
      * read-eval-print loop for Nashorn shell.
      *
      * @param context the nashorn context
      * @param global  global scope object to use
      * @return return code
      */
-    private static int readEvalPrint(final Context context, final Global global) {
+    protected int readEvalPrint(final Context context, final Global global) {
         final String prompt = bundle.getString("shell.prompt");
         final BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
         final PrintWriter err = context.getErr();
@@ -440,7 +599,7 @@ public class Shell {
                 try {
                     final Object res = context.eval(global, source, global, "<shell>");
                     if (res != ScriptRuntime.UNDEFINED) {
-                        err.println(JSType.toString(res));
+                        err.println(toString(res, global));
                     }
                 } catch (final Exception e) {
                     err.println(e);
@@ -456,5 +615,57 @@ public class Shell {
         }
 
         return SUCCESS;
+    }
+
+    /**
+     * Converts {@code result} to a printable string. The reason we don't use {@link JSType#toString(Object)}
+     * or {@link ScriptRuntime#safeToString(Object)} is that we want to be able to render Symbol values
+     * even if they occur within an Array, and therefore have to implement our own Array to String
+     * conversion.
+     *
+     * @param result the result
+     * @param global the global object
+     * @return the string representation
+     */
+    protected static String toString(final Object result, final Global global) {
+        if (result instanceof Symbol) {
+            // Normal implicit conversion of symbol to string would throw TypeError
+            return result.toString();
+        }
+
+        if (result instanceof NativeSymbol) {
+            return JSType.toPrimitive(result).toString();
+        }
+
+        if (isArrayWithDefaultToString(result, global)) {
+            // This should yield the same string as Array.prototype.toString but
+            // will not throw if the array contents include symbols.
+            final StringBuilder sb = new StringBuilder();
+            final Iterator<Object> iter = ArrayLikeIterator.arrayLikeIterator(result, true);
+
+            while (iter.hasNext()) {
+                final Object obj = iter.next();
+
+                if (obj != null && obj != ScriptRuntime.UNDEFINED) {
+                    sb.append(toString(obj, global));
+                }
+
+                if (iter.hasNext()) {
+                    sb.append(',');
+                }
+            }
+
+            return sb.toString();
+        }
+
+        return JSType.toString(result);
+    }
+
+    private static boolean isArrayWithDefaultToString(final Object result, final Global global) {
+        if (result instanceof ScriptObject) {
+            final ScriptObject sobj = (ScriptObject) result;
+            return sobj.isArray() && sobj.get("toString") == global.getArrayPrototype().get("toString");
+        }
+        return false;
     }
 }

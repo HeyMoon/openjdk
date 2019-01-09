@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1994, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1994, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,25 +24,54 @@
  */
 package java.lang;
 
-import java.io.*;
-import java.lang.reflect.Executable;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.Console;
+import java.io.FileDescriptor;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintStream;
+import java.io.UnsupportedEncodingException;
 import java.lang.annotation.Annotation;
+import java.lang.module.ModuleDescriptor;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Executable;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.net.URI;
 import java.security.AccessControlContext;
-import java.util.Properties;
-import java.util.PropertyPermission;
-import java.util.StringTokenizer;
-import java.util.Map;
+import java.security.ProtectionDomain;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
-import java.security.AllPermission;
 import java.nio.channels.Channel;
 import java.nio.channels.spi.SelectorProvider;
-import sun.nio.ch.Interruptible;
-import sun.reflect.CallerSensitive;
-import sun.reflect.Reflection;
-import sun.security.util.SecurityConstants;
-import sun.reflect.annotation.AnnotationType;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Properties;
+import java.util.PropertyPermission;
+import java.util.ResourceBundle;
+import java.util.function.Supplier;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
+
+import jdk.internal.module.ModuleBootstrap;
+import jdk.internal.module.ServicesCatalog;
+import jdk.internal.reflect.CallerSensitive;
+import jdk.internal.reflect.Reflection;
 import jdk.internal.HotSpotIntrinsicCandidate;
+import jdk.internal.misc.JavaLangAccess;;
+import jdk.internal.misc.SharedSecrets;;
+import jdk.internal.misc.VM;
+import jdk.internal.logger.LoggerFinderLoader;
+import jdk.internal.logger.LazyLoggers;
+import jdk.internal.logger.LocalizedLoggerWrapper;
+import sun.reflect.annotation.AnnotationType;
+import sun.nio.ch.Interruptible;
+import sun.security.util.SecurityConstants;
 
 /**
  * The <code>System</code> class contains several useful class fields
@@ -58,7 +87,6 @@ import jdk.internal.HotSpotIntrinsicCandidate;
  * @since   1.0
  */
 public final class System {
-
     /* register the natives via the static initializer.
      *
      * VM will invoke the initializeSystemClass method to complete
@@ -81,7 +109,7 @@ public final class System {
      * corresponds to keyboard input or another input source specified by
      * the host environment or user.
      */
-    public final static InputStream in = null;
+    public static final InputStream in = null;
 
     /**
      * The "standard" output stream. This stream is already
@@ -108,7 +136,7 @@ public final class System {
      * @see     java.io.PrintStream#println(java.lang.Object)
      * @see     java.io.PrintStream#println(java.lang.String)
      */
-    public final static PrintStream out = null;
+    public static final PrintStream out = null;
 
     /**
      * The "standard" error output stream. This stream is already
@@ -122,11 +150,11 @@ public final class System {
      * variable <code>out</code>, has been redirected to a file or other
      * destination that is typically not continuously monitored.
      */
-    public final static PrintStream err = null;
+    public static final PrintStream err = null;
 
     /* The security manager for the system.
      */
-    private static volatile SecurityManager security = null;
+    private static volatile SecurityManager security;
 
     /**
      * Reassigns the "standard" input stream.
@@ -200,22 +228,25 @@ public final class System {
         setErr0(err);
     }
 
-    private static volatile Console cons = null;
+    private static volatile Console cons;
     /**
      * Returns the unique {@link java.io.Console Console} object associated
      * with the current Java virtual machine, if any.
      *
-     * @return  The system console, if any, otherwise <tt>null</tt>.
+     * @return  The system console, if any, otherwise {@code null}.
      *
      * @since   1.6
      */
      public static Console console() {
-         if (cons == null) {
+         Console c;
+         if ((c = cons) == null) {
              synchronized (System.class) {
-                 cons = sun.misc.SharedSecrets.getJavaIOAccess().console();
+                 if ((c = cons) == null) {
+                     cons = c = SharedSecrets.getJavaIOAccess().console();
+                 }
              }
          }
-         return cons;
+         return c;
      }
 
     /**
@@ -232,7 +263,7 @@ public final class System {
      * inheritedChannel}, this method may return other kinds of
      * channels in the future.
      *
-     * @return  The inherited channel, if any, otherwise <tt>null</tt>.
+     * @return  The inherited channel, if any, otherwise {@code null}.
      *
      * @throws  IOException
      *          If an I/O error occurs
@@ -281,12 +312,13 @@ public final class System {
      * @see SecurityManager#checkPermission
      * @see java.lang.RuntimePermission
      */
-    public static
-    void setSecurityManager(final SecurityManager s) {
-        try {
-            s.checkPackageAccess("java.lang");
-        } catch (Exception e) {
-            // no-op
+    public static void setSecurityManager(final SecurityManager s) {
+        if (s != null) {
+            try {
+                s.checkPackageAccess("java.lang");
+            } catch (Exception e) {
+                // no-op
+            }
         }
         setSecurityManager0(s);
     }
@@ -545,11 +577,16 @@ public final class System {
      * system properties, a set of system properties is first created and
      * initialized. This set of system properties always includes values
      * for the following keys:
-     * <table summary="Shows property keys and associated values">
+     * <table class="striped">
+     * <caption style="display:none">Shows property keys and associated values</caption>
+     * <thead>
      * <tr><th>Key</th>
      *     <th>Description of Associated Value</th></tr>
+     * </thead>
+     * <tbody>
      * <tr><td><code>java.version</code></td>
-     *     <td>Java Runtime Environment version</td></tr>
+     *     <td>Java Runtime Environment version which may be interpreted
+     *     as a {@link Runtime.Version}</td></tr>
      * <tr><td><code>java.vendor</code></td>
      *     <td>Java Runtime Environment vendor</td></tr>
      * <tr><td><code>java.vendor.url</code></td>
@@ -557,19 +594,22 @@ public final class System {
      * <tr><td><code>java.home</code></td>
      *     <td>Java installation directory</td></tr>
      * <tr><td><code>java.vm.specification.version</code></td>
-     *     <td>Java Virtual Machine specification version</td></tr>
+     *     <td>Java Virtual Machine specification version which may be
+     *     interpreted as a {@link Runtime.Version}</td></tr>
      * <tr><td><code>java.vm.specification.vendor</code></td>
      *     <td>Java Virtual Machine specification vendor</td></tr>
      * <tr><td><code>java.vm.specification.name</code></td>
      *     <td>Java Virtual Machine specification name</td></tr>
      * <tr><td><code>java.vm.version</code></td>
-     *     <td>Java Virtual Machine implementation version</td></tr>
+     *     <td>Java Virtual Machine implementation version which may be
+     *     interpreted as a {@link Runtime.Version}</td></tr>
      * <tr><td><code>java.vm.vendor</code></td>
      *     <td>Java Virtual Machine implementation vendor</td></tr>
      * <tr><td><code>java.vm.name</code></td>
      *     <td>Java Virtual Machine implementation name</td></tr>
      * <tr><td><code>java.specification.version</code></td>
-     *     <td>Java Runtime Environment specification  version</td></tr>
+     *     <td>Java Runtime Environment specification version which may be
+     *     interpreted as a {@link Runtime.Version}</td></tr>
      * <tr><td><code>java.specification.vendor</code></td>
      *     <td>Java Runtime Environment specification  vendor</td></tr>
      * <tr><td><code>java.specification.name</code></td>
@@ -602,6 +642,7 @@ public final class System {
      *     <td>User's home directory</td></tr>
      * <tr><td><code>user.dir</code></td>
      *     <td>User's current working directory</td></tr>
+     * </tbody>
      * </table>
      * <p>
      * Multiple paths in a system property value are separated by the path
@@ -610,6 +651,26 @@ public final class System {
      * Note that even if the security manager does not permit the
      * <code>getProperties</code> operation, it may choose to permit the
      * {@link #getProperty(String)} operation.
+     *
+     * @implNote In addition to the standard system properties, the system
+     * properties may include the following keys:
+     * <table class="striped">
+     * <caption style="display:none">Shows property keys and associated values</caption>
+     * <thead>
+     * <tr><th>Key</th>
+     *     <th>Description of Associated Value</th></tr>
+     * </thead>
+     * <tbody>
+     * <tr><td>{@code jdk.module.path}</td>
+     *     <td>The application module path</td></tr>
+     * <tr><td>{@code jdk.module.upgrade.path}</td>
+     *     <td>The upgrade module path</td></tr>
+     * <tr><td>{@code jdk.module.main}</td>
+     *     <td>The module name of the initial/main module</td></tr>
+     * <tr><td>{@code jdk.module.main.class}</td>
+     *     <td>The main class name of the initial module</td></tr>
+     * </tbody>
+     * </table>
      *
      * @return     the system properties
      * @exception  SecurityException  if a security manager exists and its
@@ -849,7 +910,7 @@ public final class System {
      * being thrown.  If no exception is thrown the value of the
      * variable <code>name</code> is returned.
      *
-     * <p><a name="EnvironmentVSSystemProperties"><i>System
+     * <p><a id="EnvironmentVSSystemProperties"><i>System
      * properties</i> and <i>environment variables</i></a> are both
      * conceptually mappings between names and values.  Both
      * mechanisms can be used to pass user-defined information to a
@@ -942,6 +1003,684 @@ public final class System {
     }
 
     /**
+     * {@code System.Logger} instances log messages that will be
+     * routed to the underlying logging framework the {@link System.LoggerFinder
+     * LoggerFinder} uses.
+     * <p>
+     * {@code System.Logger} instances are typically obtained from
+     * the {@link java.lang.System System} class, by calling
+     * {@link java.lang.System#getLogger(java.lang.String) System.getLogger(loggerName)}
+     * or {@link java.lang.System#getLogger(java.lang.String, java.util.ResourceBundle)
+     * System.getLogger(loggerName, bundle)}.
+     *
+     * @see java.lang.System#getLogger(java.lang.String)
+     * @see java.lang.System#getLogger(java.lang.String, java.util.ResourceBundle)
+     * @see java.lang.System.LoggerFinder
+     *
+     * @since 9
+     *
+     */
+    public interface Logger {
+
+        /**
+         * System {@linkplain Logger loggers} levels.
+         * <p>
+         * A level has a {@linkplain #getName() name} and {@linkplain
+         * #getSeverity() severity}.
+         * Level values are {@link #ALL}, {@link #TRACE}, {@link #DEBUG},
+         * {@link #INFO}, {@link #WARNING}, {@link #ERROR}, {@link #OFF},
+         * by order of increasing severity.
+         * <br>
+         * {@link #ALL} and {@link #OFF}
+         * are simple markers with severities mapped respectively to
+         * {@link java.lang.Integer#MIN_VALUE Integer.MIN_VALUE} and
+         * {@link java.lang.Integer#MAX_VALUE Integer.MAX_VALUE}.
+         * <p>
+         * <b>Severity values and Mapping to {@code java.util.logging.Level}.</b>
+         * <p>
+         * {@linkplain System.Logger.Level System logger levels} are mapped to
+         * {@linkplain java.util.logging.Level  java.util.logging levels}
+         * of corresponding severity.
+         * <br>The mapping is as follows:
+         * <br><br>
+         * <table border="1">
+         * <caption>System.Logger Severity Level Mapping</caption>
+         * <tr><td><b>System.Logger Levels</b></td>
+         * <td>{@link Logger.Level#ALL ALL}</td>
+         * <td>{@link Logger.Level#TRACE TRACE}</td>
+         * <td>{@link Logger.Level#DEBUG DEBUG}</td>
+         * <td>{@link Logger.Level#INFO INFO}</td>
+         * <td>{@link Logger.Level#WARNING WARNING}</td>
+         * <td>{@link Logger.Level#ERROR ERROR}</td>
+         * <td>{@link Logger.Level#OFF OFF}</td>
+         * </tr>
+         * <tr><td><b>java.util.logging Levels</b></td>
+         * <td>{@link java.util.logging.Level#ALL ALL}</td>
+         * <td>{@link java.util.logging.Level#FINER FINER}</td>
+         * <td>{@link java.util.logging.Level#FINE FINE}</td>
+         * <td>{@link java.util.logging.Level#INFO INFO}</td>
+         * <td>{@link java.util.logging.Level#WARNING WARNING}</td>
+         * <td>{@link java.util.logging.Level#SEVERE SEVERE}</td>
+         * <td>{@link java.util.logging.Level#OFF OFF}</td>
+         * </tr>
+         * </table>
+         *
+         * @since 9
+         *
+         * @see java.lang.System.LoggerFinder
+         * @see java.lang.System.Logger
+         */
+        public enum Level {
+
+            // for convenience, we're reusing java.util.logging.Level int values
+            // the mapping logic in sun.util.logging.PlatformLogger depends
+            // on this.
+            /**
+             * A marker to indicate that all levels are enabled.
+             * This level {@linkplain #getSeverity() severity} is
+             * {@link Integer#MIN_VALUE}.
+             */
+            ALL(Integer.MIN_VALUE),  // typically mapped to/from j.u.l.Level.ALL
+            /**
+             * {@code TRACE} level: usually used to log diagnostic information.
+             * This level {@linkplain #getSeverity() severity} is
+             * {@code 400}.
+             */
+            TRACE(400),   // typically mapped to/from j.u.l.Level.FINER
+            /**
+             * {@code DEBUG} level: usually used to log debug information traces.
+             * This level {@linkplain #getSeverity() severity} is
+             * {@code 500}.
+             */
+            DEBUG(500),   // typically mapped to/from j.u.l.Level.FINEST/FINE/CONFIG
+            /**
+             * {@code INFO} level: usually used to log information messages.
+             * This level {@linkplain #getSeverity() severity} is
+             * {@code 800}.
+             */
+            INFO(800),    // typically mapped to/from j.u.l.Level.INFO
+            /**
+             * {@code WARNING} level: usually used to log warning messages.
+             * This level {@linkplain #getSeverity() severity} is
+             * {@code 900}.
+             */
+            WARNING(900), // typically mapped to/from j.u.l.Level.WARNING
+            /**
+             * {@code ERROR} level: usually used to log error messages.
+             * This level {@linkplain #getSeverity() severity} is
+             * {@code 1000}.
+             */
+            ERROR(1000),  // typically mapped to/from j.u.l.Level.SEVERE
+            /**
+             * A marker to indicate that all levels are disabled.
+             * This level {@linkplain #getSeverity() severity} is
+             * {@link Integer#MAX_VALUE}.
+             */
+            OFF(Integer.MAX_VALUE);  // typically mapped to/from j.u.l.Level.OFF
+
+            private final int severity;
+
+            private Level(int severity) {
+                this.severity = severity;
+            }
+
+            /**
+             * Returns the name of this level.
+             * @return this level {@linkplain #name()}.
+             */
+            public final String getName() {
+                return name();
+            }
+
+            /**
+             * Returns the severity of this level.
+             * A higher severity means a more severe condition.
+             * @return this level severity.
+             */
+            public final int getSeverity() {
+                return severity;
+            }
+        }
+
+        /**
+         * Returns the name of this logger.
+         *
+         * @return the logger name.
+         */
+        public String getName();
+
+        /**
+         * Checks if a message of the given level would be logged by
+         * this logger.
+         *
+         * @param level the log message level.
+         * @return {@code true} if the given log message level is currently
+         *         being logged.
+         *
+         * @throws NullPointerException if {@code level} is {@code null}.
+         */
+        public boolean isLoggable(Level level);
+
+        /**
+         * Logs a message.
+         *
+         * @implSpec The default implementation for this method calls
+         * {@code this.log(level, (ResourceBundle)null, msg, (Object[])null);}
+         *
+         * @param level the log message level.
+         * @param msg the string message (or a key in the message catalog, if
+         * this logger is a {@link
+         * LoggerFinder#getLocalizedLogger(java.lang.String,
+         * java.util.ResourceBundle, java.lang.Module) localized logger});
+         * can be {@code null}.
+         *
+         * @throws NullPointerException if {@code level} is {@code null}.
+         */
+        public default void log(Level level, String msg) {
+            log(level, (ResourceBundle) null, msg, (Object[]) null);
+        }
+
+        /**
+         * Logs a lazily supplied message.
+         * <p>
+         * If the logger is currently enabled for the given log message level
+         * then a message is logged that is the result produced by the
+         * given supplier function.  Otherwise, the supplier is not operated on.
+         *
+         * @implSpec When logging is enabled for the given level, the default
+         * implementation for this method calls
+         * {@code this.log(level, (ResourceBundle)null, msgSupplier.get(), (Object[])null);}
+         *
+         * @param level the log message level.
+         * @param msgSupplier a supplier function that produces a message.
+         *
+         * @throws NullPointerException if {@code level} is {@code null},
+         *         or {@code msgSupplier} is {@code null}.
+         */
+        public default void log(Level level, Supplier<String> msgSupplier) {
+            Objects.requireNonNull(msgSupplier);
+            if (isLoggable(Objects.requireNonNull(level))) {
+                log(level, (ResourceBundle) null, msgSupplier.get(), (Object[]) null);
+            }
+        }
+
+        /**
+         * Logs a message produced from the given object.
+         * <p>
+         * If the logger is currently enabled for the given log message level then
+         * a message is logged that, by default, is the result produced from
+         * calling  toString on the given object.
+         * Otherwise, the object is not operated on.
+         *
+         * @implSpec When logging is enabled for the given level, the default
+         * implementation for this method calls
+         * {@code this.log(level, (ResourceBundle)null, obj.toString(), (Object[])null);}
+         *
+         * @param level the log message level.
+         * @param obj the object to log.
+         *
+         * @throws NullPointerException if {@code level} is {@code null}, or
+         *         {@code obj} is {@code null}.
+         */
+        public default void log(Level level, Object obj) {
+            Objects.requireNonNull(obj);
+            if (isLoggable(Objects.requireNonNull(level))) {
+                this.log(level, (ResourceBundle) null, obj.toString(), (Object[]) null);
+            }
+        }
+
+        /**
+         * Logs a message associated with a given throwable.
+         *
+         * @implSpec The default implementation for this method calls
+         * {@code this.log(level, (ResourceBundle)null, msg, thrown);}
+         *
+         * @param level the log message level.
+         * @param msg the string message (or a key in the message catalog, if
+         * this logger is a {@link
+         * LoggerFinder#getLocalizedLogger(java.lang.String,
+         * java.util.ResourceBundle, java.lang.Module) localized logger});
+         * can be {@code null}.
+         * @param thrown a {@code Throwable} associated with the log message;
+         *        can be {@code null}.
+         *
+         * @throws NullPointerException if {@code level} is {@code null}.
+         */
+        public default void log(Level level, String msg, Throwable thrown) {
+            this.log(level, null, msg, thrown);
+        }
+
+        /**
+         * Logs a lazily supplied message associated with a given throwable.
+         * <p>
+         * If the logger is currently enabled for the given log message level
+         * then a message is logged that is the result produced by the
+         * given supplier function.  Otherwise, the supplier is not operated on.
+         *
+         * @implSpec When logging is enabled for the given level, the default
+         * implementation for this method calls
+         * {@code this.log(level, (ResourceBundle)null, msgSupplier.get(), thrown);}
+         *
+         * @param level one of the log message level identifiers.
+         * @param msgSupplier a supplier function that produces a message.
+         * @param thrown a {@code Throwable} associated with log message;
+         *               can be {@code null}.
+         *
+         * @throws NullPointerException if {@code level} is {@code null}, or
+         *                               {@code msgSupplier} is {@code null}.
+         */
+        public default void log(Level level, Supplier<String> msgSupplier,
+                Throwable thrown) {
+            Objects.requireNonNull(msgSupplier);
+            if (isLoggable(Objects.requireNonNull(level))) {
+                this.log(level, null, msgSupplier.get(), thrown);
+            }
+        }
+
+        /**
+         * Logs a message with an optional list of parameters.
+         *
+         * @implSpec The default implementation for this method calls
+         * {@code this.log(level, (ResourceBundle)null, format, params);}
+         *
+         * @param level one of the log message level identifiers.
+         * @param format the string message format in {@link
+         * java.text.MessageFormat} format, (or a key in the message
+         * catalog, if this logger is a {@link
+         * LoggerFinder#getLocalizedLogger(java.lang.String,
+         * java.util.ResourceBundle, java.lang.Module) localized logger});
+         * can be {@code null}.
+         * @param params an optional list of parameters to the message (may be
+         * none).
+         *
+         * @throws NullPointerException if {@code level} is {@code null}.
+         */
+        public default void log(Level level, String format, Object... params) {
+            this.log(level, null, format, params);
+        }
+
+        /**
+         * Logs a localized message associated with a given throwable.
+         * <p>
+         * If the given resource bundle is non-{@code null},  the {@code msg}
+         * string is localized using the given resource bundle.
+         * Otherwise the {@code msg} string is not localized.
+         *
+         * @param level the log message level.
+         * @param bundle a resource bundle to localize {@code msg}; can be
+         * {@code null}.
+         * @param msg the string message (or a key in the message catalog,
+         *            if {@code bundle} is not {@code null}); can be {@code null}.
+         * @param thrown a {@code Throwable} associated with the log message;
+         *        can be {@code null}.
+         *
+         * @throws NullPointerException if {@code level} is {@code null}.
+         */
+        public void log(Level level, ResourceBundle bundle, String msg,
+                Throwable thrown);
+
+        /**
+         * Logs a message with resource bundle and an optional list of
+         * parameters.
+         * <p>
+         * If the given resource bundle is non-{@code null},  the {@code format}
+         * string is localized using the given resource bundle.
+         * Otherwise the {@code format} string is not localized.
+         *
+         * @param level the log message level.
+         * @param bundle a resource bundle to localize {@code format}; can be
+         * {@code null}.
+         * @param format the string message format in {@link
+         * java.text.MessageFormat} format, (or a key in the message
+         * catalog if {@code bundle} is not {@code null}); can be {@code null}.
+         * @param params an optional list of parameters to the message (may be
+         * none).
+         *
+         * @throws NullPointerException if {@code level} is {@code null}.
+         */
+        public void log(Level level, ResourceBundle bundle, String format,
+                Object... params);
+
+
+    }
+
+    /**
+     * The {@code LoggerFinder} service is responsible for creating, managing,
+     * and configuring loggers to the underlying framework it uses.
+     * <p>
+     * A logger finder is a concrete implementation of this class that has a
+     * zero-argument constructor and implements the abstract methods defined
+     * by this class.
+     * The loggers returned from a logger finder are capable of routing log
+     * messages to the logging backend this provider supports.
+     * A given invocation of the Java Runtime maintains a single
+     * system-wide LoggerFinder instance that is loaded as follows:
+     * <ul>
+     *    <li>First it finds any custom {@code LoggerFinder} provider
+     *        using the {@link java.util.ServiceLoader} facility with the
+     *        {@linkplain ClassLoader#getSystemClassLoader() system class
+     *        loader}.</li>
+     *    <li>If no {@code LoggerFinder} provider is found, the system default
+     *        {@code LoggerFinder} implementation will be used.</li>
+     * </ul>
+     * <p>
+     * An application can replace the logging backend
+     * <i>even when the java.logging module is present</i>, by simply providing
+     * and declaring an implementation of the {@link LoggerFinder} service.
+     * <p>
+     * <b>Default Implementation</b>
+     * <p>
+     * The system default {@code LoggerFinder} implementation uses
+     * {@code java.util.logging} as the backend framework when the
+     * {@code java.logging} module is present.
+     * It returns a {@linkplain System.Logger logger} instance
+     * that will route log messages to a {@link java.util.logging.Logger
+     * java.util.logging.Logger}. Otherwise, if {@code java.logging} is not
+     * present, the default implementation will return a simple logger
+     * instance that will route log messages of {@code INFO} level and above to
+     * the console ({@code System.err}).
+     * <p>
+     * <b>Logging Configuration</b>
+     * <p>
+     * {@linkplain Logger Logger} instances obtained from the
+     * {@code LoggerFinder} factory methods are not directly configurable by
+     * the application. Configuration is the responsibility of the underlying
+     * logging backend, and usually requires using APIs specific to that backend.
+     * <p>For the default {@code LoggerFinder} implementation
+     * using {@code java.util.logging} as its backend, refer to
+     * {@link java.util.logging java.util.logging} for logging configuration.
+     * For the default {@code LoggerFinder} implementation returning simple loggers
+     * when the {@code java.logging} module is absent, the configuration
+     * is implementation dependent.
+     * <p>
+     * Usually an application that uses a logging framework will log messages
+     * through a logger facade defined (or supported) by that framework.
+     * Applications that wish to use an external framework should log
+     * through the facade associated with that framework.
+     * <p>
+     * A system class that needs to log messages will typically obtain
+     * a {@link System.Logger} instance to route messages to the logging
+     * framework selected by the application.
+     * <p>
+     * Libraries and classes that only need loggers to produce log messages
+     * should not attempt to configure loggers by themselves, as that
+     * would make them dependent from a specific implementation of the
+     * {@code LoggerFinder} service.
+     * <p>
+     * In addition, when a security manager is present, loggers provided to
+     * system classes should not be directly configurable through the logging
+     * backend without requiring permissions.
+     * <br>
+     * It is the responsibility of the provider of
+     * the concrete {@code LoggerFinder} implementation to ensure that
+     * these loggers are not configured by untrusted code without proper
+     * permission checks, as configuration performed on such loggers usually
+     * affects all applications in the same Java Runtime.
+     * <p>
+     * <b>Message Levels and Mapping to backend levels</b>
+     * <p>
+     * A logger finder is responsible for mapping from a {@code
+     * System.Logger.Level} to a level supported by the logging backend it uses.
+     * <br>The default LoggerFinder using {@code java.util.logging} as the backend
+     * maps {@code System.Logger} levels to
+     * {@linkplain java.util.logging.Level java.util.logging} levels
+     * of corresponding severity - as described in {@link Logger.Level
+     * Logger.Level}.
+     *
+     * @see java.lang.System
+     * @see java.lang.System.Logger
+     *
+     * @since 9
+     */
+    public static abstract class LoggerFinder {
+        /**
+         * The {@code RuntimePermission("loggerFinder")} is
+         * necessary to subclass and instantiate the {@code LoggerFinder} class,
+         * as well as to obtain loggers from an instance of that class.
+         */
+        static final RuntimePermission LOGGERFINDER_PERMISSION =
+                new RuntimePermission("loggerFinder");
+
+        /**
+         * Creates a new instance of {@code LoggerFinder}.
+         *
+         * @implNote It is recommended that a {@code LoggerFinder} service
+         *   implementation does not perform any heavy initialization in its
+         *   constructor, in order to avoid possible risks of deadlock or class
+         *   loading cycles during the instantiation of the service provider.
+         *
+         * @throws SecurityException if a security manager is present and its
+         *         {@code checkPermission} method doesn't allow the
+         *         {@code RuntimePermission("loggerFinder")}.
+         */
+        protected LoggerFinder() {
+            this(checkPermission());
+        }
+
+        private LoggerFinder(Void unused) {
+            // nothing to do.
+        }
+
+        private static Void checkPermission() {
+            final SecurityManager sm = System.getSecurityManager();
+            if (sm != null) {
+                sm.checkPermission(LOGGERFINDER_PERMISSION);
+            }
+            return null;
+        }
+
+        /**
+         * Returns an instance of {@link Logger Logger}
+         * for the given {@code module}.
+         *
+         * @param name the name of the logger.
+         * @param module the module for which the logger is being requested.
+         *
+         * @return a {@link Logger logger} suitable for use within the given
+         *         module.
+         * @throws NullPointerException if {@code name} is {@code null} or
+         *        {@code module} is {@code null}.
+         * @throws SecurityException if a security manager is present and its
+         *         {@code checkPermission} method doesn't allow the
+         *         {@code RuntimePermission("loggerFinder")}.
+         */
+        public abstract Logger getLogger(String name, Module module);
+
+        /**
+         * Returns a localizable instance of {@link Logger Logger}
+         * for the given {@code module}.
+         * The returned logger will use the provided resource bundle for
+         * message localization.
+         *
+         * @implSpec By default, this method calls {@link
+         * #getLogger(java.lang.String, java.lang.Module)
+         * this.getLogger(name, module)} to obtain a logger, then wraps that
+         * logger in a {@link Logger} instance where all methods that do not
+         * take a {@link ResourceBundle} as parameter are redirected to one
+         * which does - passing the given {@code bundle} for
+         * localization. So for instance, a call to {@link
+         * Logger#log(Level, String) Logger.log(Level.INFO, msg)}
+         * will end up as a call to {@link
+         * Logger#log(Level, ResourceBundle, String, Object...)
+         * Logger.log(Level.INFO, bundle, msg, (Object[])null)} on the wrapped
+         * logger instance.
+         * Note however that by default, string messages returned by {@link
+         * java.util.function.Supplier Supplier&lt;String&gt;} will not be
+         * localized, as it is assumed that such strings are messages which are
+         * already constructed, rather than keys in a resource bundle.
+         * <p>
+         * An implementation of {@code LoggerFinder} may override this method,
+         * for example, when the underlying logging backend provides its own
+         * mechanism for localizing log messages, then such a
+         * {@code LoggerFinder} would be free to return a logger
+         * that makes direct use of the mechanism provided by the backend.
+         *
+         * @param name    the name of the logger.
+         * @param bundle  a resource bundle; can be {@code null}.
+         * @param module  the module for which the logger is being requested.
+         * @return an instance of {@link Logger Logger}  which will use the
+         * provided resource bundle for message localization.
+         *
+         * @throws NullPointerException if {@code name} is {@code null} or
+         *         {@code module} is {@code null}.
+         * @throws SecurityException if a security manager is present and its
+         *         {@code checkPermission} method doesn't allow the
+         *         {@code RuntimePermission("loggerFinder")}.
+         */
+        public Logger getLocalizedLogger(String name, ResourceBundle bundle,
+                                         Module module) {
+            return new LocalizedLoggerWrapper<>(getLogger(name, module), bundle);
+        }
+
+        /**
+         * Returns the {@code LoggerFinder} instance. There is one
+         * single system-wide {@code LoggerFinder} instance in
+         * the Java Runtime.  See the class specification of how the
+         * {@link LoggerFinder LoggerFinder} implementation is located and
+         * loaded.
+
+         * @return the {@link LoggerFinder LoggerFinder} instance.
+         * @throws SecurityException if a security manager is present and its
+         *         {@code checkPermission} method doesn't allow the
+         *         {@code RuntimePermission("loggerFinder")}.
+         */
+        public static LoggerFinder getLoggerFinder() {
+            final SecurityManager sm = System.getSecurityManager();
+            if (sm != null) {
+                sm.checkPermission(LOGGERFINDER_PERMISSION);
+            }
+            return accessProvider();
+        }
+
+
+        private static volatile LoggerFinder service;
+        static LoggerFinder accessProvider() {
+            // We do not need to synchronize: LoggerFinderLoader will
+            // always return the same instance, so if we don't have it,
+            // just fetch it again.
+            if (service == null) {
+                PrivilegedAction<LoggerFinder> pa =
+                        () -> LoggerFinderLoader.getLoggerFinder();
+                service = AccessController.doPrivileged(pa, null,
+                        LOGGERFINDER_PERMISSION);
+            }
+            return service;
+        }
+
+    }
+
+
+    /**
+     * Returns an instance of {@link Logger Logger} for the caller's
+     * use.
+     *
+     * @implSpec
+     * Instances returned by this method route messages to loggers
+     * obtained by calling {@link LoggerFinder#getLogger(java.lang.String,
+     * java.lang.Module) LoggerFinder.getLogger(name, module)}, where
+     * {@code module} is the caller's module.
+     * In cases where {@code System.getLogger} is called from a context where
+     * there is no caller frame on the stack (e.g when called directly
+     * from a JNI attached thread), {@code IllegalCallerException} is thrown.
+     * To obtain a logger in such a context, use an auxiliary class that will
+     * implicitly be identified as the caller, or use the system {@link
+     * LoggerFinder#getLoggerFinder() LoggerFinder} to obtain a logger instead.
+     * Note that doing the latter may eagerly initialize the underlying
+     * logging system.
+     *
+     * @apiNote
+     * This method may defer calling the {@link
+     * LoggerFinder#getLogger(java.lang.String, java.lang.Module)
+     * LoggerFinder.getLogger} method to create an actual logger supplied by
+     * the logging backend, for instance, to allow loggers to be obtained during
+     * the system initialization time.
+     *
+     * @param name the name of the logger.
+     * @return an instance of {@link Logger} that can be used by the calling
+     *         class.
+     * @throws NullPointerException if {@code name} is {@code null}.
+     * @throws IllegalCallerException if there is no Java caller frame on the
+     *         stack.
+     *
+     * @since 9
+     */
+    @CallerSensitive
+    public static Logger getLogger(String name) {
+        Objects.requireNonNull(name);
+        final Class<?> caller = Reflection.getCallerClass();
+        if (caller == null) {
+            throw new IllegalCallerException("no caller frame");
+        }
+        return LazyLoggers.getLogger(name, caller.getModule());
+    }
+
+    /**
+     * Returns a localizable instance of {@link Logger
+     * Logger} for the caller's use.
+     * The returned logger will use the provided resource bundle for message
+     * localization.
+     *
+     * @implSpec
+     * The returned logger will perform message localization as specified
+     * by {@link LoggerFinder#getLocalizedLogger(java.lang.String,
+     * java.util.ResourceBundle, java.lang.Module)
+     * LoggerFinder.getLocalizedLogger(name, bundle, module)}, where
+     * {@code module} is the caller's module.
+     * In cases where {@code System.getLogger} is called from a context where
+     * there is no caller frame on the stack (e.g when called directly
+     * from a JNI attached thread), {@code IllegalCallerException} is thrown.
+     * To obtain a logger in such a context, use an auxiliary class that
+     * will implicitly be identified as the caller, or use the system {@link
+     * LoggerFinder#getLoggerFinder() LoggerFinder} to obtain a logger instead.
+     * Note that doing the latter may eagerly initialize the underlying
+     * logging system.
+     *
+     * @apiNote
+     * This method is intended to be used after the system is fully initialized.
+     * This method may trigger the immediate loading and initialization
+     * of the {@link LoggerFinder} service, which may cause issues if the
+     * Java Runtime is not ready to initialize the concrete service
+     * implementation yet.
+     * System classes which may be loaded early in the boot sequence and
+     * need to log localized messages should create a logger using
+     * {@link #getLogger(java.lang.String)} and then use the log methods that
+     * take a resource bundle as parameter.
+     *
+     * @param name    the name of the logger.
+     * @param bundle  a resource bundle.
+     * @return an instance of {@link Logger} which will use the provided
+     * resource bundle for message localization.
+     * @throws NullPointerException if {@code name} is {@code null} or
+     *         {@code bundle} is {@code null}.
+     * @throws IllegalCallerException if there is no Java caller frame on the
+     *         stack.
+     *
+     * @since 9
+     */
+    @CallerSensitive
+    public static Logger getLogger(String name, ResourceBundle bundle) {
+        final ResourceBundle rb = Objects.requireNonNull(bundle);
+        Objects.requireNonNull(name);
+        final Class<?> caller = Reflection.getCallerClass();
+        if (caller == null) {
+            throw new IllegalCallerException("no caller frame");
+        }
+        final SecurityManager sm = System.getSecurityManager();
+        // We don't use LazyLoggers if a resource bundle is specified.
+        // Bootstrap sensitive classes in the JDK do not use resource bundles
+        // when logging. This could be revisited later, if it needs to.
+        if (sm != null) {
+            final PrivilegedAction<Logger> pa =
+                    () -> LoggerFinder.accessProvider()
+                            .getLocalizedLogger(name, rb, caller.getModule());
+            return AccessController.doPrivileged(pa, null,
+                                         LoggerFinder.LOGGERFINDER_PERMISSION);
+        }
+        return LoggerFinder.accessProvider()
+                .getLocalizedLogger(name, rb, caller.getModule());
+    }
+
+    /**
      * Terminates the currently running Java Virtual Machine. The
      * argument serves as a status code; by convention, a nonzero status
      * code indicates abnormal termination.
@@ -1024,6 +1763,7 @@ public final class System {
      *      finalizers being called on live objects while other threads are
      *      concurrently manipulating those objects, resulting in erratic
      *      behavior or deadlock.
+     *      This method is subject to removal in a future version of Java SE.
      * @param value indicating enabling or disabling of finalization
      * @throws  SecurityException
      *        if a security manager exists and its <code>checkExit</code>
@@ -1034,7 +1774,8 @@ public final class System {
      * @see     java.lang.SecurityManager#checkExit(int)
      * @since   1.1
      */
-    @Deprecated
+    @Deprecated(since="1.2", forRemoval=true)
+    @SuppressWarnings("removal")
     public static void runFinalizersOnExit(boolean value) {
         Runtime.runFinalizersOnExit(value);
     }
@@ -1142,11 +1883,43 @@ public final class System {
         return new PrintStream(new BufferedOutputStream(fos, 128), true);
     }
 
+    /**
+     * Logs an exception/error at initialization time to stdout or stderr.
+     *
+     * @param printToStderr to print to stderr rather than stdout
+     * @param printStackTrace to print the stack trace
+     * @param msg the message to print before the exception, can be {@code null}
+     * @param e the exception or error
+     */
+    private static void logInitException(boolean printToStderr,
+                                         boolean printStackTrace,
+                                         String msg,
+                                         Throwable e) {
+        if (VM.initLevel() < 1) {
+            throw new InternalError("system classes not initialized");
+        }
+        PrintStream log = (printToStderr) ? err : out;
+        if (msg != null) {
+            log.println(msg);
+        }
+        if (printStackTrace) {
+            e.printStackTrace(log);
+        } else {
+            log.println(e);
+            for (Throwable suppressed : e.getSuppressed()) {
+                log.println("Suppressed: " + suppressed);
+            }
+            Throwable cause = e.getCause();
+            if (cause != null) {
+                log.println("Caused by: " + cause);
+            }
+        }
+    }
 
     /**
      * Initialize the system class.  Called after thread initialization.
      */
-    private static void initializeSystemClass() {
+    private static void initPhase1() {
 
         // VM might invoke JNU_NewStringPlatform() to set those encoding
         // sensitive properties (user.home, user.name, boot.class.path, etc.)
@@ -1168,16 +1941,15 @@ public final class System {
         // removed from the system properties.
         //
         // See java.lang.Integer.IntegerCache and the
-        // sun.misc.VM.saveAndRemoveProperties method for example.
+        // VM.saveAndRemoveProperties method for example.
         //
         // Save a private copy of the system properties object that
         // can only be accessed by the internal implementation.  Remove
         // certain system properties that are not intended for public access.
-        sun.misc.VM.saveAndRemoveProperties(props);
-
+        VM.saveAndRemoveProperties(props);
 
         lineSeparator = props.getProperty("line.separator");
-        sun.misc.Version.init();
+        VersionProps.init();
 
         FileInputStream fdIn = new FileInputStream(FileDescriptor.in);
         FileOutputStream fdOut = new FileOutputStream(FileDescriptor.out);
@@ -1197,7 +1969,7 @@ public final class System {
         // set for the class libraries. Currently this is no-op everywhere except
         // for Windows where the process-wide error mode is set before the java.io
         // classes are used.
-        sun.misc.VM.initializeOSEnvironment();
+        VM.initializeOSEnvironment();
 
         // The main thread is not added to its thread group in the same
         // way as other threads; we must do it ourselves here.
@@ -1208,16 +1980,99 @@ public final class System {
         setJavaLangAccess();
 
         // Subsystems that are invoked during initialization can invoke
-        // sun.misc.VM.isBooted() in order to avoid doing things that should
-        // wait until the application class loader has been set up.
+        // VM.isBooted() in order to avoid doing things that should
+        // wait until the VM is fully initialized. The initialization level
+        // is incremented from 0 to 1 here to indicate the first phase of
+        // initialization has completed.
         // IMPORTANT: Ensure that this remains the last initialization action!
-        sun.misc.VM.booted();
+        VM.initLevel(1);
+    }
+
+    // @see #initPhase2()
+    static ModuleLayer bootLayer;
+
+    /*
+     * Invoked by VM.  Phase 2 module system initialization.
+     * Only classes in java.base can be loaded in this phase.
+     *
+     * @param printToStderr print exceptions to stderr rather than stdout
+     * @param printStackTrace print stack trace when exception occurs
+     *
+     * @return JNI_OK for success, JNI_ERR for failure
+     */
+    private static int initPhase2(boolean printToStderr, boolean printStackTrace) {
+        try {
+            bootLayer = ModuleBootstrap.boot();
+        } catch (Exception | Error e) {
+            logInitException(printToStderr, printStackTrace,
+                             "Error occurred during initialization of boot layer", e);
+            return -1; // JNI_ERR
+        }
+
+        // module system initialized
+        VM.initLevel(2);
+
+        return 0; // JNI_OK
+    }
+
+    /*
+     * Invoked by VM.  Phase 3 is the final system initialization:
+     * 1. set security manager
+     * 2. set system class loader
+     * 3. set TCCL
+     *
+     * This method must be called after the module system initialization.
+     * The security manager and system class loader may be custom class from
+     * the application classpath or modulepath.
+     */
+    private static void initPhase3() {
+        // set security manager
+        String cn = System.getProperty("java.security.manager");
+        if (cn != null) {
+            if (cn.isEmpty() || "default".equals(cn)) {
+                System.setSecurityManager(new SecurityManager());
+            } else {
+                try {
+                    Class<?> c = Class.forName(cn, false, ClassLoader.getBuiltinAppClassLoader());
+                    Constructor<?> ctor = c.getConstructor();
+                    // Must be a public subclass of SecurityManager with
+                    // a public no-arg constructor
+                    if (!SecurityManager.class.isAssignableFrom(c) ||
+                            !Modifier.isPublic(c.getModifiers()) ||
+                            !Modifier.isPublic(ctor.getModifiers())) {
+                        throw new Error("Could not create SecurityManager: " + ctor.toString());
+                    }
+                    // custom security manager implementation may be in unnamed module
+                    // or a named module but non-exported package
+                    ctor.setAccessible(true);
+                    SecurityManager sm = (SecurityManager) ctor.newInstance();
+                    System.setSecurityManager(sm);
+                } catch (Exception e) {
+                    throw new Error("Could not create SecurityManager", e);
+                }
+            }
+        }
+
+        // initializing the system class loader
+        VM.initLevel(3);
+
+        // system class loader initialized
+        ClassLoader scl = ClassLoader.initSystemClassLoader();
+
+        // set TCCL
+        Thread.currentThread().setContextClassLoader(scl);
+
+        // system is fully initialized
+        VM.initLevel(4);
     }
 
     private static void setJavaLangAccess() {
         // Allow privileged classes outside of java.lang
-        sun.misc.SharedSecrets.setJavaLangAccess(new sun.misc.JavaLangAccess(){
-            public sun.reflect.ConstantPool getConstantPool(Class<?> klass) {
+        SharedSecrets.setJavaLangAccess(new JavaLangAccess() {
+            public List<Method> getDeclaredPublicMethods(Class<?> klass, String name, Class<?>... parameterTypes) {
+                return klass.getDeclaredPublicMethods(name, parameterTypes);
+            }
+            public jdk.internal.reflect.ConstantPool getConstantPool(Class<?> klass) {
                 return klass.getConstantPool();
             }
             public boolean casAnnotationType(Class<?> klass, AnnotationType oldType, AnnotationType newType) {
@@ -1239,7 +2094,7 @@ public final class System {
                 return Class.getExecutableTypeAnnotationBytes(executable);
             }
             public <E extends Enum<E>>
-                    E[] getEnumConstantsShared(Class<E> klass) {
+            E[] getEnumConstantsShared(Class<E> klass) {
                 return klass.getEnumConstantsShared();
             }
             public void blockedOn(Thread t, Interruptible b) {
@@ -1248,26 +2103,83 @@ public final class System {
             public void registerShutdownHook(int slot, boolean registerShutdownInProgress, Runnable hook) {
                 Shutdown.add(slot, registerShutdownInProgress, hook);
             }
-            public int getStackTraceDepth(Throwable t) {
-                return t.getStackTraceDepth();
-            }
-            public StackTraceElement getStackTraceElement(Throwable t, int i) {
-                return t.getStackTraceElement(i);
-            }
             public String newStringUnsafe(char[] chars) {
                 return new String(chars, true);
             }
             public Thread newThreadWithAcc(Runnable target, AccessControlContext acc) {
                 return new Thread(target, acc);
             }
+            @SuppressWarnings("deprecation")
             public void invokeFinalize(Object o) throws Throwable {
                 o.finalize();
             }
-            public void formatUnsignedLong(long val, int shift, char[] buf, int offset, int len) {
-                Long.formatUnsignedLong(val, shift, buf, offset, len);
+            public ConcurrentHashMap<?, ?> createOrGetClassLoaderValueMap(ClassLoader cl) {
+                return cl.createOrGetClassLoaderValueMap();
             }
-            public void formatUnsignedInt(int val, int shift, char[] buf, int offset, int len) {
-                Integer.formatUnsignedInt(val, shift, buf, offset, len);
+            public Class<?> defineClass(ClassLoader loader, String name, byte[] b, ProtectionDomain pd, String source) {
+                return ClassLoader.defineClass1(loader, name, b, 0, b.length, pd, source);
+            }
+            public Class<?> findBootstrapClassOrNull(ClassLoader cl, String name) {
+                return cl.findBootstrapClassOrNull(name);
+            }
+            public Package definePackage(ClassLoader cl, String name, Module module) {
+                return cl.definePackage(name, module);
+            }
+            public String fastUUID(long lsb, long msb) {
+                return Long.fastUUID(lsb, msb);
+            }
+            public void addNonExportedPackages(ModuleLayer layer) {
+                SecurityManager.addNonExportedPackages(layer);
+            }
+            public void invalidatePackageAccessCache() {
+                SecurityManager.invalidatePackageAccessCache();
+            }
+            public Module defineModule(ClassLoader loader,
+                                       ModuleDescriptor descriptor,
+                                       URI uri) {
+                return new Module(null, loader, descriptor, uri);
+            }
+            public Module defineUnnamedModule(ClassLoader loader) {
+                return new Module(loader);
+            }
+            public void addReads(Module m1, Module m2) {
+                m1.implAddReads(m2);
+            }
+            public void addReadsAllUnnamed(Module m) {
+                m.implAddReadsAllUnnamed();
+            }
+            public void addExports(Module m, String pn, Module other) {
+                m.implAddExports(pn, other);
+            }
+            public void addExportsToAllUnnamed(Module m, String pn) {
+                m.implAddExportsToAllUnnamed(pn);
+            }
+            public void addOpens(Module m, String pn, Module other) {
+                m.implAddOpens(pn, other);
+            }
+            public void addOpensToAllUnnamed(Module m, String pn) {
+                m.implAddOpensToAllUnnamed(pn);
+            }
+            public void addOpensToAllUnnamed(Module m, Iterator<String> packages) {
+                m.implAddOpensToAllUnnamed(packages);
+            }
+            public void addUses(Module m, Class<?> service) {
+                m.implAddUses(service);
+            }
+            public boolean isReflectivelyExported(Module m, String pn, Module other) {
+                return m.isReflectivelyExported(pn, other);
+            }
+            public boolean isReflectivelyOpened(Module m, String pn, Module other) {
+                return m.isReflectivelyOpened(pn, other);
+            }
+            public ServicesCatalog getServicesCatalog(ModuleLayer layer) {
+                return layer.getServicesCatalog();
+            }
+            public Stream<ModuleLayer> layers(ModuleLayer layer) {
+                return layer.layers();
+            }
+            public Stream<ModuleLayer> layers(ClassLoader loader) {
+                return ModuleLayer.layers(loader);
             }
         });
     }

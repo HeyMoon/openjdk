@@ -61,6 +61,12 @@ bool IdealLoopTree::policy_unswitching( PhaseIdealLoop *phase ) const {
   if (!_head->is_Loop()) {
     return false;
   }
+
+  // check for vectorized loops, any unswitching was already applied
+  if (_head->is_CountedLoop() && _head->as_CountedLoop()->do_unroll_only()) {
+    return false;
+  }
+
   int nodes_left = phase->C->max_node_limit() - phase->C->live_nodes();
   if ((int)(2 * _body.size()) > nodes_left) {
     return false; // Too speculative if running low on nodes.
@@ -126,13 +132,13 @@ void PhaseIdealLoop::do_unswitching (IdealLoopTree *loop, Node_List &old_new) {
     head->as_CountedLoop()->set_normal_loop();
   }
 
-  ProjNode* proj_true = create_slow_version_of_loop(loop, old_new);
+  ProjNode* proj_true = create_slow_version_of_loop(loop, old_new, unswitch_iff->Opcode());
 
 #ifdef ASSERT
   Node* uniqc = proj_true->unique_ctrl_out();
   Node* entry = head->in(LoopNode::EntryControl);
   Node* predicate = find_predicate(entry);
-  if (predicate != NULL && LoopLimitCheck && UseLoopPredicate) {
+  if (predicate != NULL && UseLoopPredicate) {
     // We may have two predicates, find first.
     entry = find_predicate(entry->in(0)->in(0));
     if (entry != NULL) predicate = entry;
@@ -216,7 +222,8 @@ void PhaseIdealLoop::do_unswitching (IdealLoopTree *loop, Node_List &old_new) {
 // and inserting an if to select fast-slow versions.
 // Return control projection of the entry to the fast version.
 ProjNode* PhaseIdealLoop::create_slow_version_of_loop(IdealLoopTree *loop,
-                                                      Node_List &old_new) {
+                                                      Node_List &old_new,
+                                                      int opcode) {
   LoopNode* head  = loop->_head->as_Loop();
   bool counted_loop = head->is_CountedLoop();
   Node*     entry = head->in(LoopNode::EntryControl);
@@ -229,7 +236,8 @@ ProjNode* PhaseIdealLoop::create_slow_version_of_loop(IdealLoopTree *loop,
   register_node(opq, outer_loop, entry, dom_depth(entry));
   Node *bol       = new Conv2BNode(opq);
   register_node(bol, outer_loop, entry, dom_depth(entry));
-  IfNode* iff = new IfNode(entry, bol, PROB_MAX, COUNT_UNKNOWN);
+  IfNode* iff = (opcode == Op_RangeCheck) ? new RangeCheckNode(entry, bol, PROB_MAX, COUNT_UNKNOWN) :
+    new IfNode(entry, bol, PROB_MAX, COUNT_UNKNOWN);
   register_node(iff, outer_loop, entry, dom_depth(entry));
   ProjNode* iffast = new IfTrueNode(iff);
   register_node(iffast, outer_loop, iff, dom_depth(iff));
@@ -256,4 +264,150 @@ ProjNode* PhaseIdealLoop::create_slow_version_of_loop(IdealLoopTree *loop,
   recompute_dom_depth();
 
   return iffast;
+}
+
+LoopNode* PhaseIdealLoop::create_reserve_version_of_loop(IdealLoopTree *loop, CountedLoopReserveKit* lk) {
+  Node_List old_new;
+  LoopNode* head  = loop->_head->as_Loop();
+  bool counted_loop = head->is_CountedLoop();
+  Node*     entry = head->in(LoopNode::EntryControl);
+  _igvn.rehash_node_delayed(entry);
+  IdealLoopTree* outer_loop = loop->_parent;
+
+  ConINode* const_1 = _igvn.intcon(1);
+  set_ctrl(const_1, C->root());
+  IfNode* iff = new IfNode(entry, const_1, PROB_MAX, COUNT_UNKNOWN);
+  register_node(iff, outer_loop, entry, dom_depth(entry));
+  ProjNode* iffast = new IfTrueNode(iff);
+  register_node(iffast, outer_loop, iff, dom_depth(iff));
+  ProjNode* ifslow = new IfFalseNode(iff);
+  register_node(ifslow, outer_loop, iff, dom_depth(iff));
+
+  // Clone the loop body.  The clone becomes the fast loop.  The
+  // original pre-header will (illegally) have 3 control users
+  // (old & new loops & new if).
+  clone_loop(loop, old_new, dom_depth(head), iff);
+  assert(old_new[head->_idx]->is_Loop(), "" );
+
+  LoopNode* slow_head = old_new[head->_idx]->as_Loop();
+
+#ifndef PRODUCT
+  if (TraceLoopOpts) {
+    tty->print_cr("PhaseIdealLoop::create_reserve_version_of_loop:");
+    tty->print("\t iff = %d, ", iff->_idx); iff->dump();
+    tty->print("\t iffast = %d, ", iffast->_idx); iffast->dump();
+    tty->print("\t ifslow = %d, ", ifslow->_idx); ifslow->dump();
+    tty->print("\t before replace_input_of: head = %d, ", head->_idx); head->dump();
+    tty->print("\t before replace_input_of: slow_head = %d, ", slow_head->_idx); slow_head->dump();
+  }
+#endif
+
+  // Fast (true) control
+  _igvn.replace_input_of(head, LoopNode::EntryControl, iffast);
+  // Slow (false) control
+  _igvn.replace_input_of(slow_head, LoopNode::EntryControl, ifslow);
+
+  recompute_dom_depth();
+
+  lk->set_iff(iff);
+
+#ifndef PRODUCT
+  if (TraceLoopOpts ) {
+    tty->print("\t after  replace_input_of: head = %d, ", head->_idx); head->dump();
+    tty->print("\t after  replace_input_of: slow_head = %d, ", slow_head->_idx); slow_head->dump();
+  }
+#endif
+
+  return slow_head->as_Loop();
+}
+
+CountedLoopReserveKit::CountedLoopReserveKit(PhaseIdealLoop* phase, IdealLoopTree *loop, bool active = true) :
+  _phase(phase),
+  _lpt(loop),
+  _lp(NULL),
+  _iff(NULL),
+  _lp_reserved(NULL),
+  _has_reserved(false),
+  _use_new(false),
+  _active(active)
+  {
+    create_reserve();
+  };
+
+CountedLoopReserveKit::~CountedLoopReserveKit() {
+  if (!_active) {
+    return;
+  }
+
+  if (_has_reserved && !_use_new) {
+    // intcon(0)->iff-node reverts CF to the reserved copy
+    ConINode* const_0 = _phase->_igvn.intcon(0);
+    _phase->set_ctrl(const_0, _phase->C->root());
+    _iff->set_req(1, const_0);
+
+    #ifndef PRODUCT
+      if (TraceLoopOpts) {
+        tty->print_cr("CountedLoopReserveKit::~CountedLoopReserveKit()");
+        tty->print("\t discard loop %d and revert to the reserved loop clone %d: ", _lp->_idx, _lp_reserved->_idx);
+        _lp_reserved->dump();
+      }
+    #endif
+  }
+}
+
+bool CountedLoopReserveKit::create_reserve() {
+  if (!_active) {
+    return false;
+  }
+
+  if(!_lpt->_head->is_CountedLoop()) {
+    if (TraceLoopOpts) {
+      tty->print_cr("CountedLoopReserveKit::create_reserve: %d not counted loop", _lpt->_head->_idx);
+    }
+    return false;
+  }
+  CountedLoopNode *cl = _lpt->_head->as_CountedLoop();
+  if (!cl->is_valid_counted_loop()) {
+    if (TraceLoopOpts) {
+      tty->print_cr("CountedLoopReserveKit::create_reserve: %d not valid counted loop", cl->_idx);
+    }
+    return false; // skip malformed counted loop
+  }
+  if (!cl->is_main_loop()) {
+    bool loop_not_canonical = true;
+    if (cl->is_post_loop() && (cl->slp_max_unroll() > 0)) {
+      loop_not_canonical = false;
+    }
+    // only reject some loop forms
+    if (loop_not_canonical) {
+      if (TraceLoopOpts) {
+        tty->print_cr("CountedLoopReserveKit::create_reserve: %d not canonical loop", cl->_idx);
+      }
+      return false; // skip normal, pre, and post (conditionally) loops
+    }
+  }
+
+  _lp = _lpt->_head->as_Loop();
+  _lp_reserved = _phase->create_reserve_version_of_loop(_lpt, this);
+
+  if (!_lp_reserved->is_CountedLoop()) {
+    return false;
+  }
+
+  Node* ifslow_pred = _lp_reserved->as_CountedLoop()->in(LoopNode::EntryControl);
+
+  if (!ifslow_pred->is_IfFalse()) {
+    return false;
+  }
+
+  Node* iff = ifslow_pred->in(0);
+  if (!iff->is_If() || iff != _iff) {
+    return false;
+  }
+
+  if (iff->in(1)->Opcode() != Op_ConI) {
+    return false;
+  }
+
+  return _has_reserved = true;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,9 +28,12 @@ package sun.java2d.pipe;
 import java.awt.Rectangle;
 import java.awt.Shape;
 import java.awt.geom.AffineTransform;
+import java.awt.geom.Rectangle2D;
 import java.awt.geom.RectangularShape;
 
 import sun.java2d.loops.TransformHelper;
+
+import static java.lang.Double.isNaN;
 
 /**
  * This class encapsulates a definition of a two dimensional region which
@@ -62,37 +65,21 @@ import sun.java2d.loops.TransformHelper;
  * bands[rowstart+3+N*2] = ...    // start of next Y row
  * </pre>
  */
-public class Region {
-    static final int INIT_SIZE = 50;
-    static final int GROW_SIZE = 50;
+public final class Region {
+    private static final int INIT_SIZE = 50;
+    private static final int GROW_SIZE = 50;
 
-    /**
-     * Immutable Region.
-     */
-    private static final class ImmutableRegion extends Region {
-        protected ImmutableRegion(int lox, int loy, int hix, int hiy) {
-            super(lox, loy, hix, hiy);
-        }
-
-        // Override all the methods that mutate the object
-        public void appendSpans(sun.java2d.pipe.SpanIterator si) {}
-        public void setOutputArea(java.awt.Rectangle r) {}
-        public void setOutputAreaXYWH(int x, int y, int w, int h) {}
-        public void setOutputArea(int[] box) {}
-        public void setOutputAreaXYXY(int lox, int loy, int hix, int hiy) {}
-    }
-
-    public static final Region EMPTY_REGION = new ImmutableRegion(0, 0, 0, 0);
-    public static final Region WHOLE_REGION = new ImmutableRegion(
+    public static final Region EMPTY_REGION = new Region(0, 0, 0, 0);
+    public static final Region WHOLE_REGION = new Region(
             Integer.MIN_VALUE,
             Integer.MIN_VALUE,
             Integer.MAX_VALUE,
             Integer.MAX_VALUE);
 
-    int lox;
-    int loy;
-    int hix;
-    int hiy;
+    private int lox;
+    private int loy;
+    private int hix;
+    private int hiy;
 
     int endIndex;
     int[] bands;
@@ -104,11 +91,11 @@ public class Region {
     }
 
     /**
-     * Adds the dimension <code>dim</code> to the coordinate
-     * <code>start</code> with appropriate clipping.  If
-     * <code>dim</code> is non-positive then the method returns
+     * Adds the dimension {@code dim} to the coordinate
+     * {@code start} with appropriate clipping.  If
+     * {@code dim} is non-positive then the method returns
      * the start coordinate.  If the sum overflows an integer
-     * data type then the method returns <code>Integer.MAX_VALUE</code>.
+     * data type then the method returns {@code Integer.MAX_VALUE}.
      */
     public static int dimAdd(int start, int dim) {
         if (dim <= 0) return start;
@@ -134,6 +121,34 @@ public class Region {
     }
 
     /**
+     * Returns the closest {@code int} to the argument, with ties rounding to
+     * negative infinity.
+     * <p>
+     * Special cases:
+     * <ul><li>If the argument is NaN, the result is 0.
+     * <li>If the argument is negative infinity or any value less than or
+     * equal to the value of {@code Integer.MIN_VALUE}, the result is
+     * equal to the value of {@code Integer.MIN_VALUE}.
+     * <li>If the argument is positive infinity or any value greater than or
+     * equal to the value of {@code Integer.MAX_VALUE}, the result is
+     * equal to the value of {@code Integer.MAX_VALUE}.</ul>
+     *
+     * @param   coordinate a floating-point value to be rounded to an integer
+     * @return  the value of the argument rounded to the nearest
+     *          {@code int} value.
+     */
+    public static int clipRound(final double coordinate) {
+        final double newv = coordinate - 0.5;
+        if (newv < Integer.MIN_VALUE) {
+            return Integer.MIN_VALUE;
+        }
+        if (newv > Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        return (int) Math.ceil(newv);
+    }
+
+    /**
      * Multiply the scale factor {@code sv} and the value {@code v} with
      * appropriate clipping to the bounds of Integer resolution. If the answer
      * would be greater than {@code Integer.MAX_VALUE} then {@code
@@ -155,7 +170,7 @@ public class Region {
         return (int) Math.round(newv);
     }
 
-    protected Region(int lox, int loy, int hix, int hiy) {
+    private Region(int lox, int loy, int hix, int hiy) {
         this.lox = lox;
         this.loy = loy;
         this.hix = hix;
@@ -179,9 +194,9 @@ public class Region {
      *
      * @param s a non-null Shape object specifying the geometry enclosing
      *          the pixels of interest
-     * @param at an optional <code>AffineTransform</code> to be applied to the
+     * @param at an optional {@code AffineTransform} to be applied to the
      *          coordinates as they are returned in the iteration, or
-     *          <code>null</code> if untransformed coordinates are desired
+     *          {@code null} if untransformed coordinates are desired
      */
     public static Region getInstance(Shape s, AffineTransform at) {
         return getInstance(WHOLE_REGION, false, s, at);
@@ -205,9 +220,9 @@ public class Region {
      *          clip the geometry to
      * @param s a non-null Shape object specifying the geometry enclosing
      *          the pixels of interest
-     * @param at an optional <code>AffineTransform</code> to be applied to the
+     * @param at an optional {@code AffineTransform} to be applied to the
      *          coordinates as they are returned in the iteration, or
-     *          <code>null</code> if untransformed coordinates are desired
+     *          {@code null} if untransformed coordinates are desired
      */
     public static Region getInstance(Region devBounds,
                                      Shape s, AffineTransform at)
@@ -238,9 +253,9 @@ public class Region {
      *          normalization
      * @param s a non-null Shape object specifying the geometry enclosing
      *          the pixels of interest
-     * @param at an optional <code>AffineTransform</code> to be applied to the
+     * @param at an optional {@code AffineTransform} to be applied to the
      *          coordinates as they are returned in the iteration, or
-     *          <code>null</code> if untransformed coordinates are desired
+     *          {@code null} if untransformed coordinates are desired
      */
     public static Region getInstance(Region devBounds, boolean normalize,
                                      Shape s, AffineTransform at)
@@ -258,9 +273,7 @@ public class Region {
             sr.setOutputArea(devBounds);
             sr.appendPath(s.getPathIterator(at));
             sr.getPathBox(box);
-            Region r = Region.getInstance(box);
-            r.appendSpans(sr);
-            return r;
+            return Region.getInstance(box, sr);
         } finally {
             sr.dispose();
         }
@@ -349,56 +362,18 @@ public class Region {
     }
 
     /**
-     * Sets the rectangle of interest for storing and returning
-     * region bands.
-     * <p>
-     * This method can also be used to initialize a simple rectangular
-     * region.
+     * Returns a Region object with a rectangle of interest specified by the
+     * indicated rectangular area in lox, loy, hix, hiy format.
+     * <p/>
+     * Appends the list of spans returned from the indicated SpanIterator. Each
+     * span must be at a higher starting Y coordinate than the previous data or
+     * it must have a Y range equal to the highest Y band in the region and a
+     * higher X coordinate than any of the spans in that band.
      */
-    public void setOutputArea(Rectangle r) {
-        setOutputAreaXYWH(r.x, r.y, r.width, r.height);
-    }
-
-    /**
-     * Sets the rectangle of interest for storing and returning
-     * region bands.  The rectangle is specified in x, y, width, height
-     * format and appropriate clipping is performed as per the method
-     * <code>dimAdd</code>.
-     * <p>
-     * This method can also be used to initialize a simple rectangular
-     * region.
-     */
-    public void setOutputAreaXYWH(int x, int y, int w, int h) {
-        setOutputAreaXYXY(x, y, dimAdd(x, w), dimAdd(y, h));
-    }
-
-    /**
-     * Sets the rectangle of interest for storing and returning
-     * region bands.  The rectangle is specified as a span array.
-     * <p>
-     * This method can also be used to initialize a simple rectangular
-     * region.
-     */
-    public void setOutputArea(int box[]) {
-        this.lox = box[0];
-        this.loy = box[1];
-        this.hix = box[2];
-        this.hiy = box[3];
-    }
-
-    /**
-     * Sets the rectangle of interest for storing and returning
-     * region bands.  The rectangle is specified in lox, loy,
-     * hix, hiy format.
-     * <p>
-     * This method can also be used to initialize a simple rectangular
-     * region.
-     */
-    public void setOutputAreaXYXY(int lox, int loy, int hix, int hiy) {
-        this.lox = lox;
-        this.loy = loy;
-        this.hix = hix;
-        this.hiy = hiy;
+    public static Region getInstance(int box[], SpanIterator si) {
+        Region ret = new Region(box[0], box[1], box[2], box[3]);
+        ret.appendSpans(si);
+        return ret;
     }
 
     /**
@@ -408,7 +383,7 @@ public class Region {
      * Y range equal to the highest Y band in the region and a
      * higher X coordinate than any of the spans in that band.
      */
-    public void appendSpans(SpanIterator si) {
+    private void appendSpans(SpanIterator si) {
         int[] box = new int[6];
 
         while (si.nextSpan(box)) {
@@ -615,6 +590,33 @@ public class Region {
 
     /**
      * Returns a Region object that represents the intersection of
+     * this object with the specified Rectangle2D. The return value
+     * may be this same object if no clipping occurs.
+     */
+    public Region getIntersection(final Rectangle2D r) {
+        if (r instanceof Rectangle) {
+            return getIntersection((Rectangle) r);
+        }
+        return getIntersectionXYXY(r.getMinX(), r.getMinY(), r.getMaxX(),
+                                   r.getMaxY());
+    }
+
+    /**
+     * Returns a Region object that represents the intersection of
+     * this object with the specified rectangular area. The return
+     * value may be this same object if no clipping occurs.
+     */
+    public Region getIntersectionXYXY(double lox, double loy, double hix,
+                                      double hiy) {
+        if (isNaN(lox) || isNaN(loy) || isNaN(hix) || isNaN(hiy)) {
+            return EMPTY_REGION;
+        }
+        return getIntersectionXYXY(clipRound(lox), clipRound(loy),
+                                   clipRound(hix), clipRound(hiy));
+    }
+
+    /**
+     * Returns a Region object that represents the intersection of
      * this object with the specified rectangular area.  The return
      * value may be this same object if no clipping occurs.
      */
@@ -637,7 +639,7 @@ public class Region {
      * object with the specified Region object.
      * <p>
      * If {@code A} and {@code B} are both Region Objects and
-     * <code>C = A.getIntersection(B);</code> then a point will
+     * {@code C = A.getIntersection(B);} then a point will
      * be contained in {@code C} iff it is contained in both
      * {@code A} and {@code B}.
      * <p>
@@ -666,7 +668,7 @@ public class Region {
      * object with the specified Region object.
      * <p>
      * If {@code A} and {@code B} are both Region Objects and
-     * <code>C = A.getUnion(B);</code> then a point will
+     * {@code C = A.getUnion(B);} then a point will
      * be contained in {@code C} iff it is contained in either
      * {@code A} or {@code B}.
      * <p>
@@ -693,7 +695,7 @@ public class Region {
      * specified Region object subtracted from this object.
      * <p>
      * If {@code A} and {@code B} are both Region Objects and
-     * <code>C = A.getDifference(B);</code> then a point will
+     * {@code C = A.getDifference(B);} then a point will
      * be contained in {@code C} iff it is contained in
      * {@code A} but not contained in {@code B}.
      * <p>
@@ -717,7 +719,7 @@ public class Region {
      * object with the specified Region object.
      * <p>
      * If {@code A} and {@code B} are both Region Objects and
-     * <code>C = A.getExclusiveOr(B);</code> then a point will
+     * {@code C = A.getExclusiveOr(B);} then a point will
      * be contained in {@code C} iff it is contained in either
      * {@code A} or {@code B}, but not if it is contained in both.
      * <p>
@@ -739,9 +741,9 @@ public class Region {
         return ret;
     }
 
-    static final int INCLUDE_A      = 1;
-    static final int INCLUDE_B      = 2;
-    static final int INCLUDE_COMMON = 4;
+    private static final int INCLUDE_A      = 1;
+    private static final int INCLUDE_B      = 2;
+    private static final int INCLUDE_COMMON = 4;
 
     private void filterSpans(Region ra, Region rb, int flags) {
         int abands[] = ra.bands;
@@ -1080,35 +1082,35 @@ public class Region {
     /**
      * Returns the lowest X coordinate in the Region.
      */
-    public final int getLoX() {
+    public int getLoX() {
         return lox;
     }
 
     /**
      * Returns the lowest Y coordinate in the Region.
      */
-    public final int getLoY() {
+    public int getLoY() {
         return loy;
     }
 
     /**
      * Returns the highest X coordinate in the Region.
      */
-    public final int getHiX() {
+    public int getHiX() {
         return hix;
     }
 
     /**
      * Returns the highest Y coordinate in the Region.
      */
-    public final int getHiY() {
+    public int getHiY() {
         return hiy;
     }
 
     /**
      * Returns the width of this Region clipped to the range (0 - MAX_INT).
      */
-    public final int getWidth() {
+    public int getWidth() {
         if (hix < lox) return 0;
         int w;
         if ((w = hix - lox) < 0) {
@@ -1120,7 +1122,7 @@ public class Region {
     /**
      * Returns the height of this Region clipped to the range (0 - MAX_INT).
      */
-    public final int getHeight() {
+    public int getHeight() {
         if (hiy < loy) return 0;
         int h;
         if ((h = hiy - loy) < 0) {
@@ -1325,6 +1327,7 @@ public class Region {
         return si;
     }
 
+    @Override
     public String toString() {
         StringBuilder sb = new StringBuilder();
         sb.append("Region[[");
@@ -1335,13 +1338,13 @@ public class Region {
         sb.append(hix);
         sb.append(", ");
         sb.append(hiy);
-        sb.append("]");
+        sb.append(']');
         if (bands != null) {
             int col = 0;
             while (col < endIndex) {
                 sb.append("y{");
                 sb.append(bands[col++]);
-                sb.append(",");
+                sb.append(',');
                 sb.append(bands[col++]);
                 sb.append("}[");
                 int end = bands[col++];
@@ -1351,20 +1354,25 @@ public class Region {
                     sb.append(bands[col++]);
                     sb.append(", ");
                     sb.append(bands[col++]);
-                    sb.append(")");
+                    sb.append(')');
                 }
-                sb.append("]");
+                sb.append(']');
             }
         }
-        sb.append("]");
+        sb.append(']');
         return sb.toString();
     }
 
+    @Override
     public int hashCode() {
         return (isEmpty() ? 0 : (lox * 3 + loy * 5 + hix * 7 + hiy * 9));
     }
 
+    @Override
     public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
         if (!(o instanceof Region)) {
             return false;
         }

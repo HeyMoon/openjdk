@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,7 +31,7 @@ package com.sun.source.doctree;
  * Classes implementing this interface are used to operate
  * on a tree when the kind of tree is unknown at compile time.
  * When a visitor is passed to an tree's {@link DocTree#accept
- * accept} method, the <tt>visit<i>XYZ</i></tt> method most applicable
+ * accept} method, the <code>visit<i>Xyz</i></code> method most applicable
  * to that tree is invoked.
  *
  * <p> Classes implementing this interface may or may not throw a
@@ -54,7 +54,6 @@ package com.sun.source.doctree;
  *
  * @since 1.8
  */
-@jdk.Exported
 public interface DocTreeVisitor<R,P> {
 
     /**
@@ -130,12 +129,28 @@ public interface DocTreeVisitor<R,P> {
     R visitErroneous(ErroneousTree node, P p);
 
     /**
+     * Visits a HiddenTree node.
+     * @param node the node being visited
+     * @param p a parameter value
+     * @return a result value
+     */
+    R visitHidden(HiddenTree node, P p);
+
+    /**
      * Visits an IdentifierTree node.
      * @param node the node being visited
      * @param p a parameter value
      * @return a result value
      */
     R visitIdentifier(IdentifierTree node, P p);
+
+    /**
+     * Visits an IndexTree node.
+     * @param node the node being visited
+     * @param p a parameter value
+     * @return a result value
+     */
+    R visitIndex(IndexTree node, P p);
 
     /**
      * Visits an InheritDocTree node.
@@ -168,6 +183,14 @@ public interface DocTreeVisitor<R,P> {
      * @return a result value
      */
     R visitParam(ParamTree node, P p);
+
+    /**
+     * Visits a ProvidesTree node.
+     * @param node the node being visited
+     * @param p a parameter value
+     * @return a result value
+     */
+    R visitProvides(ProvidesTree node, P p);
 
     /**
      * Visits a ReferenceTree node.
@@ -264,6 +287,14 @@ public interface DocTreeVisitor<R,P> {
      * @return a result value
      */
     R visitUnknownInlineTag(UnknownInlineTagTree node, P p);
+
+    /**
+     * Visits a UsesTree node.
+     * @param node the node being visited
+     * @param p a parameter value
+     * @return a result value
+     */
+    R visitUses(UsesTree node, P p);
 
     /**
      * Visits a ValueTree node.

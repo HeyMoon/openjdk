@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,13 +25,13 @@
 
 package sun.reflect.annotation;
 
-import sun.misc.JavaLangAccess;
-
 import java.lang.annotation.*;
 import java.lang.reflect.*;
 import java.util.*;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
+import jdk.internal.misc.SharedSecrets;
+import jdk.internal.misc.JavaLangAccess;
 
 /**
  * Represents an annotation type at run time.  Used to type-check annotations
@@ -79,7 +79,7 @@ public class AnnotationType {
     public static AnnotationType getInstance(
         Class<? extends Annotation> annotationClass)
     {
-        JavaLangAccess jla = sun.misc.SharedSecrets.getJavaLangAccess();
+        JavaLangAccess jla = SharedSecrets.getJavaLangAccess();
         AnnotationType result = jla.getAnnotationType(annotationClass); // volatile read
         if (result == null) {
             result = new AnnotationType(annotationClass);
@@ -98,8 +98,8 @@ public class AnnotationType {
      * Sole constructor.
      *
      * @param annotationClass the class object for the annotation type
-     * @throw IllegalArgumentException if the specified class object for
-     *     does not represent a valid annotation type
+     * @throws IllegalArgumentException if the specified class object for
+     *         does not represent a valid annotation type
      */
     private AnnotationType(final Class<? extends Annotation> annotationClass) {
         if (!annotationClass.isAnnotation())
@@ -118,23 +118,29 @@ public class AnnotationType {
         members = new HashMap<>(methods.length+1, 1.0f);
 
         for (Method method : methods) {
-            if (method.getParameterTypes().length != 0)
-                throw new IllegalArgumentException(method + " has params");
-            String name = method.getName();
-            Class<?> type = method.getReturnType();
-            memberTypes.put(name, invocationHandlerReturnType(type));
-            members.put(name, method);
+            if (Modifier.isPublic(method.getModifiers()) &&
+                Modifier.isAbstract(method.getModifiers()) &&
+                !method.isSynthetic()) {
+                if (method.getParameterTypes().length != 0) {
+                    throw new IllegalArgumentException(method + " has params");
+                }
+                String name = method.getName();
+                Class<?> type = method.getReturnType();
+                memberTypes.put(name, invocationHandlerReturnType(type));
+                members.put(name, method);
 
-            Object defaultValue = method.getDefaultValue();
-            if (defaultValue != null)
-                memberDefaults.put(name, defaultValue);
+                Object defaultValue = method.getDefaultValue();
+                if (defaultValue != null) {
+                    memberDefaults.put(name, defaultValue);
+                }
+            }
         }
 
         // Initialize retention, & inherited fields.  Special treatment
         // of the corresponding annotation types breaks infinite recursion.
         if (annotationClass != Retention.class &&
             annotationClass != Inherited.class) {
-            JavaLangAccess jla = sun.misc.SharedSecrets.getJavaLangAccess();
+            JavaLangAccess jla = SharedSecrets.getJavaLangAccess();
             Map<Class<? extends Annotation>, Annotation> metaAnnotations =
                 AnnotationParser.parseSelectAnnotations(
                     jla.getRawClassAnnotations(annotationClass),

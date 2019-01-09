@@ -26,7 +26,7 @@
 # @summary Test non US-ASCII characters in the value of the Boot-Class-Path
 #          attribute.
 #
-# @modules java.instrument
+# @key intermittent
 # @run shell/timeout=240 BootClassPathTest.sh
 
 if [ "${TESTJAVA}" = "" ]

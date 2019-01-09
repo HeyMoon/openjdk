@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -67,7 +67,7 @@ import sun.management.spi.PlatformMBeanProvider.PlatformComponent;
  * the management interface of a component of the Java virtual
  * machine.
  *
- * <h3><a name="MXBean">Platform MXBeans</a></h3>
+ * <h3><a id="MXBean">Platform MXBeans</a></h3>
  * <p>
  * A platform MXBean is a <i>managed bean</i> that
  * conforms to the <a href="../../../javax/management/package-summary.html">JMX</a>
@@ -83,7 +83,7 @@ import sun.management.spi.PlatformMBeanProvider.PlatformComponent;
  * See <a href="../../../javax/management/MXBean.html#MXBean-spec">
  * the specification of MXBeans</a> for details.
  *
- * <a name="MXBeanNames"></a>
+ * <a id="MXBeanNames"></a>
  * <p>Each platform MXBean is a {@link PlatformManagedObject}
  * and it has a unique
  * {@link javax.management.ObjectName ObjectName} for
@@ -116,7 +116,7 @@ import sun.management.spi.PlatformMBeanProvider.PlatformComponent;
  * <h4>2. Indirect access to an MXBean interface via MBeanServer</h4>
  * <ul>
  *     <li>Go through the platform {@code MBeanServer} to access MXBeans
- *         locally or a specific <tt>MBeanServerConnection</tt> to access
+ *         locally or a specific {@code MBeanServerConnection} to access
  *         MXBeans remotely.
  *         The attributes and operations of an MXBean use only
  *         <em>JMX open types</em> which include basic data types,
@@ -141,7 +141,8 @@ import sun.management.spi.PlatformMBeanProvider.PlatformComponent;
  * interfaces:
  *
  * <blockquote>
- * <table border summary="The list of Management Interfaces and their single instances">
+ * <table border="1">
+ * <caption style="display:none">The list of Management Interfaces and their single instances</caption>
  * <tr>
  * <th>Management Interface</th>
  * <th>ObjectName</th>
@@ -184,7 +185,8 @@ import sun.management.spi.PlatformMBeanProvider.PlatformComponent;
  * the following management interfaces.
  *
  * <blockquote>
- * <table border summary="The list of Management Interfaces and their single instances">
+ * <table border="1">
+ * <caption style="display:none">The list of Management Interfaces and their single instances</caption>
  * <tr>
  * <th>Management Interface</th>
  * <th>ObjectName</th>
@@ -201,7 +203,8 @@ import sun.management.spi.PlatformMBeanProvider.PlatformComponent;
  * A Java virtual machine may have one or more instances of the following
  * management interfaces.
  * <blockquote>
- * <table border summary="The list of Management Interfaces and their single instances">
+ * <table border="1">
+ * <caption style="display:none">The list of Management Interfaces and their single instances</caption>
  * <tr>
  * <th>Management Interface</th>
  * <th>ObjectName</th>
@@ -209,17 +212,17 @@ import sun.management.spi.PlatformMBeanProvider.PlatformComponent;
  * <tr>
  * <td> {@link GarbageCollectorMXBean} </td>
  * <td> {@link #GARBAGE_COLLECTOR_MXBEAN_DOMAIN_TYPE
- *             java.lang:type=GarbageCollector}<tt>,name=</tt><i>collector's name</i></td>
+ *             java.lang:type=GarbageCollector}{@code ,name=}<i>collector's name</i></td>
  * </tr>
  * <tr>
  * <td> {@link MemoryManagerMXBean} </td>
  * <td> {@link #MEMORY_MANAGER_MXBEAN_DOMAIN_TYPE
- *             java.lang:type=MemoryManager}<tt>,name=</tt><i>manager's name</i></td>
+ *             java.lang:type=MemoryManager}{@code ,name=}<i>manager's name</i></td>
  * </tr>
  * <tr>
  * <td> {@link MemoryPoolMXBean} </td>
  * <td> {@link #MEMORY_POOL_MXBEAN_DOMAIN_TYPE
- *             java.lang:type=MemoryPool}<tt>,name=</tt><i>pool's name</i></td>
+ *             java.lang:type=MemoryPool}{@code ,name=}<i>pool's name</i></td>
  * </tr>
  * <tr>
  * <td> {@link BufferPoolMXBean} </td>
@@ -243,72 +246,72 @@ public class ManagementFactory {
 
     /**
      * String representation of the
-     * <tt>ObjectName</tt> for the {@link ClassLoadingMXBean}.
+     * {@code ObjectName} for the {@link ClassLoadingMXBean}.
      */
     public final static String CLASS_LOADING_MXBEAN_NAME =
         "java.lang:type=ClassLoading";
 
     /**
      * String representation of the
-     * <tt>ObjectName</tt> for the {@link CompilationMXBean}.
+     * {@code ObjectName} for the {@link CompilationMXBean}.
      */
     public final static String COMPILATION_MXBEAN_NAME =
         "java.lang:type=Compilation";
 
     /**
      * String representation of the
-     * <tt>ObjectName</tt> for the {@link MemoryMXBean}.
+     * {@code ObjectName} for the {@link MemoryMXBean}.
      */
     public final static String MEMORY_MXBEAN_NAME =
         "java.lang:type=Memory";
 
     /**
      * String representation of the
-     * <tt>ObjectName</tt> for the {@link OperatingSystemMXBean}.
+     * {@code ObjectName} for the {@link OperatingSystemMXBean}.
      */
     public final static String OPERATING_SYSTEM_MXBEAN_NAME =
         "java.lang:type=OperatingSystem";
 
     /**
      * String representation of the
-     * <tt>ObjectName</tt> for the {@link RuntimeMXBean}.
+     * {@code ObjectName} for the {@link RuntimeMXBean}.
      */
     public final static String RUNTIME_MXBEAN_NAME =
         "java.lang:type=Runtime";
 
     /**
      * String representation of the
-     * <tt>ObjectName</tt> for the {@link ThreadMXBean}.
+     * {@code ObjectName} for the {@link ThreadMXBean}.
      */
     public final static String THREAD_MXBEAN_NAME =
         "java.lang:type=Threading";
 
     /**
      * The domain name and the type key property in
-     * the <tt>ObjectName</tt> for a {@link GarbageCollectorMXBean}.
-     * The unique <tt>ObjectName</tt> for a <tt>GarbageCollectorMXBean</tt>
+     * the {@code ObjectName} for a {@link GarbageCollectorMXBean}.
+     * The unique {@code ObjectName} for a {@code GarbageCollectorMXBean}
      * can be formed by appending this string with
-     * "<tt>,name=</tt><i>collector's name</i>".
+     * "{@code ,name=}<i>collector's name</i>".
      */
     public final static String GARBAGE_COLLECTOR_MXBEAN_DOMAIN_TYPE =
         "java.lang:type=GarbageCollector";
 
     /**
      * The domain name and the type key property in
-     * the <tt>ObjectName</tt> for a {@link MemoryManagerMXBean}.
-     * The unique <tt>ObjectName</tt> for a <tt>MemoryManagerMXBean</tt>
+     * the {@code ObjectName} for a {@link MemoryManagerMXBean}.
+     * The unique {@code ObjectName} for a {@code MemoryManagerMXBean}
      * can be formed by appending this string with
-     * "<tt>,name=</tt><i>manager's name</i>".
+     * "{@code ,name=}<i>manager's name</i>".
      */
     public final static String MEMORY_MANAGER_MXBEAN_DOMAIN_TYPE=
         "java.lang:type=MemoryManager";
 
     /**
      * The domain name and the type key property in
-     * the <tt>ObjectName</tt> for a {@link MemoryPoolMXBean}.
-     * The unique <tt>ObjectName</tt> for a <tt>MemoryPoolMXBean</tt>
+     * the {@code ObjectName} for a {@link MemoryPoolMXBean}.
+     * The unique {@code ObjectName} for a {@code MemoryPoolMXBean}
      * can be formed by appending this string with
-     * <tt>,name=</tt><i>pool's name</i>.
+     * {@code ,name=}<i>pool's name</i>.
      */
     public final static String MEMORY_POOL_MXBEAN_DOMAIN_TYPE=
         "java.lang:type=MemoryPool";
@@ -357,11 +360,11 @@ public class ManagementFactory {
 
     /**
      * Returns the managed bean for the compilation system of
-     * the Java virtual machine.  This method returns <tt>null</tt>
+     * the Java virtual machine.  This method returns {@code null}
      * if the Java virtual machine has no compilation system.
      *
      * @return a {@link CompilationMXBean} object for the Java virtual
-     *   machine or <tt>null</tt> if the Java virtual machine has
+     *   machine or {@code null} if the Java virtual machine has
      *   no compilation system.
      */
     public static CompilationMXBean getCompilationMXBean() {
@@ -385,7 +388,7 @@ public class ManagementFactory {
      * The Java virtual machine can have one or more memory pools.
      * It may add or remove memory pools during execution.
      *
-     * @return a list of <tt>MemoryPoolMXBean</tt> objects.
+     * @return a list of {@code MemoryPoolMXBean} objects.
      *
      */
     public static List<MemoryPoolMXBean> getMemoryPoolMXBeans() {
@@ -398,7 +401,7 @@ public class ManagementFactory {
      * The Java virtual machine can have one or more memory managers.
      * It may add or remove memory managers during execution.
      *
-     * @return a list of <tt>MemoryManagerMXBean</tt> objects.
+     * @return a list of {@code MemoryManagerMXBean} objects.
      *
      */
     public static List<MemoryManagerMXBean> getMemoryManagerMXBeans() {
@@ -410,11 +413,11 @@ public class ManagementFactory {
      * Returns a list of {@link GarbageCollectorMXBean} objects
      * in the Java virtual machine.
      * The Java virtual machine may have one or more
-     * <tt>GarbageCollectorMXBean</tt> objects.
-     * It may add or remove <tt>GarbageCollectorMXBean</tt>
+     * {@code GarbageCollectorMXBean} objects.
+     * It may add or remove {@code GarbageCollectorMXBean}
      * during execution.
      *
-     * @return a list of <tt>GarbageCollectorMXBean</tt> objects.
+     * @return a list of {@code GarbageCollectorMXBean} objects.
      *
      */
     public static List<GarbageCollectorMXBean> getGarbageCollectorMXBeans() {
@@ -485,21 +488,21 @@ public class ManagementFactory {
      * Returns a proxy for a platform MXBean interface of a
      * given <a href="#MXBeanNames">MXBean name</a>
      * that forwards its method calls through the given
-     * <tt>MBeanServerConnection</tt>.
+     * {@code MBeanServerConnection}.
      *
      * <p>This method is equivalent to:
      * <blockquote>
      * {@link java.lang.reflect.Proxy#newProxyInstance
-     *        Proxy.newProxyInstance}<tt>(mxbeanInterface.getClassLoader(),
-     *        new Class[] { mxbeanInterface }, handler)</tt>
+     *        Proxy.newProxyInstance}{@code (mxbeanInterface.getClassLoader(),
+     *        new Class[] { mxbeanInterface }, handler)}
      * </blockquote>
      *
-     * where <tt>handler</tt> is an {@link java.lang.reflect.InvocationHandler
+     * where {@code handler} is an {@link java.lang.reflect.InvocationHandler
      * InvocationHandler} to which method invocations to the MXBean interface
-     * are dispatched. This <tt>handler</tt> converts an input parameter
+     * are dispatched. This {@code handler} converts an input parameter
      * from an MXBean data type to its mapped open type before forwarding
-     * to the <tt>MBeanServer</tt> and converts a return value from
-     * an MXBean method call through the <tt>MBeanServer</tt>
+     * to the {@code MBeanServer} and converts a return value from
+     * an MXBean method call through the {@code MBeanServer}
      * from an open type to the corresponding return type declared in
      * the MXBean interface.
      *
@@ -507,7 +510,7 @@ public class ManagementFactory {
      * If the MXBean is a notification emitter (i.e.,
      * it implements
      * {@link javax.management.NotificationEmitter NotificationEmitter}),
-     * both the <tt>mxbeanInterface</tt> and <tt>NotificationEmitter</tt>
+     * both the {@code mxbeanInterface} and {@code NotificationEmitter}
      * will be implemented by this proxy.
      *
      * <p>
@@ -516,12 +519,16 @@ public class ManagementFactory {
      * <li>Using an MXBean proxy is a convenience remote access to
      * a platform MXBean of a running virtual machine.  All method
      * calls to the MXBean proxy are forwarded to an
-     * <tt>MBeanServerConnection</tt> where
+     * {@code MBeanServerConnection} where
      * {@link java.io.IOException IOException} may be thrown
      * when the communication problem occurs with the connector server.
-     * An application remotely accesses the platform MXBeans using
-     * proxy should prepare to catch <tt>IOException</tt> as if
-     * accessing with the <tt>MBeanServerConnector</tt> interface.</li>
+     * If thrown, {@link java.io.IOException IOException} will be wrappped in
+     * {@link java.lang.reflect.UndeclaredThrowableException UndeclaredThrowableException}.
+     * An application remotely accessing the platform MXBeans using
+     * proxy should prepare to catch {@code UndeclaredThrowableException} and
+     * handle its {@linkplain java.lang.reflect.UndeclaredThrowableException#getCause() cause}
+     * as if that cause had been thrown by the {@code MBeanServerConnection}
+     * interface.</li>
      *
      * <li>When a client application is designed to remotely access MXBeans
      * for a running virtual machine whose version is different than
@@ -530,22 +537,26 @@ public class ManagementFactory {
      * {@link java.io.InvalidObjectException InvalidObjectException}
      * which is thrown when an MXBean proxy receives a name of an
      * enum constant which is missing in the enum class loaded in
-     * the client application. </li>
+     * the client application.   If thrown,
+     * {@link java.io.InvalidObjectException InvalidObjectException} will be
+     * wrappped in
+     * {@link java.lang.reflect.UndeclaredThrowableException UndeclaredThrowableException}.
+     * </li>
      *
      * <li>{@link javax.management.MBeanServerInvocationHandler
      * MBeanServerInvocationHandler} or its
      * {@link javax.management.MBeanServerInvocationHandler#newProxyInstance
      * newProxyInstance} method cannot be used to create
      * a proxy for a platform MXBean. The proxy object created
-     * by <tt>MBeanServerInvocationHandler</tt> does not handle
+     * by {@code MBeanServerInvocationHandler} does not handle
      * the properties of the platform MXBeans described in
      * the <a href="#MXBean">class specification</a>.
      *</li>
      * </ol>
      *
-     * @param connection the <tt>MBeanServerConnection</tt> to forward to.
+     * @param connection the {@code MBeanServerConnection} to forward to.
      * @param mxbeanName the name of a platform MXBean within
-     * <tt>connection</tt> to forward to. <tt>mxbeanName</tt> must be
+     * {@code connection} to forward to. {@code mxbeanName} must be
      * in the format of {@link ObjectName ObjectName}.
      * @param mxbeanInterface the MXBean interface to be implemented
      * by the proxy.
@@ -554,22 +565,22 @@ public class ManagementFactory {
      * @return a proxy for a platform MXBean interface of a
      * given <a href="#MXBeanNames">MXBean name</a>
      * that forwards its method calls through the given
-     * <tt>MBeanServerConnection</tt>, or {@code null} if not exist.
+     * {@code MBeanServerConnection}, or {@code null} if not exist.
      *
      * @throws IllegalArgumentException if
      * <ul>
-     * <li><tt>mxbeanName</tt> is not with a valid
+     * <li>{@code mxbeanName} is not with a valid
      *     {@link ObjectName ObjectName} format, or</li>
-     * <li>the named MXBean in the <tt>connection</tt> is
+     * <li>the named MXBean in the {@code connection} is
      *     not a MXBean provided by the platform, or</li>
      * <li>the named MXBean is not registered in the
-     *     <tt>MBeanServerConnection</tt>, or</li>
+     *     {@code MBeanServerConnection}, or</li>
      * <li>the named MXBean is not an instance of the given
-     *     <tt>mxbeanInterface</tt></li>
+     *     {@code mxbeanInterface}</li>
      * </ul>
      *
      * @throws java.io.IOException if a communication problem
-     * occurred when accessing the <tt>MBeanServerConnection</tt>.
+     * occurred when accessing the {@code MBeanServerConnection}.
      */
     public static <T> T
         newPlatformMXBeanProxy(MBeanServerConnection connection,
@@ -583,16 +594,15 @@ public class ManagementFactory {
         ClassLoader loader =
             AccessController.doPrivileged(
                 (PrivilegedAction<ClassLoader>) () -> cls.getClassLoader());
-        if (!sun.misc.VM.isSystemDomainLoader(loader)) {
+        if (!jdk.internal.misc.VM.isSystemDomainLoader(loader)) {
             throw new IllegalArgumentException(mxbeanName +
                 " is not a platform MXBean");
         }
 
         try {
             final ObjectName objName = new ObjectName(mxbeanName);
-            // skip the isInstanceOf check for LoggingMXBean
             String intfName = mxbeanInterface.getName();
-            if (!connection.isInstanceOf(objName, intfName)) {
+            if (!isInstanceOf(connection, objName, intfName)) {
                 throw new IllegalArgumentException(mxbeanName +
                     " is not an instance of " + mxbeanInterface);
             }
@@ -606,6 +616,33 @@ public class ManagementFactory {
         } catch (InstanceNotFoundException|MalformedObjectNameException e) {
             throw new IllegalArgumentException(e);
         }
+    }
+
+    // This makes it possible to obtain an instance of LoggingMXBean
+    // using newPlatformMXBeanProxy(mbs, on, LoggingMXBean.class)
+    // even though the underlying MXBean no longer implements
+    // java.util.logging.LoggingMXBean.
+    // Altough java.util.logging.LoggingMXBean is deprecated, an application
+    // that uses newPlatformMXBeanProxy(mbs, on, LoggingMXBean.class) will
+    // continue to work.
+    //
+    private static boolean isInstanceOf(MBeanServerConnection connection,
+            ObjectName objName, String intfName)
+            throws InstanceNotFoundException, IOException
+    {
+        // special case for java.util.logging.LoggingMXBean.
+        // java.util.logging.LoggingMXBean is deprecated and
+        // replaced with java.lang.management.PlatformLoggingMXBean,
+        // so we will consider that any MBean implementing
+        // java.lang.management.PlatformLoggingMXBean also implements
+        // java.util.logging.LoggingMXBean.
+        if ("java.util.logging.LoggingMXBean".equals(intfName)) {
+            if (connection.isInstanceOf(objName,
+                    PlatformLoggingMXBean.class.getName())) {
+                return true;
+            }
+        }
+        return connection.isInstanceOf(objName, intfName);
     }
 
     /**

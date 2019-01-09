@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.io.PrintWriter;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -62,16 +64,17 @@ final class PropMap implements SortedMap<String, String>  {
         Properties props = new Properties();
 
         // Allow implementation selected via -Dpack.disable.native=true
+        String propValue = getPropertyValue(Utils.DEBUG_DISABLE_NATIVE, "false");
         props.put(Utils.DEBUG_DISABLE_NATIVE,
-                  String.valueOf(Boolean.getBoolean(Utils.DEBUG_DISABLE_NATIVE)));
+                  String.valueOf(Boolean.parseBoolean(propValue)));
 
         // Set the DEBUG_VERBOSE from system
-        props.put(Utils.DEBUG_VERBOSE,
-                  String.valueOf(Integer.getInteger(Utils.DEBUG_VERBOSE,0)));
-
-        // Set the PACK_TIMEZONE_NO_UTC
-        props.put(Utils.PACK_DEFAULT_TIMEZONE,
-                  String.valueOf(Boolean.getBoolean(Utils.PACK_DEFAULT_TIMEZONE)));
+        int verbose = 0;
+        try {
+            verbose = Integer.decode(getPropertyValue(Utils.DEBUG_VERBOSE, "0"));
+        } catch (NumberFormatException e) {
+        }
+        props.put(Utils.DEBUG_VERBOSE, String.valueOf(verbose));
 
         // The segment size is unlimited
         props.put(Pack200.Packer.SEGMENT_LIMIT, "-1");
@@ -91,7 +94,7 @@ final class PropMap implements SortedMap<String, String>  {
         // Pass through files with unrecognized format by default, also
         // allow system property to be set
         props.put(Utils.CLASS_FORMAT_ERROR,
-                System.getProperty(Utils.CLASS_FORMAT_ERROR, Pack200.Packer.PASS));
+                  getPropertyValue(Utils.CLASS_FORMAT_ERROR, Pack200.Packer.PASS));
 
         // Default effort is 5, midway between 1 and 9.
         props.put(Pack200.Packer.EFFORT, "5");
@@ -101,7 +104,9 @@ final class PropMap implements SortedMap<String, String>  {
         // to allow override if necessary.
         String propFile = "intrinsic.properties";
 
-        try (InputStream propStr = PackerImpl.class.getResourceAsStream(propFile)) {
+        PrivilegedAction<InputStream> pa =
+            () -> PackerImpl.class.getResourceAsStream(propFile);
+        try (InputStream propStr = AccessController.doPrivileged(pa)) {
             if (propStr == null) {
                 throw new RuntimeException(propFile + " cannot be loaded");
             }
@@ -121,6 +126,12 @@ final class PropMap implements SortedMap<String, String>  {
         @SuppressWarnings({"unchecked", "rawtypes"})
         HashMap<String, String> temp = new HashMap(props);  // shrink to fit
         defaultProps = temp;
+    }
+
+    private static String getPropertyValue(String key, String defaultValue) {
+        PrivilegedAction<String> pa = () -> System.getProperty(key);
+        String s = AccessController.doPrivileged(pa);
+        return s != null ? s : defaultValue;
     }
 
     PropMap() {

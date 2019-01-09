@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2013 SAP AG. All rights reserved.
+ * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2013 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -81,11 +81,7 @@
 #define JNI_LIB_PREFIX "lib"
 #define JNI_LIB_SUFFIX ".so"
 
-// Hack: MAXPATHLEN is 4095 on some Linux and 4096 on others. This may
-//       cause problems if JVM and the rest of JDK are built on different
-//       Linux releases. Here we define JVM_MAXPATHLEN to be MAXPATHLEN + 1,
-//       so buffers declared in VM are always >= 4096.
-#define JVM_MAXPATHLEN MAXPATHLEN + 1
+#define JVM_MAXPATHLEN MAXPATHLEN
 
 #define JVM_R_OK    R_OK
 #define JVM_W_OK    W_OK
@@ -113,7 +109,6 @@
 /* Signal definitions */
 
 #define BREAK_SIGNAL     SIGQUIT           /* Thread dumping support.    */
-#define INTERRUPT_SIGNAL SIGUSR1           /* Interruptible I/O support. */
 #define SHUTDOWN1_SIGNAL SIGHUP            /* Shutdown Hooks support.    */
 #define SHUTDOWN2_SIGNAL SIGINT
 #define SHUTDOWN3_SIGNAL SIGTERM

@@ -31,6 +31,8 @@ if [ "${TESTJAVA}" = "" ] ; then
   TESTJAVA=`dirname $JAVAC_CMD`/..
 fi
 
+TESTTOOLVMOPTS="$TESTTOOLVMOPTS -J-Duser.language=en -J-Duser.country=US"
+
 # The sigalg used is MD2withRSA, which is obsolete.
 
 KT="$TESTJAVA/bin/keytool ${TESTTOOLVMOPTS} -keystore ks
@@ -52,9 +54,9 @@ $KT -certreq -alias signer | \
 $JAR cvf a.jar ks
 
 # We always trust a TrustedCertificateEntry
-$JS a.jar ca || exit 1
+$JS a.jar ca | grep "chain is not validated" && exit 1
 
 # An end-entity cert must follow algorithm constraints
-$JS a.jar signer && exit 2
+$JS a.jar signer | grep "chain is not validated" || exit 2
 
 exit 0

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,7 +47,7 @@ class TypeArrayKlass : public ArrayKlass {
   void set_max_length(jint m)           { _max_length = m;    }
 
   // testers
-  bool oop_is_typeArray_slow() const    { return true; }
+  DEBUG_ONLY(bool is_typeArray_klass_slow() const  { return true; })
 
   // klass allocation
   static TypeArrayKlass* create_klass(BasicType type, const char* name_str,
@@ -75,14 +75,13 @@ class TypeArrayKlass : public ArrayKlass {
   // GC specific object visitors
   //
   // Mark Sweep
-  void oop_ms_follow_contents(oop obj);
   int  oop_ms_adjust_pointers(oop obj);
 #if INCLUDE_ALL_GCS
   // Parallel Scavenge
   void oop_ps_push_contents(  oop obj, PSPromotionManager* pm);
   // Parallel Compact
   void oop_pc_follow_contents(oop obj, ParCompactionManager* cm);
-  void oop_pc_update_pointers(oop obj);
+  void oop_pc_update_pointers(oop obj, ParCompactionManager* cm);
 #endif
 
   // Oop iterators. Since there are no oops in TypeArrayKlasses,
@@ -90,15 +89,15 @@ class TypeArrayKlass : public ArrayKlass {
 
  private:
   // The implementation used by all oop_oop_iterate functions in TypeArrayKlasses.
-  inline int oop_oop_iterate_impl(oop obj, ExtendedOopClosure* closure);
+  inline void oop_oop_iterate_impl(oop obj, ExtendedOopClosure* closure);
 
   // Wraps oop_oop_iterate_impl to conform to macros.
   template <bool nv, typename OopClosureType>
-  inline int oop_oop_iterate(oop obj, OopClosureType* closure);
+  inline void oop_oop_iterate(oop obj, OopClosureType* closure);
 
   // Wraps oop_oop_iterate_impl to conform to macros.
   template <bool nv, typename OopClosureType>
-  inline int oop_oop_iterate_bounded(oop obj, OopClosureType* closure, MemRegion mr);
+  inline void oop_oop_iterate_bounded(oop obj, OopClosureType* closure, MemRegion mr);
 
  public:
 
@@ -121,17 +120,20 @@ class TypeArrayKlass : public ArrayKlass {
   virtual Klass* array_klass_impl(bool or_null, TRAPS);
 
  public:
-  // Casting from Klass*
   static TypeArrayKlass* cast(Klass* k) {
-    assert(k->oop_is_typeArray(), "cast to TypeArrayKlass");
-    return (TypeArrayKlass*) k;
+    return const_cast<TypeArrayKlass*>(cast(const_cast<const Klass*>(k)));
+  }
+
+  static const TypeArrayKlass* cast(const Klass* k) {
+    assert(k->is_typeArray_klass(), "cast to TypeArrayKlass");
+    return static_cast<const TypeArrayKlass*>(k);
   }
 
   // Naming
   static const char* external_name(BasicType type);
 
   // Sizing
-  static int header_size()  { return sizeof(TypeArrayKlass)/HeapWordSize; }
+  static int header_size()  { return sizeof(TypeArrayKlass)/wordSize; }
   int size() const          { return ArrayKlass::static_size(header_size()); }
 
   // Initialization (virtual from Klass)
@@ -148,6 +150,9 @@ class TypeArrayKlass : public ArrayKlass {
 
  public:
   const char* internal_name() const;
+
+  ModuleEntry* module() const;
+  PackageEntry* package() const;
 };
 
 #endif // SHARE_VM_OOPS_TYPEARRAYKLASS_HPP

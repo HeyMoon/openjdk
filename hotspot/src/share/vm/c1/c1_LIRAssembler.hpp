@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,7 +28,7 @@
 #include "c1/c1_CodeStubs.hpp"
 #include "ci/ciMethodData.hpp"
 #include "oops/methodData.hpp"
-#include "utilities/top.hpp"
+#include "utilities/macros.hpp"
 
 class Compilation;
 class ScopeValue;
@@ -99,8 +99,8 @@ class LIR_Assembler: public CompilationResourceObj {
   void add_debug_info_for_branch(CodeEmitInfo* info);
   void add_debug_info_for_div0(int pc_offset, CodeEmitInfo* cinfo);
   void add_debug_info_for_div0_here(CodeEmitInfo* info);
-  void add_debug_info_for_null_check(int pc_offset, CodeEmitInfo* cinfo);
-  void add_debug_info_for_null_check_here(CodeEmitInfo* info);
+  ImplicitNullCheckStub* add_debug_info_for_null_check(int pc_offset, CodeEmitInfo* cinfo);
+  ImplicitNullCheckStub* add_debug_info_for_null_check_here(CodeEmitInfo* info);
 
   void set_24bit_FPU();
   void reset_FPU();
@@ -160,8 +160,6 @@ class LIR_Assembler: public CompilationResourceObj {
   // any last minute peephole optimizations are performed here.  In
   // particular sparc uses this for delay slot filling.
   void peephole(LIR_List* list);
-
-  void emit_string_compare(LIR_Opr left, LIR_Opr right, LIR_Opr dst, CodeEmitInfo* info);
 
   void return_op(LIR_Opr result);
 
@@ -253,28 +251,30 @@ class LIR_Assembler: public CompilationResourceObj {
   void membar_storestore();
   void membar_loadstore();
   void membar_storeload();
+  void on_spin_wait();
   void get_thread(LIR_Opr result);
 
   void verify_oop_map(CodeEmitInfo* info);
 
   void atomic_op(LIR_Code code, LIR_Opr src, LIR_Opr data, LIR_Opr dest, LIR_Opr tmp);
 
-#ifdef TARGET_ARCH_x86
-# include "c1_LIRAssembler_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "c1_LIRAssembler_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "c1_LIRAssembler_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "c1_LIRAssembler_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "c1_LIRAssembler_aarch64.hpp"
-#endif
+#include CPU_HEADER(c1_LIRAssembler)
 
+  static int call_stub_size() {
+    if (UseAOT) {
+      return _call_stub_size + _call_aot_stub_size;
+    } else {
+      return _call_stub_size;
+    }
+  }
+
+  static int exception_handler_size() {
+    return _exception_handler_size;
+  }
+
+  static int deopt_handler_size() {
+    return _deopt_handler_size;
+  }
 };
 
 #endif // SHARE_VM_C1_C1_LIRASSEMBLER_HPP

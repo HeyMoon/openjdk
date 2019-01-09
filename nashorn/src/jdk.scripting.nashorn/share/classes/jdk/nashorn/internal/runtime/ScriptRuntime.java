@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,17 +45,23 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
-import jdk.internal.dynalink.beans.StaticClass;
+import jdk.dynalink.beans.BeansLinker;
+import jdk.dynalink.beans.StaticClass;
 import jdk.nashorn.api.scripting.JSObject;
 import jdk.nashorn.api.scripting.ScriptObjectMirror;
 import jdk.nashorn.internal.codegen.ApplySpecialization;
 import jdk.nashorn.internal.codegen.CompilerConstants;
 import jdk.nashorn.internal.codegen.CompilerConstants.Call;
 import jdk.nashorn.internal.ir.debug.JSONWriter;
+import jdk.nashorn.internal.objects.AbstractIterator;
 import jdk.nashorn.internal.objects.Global;
 import jdk.nashorn.internal.objects.NativeObject;
+import jdk.nashorn.internal.objects.NativeJava;
+import jdk.nashorn.internal.objects.NativeArray;
 import jdk.nashorn.internal.parser.Lexer;
+import jdk.nashorn.internal.runtime.arrays.ArrayIndex;
 import jdk.nashorn.internal.runtime.linker.Bootstrap;
+import jdk.nashorn.internal.runtime.linker.InvokeByName;
 
 /**
  * Utilities to be called by JavaScript runtime API and generated classes.
@@ -101,6 +107,11 @@ public final class ScriptRuntime {
      * Return an appropriate iterator for the elements in a for-each construct
      */
     public static final Call TO_VALUE_ITERATOR = staticCallNoLookup(ScriptRuntime.class, "toValueIterator", Iterator.class, Object.class);
+
+    /**
+     * Return an appropriate iterator for the elements in a ES6 for-of loop
+     */
+    public static final Call TO_ES6_ITERATOR = staticCallNoLookup(ScriptRuntime.class, "toES6Iterator", Iterator.class, Object.class);
 
     /**
       * Method handle for apply. Used from {@link ScriptFunction} for looking up calls to
@@ -306,18 +317,8 @@ public final class ScriptRuntime {
         }
     }
 
-    /**
-     * Returns an iterator over property values used in the {@code for each...in} statement. Aside from built-in JS
-     * objects, it also operates on Java arrays, any {@link Iterable}, as well as on {@link Map} objects, iterating over
-     * map values.
-     * @param obj object to iterate on.
-     * @return iterator over the object's property values.
-     */
-    public static Iterator<?> toValueIterator(final Object obj) {
-        if (obj instanceof ScriptObject) {
-            return ((ScriptObject)obj).valueIterator();
-        }
-
+    // value Iterator for important Java objects - arrays, maps, iterables.
+    private static Iterator<?> iteratorForJavaArrayOrList(final Object obj) {
         if (obj != null && obj.getClass().isArray()) {
             final Object array  = obj;
             final int    length = Array.getLength(obj);
@@ -345,16 +346,36 @@ public final class ScriptRuntime {
             };
         }
 
+        if (obj instanceof Iterable) {
+            return ((Iterable<?>)obj).iterator();
+        }
+
+        return null;
+    }
+
+    /**
+     * Returns an iterator over property values used in the {@code for each...in} statement. Aside from built-in JS
+     * objects, it also operates on Java arrays, any {@link Iterable}, as well as on {@link Map} objects, iterating over
+     * map values.
+     * @param obj object to iterate on.
+     * @return iterator over the object's property values.
+     */
+    public static Iterator<?> toValueIterator(final Object obj) {
+        if (obj instanceof ScriptObject) {
+            return ((ScriptObject)obj).valueIterator();
+        }
+
         if (obj instanceof JSObject) {
             return ((JSObject)obj).values().iterator();
         }
 
-        if (obj instanceof Map) {
-            return ((Map<?,?>)obj).values().iterator();
+        final Iterator<?> itr = iteratorForJavaArrayOrList(obj);
+        if (itr != null) {
+            return itr;
         }
 
-        if (obj instanceof Iterable) {
-            return ((Iterable<?>)obj).iterator();
+        if (obj instanceof Map) {
+            return ((Map<?,?>)obj).values().iterator();
         }
 
         final Object wrapped = Global.instance().wrapAsObject(obj);
@@ -363,6 +384,109 @@ public final class ScriptRuntime {
         }
 
         return Collections.emptyIterator();
+    }
+
+    /**
+     * Returns an iterator over property values used in the {@code for ... of} statement. The iterator uses the
+     * Iterator interface defined in version 6 of the ECMAScript specification.
+     *
+     * @param obj object to iterate on.
+     * @return iterator based on the ECMA 6 Iterator interface.
+     */
+    public static Iterator<?> toES6Iterator(final Object obj) {
+        // if not a ScriptObject, try convenience iterator for Java objects!
+        if (!(obj instanceof ScriptObject)) {
+            final Iterator<?> itr = iteratorForJavaArrayOrList(obj);
+            if (itr != null) {
+                return itr;
+            }
+
+        if (obj instanceof Map) {
+            return new Iterator<Object>() {
+                private Iterator<?> iter = ((Map<?,?>)obj).entrySet().iterator();
+
+                @Override
+                public boolean hasNext() {
+                    return iter.hasNext();
+                }
+
+                @Override
+                public Object next() {
+                    Map.Entry<?,?> next = (Map.Entry)iter.next();
+                    Object[] keyvalue = new Object[]{next.getKey(), next.getValue()};
+                    NativeArray array = NativeJava.from(null, keyvalue);
+                    return array;
+                }
+
+                @Override
+                public void remove() {
+                    iter.remove();
+                }
+            };
+        }
+        }
+
+        final Global global = Global.instance();
+        final Object iterator = AbstractIterator.getIterator(Global.toObject(obj), global);
+
+        final InvokeByName nextInvoker = AbstractIterator.getNextInvoker(global);
+        final MethodHandle doneInvoker = AbstractIterator.getDoneInvoker(global);
+        final MethodHandle valueInvoker = AbstractIterator.getValueInvoker(global);
+
+        return new Iterator<Object>() {
+
+            private Object nextResult = nextResult();
+
+            private Object nextResult() {
+                try {
+                    final Object next = nextInvoker.getGetter().invokeExact(iterator);
+                    if (Bootstrap.isCallable(next)) {
+                        return nextInvoker.getInvoker().invokeExact(next, iterator, (Object) null);
+                    }
+                } catch (final RuntimeException|Error r) {
+                    throw r;
+                } catch (final Throwable t) {
+                    throw new RuntimeException(t);
+                }
+                return null;
+            }
+
+            @Override
+            public boolean hasNext() {
+                if (nextResult == null) {
+                    return false;
+                }
+                try {
+                    final Object done = doneInvoker.invokeExact(nextResult);
+                    return !JSType.toBoolean(done);
+                } catch (final RuntimeException|Error r) {
+                    throw r;
+                } catch (final Throwable t) {
+                    throw new RuntimeException(t);
+                }
+            }
+
+            @Override
+            public Object next() {
+                if (nextResult == null) {
+                    return Undefined.getUndefined();
+                }
+                try {
+                    final Object result = nextResult;
+                    nextResult = nextResult();
+                    return valueInvoker.invokeExact(result);
+                } catch (final RuntimeException|Error r) {
+                    throw r;
+                } catch (final Throwable t) {
+                    throw new RuntimeException(t);
+                }
+            }
+
+            @Override
+            public void remove() {
+                throw new UnsupportedOperationException("remove");
+            }
+        };
     }
 
     /**
@@ -380,8 +504,8 @@ public final class ScriptRuntime {
 
     /**
      * Call a function given self and args. If the number of the arguments is known in advance, you can likely achieve
-     * better performance by {@link Bootstrap#createDynamicInvoker(String, Class, Class...) creating a dynamic invoker}
-     * for operation {@code "dyn:call"}, then using its {@link MethodHandle#invokeExact(Object...)} method instead.
+     * better performance by creating a dynamic invoker using {@link Bootstrap#createDynamicCallInvoker(Class, Class...)}
+     * then using its {@link MethodHandle#invokeExact(Object...)} method instead.
      *
      * @param target ScriptFunction object.
      * @param self   Receiver in call.
@@ -608,7 +732,17 @@ public final class ScriptRuntime {
 
         if (property != null) {
             if (obj instanceof ScriptObject) {
-                obj = ((ScriptObject)obj).get(property);
+                // this is a scope identifier
+                assert property instanceof String;
+                final ScriptObject sobj = (ScriptObject) obj;
+
+                final FindProperty find = sobj.findProperty(property, true, true, sobj);
+                if (find != null) {
+                    obj = find.getObjectValue();
+                } else {
+                    obj = sobj.invokeNoSuchProperty(property, false, UnwarrantedOptimismException.INVALID_PROGRAM_POINT);
+                }
+
                 if(Global.isLocationPropertyPlaceholder(obj)) {
                     if(CompilerConstants.__LINE__.name().equals(property)) {
                         obj = 0;
@@ -685,6 +819,33 @@ public final class ScriptRuntime {
     }
 
     /**
+     * ECMA 11.4.1 - delete operator, implementation for slow scopes
+     *
+     * This implementation of 'delete' walks the scope chain to find the scope that contains the
+     * property to be deleted, then invokes delete on it.
+     *
+     * @param obj       top scope object
+     * @param property  property to delete
+     * @param strict    are we in strict mode
+     *
+     * @return true if property was successfully found and deleted
+     */
+    public static boolean SLOW_DELETE(final Object obj, final Object property, final Object strict) {
+        if (obj instanceof ScriptObject) {
+            ScriptObject sobj = (ScriptObject) obj;
+            final String key = property.toString();
+            while (sobj != null && sobj.isScope()) {
+                final FindProperty find = sobj.findProperty(key, false);
+                if (find != null) {
+                    return sobj.delete(key, Boolean.TRUE.equals(strict));
+                }
+                sobj = sobj.getProto();
+            }
+        }
+        return DELETE(obj, property, strict);
+    }
+
+    /**
      * ECMA 11.4.1 - delete operator, special case
      *
      * This is 'delete' that always fails. We have to check strict mode and throw error.
@@ -728,7 +889,9 @@ public final class ScriptRuntime {
 
     /** ECMA 11.9.3 The Abstract Equality Comparison Algorithm */
     private static boolean equals(final Object x, final Object y) {
-        if (x == y) {
+        // We want to keep this method small so we skip reference equality check for numbers
+        // as NaN should return false when compared to itself (JDK-8043608).
+        if (x == y && !(x instanceof Number)) {
             return true;
         }
         if (x instanceof ScriptObject && y instanceof ScriptObject) {
@@ -808,11 +971,11 @@ public final class ScriptRuntime {
         } else if (yType == JSType.BOOLEAN) {
             // Can reverse order as y is primitive
             return equalBooleanToAny(y, x);
-        } else if (isNumberOrStringAndObject(xType, yType)) {
-            return equalNumberOrStringToObject(x, y);
-        } else if (isNumberOrStringAndObject(yType, xType)) {
+        } else if (isPrimitiveAndObject(xType, yType)) {
+            return equalWrappedPrimitiveToObject(x, y);
+        } else if (isPrimitiveAndObject(yType, xType)) {
             // Can reverse order as y is primitive
-            return equalNumberOrStringToObject(y, x);
+            return equalWrappedPrimitiveToObject(y, x);
         }
 
         return false;
@@ -826,8 +989,8 @@ public final class ScriptRuntime {
         return xType == JSType.NUMBER && yType == JSType.STRING;
     }
 
-    private static boolean isNumberOrStringAndObject(final JSType xType, final JSType yType) {
-        return (xType == JSType.NUMBER || xType == JSType.STRING) && yType == JSType.OBJECT;
+    private static boolean isPrimitiveAndObject(final JSType xType, final JSType yType) {
+        return (xType == JSType.NUMBER || xType == JSType.STRING || xType == JSType.SYMBOL) && yType == JSType.OBJECT;
     }
 
     private static boolean equalNumberToString(final Object num, final Object str) {
@@ -841,7 +1004,7 @@ public final class ScriptRuntime {
         return equals(JSType.toNumber((Boolean)bool), any);
     }
 
-    private static boolean equalNumberOrStringToObject(final Object numOrStr, final Object any) {
+    private static boolean equalWrappedPrimitiveToObject(final Object numOrStr, final Object any) {
         return equals(numOrStr, JSType.toPrimitive(any));
     }
 
@@ -904,7 +1067,30 @@ public final class ScriptRuntime {
                 return ((JSObject)obj).hasMember(Objects.toString(property));
             }
 
-            return false;
+            final Object key = JSType.toPropertyKey(property);
+
+            if (obj instanceof StaticClass) {
+                final Class<?> clazz = ((StaticClass) obj).getRepresentedClass();
+                return BeansLinker.getReadableStaticPropertyNames(clazz).contains(Objects.toString(key))
+                    || BeansLinker.getStaticMethodNames(clazz).contains(Objects.toString(key));
+            } else {
+                if (obj instanceof Map && ((Map) obj).containsKey(key)) {
+                    return true;
+                }
+
+                final int index = ArrayIndex.getArrayIndex(key);
+                if (index >= 0) {
+                    if (obj instanceof List && index < ((List) obj).size()) {
+                        return true;
+                    }
+                    if (obj.getClass().isArray() && index < Array.getLength(obj)) {
+                        return true;
+                    }
+                }
+
+                return BeansLinker.getReadableInstancePropertyNames(obj.getClass()).contains(Objects.toString(key))
+                    || BeansLinker.getInstanceMethodNames(obj.getClass()).contains(Objects.toString(key));
+            }
         }
 
         throw typeError("in.with.non.object", rvalType.toString().toLowerCase(Locale.ENGLISH));
@@ -1022,5 +1208,21 @@ public final class ScriptRuntime {
         assert sp != null;
         context.getLogger(ApplySpecialization.class).info("Overwrote special name '" + name +"' - invalidating switchpoint");
         SwitchPoint.invalidateAll(new SwitchPoint[] { sp });
+    }
+
+    /**
+     * ES6 12.2.9.3 Runtime Semantics: GetTemplateObject(templateLiteral).
+     *
+     * @param rawStrings array of template raw values
+     * @param cookedStrings array of template values
+     * @return template object
+     */
+    public static ScriptObject GET_TEMPLATE_OBJECT(final Object rawStrings, final Object cookedStrings) {
+        final ScriptObject template = (ScriptObject)cookedStrings;
+        final ScriptObject rawObj = (ScriptObject)rawStrings;
+        assert rawObj.getArray().length() == template.getArray().length();
+        template.addOwnProperty("raw", Property.NOT_WRITABLE | Property.NOT_ENUMERABLE | Property.NOT_CONFIGURABLE, rawObj.freeze());
+        template.freeze();
+        return template;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,50 +33,53 @@
 // the addresses of modified old-generation objects.  This type supports
 // this operation.
 
-// The definition of placement operator new(size_t, void*) in the <new>.
-#include <new>
-
+class BufferNode;
 class PtrQueueSet;
 class PtrQueue VALUE_OBJ_CLASS_SPEC {
   friend class VMStructs;
 
-protected:
+  // Noncopyable - not defined.
+  PtrQueue(const PtrQueue&);
+  PtrQueue& operator=(const PtrQueue&);
+
   // The ptr queue set to which this queue belongs.
-  PtrQueueSet* _qset;
+  PtrQueueSet* const _qset;
 
   // Whether updates should be logged.
   bool _active;
 
-  // The buffer.
-  void** _buf;
-  // The index at which an object was last enqueued.  Starts at "_sz"
-  // (indicating an empty buffer) and goes towards zero.
-  size_t _index;
-
-  // The size of the buffer.
-  size_t _sz;
-
   // If true, the queue is permanent, and doesn't need to deallocate
   // its buffer in the destructor (since that obtains a lock which may not
   // be legally locked by then.
-  bool _perm;
+  const bool _permanent;
+
+protected:
+  // The buffer.
+  void** _buf;
+  // The (byte) index at which an object was last enqueued.  Starts at "_sz"
+  // (indicating an empty buffer) and goes towards zero.
+  size_t _index;
+
+  // The (byte) size of the buffer.
+  size_t _sz;
 
   // If there is a lock associated with this buffer, this is that lock.
   Mutex* _lock;
 
   PtrQueueSet* qset() { return _qset; }
-  bool is_permanent() const { return _perm; }
+  bool is_permanent() const { return _permanent; }
 
   // Process queue entries and release resources, if not permanent.
   void flush_impl();
 
-public:
   // Initialize this queue to contain a null buffer, and be part of the
   // given PtrQueueSet.
-  PtrQueue(PtrQueueSet* qset, bool perm = false, bool active = false);
+  PtrQueue(PtrQueueSet* qset, bool permanent = false, bool active = false);
 
   // Requires queue flushed or permanent.
   ~PtrQueue();
+
+public:
 
   // Associate a lock with a ptr queue.
   void set_lock(Mutex* lock) { _lock = lock; }
@@ -102,7 +105,7 @@ public:
   // get into an infinite loop).
   virtual bool should_enqueue_buffer() { return true; }
   void handle_zero_index();
-  void locking_enqueue_completed_buffer(void** buf);
+  void locking_enqueue_completed_buffer(BufferNode* node);
 
   void enqueue_known_active(void* ptr);
 
@@ -129,29 +132,37 @@ public:
 
   bool is_active() { return _active; }
 
-  static int byte_index_to_index(int ind) {
-    assert((ind % oopSize) == 0, "Invariant.");
-    return ind / oopSize;
+  static size_t byte_index_to_index(size_t ind) {
+    assert((ind % sizeof(void*)) == 0, "Invariant.");
+    return ind / sizeof(void*);
   }
 
-  static int index_to_byte_index(int byte_ind) {
-    return byte_ind * oopSize;
+  static size_t index_to_byte_index(size_t ind) {
+    return ind * sizeof(void*);
   }
 
   // To support compiler.
+
+protected:
+  template<typename Derived>
   static ByteSize byte_offset_of_index() {
-    return byte_offset_of(PtrQueue, _index);
+    return byte_offset_of(Derived, _index);
   }
+
   static ByteSize byte_width_of_index() { return in_ByteSize(sizeof(size_t)); }
 
+  template<typename Derived>
   static ByteSize byte_offset_of_buf() {
-    return byte_offset_of(PtrQueue, _buf);
+    return byte_offset_of(Derived, _buf);
   }
+
   static ByteSize byte_width_of_buf() { return in_ByteSize(sizeof(void*)); }
 
+  template<typename Derived>
   static ByteSize byte_offset_of_active() {
-    return byte_offset_of(PtrQueue, _active);
+    return byte_offset_of(Derived, _active);
   }
+
   static ByteSize byte_width_of_active() { return in_ByteSize(sizeof(bool)); }
 
 };
@@ -159,42 +170,41 @@ public:
 class BufferNode {
   size_t _index;
   BufferNode* _next;
-public:
+  void* _buffer[1];             // Pseudo flexible array member.
+
   BufferNode() : _index(0), _next(NULL) { }
+  ~BufferNode() { }
+
+  static size_t buffer_offset() {
+    return offset_of(BufferNode, _buffer);
+  }
+
+public:
   BufferNode* next() const     { return _next;  }
   void set_next(BufferNode* n) { _next = n;     }
   size_t index() const         { return _index; }
   void set_index(size_t i)     { _index = i;    }
 
-  // Align the size of the structure to the size of the pointer
-  static size_t aligned_size() {
-    static const size_t alignment = round_to(sizeof(BufferNode), sizeof(void*));
-    return alignment;
+  // Allocate a new BufferNode with the "buffer" having size bytes.
+  static BufferNode* allocate(size_t byte_size);
+
+  // Free a BufferNode.
+  static void deallocate(BufferNode* node);
+
+  // Return the BufferNode containing the buffer, after setting its index.
+  static BufferNode* make_node_from_buffer(void** buffer, size_t index) {
+    BufferNode* node =
+      reinterpret_cast<BufferNode*>(
+        reinterpret_cast<char*>(buffer) - buffer_offset());
+    node->set_index(index);
+    return node;
   }
 
-  // BufferNode is allocated before the buffer.
-  // The chunk of memory that holds both of them is a block.
-
-  // Produce a new BufferNode given a buffer.
-  static BufferNode* new_from_buffer(void** buf) {
-    return new (make_block_from_buffer(buf)) BufferNode;
-  }
-
-  // The following are the required conversion routines:
-  static BufferNode* make_node_from_buffer(void** buf) {
-    return (BufferNode*)make_block_from_buffer(buf);
-  }
+  // Return the buffer for node.
   static void** make_buffer_from_node(BufferNode *node) {
-    return make_buffer_from_block(node);
-  }
-  static void* make_block_from_node(BufferNode *node) {
-    return (void*)node;
-  }
-  static void** make_buffer_from_block(void* p) {
-    return (void**)((char*)p + aligned_size());
-  }
-  static void* make_block_from_buffer(void** p) {
-    return (void*)((char*)p - aligned_size());
+    // &_buffer[0] might lead to index out of bounds warnings.
+    return reinterpret_cast<void**>(
+      reinterpret_cast<char*>(node) + buffer_offset());
   }
 };
 
@@ -207,7 +217,7 @@ protected:
   Monitor* _cbl_mon;  // Protects the fields below.
   BufferNode* _completed_buffers_head;
   BufferNode* _completed_buffers_tail;
-  int _n_completed_buffers;
+  size_t _n_completed_buffers;
   int _process_completed_threshold;
   volatile bool _process_completed;
 
@@ -231,9 +241,9 @@ protected:
   // Maximum number of elements allowed on completed queue: after that,
   // enqueuer does the work itself.  Zero indicates no maximum.
   int _max_completed_queue;
-  int _completed_queue_padding;
+  size_t _completed_queue_padding;
 
-  int completed_buffers_list_length();
+  size_t completed_buffers_list_length();
   void assert_completed_buffer_list_len_correct_locked();
   void assert_completed_buffer_list_len_correct();
 
@@ -241,42 +251,37 @@ protected:
   // A mutator thread does the the work of processing a buffer.
   // Returns "true" iff the work is complete (and the buffer may be
   // deallocated).
-  virtual bool mut_process_buffer(void** buf) {
+  virtual bool mut_process_buffer(BufferNode* node) {
     ShouldNotReachHere();
     return false;
   }
 
-public:
   // Create an empty ptr queue set.
   PtrQueueSet(bool notify_when_complete = false);
+  ~PtrQueueSet();
 
   // Because of init-order concerns, we can't pass these as constructor
   // arguments.
-  void initialize(Monitor* cbl_mon, Mutex* fl_lock,
+  void initialize(Monitor* cbl_mon,
+                  Mutex* fl_lock,
                   int process_completed_threshold,
                   int max_completed_queue,
-                  PtrQueueSet *fl_owner = NULL) {
-    _max_completed_queue = max_completed_queue;
-    _process_completed_threshold = process_completed_threshold;
-    _completed_queue_padding = 0;
-    assert(cbl_mon != NULL && fl_lock != NULL, "Init order issue?");
-    _cbl_mon = cbl_mon;
-    _fl_lock = fl_lock;
-    _fl_owner = (fl_owner != NULL) ? fl_owner : this;
-  }
+                  PtrQueueSet *fl_owner = NULL);
 
-  // Return an empty oop array of size _sz (required to be non-zero).
+public:
+
+  // Return an empty array of size _sz (required to be non-zero).
   void** allocate_buffer();
 
   // Return an empty buffer to the free list.  The "buf" argument is
   // required to be a pointer to the head of an array of length "_sz".
-  void deallocate_buffer(void** buf);
+  void deallocate_buffer(BufferNode* node);
 
   // Declares that "buf" is a complete buffer.
-  void enqueue_complete_buffer(void** buf, size_t index = 0);
+  void enqueue_complete_buffer(BufferNode* node);
 
   // To be invoked by the mutator.
-  bool process_or_enqueue_complete_buffer(void** buf);
+  bool process_or_enqueue_complete_buffer(BufferNode* node);
 
   bool completed_buffers_exist_dirty() {
     return _n_completed_buffers > 0;
@@ -302,15 +307,15 @@ public:
   // list size may be reduced, if that is deemed desirable.
   void reduce_free_list();
 
-  int completed_buffers_num() { return _n_completed_buffers; }
+  size_t completed_buffers_num() { return _n_completed_buffers; }
 
   void merge_bufferlists(PtrQueueSet* src);
 
   void set_max_completed_queue(int m) { _max_completed_queue = m; }
   int max_completed_queue() { return _max_completed_queue; }
 
-  void set_completed_queue_padding(int padding) { _completed_queue_padding = padding; }
-  int completed_queue_padding() { return _completed_queue_padding; }
+  void set_completed_queue_padding(size_t padding) { _completed_queue_padding = padding; }
+  size_t completed_queue_padding() { return _completed_queue_padding; }
 
   // Notify the consumer if the number of buffers crossed the threshold
   void notify_if_necessary();

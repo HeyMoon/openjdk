@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,8 +33,10 @@
 #include "runtime/os.hpp"
 
 void LIR_Assembler::patching_epilog(PatchingStub* patch, LIR_PatchCode patch_code, Register obj, CodeEmitInfo* info) {
-  // we must have enough patching space so that call can be inserted
-  while ((intx) _masm->pc() - (intx) patch->pc_start() < NativeCall::instruction_size) {
+  // We must have enough patching space so that call can be inserted.
+  // We cannot use fat nops here, since the concurrent code rewrite may transiently
+  // create the illegal instruction sequence.
+  while ((intx) _masm->pc() - (intx) patch->pc_start() < NativeGeneralJump::instruction_size) {
     _masm->nop();
   }
   patch->install(_masm, patch_code, obj, info);
@@ -125,7 +127,7 @@ void LIR_Assembler::append_code_stub(CodeStub* stub) {
 
 void LIR_Assembler::emit_stubs(CodeStubList* stub_list) {
   for (int m = 0; m < stub_list->length(); m++) {
-    CodeStub* s = (*stub_list)[m];
+    CodeStub* s = stub_list->at(m);
 
     check_codespace();
     CHECK_BAILOUT();
@@ -403,20 +405,22 @@ void LIR_Assembler::record_non_safepoint_debug_info() {
     if (s == NULL)  break;
     IRScope* scope = s->scope();
     //Always pass false for reexecute since these ScopeDescs are never used for deopt
-    debug_info->describe_scope(pc_offset, scope->method(), s->bci(), false/*reexecute*/);
+    methodHandle null_mh;
+    debug_info->describe_scope(pc_offset, null_mh, scope->method(), s->bci(), false/*reexecute*/);
   }
 
   debug_info->end_non_safepoint(pc_offset);
 }
 
 
-void LIR_Assembler::add_debug_info_for_null_check_here(CodeEmitInfo* cinfo) {
-  add_debug_info_for_null_check(code_offset(), cinfo);
+ImplicitNullCheckStub* LIR_Assembler::add_debug_info_for_null_check_here(CodeEmitInfo* cinfo) {
+  return add_debug_info_for_null_check(code_offset(), cinfo);
 }
 
-void LIR_Assembler::add_debug_info_for_null_check(int pc_offset, CodeEmitInfo* cinfo) {
+ImplicitNullCheckStub* LIR_Assembler::add_debug_info_for_null_check(int pc_offset, CodeEmitInfo* cinfo) {
   ImplicitNullCheckStub* stub = new ImplicitNullCheckStub(pc_offset, cinfo);
   append_code_stub(stub);
+  return stub;
 }
 
 void LIR_Assembler::add_debug_info_for_div0_here(CodeEmitInfo* info) {
@@ -443,6 +447,7 @@ void LIR_Assembler::emit_call(LIR_OpJavaCall* op) {
 
   // emit the static call stub stuff out of line
   emit_static_call_stub();
+  CHECK_BAILOUT();
 
   switch (op->code()) {
   case lir_static_call:
@@ -459,7 +464,7 @@ void LIR_Assembler::emit_call(LIR_OpJavaCall* op) {
     vtable_call(op);
     break;
   default:
-    fatal(err_msg_res("unexpected op code: %s", op->name()));
+    fatal("unexpected op code: %s", op->name());
     break;
   }
 
@@ -551,17 +556,16 @@ void LIR_Assembler::emit_op1(LIR_Op1* op) {
       leal(op->in_opr(), op->result_opr());
       break;
 
-    case lir_null_check:
-      if (GenerateCompilerNullChecks) {
-        add_debug_info_for_null_check_here(op->info());
+    case lir_null_check: {
+      ImplicitNullCheckStub* stub = add_debug_info_for_null_check_here(op->info());
 
-        if (op->in_opr()->is_single_cpu()) {
-          _masm->null_check(op->in_opr()->as_register());
-        } else {
-          Unimplemented();
-        }
+      if (op->in_opr()->is_single_cpu()) {
+        _masm->null_check(op->in_opr()->as_register(), stub->entry());
+      } else {
+        Unimplemented();
       }
       break;
+    }
 
     case lir_monaddr:
       monitor_address(op->in_opr()->as_constant_ptr()->as_jint(), op->result_opr());
@@ -591,9 +595,7 @@ void LIR_Assembler::emit_op1(LIR_Op1* op) {
 void LIR_Assembler::emit_op0(LIR_Op0* op) {
   switch (op->code()) {
     case lir_word_align: {
-      while (code_offset() % BytesPerWord != 0) {
-        _masm->nop();
-      }
+      _masm->align(BytesPerWord);
       break;
     }
 
@@ -676,6 +678,10 @@ void LIR_Assembler::emit_op0(LIR_Op0* op) {
       get_thread(op->result_opr());
       break;
 
+    case lir_on_spin_wait:
+      on_spin_wait();
+      break;
+
     default:
       ShouldNotReachHere();
       break;
@@ -733,13 +739,8 @@ void LIR_Assembler::emit_op2(LIR_Op2* op) {
 
     case lir_abs:
     case lir_sqrt:
-    case lir_sin:
     case lir_tan:
-    case lir_cos:
-    case lir_log:
     case lir_log10:
-    case lir_exp:
-    case lir_pow:
       intrinsic_op(op->code(), op->in_opr1(), op->in_opr2(), op->result_opr(), op);
       break;
 

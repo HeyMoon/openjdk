@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -907,7 +907,6 @@ class Socket implements java.io.Closeable {
             throw new SocketException("Socket is not connected");
         if (isInputShutdown())
             throw new SocketException("Socket input is shutdown");
-        final Socket s = this;
         InputStream is = null;
         try {
             is = AccessController.doPrivileged(
@@ -947,7 +946,6 @@ class Socket implements java.io.Closeable {
             throw new SocketException("Socket is not connected");
         if (isOutputShutdown())
             throw new SocketException("Socket output is shutdown");
-        final Socket s = this;
         OutputStream os = null;
         try {
             os = AccessController.doPrivileged(
@@ -1756,7 +1754,7 @@ class Socket implements java.io.Closeable {
      *         {@link java.net.StandardSocketOptions StandardSocketOptions}
      *         do not require any security permission.
      *
-     * @since 1.9
+     * @since 9
      */
     public <T> Socket setOption(SocketOption<T> name, T value) throws IOException {
         getImpl().setOption(name, value);
@@ -1784,7 +1782,7 @@ class Socket implements java.io.Closeable {
      *         {@link java.net.StandardSocketOptions StandardSocketOptions}
      *         do not require any security permission.
      *
-     * @since 1.9
+     * @since 9
      */
     @SuppressWarnings("unchecked")
     public <T> T getOption(SocketOption<T> name) throws IOException {
@@ -1803,7 +1801,7 @@ class Socket implements java.io.Closeable {
      * @return A set of the socket options supported by this socket. This set
      *         may be empty if the socket's SocketImpl cannot be created.
      *
-     * @since 1.9
+     * @since 9
      */
     public Set<SocketOption<?>> supportedOptions() {
         synchronized (Socket.class) {

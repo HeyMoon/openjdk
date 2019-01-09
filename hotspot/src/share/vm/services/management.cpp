@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -58,8 +58,6 @@
 #include "services/threadService.hpp"
 #include "utilities/macros.hpp"
 
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
-
 PerfVariable* Management::_begin_vm_creation_time = NULL;
 PerfVariable* Management::_end_vm_creation_time = NULL;
 PerfVariable* Management::_vm_init_done_time = NULL;
@@ -86,10 +84,6 @@ void management_init() {
   ClassLoadingService::init();
 #else
   ThreadService::init();
-  // Make sure the VM version is initialized
-  // This is normally called by RuntimeService::init().
-  // Since that is conditionalized out, we need to call it here.
-  Abstract_VM_Version::initialize();
 #endif // INCLUDE_MANAGEMENT
 }
 
@@ -127,7 +121,6 @@ void Management::init() {
     _optional_support.isOtherThreadCpuTimeSupported = 0;
   }
 
-  _optional_support.isBootClassPathSupported = 1;
   _optional_support.isObjectMonitorUsageSupported = 1;
 #if INCLUDE_SERVICES
   // This depends on the heap inspector
@@ -152,16 +145,16 @@ void Management::initialize(TRAPS) {
     ResourceMark rm(THREAD);
     HandleMark hm(THREAD);
 
-    // Load and initialize the sun.management.Agent class
+    // Load and initialize the jdk.internal.agent.Agent class
     // invoke startAgent method to start the management server
     Handle loader = Handle(THREAD, SystemDictionary::java_system_loader());
-    Klass* k = SystemDictionary::resolve_or_null(vmSymbols::sun_management_Agent(),
+    Klass* k = SystemDictionary::resolve_or_null(vmSymbols::jdk_internal_agent_Agent(),
                                                    loader,
                                                    Handle(),
                                                    THREAD);
     if (k == NULL) {
       vm_exit_during_initialization("Management agent initialization failure: "
-          "class sun.management.Agent not found.");
+          "class jdk.internal.agent.Agent not found.");
     }
     instanceKlassHandle ik (THREAD, k);
 
@@ -180,6 +173,20 @@ void Management::get_optional_support(jmmOptionalSupport* support) {
 
 Klass* Management::load_and_initialize_klass(Symbol* sh, TRAPS) {
   Klass* k = SystemDictionary::resolve_or_fail(sh, true, CHECK_NULL);
+  Klass* ik = initialize_klass(k, CHECK_NULL);
+  return ik;
+}
+
+Klass* Management::load_and_initialize_klass_or_null(Symbol* sh, TRAPS) {
+  Klass* k = SystemDictionary::resolve_or_null(sh, CHECK_NULL);
+  if (k == NULL) {
+     return NULL;
+  }
+  Klass* ik = initialize_klass(k, CHECK_NULL);
+  return ik;
+}
+
+Klass* Management::initialize_klass(Klass* k, TRAPS) {
   instanceKlassHandle ik (THREAD, k);
   if (ik->should_be_initialized()) {
     ik->initialize(CHECK_NULL);
@@ -262,7 +269,8 @@ Klass* Management::sun_management_ManagementFactoryHelper_klass(TRAPS) {
 
 Klass* Management::com_sun_management_internal_GarbageCollectorExtImpl_klass(TRAPS) {
   if (_garbageCollectorExtImpl_klass == NULL) {
-    _garbageCollectorExtImpl_klass = load_and_initialize_klass(vmSymbols::com_sun_management_internal_GarbageCollectorExtImpl(), CHECK_NULL);
+    _garbageCollectorExtImpl_klass =
+                load_and_initialize_klass_or_null(vmSymbols::com_sun_management_internal_GarbageCollectorExtImpl(), CHECK_NULL);
   }
   return _garbageCollectorExtImpl_klass;
 }
@@ -479,90 +487,6 @@ JVM_LEAF(jint, jmm_GetOptionalSupport(JNIEnv *env, jmmOptionalSupport* support))
   return 0;
 JVM_END
 
-// Returns a java.lang.String object containing the input arguments to the VM.
-JVM_ENTRY(jobject, jmm_GetInputArguments(JNIEnv *env))
-  ResourceMark rm(THREAD);
-
-  if (Arguments::num_jvm_args() == 0 && Arguments::num_jvm_flags() == 0) {
-    return NULL;
-  }
-
-  char** vm_flags = Arguments::jvm_flags_array();
-  char** vm_args  = Arguments::jvm_args_array();
-  int num_flags   = Arguments::num_jvm_flags();
-  int num_args    = Arguments::num_jvm_args();
-
-  size_t length = 1; // null terminator
-  int i;
-  for (i = 0; i < num_flags; i++) {
-    length += strlen(vm_flags[i]);
-  }
-  for (i = 0; i < num_args; i++) {
-    length += strlen(vm_args[i]);
-  }
-  // add a space between each argument
-  length += num_flags + num_args - 1;
-
-  // Return the list of input arguments passed to the VM
-  // and preserve the order that the VM processes.
-  char* args = NEW_RESOURCE_ARRAY(char, length);
-  args[0] = '\0';
-  // concatenate all jvm_flags
-  if (num_flags > 0) {
-    strcat(args, vm_flags[0]);
-    for (i = 1; i < num_flags; i++) {
-      strcat(args, " ");
-      strcat(args, vm_flags[i]);
-    }
-  }
-
-  if (num_args > 0 && num_flags > 0) {
-    // append a space if args already contains one or more jvm_flags
-    strcat(args, " ");
-  }
-
-  // concatenate all jvm_args
-  if (num_args > 0) {
-    strcat(args, vm_args[0]);
-    for (i = 1; i < num_args; i++) {
-      strcat(args, " ");
-      strcat(args, vm_args[i]);
-    }
-  }
-
-  Handle hargs = java_lang_String::create_from_platform_dependent_str(args, CHECK_NULL);
-  return JNIHandles::make_local(env, hargs());
-JVM_END
-
-// Returns an array of java.lang.String object containing the input arguments to the VM.
-JVM_ENTRY(jobjectArray, jmm_GetInputArgumentArray(JNIEnv *env))
-  ResourceMark rm(THREAD);
-
-  if (Arguments::num_jvm_args() == 0 && Arguments::num_jvm_flags() == 0) {
-    return NULL;
-  }
-
-  char** vm_flags = Arguments::jvm_flags_array();
-  char** vm_args = Arguments::jvm_args_array();
-  int num_flags = Arguments::num_jvm_flags();
-  int num_args = Arguments::num_jvm_args();
-
-  instanceKlassHandle ik (THREAD, SystemDictionary::String_klass());
-  objArrayOop r = oopFactory::new_objArray(ik(), num_args + num_flags, CHECK_NULL);
-  objArrayHandle result_h(THREAD, r);
-
-  int index = 0;
-  for (int j = 0; j < num_flags; j++, index++) {
-    Handle h = java_lang_String::create_from_platform_dependent_str(vm_flags[j], CHECK_NULL);
-    result_h->obj_at_put(index, h());
-  }
-  for (int i = 0; i < num_args; i++, index++) {
-    Handle h = java_lang_String::create_from_platform_dependent_str(vm_args[i], CHECK_NULL);
-    result_h->obj_at_put(index, h());
-  }
-  return (jobjectArray) JNIHandles::make_local(env, result_h());
-JVM_END
-
 // Returns an array of java/lang/management/MemoryPoolMXBean object
 // one for each memory pool if obj == null; otherwise returns
 // an array of memory pools for a given memory manager if
@@ -752,7 +676,7 @@ JVM_ENTRY(jlong, jmm_SetPoolThreshold(JNIEnv* env, jobject obj, jmmThresholdType
 
   if ((size_t)threshold > max_uintx) {
     stringStream st;
-    st.print("Invalid valid threshold value. Threshold value (" UINT64_FORMAT ") > max value of size_t (" SIZE_FORMAT ")", (size_t)threshold, max_uintx);
+    st.print("Invalid valid threshold value. Threshold value (" JLONG_FORMAT ") > max value of size_t (" UINTX_FORMAT ")", threshold, max_uintx);
     THROW_MSG_(vmSymbols::java_lang_IllegalArgumentException(), st.as_string(), -1);
   }
 
@@ -1700,8 +1624,8 @@ JVM_ENTRY(void, jmm_SetVMGlobal(JNIEnv *env, jstring flag_name, jvalue new_value
   }
   char* name = java_lang_String::as_utf8_string(fn);
 
-  FormatBuffer<80> err_msg("%s", "");
-  int succeed = WriteableFlags::set_flag(name, new_value, Flag::MANAGEMENT, err_msg);
+  FormatBuffer<80> error_msg("%s", "");
+  int succeed = WriteableFlags::set_flag(name, new_value, Flag::MANAGEMENT, error_msg);
 
   if (succeed != Flag::SUCCESS) {
     if (succeed == Flag::MISSING_VALUE) {
@@ -1710,7 +1634,7 @@ JVM_ENTRY(void, jmm_SetVMGlobal(JNIEnv *env, jstring flag_name, jvalue new_value
     } else {
       // all the other errors are reported as IAE with the appropriate error message
       THROW_MSG(vmSymbols::java_lang_IllegalArgumentException(),
-                err_msg.buffer());
+                error_msg.buffer());
     }
   }
   assert(succeed == Flag::SUCCESS, "Setting flag should succeed");
@@ -2297,9 +2221,7 @@ const struct jmmInterface_1_ jmm_interface = {
   NULL,
   jmm_GetVersion,
   jmm_GetOptionalSupport,
-  jmm_GetInputArguments,
   jmm_GetThreadInfo,
-  jmm_GetInputArgumentArray,
   jmm_GetMemoryPools,
   jmm_GetMemoryManagers,
   jmm_GetMemoryPoolUsage,

@@ -37,12 +37,14 @@ import com.sun.tools.javac.util.StringUtils;
  *
  * @author Bhavesh Patel
  */
+@Deprecated
 public enum HtmlAttr {
     ALT,
     CLASS,
     CLEAR,
     COLS,
     CONTENT,
+    DISABLED,
     HREF,
     HTTP_EQUIV("http-equiv"),
     ID,
@@ -59,6 +61,7 @@ public enum HtmlAttr {
     TARGET,
     TITLE,
     TYPE,
+    VALUE,
     WIDTH;
 
     private final String value;

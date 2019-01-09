@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,49 @@
 #define SHARE_VM_COMPILER_ABSTRACTCOMPILER_HPP
 
 #include "ci/compilerInterface.hpp"
+#include "compiler/compilerDefinitions.hpp"
+#include "compiler/compilerDirectives.hpp"
+
+typedef void (*initializer)(void);
+
+#if INCLUDE_JVMCI
+// Per-compiler statistics
+class CompilerStatistics VALUE_OBJ_CLASS_SPEC {
+  friend class VMStructs;
+
+  class Data VALUE_OBJ_CLASS_SPEC {
+    friend class VMStructs;
+  public:
+    elapsedTimer _time;  // time spent compiling
+    int _bytes;          // number of bytecodes compiled, including inlined bytecodes
+    int _count;          // number of compilations
+    Data() : _bytes(0), _count(0) {}
+    void update(elapsedTimer time, int bytes) {
+      _time.add(time);
+      _bytes += bytes;
+      _count++;
+    }
+    void reset() {
+      _time.reset();
+    }
+  };
+
+ public:
+  Data _standard;  // stats for non-OSR compilations
+  Data _osr;       // stats for OSR compilations
+  int _nmethods_size; //
+  int _nmethods_code_size;
+  int bytes_per_second() {
+    int bytes = _standard._bytes + _osr._bytes;
+    if (bytes == 0) {
+      return 0;
+    }
+    double seconds = _standard._time.seconds() + _osr._time.seconds();
+    return seconds == 0.0 ? 0 : (int) (bytes / seconds);
+  }
+  CompilerStatistics() : _nmethods_size(0), _nmethods_code_size(0) {}
+};
+#endif // INCLUDE_JVMCI
 
 class AbstractCompiler : public CHeapObj<mtCompiler> {
  private:
@@ -40,19 +83,15 @@ class AbstractCompiler : public CHeapObj<mtCompiler> {
   // This thread will initialize the compiler runtime.
   bool should_perform_init();
 
-  // The (closed set) of concrete compiler classes.
-  enum Type {
-    none,
-    c1,
-    c2,
-    shark
-  };
-
  private:
-  Type _type;
+  const CompilerType _type;
+
+#if INCLUDE_JVMCI
+  CompilerStatistics _stats;
+#endif
 
  public:
-  AbstractCompiler(Type type) : _type(type), _compiler_state(uninitialized), _num_compiler_threads(0) {}
+  AbstractCompiler(CompilerType type) : _type(type), _compiler_state(uninitialized), _num_compiler_threads(0) {}
 
   // This function determines the compiler thread that will perform the
   // shutdown of the corresponding compiler runtime.
@@ -64,12 +103,60 @@ class AbstractCompiler : public CHeapObj<mtCompiler> {
   // Missing feature tests
   virtual bool supports_native()                 { return true; }
   virtual bool supports_osr   ()                 { return true; }
-  virtual bool can_compile_method(methodHandle method)  { return true; }
+  virtual bool can_compile_method(const methodHandle& method)  { return true; }
+
+  // Determine if the current compiler provides an intrinsic
+  // for method 'method'. An intrinsic is available if:
+  //  - the intrinsic is enabled (by using the appropriate command-line flag,
+  //    the command-line compile ommand, or a compiler directive)
+  //  - the platform on which the VM is running supports the intrinsic
+  //    (i.e., the platform provides the instructions necessary for the compiler
+  //    to generate the intrinsic code).
+  //
+  // The directive provides the compilation context and includes pre-evaluated values
+  // dependent on VM flags, compile commands, and compiler directives.
+  //
+  // Usually, the compilation context is the caller of the method 'method'.
+  // The only case when for a non-recursive method 'method' the compilation context
+  // is not the caller of the 'method' (but it is the method itself) is
+  // java.lang.ref.Referene::get.
+  // For java.lang.ref.Reference::get, the intrinsic version is used
+  // instead of the compiled version so that the value in the referent
+  // field can be registered by the G1 pre-barrier code. The intrinsified
+  // version of Reference::get also adds a memory barrier to prevent
+  // commoning reads from the referent field across safepoint since GC
+  // can change the referent field's value. See Compile::Compile()
+  // in src/share/vm/opto/compile.cpp or
+  // GraphBuilder::GraphBuilder() in src/share/vm/c1/c1_GraphBuilder.cpp
+  // for more details.
+
+  virtual bool is_intrinsic_available(const methodHandle& method, DirectiveSet* directive) {
+    return is_intrinsic_supported(method) &&
+           !directive->is_intrinsic_disabled(method) &&
+           !vmIntrinsics::is_disabled_by_flags(method);
+  }
+
+  // Determines if an intrinsic is supported by the compiler, that is,
+  // the compiler provides the instructions necessary to generate
+  // the intrinsic code for method 'method'.
+  //
+  // The 'is_intrinsic_supported' method is a white list, that is,
+  // by default no intrinsics are supported by a compiler except
+  // the ones listed in the method. Overriding methods should conform
+  // to this behavior.
+  virtual bool is_intrinsic_supported(const methodHandle& method) {
+    return false;
+  }
 
   // Compiler type queries.
-  bool is_c1()                                   { return _type == c1; }
-  bool is_c2()                                   { return _type == c2; }
-  bool is_shark()                                { return _type == shark; }
+  const bool is_c1()                             { return _type == compiler_c1; }
+  const bool is_c2()                             { return _type == compiler_c2; }
+  const bool is_jvmci()                          { return _type == compiler_jvmci; }
+  const bool is_shark()                          { return _type == compiler_shark; }
+  const CompilerType type()                      { return _type; }
+
+  // Extra tests to identify trivial methods for the tiered compilation policy.
+  virtual bool is_trivial(Method* method) { return false; }
 
   // Customization
   virtual void initialize () = 0;
@@ -83,7 +170,7 @@ class AbstractCompiler : public CHeapObj<mtCompiler> {
   void set_state     (int state);
   void set_shut_down ()           { set_state(shut_down); }
   // Compilation entry point for methods
-  virtual void compile_method(ciEnv* env, ciMethod* target, int entry_bci) {
+  virtual void compile_method(ciEnv* env, ciMethod* target, int entry_bci, DirectiveSet* directive) {
     ShouldNotReachHere();
   }
 
@@ -92,6 +179,10 @@ class AbstractCompiler : public CHeapObj<mtCompiler> {
   virtual void print_timers() {
     ShouldNotReachHere();
   }
+
+#if INCLUDE_JVMCI
+  CompilerStatistics* stats() { return &_stats; }
+#endif
 };
 
 #endif // SHARE_VM_COMPILER_ABSTRACTCOMPILER_HPP

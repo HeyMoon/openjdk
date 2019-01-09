@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,8 @@ import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
+import java.util.Locale;
+import java.util.ResourceBundle;
 import javax.xml.ws.WebServiceException;
 
 /**
@@ -43,7 +45,7 @@ import javax.xml.ws.WebServiceException;
  * @author WS Development Team
  */
 public abstract class JAXWSExceptionBase
-    extends WebServiceException implements Localizable {
+    extends WebServiceException implements Localizable, LocalizableMessageFactory.ResourceBundleSupplier {
 
     //Don't worry about previous  serialVersionUID = 4818235090198755494L;, this class was not serializable before.
     private static final long serialVersionUID = 1L;
@@ -51,12 +53,14 @@ public abstract class JAXWSExceptionBase
     private transient Localizable msg;
 
     /**
-     * @deprecated
-     *      Should use the localizable constructor instead.
+     * @param key
+     * @param args
+     * @deprecated Should use the localizable constructor instead.
      */
+    @Deprecated
     protected JAXWSExceptionBase(String key, Object... args) {
         super(findNestedException(args));
-        this.msg = new LocalizableMessage(getDefaultResourceBundleName(), key, args);
+        this.msg = new LocalizableMessage(getDefaultResourceBundleName(), this, key, args);
     }
 
 
@@ -66,6 +70,7 @@ public abstract class JAXWSExceptionBase
 
     /**
      * Creates a new exception that wraps the specified exception.
+     * @param throwable
      */
     protected JAXWSExceptionBase(Throwable throwable) {
         this(new NullLocalizable(throwable.toString()),throwable);
@@ -138,6 +143,7 @@ public abstract class JAXWSExceptionBase
         return null;
     }
 
+    @Override
     public String getMessage() {
         Localizer localizer = new Localizer();
         return localizer.localize(this);
@@ -146,21 +152,31 @@ public abstract class JAXWSExceptionBase
     /**
      * Gets the default resource bundle name for this kind of exception.
      * Used for {@link #JAXWSExceptionBase(String, Object[])}.
+     * @return
      */
     protected abstract String getDefaultResourceBundleName();
 
 //
 // Localizable delegation
 //
+    @Override
     public final String getKey() {
         return msg.getKey();
     }
 
+    @Override
     public final Object[] getArguments() {
         return msg.getArguments();
     }
 
+    @Override
     public final String getResourceBundleName() {
         return msg.getResourceBundleName();
     }
+
+    @Override
+    public ResourceBundle getResourceBundle(Locale locale) {
+        return ResourceBundle.getBundle(getDefaultResourceBundleName(), locale);
+    }
+
 }

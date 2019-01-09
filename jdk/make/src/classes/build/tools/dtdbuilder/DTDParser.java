@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,8 +34,6 @@ import java.util.Vector;
 import java.util.Hashtable;
 import java.util.BitSet;
 import java.text.MessageFormat;
-
-import sun.misc.MessageUtils;
 
 /**
  * A parser for DTDs. This parser roughly corresponds to the
@@ -910,16 +908,12 @@ class DTDParser implements DTDConstants {
             this.dtd = dtd;
             this.in = new DTDInputStream(in, dtd);
 
-            long tm = System.currentTimeMillis();
             ch = this.in.read();
             parseSection();
 
             if (ch != -1) {
                 error("premature");
             }
-
-            tm = System.currentTimeMillis() - tm;
-            System.err.println("[Parsed DTD " + dtd + " in " + tm + "ms]");
         } catch (IOException e) {
             error("ioexception");
         } catch (Exception e) {

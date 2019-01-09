@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -91,9 +91,14 @@ class UnixNativeDispatcher {
         throws UnixException;
 
     /**
-     * close(int filedes)
+     * close(int filedes). If fd is -1 this is a no-op.
      */
-    static native void close(int fd);
+    static void close(int fd) {
+        if (fd != -1) {
+            close0(fd);
+        }
+    }
+    private static native void close0(int fd);
 
     /**
      * FILE* fopen(const char *filename, const char* mode);
@@ -291,6 +296,23 @@ class UnixNativeDispatcher {
     private static native void stat0(long pathAddress, UnixFileAttributes attrs)
         throws UnixException;
 
+
+    /**
+     * stat(const char* path, struct stat* buf)
+     *
+     * @return st_mode (file type and mode) or 0 if an error occurs.
+     */
+    static int stat(UnixPath path) {
+        NativeBuffer buffer = copyToNativeBuffer(path);
+        try {
+            return stat1(buffer.address());
+        } finally {
+            buffer.release();
+        }
+    }
+    private static native int stat1(long pathAddress);
+
+
     /**
      * lstat(const char* path, struct stat* buf)
      */
@@ -452,6 +474,22 @@ class UnixNativeDispatcher {
         }
     }
     private static native void access0(long pathAddress, int amode) throws UnixException;
+
+    /**
+     * access(constant char* path, F_OK)
+     *
+     * @return true if the file exists, false otherwise
+     */
+    static boolean exists(UnixPath path) {
+        NativeBuffer buffer = copyToNativeBuffer(path);
+        try {
+            return exists0(buffer.address());
+        } finally {
+            buffer.release();
+        }
+    }
+    private static native boolean exists0(long pathAddress);
+
 
     /**
      * struct passwd *getpwuid(uid_t uid);

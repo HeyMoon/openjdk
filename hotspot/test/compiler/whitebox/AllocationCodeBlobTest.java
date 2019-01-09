@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -19,34 +19,39 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
-
-import java.lang.management.MemoryPoolMXBean;
-import java.util.EnumSet;
-import java.util.ArrayList;
-
-import sun.hotspot.WhiteBox;
-import sun.hotspot.code.BlobType;
-import jdk.test.lib.Asserts;
-import jdk.test.lib.InfiniteLoop;
 
 /*
  * @test AllocationCodeBlobTest
- * @bug 8059624 8064669
- * @library /testlibrary /../../test/lib
- * @modules java.management
- * @build AllocationCodeBlobTest
- * @run main ClassFileInstaller sun.hotspot.WhiteBox
- *                              sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
- *                   -XX:+WhiteBoxAPI -XX:CompileCommand=compileonly,null::*
- *                   -XX:-SegmentedCodeCache AllocationCodeBlobTest
- * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
- *                   -XX:+WhiteBoxAPI -XX:CompileCommand=compileonly,null::*
- *                   -XX:+SegmentedCodeCache AllocationCodeBlobTest
  * @summary testing of WB::allocate/freeCodeBlob()
+ * @bug 8059624 8064669
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ *          java.management
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *                                sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *                   -XX:+WhiteBoxAPI -XX:CompileCommand=compileonly,null::*
+ *                   -XX:-SegmentedCodeCache
+ *                   compiler.whitebox.AllocationCodeBlobTest
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *                   -XX:+WhiteBoxAPI -XX:CompileCommand=compileonly,null::*
+ *                   -XX:+SegmentedCodeCache
+ *                   compiler.whitebox.AllocationCodeBlobTest
  */
+
+package compiler.whitebox;
+
+import jdk.test.lib.Asserts;
+import jdk.test.lib.InfiniteLoop;
+import sun.hotspot.WhiteBox;
+import sun.hotspot.code.BlobType;
+
+import java.lang.management.MemoryPoolMXBean;
+import java.util.ArrayList;
+import java.util.EnumSet;
+
 public class AllocationCodeBlobTest {
     private static final WhiteBox WHITE_BOX = WhiteBox.getWhiteBox();
     private static final long CODE_CACHE_SIZE
@@ -92,33 +97,36 @@ public class AllocationCodeBlobTest {
 
     private void test() {
         System.out.printf("type %s%n", type);
-        long start = getUsage();
-        long addr = WHITE_BOX.allocateCodeBlob(SIZE, type.id);
-        Asserts.assertNE(0, addr, "allocation failed");
 
+        // Measure the code cache usage after allocate/free.
+        long start = getUsage();
+        long addr1 = WHITE_BOX.allocateCodeBlob(SIZE, type.id);
         long firstAllocation = getUsage();
+        WHITE_BOX.freeCodeBlob(addr1);
+        long firstFree = getUsage();
+        long addr2 = WHITE_BOX.allocateCodeBlob(SIZE, type.id);
+        long secondAllocation = getUsage();
+        WHITE_BOX.freeCodeBlob(addr2);
+
+        // The following code may trigger resolving of invokedynamic
+        // instructions and therefore method handle intrinsic creation
+        // in the code cache. Make sure this is executed after measuring
+        // the code cache usage.
+        Asserts.assertNE(0, addr1, "first allocation failed");
+        Asserts.assertNE(0, addr2, "second allocation failed");
         Asserts.assertLTE(start + SIZE, firstAllocation,
                 "allocation should increase memory usage: "
                 + start + " + " + SIZE + " <= " + firstAllocation);
-
-        WHITE_BOX.freeCodeBlob(addr);
-        long firstFree = getUsage();
         Asserts.assertLTE(firstFree, firstAllocation,
                 "free shouldn't increase memory usage: "
                 + firstFree + " <= " + firstAllocation);
-
-        addr = WHITE_BOX.allocateCodeBlob(SIZE, type.id);
-        Asserts.assertNE(0, addr, "allocation failed");
-
-        long secondAllocation = getUsage();
         Asserts.assertEQ(firstAllocation, secondAllocation);
 
-        WHITE_BOX.freeCodeBlob(addr);
         System.out.println("allocating till possible...");
         ArrayList<Long> blobs = new ArrayList<>();
         int size = (int) (CODE_CACHE_SIZE >> 7);
-        while ((addr = WHITE_BOX.allocateCodeBlob(size, type.id)) != 0) {
-            blobs.add(addr);
+        while ((addr1 = WHITE_BOX.allocateCodeBlob(size, type.id)) != 0) {
+            blobs.add(addr1);
         }
         for (Long blob : blobs) {
             WHITE_BOX.freeCodeBlob(blob);

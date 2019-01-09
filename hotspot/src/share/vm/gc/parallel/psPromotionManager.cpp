@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,16 +23,20 @@
  */
 
 #include "precompiled.hpp"
+#include "gc/parallel/gcTaskManager.hpp"
 #include "gc/parallel/mutableSpace.hpp"
 #include "gc/parallel/parallelScavengeHeap.hpp"
 #include "gc/parallel/psOldGen.hpp"
 #include "gc/parallel/psPromotionManager.inline.hpp"
 #include "gc/parallel/psScavenge.inline.hpp"
 #include "gc/shared/gcTrace.hpp"
+#include "gc/shared/preservedMarks.inline.hpp"
 #include "gc/shared/taskqueue.inline.hpp"
+#include "logging/log.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/memRegion.hpp"
 #include "memory/padded.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/instanceKlass.inline.hpp"
 #include "oops/instanceMirrorKlass.inline.hpp"
 #include "oops/objArrayKlass.inline.hpp"
@@ -40,6 +44,7 @@
 
 PaddedEnd<PSPromotionManager>* PSPromotionManager::_manager_array = NULL;
 OopStarTaskQueueSet*           PSPromotionManager::_stack_array_depth = NULL;
+PreservedMarksSet*             PSPromotionManager::_preserved_marks_set = NULL;
 PSOldGen*                      PSPromotionManager::_old_gen = NULL;
 MutableSpace*                  PSPromotionManager::_young_space = NULL;
 
@@ -49,10 +54,12 @@ void PSPromotionManager::initialize() {
   _old_gen = heap->old_gen();
   _young_space = heap->young_gen()->to_space();
 
+  const uint promotion_manager_num = ParallelGCThreads + 1;
+
   // To prevent false sharing, we pad the PSPromotionManagers
   // and make sure that the first instance starts at a cache line.
   assert(_manager_array == NULL, "Attempt to initialize twice");
-  _manager_array = PaddedArray<PSPromotionManager, mtGC>::create_unfreeable(ParallelGCThreads + 1);
+  _manager_array = PaddedArray<PSPromotionManager, mtGC>::create_unfreeable(promotion_manager_num);
   guarantee(_manager_array != NULL, "Could not initialize promotion manager");
 
   _stack_array_depth = new OopStarTaskQueueSet(ParallelGCThreads);
@@ -64,6 +71,14 @@ void PSPromotionManager::initialize() {
   }
   // The VMThread gets its own PSPromotionManager, which is not available
   // for work stealing.
+
+  assert(_preserved_marks_set == NULL, "Attempt to initialize twice");
+  _preserved_marks_set = new PreservedMarksSet(true /* in_c_heap */);
+  guarantee(_preserved_marks_set != NULL, "Could not initialize preserved marks set");
+  _preserved_marks_set->init(promotion_manager_num);
+  for (uint i = 0; i < promotion_manager_num; i += 1) {
+    _manager_array[i].register_preserved_marks(_preserved_marks_set->get(i));
+  }
 }
 
 // Helper functions to get around the circular dependency between
@@ -89,6 +104,7 @@ PSPromotionManager* PSPromotionManager::vm_thread_promotion_manager() {
 void PSPromotionManager::pre_scavenge() {
   ParallelScavengeHeap* heap = ParallelScavengeHeap::heap();
 
+  _preserved_marks_set->assert_empty();
   _young_space = heap->young_gen()->to_space();
 
   for(uint i=0; i<ParallelGCThreads+1; i++) {
@@ -99,7 +115,7 @@ void PSPromotionManager::pre_scavenge() {
 bool PSPromotionManager::post_scavenge(YoungGCTracer& gc_tracer) {
   bool promotion_failure_occurred = false;
 
-  TASKQUEUE_STATS_ONLY(if (PrintTaskqueue) print_taskqueue_stats());
+  TASKQUEUE_STATS_ONLY(print_taskqueue_stats());
   for (uint i = 0; i < ParallelGCThreads + 1; i++) {
     PSPromotionManager* manager = manager_array(i);
     assert(manager->claimed_stack_depth()->is_empty(), "should be empty");
@@ -108,6 +124,11 @@ bool PSPromotionManager::post_scavenge(YoungGCTracer& gc_tracer) {
       promotion_failure_occurred = true;
     }
     manager->flush_labs();
+  }
+  if (!promotion_failure_occurred) {
+    // If there was no promotion failure, the preserved mark stacks
+    // should be empty.
+    _preserved_marks_set->assert_empty();
   }
   return promotion_failure_occurred;
 }
@@ -128,7 +149,13 @@ static const char* const pm_stats_hdr[] = {
 };
 
 void
-PSPromotionManager::print_taskqueue_stats(outputStream* const out) {
+PSPromotionManager::print_taskqueue_stats() {
+  if (!log_develop_is_enabled(Trace, gc, task, stats)) {
+    return;
+  }
+  Log(gc, task, stats) log;
+  ResourceMark rm;
+  outputStream* out = log.trace_stream();
   out->print_cr("== GC Tasks Stats, GC %3d",
                 ParallelScavengeHeap::heap()->total_collections());
 
@@ -180,6 +207,8 @@ PSPromotionManager::PSPromotionManager() {
   // let's choose 1.5x the chunk size
   _min_array_size_for_chunking = 3 * _array_chunk_size / 2;
 
+  _preserved_marks = NULL;
+
   reset();
 }
 
@@ -204,6 +233,59 @@ void PSPromotionManager::reset() {
   TASKQUEUE_STATS_ONLY(reset_stats());
 }
 
+void PSPromotionManager::register_preserved_marks(PreservedMarks* preserved_marks) {
+  assert(_preserved_marks == NULL, "do not set it twice");
+  _preserved_marks = preserved_marks;
+}
+
+class ParRestoreGCTask : public GCTask {
+private:
+  const uint _id;
+  PreservedMarksSet* const _preserved_marks_set;
+  volatile size_t* const _total_size_addr;
+
+public:
+  virtual char* name() {
+    return (char*) "preserved mark restoration task";
+  }
+
+  virtual void do_it(GCTaskManager* manager, uint which){
+    _preserved_marks_set->get(_id)->restore_and_increment(_total_size_addr);
+  }
+
+  ParRestoreGCTask(uint id,
+                   PreservedMarksSet* preserved_marks_set,
+                   volatile size_t* total_size_addr)
+    : _id(id),
+      _preserved_marks_set(preserved_marks_set),
+      _total_size_addr(total_size_addr) { }
+};
+
+class PSRestorePreservedMarksTaskExecutor : public RestorePreservedMarksTaskExecutor {
+private:
+  GCTaskManager* _gc_task_manager;
+
+public:
+  PSRestorePreservedMarksTaskExecutor(GCTaskManager* gc_task_manager)
+      : _gc_task_manager(gc_task_manager) { }
+
+  void restore(PreservedMarksSet* preserved_marks_set,
+               volatile size_t* total_size_addr) {
+    // GCTask / GCTaskQueue are ResourceObjs
+    ResourceMark rm;
+
+    GCTaskQueue* q = GCTaskQueue::create();
+    for (uint i = 0; i < preserved_marks_set->num(); i += 1) {
+      q->enqueue(new ParRestoreGCTask(i, preserved_marks_set, total_size_addr));
+    }
+    _gc_task_manager->execute_and_wait(q);
+  }
+};
+
+void PSPromotionManager::restore_preserved_marks() {
+  PSRestorePreservedMarksTaskExecutor task_executor(PSScavenge::gc_task_manager());
+  _preserved_marks_set->restore(&task_executor);
+}
 
 void PSPromotionManager::drain_stacks_depth(bool totally_drain) {
   totally_drain = totally_drain || _totally_drain;
@@ -368,12 +450,7 @@ static void oop_ps_push_contents_specialized(oop obj, InstanceRefKlass *klass, P
   T  next_oop = oopDesc::load_heap_oop(next_addr);
   if (!oopDesc::is_null(next_oop)) { // i.e. ref is not "active"
     T* discovered_addr = (T*)java_lang_ref_Reference::discovered_addr(obj);
-    debug_only(
-      if(TraceReferenceGC && PrintGCDetails) {
-        gclog_or_tty->print_cr("   Process discovered as normal "
-                               PTR_FORMAT, p2i(discovered_addr));
-      }
-    )
+    log_develop_trace(gc, ref)("   Process discovered as normal " PTR_FORMAT, p2i(discovered_addr));
     if (PSScavenge::should_scavenge(discovered_addr)) {
       pm->claim_or_forward_depth(discovered_addr);
     }
@@ -420,8 +497,7 @@ oop PSPromotionManager::oop_promotion_failed(oop obj, markOop obj_mark) {
 
     push_contents(obj);
 
-    // Save the mark if needed
-    PSScavenge::oop_promotion_failed(obj, obj_mark);
+    _preserved_marks->push_if_necessary(obj, obj_mark);
   }  else {
     // We lost, someone else "owns" this object
     guarantee(obj->is_forwarded(), "Object must be forwarded if the cas failed.");
@@ -430,15 +506,7 @@ oop PSPromotionManager::oop_promotion_failed(oop obj, markOop obj_mark) {
     obj = obj->forwardee();
   }
 
-#ifndef PRODUCT
-  if (TraceScavenge) {
-    gclog_or_tty->print_cr("{%s %s " PTR_FORMAT " (%d)}",
-                           "promotion-failure",
-                           obj->klass()->internal_name(),
-                           p2i(obj), obj->size());
-
-  }
-#endif
+  log_develop_trace(gc, scavenge)("{promotion-failure %s " PTR_FORMAT " (%d)}", obj->klass()->internal_name(), p2i(obj), obj->size());
 
   return obj;
 }

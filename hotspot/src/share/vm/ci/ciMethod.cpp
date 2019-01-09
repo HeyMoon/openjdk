@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,7 +35,6 @@
 #include "ci/ciUtilities.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "compiler/abstractCompiler.hpp"
-#include "compiler/compilerOracle.hpp"
 #include "compiler/methodLiveness.hpp"
 #include "interpreter/interpreter.hpp"
 #include "interpreter/linkResolver.hpp"
@@ -75,6 +74,9 @@ ciMethod::ciMethod(methodHandle h_m, ciInstanceKlass* holder) :
 {
   assert(h_m() != NULL, "no null method");
 
+  if (LogTouchedMethods) {
+    h_m()->log_touched(Thread::current());
+  }
   // These fields are always filled in in loaded methods.
   _flags = ciFlags(h_m()->access_flags());
 
@@ -89,6 +91,7 @@ ciMethod::ciMethod(methodHandle h_m, ciInstanceKlass* holder) :
   _balanced_monitors  = !_uses_monitors || h_m()->access_flags().is_monitor_matching();
   _is_c1_compilable   = !h_m()->is_not_c1_compilable();
   _is_c2_compilable   = !h_m()->is_not_c2_compilable();
+  _has_reserved_stack_access = h_m()->has_reserved_stack_access();
   // Lazy fields, filled in on demand.  Require allocation.
   _code               = NULL;
   _exception_handlers = NULL;
@@ -199,6 +202,7 @@ void ciMethod::load_code() {
   _code = (address)arena->Amalloc(code_size());
   memcpy(_code, me->code_base(), code_size());
 
+#if INCLUDE_JVMTI
   // Revert any breakpoint bytecodes in ci's copy
   if (me->number_of_breakpoints() > 0) {
     BreakpointInfo* bp = me->method_holder()->breakpoints();
@@ -208,6 +212,7 @@ void ciMethod::load_code() {
       }
     }
   }
+#endif
 
   // And load the exception table.
   ExceptionTable exc_table(me);
@@ -438,13 +443,12 @@ MethodLivenessResult ciMethod::liveness_at_bci(int bci) {
 // gc'ing an interpreter frame we need to use its viewpoint  during
 // OSR when loading the locals.
 
-BitMap ciMethod::live_local_oops_at_bci(int bci) {
+ResourceBitMap ciMethod::live_local_oops_at_bci(int bci) {
   VM_ENTRY_MARK;
   InterpreterOopMap mask;
   OopMapCache::compute_one_oop_map(get_Method(), bci, &mask);
   int mask_size = max_locals();
-  BitMap result(mask_size);
-  result.clear();
+  ResourceBitMap result(mask_size);
   int i;
   for (i = 0; i < mask_size ; i++ ) {
     if (mask.is_oop(i)) result.set_bit(i);
@@ -458,7 +462,7 @@ BitMap ciMethod::live_local_oops_at_bci(int bci) {
 // ciMethod::bci_block_start
 //
 // Marks all bcis where a new basic block starts
-const BitMap ciMethod::bci_block_start() {
+const BitMap& ciMethod::bci_block_start() {
   check_is_loaded();
   if (_liveness == NULL) {
     // Create the liveness analyzer.
@@ -573,13 +577,13 @@ void ciCallProfile::add_receiver(ciKlass* receiver, int receiver_count) {
 
 void ciMethod::assert_virtual_call_type_ok(int bci) {
   assert(java_code_at_bci(bci) == Bytecodes::_invokevirtual ||
-         java_code_at_bci(bci) == Bytecodes::_invokeinterface, err_msg("unexpected bytecode %s", Bytecodes::name(java_code_at_bci(bci))));
+         java_code_at_bci(bci) == Bytecodes::_invokeinterface, "unexpected bytecode %s", Bytecodes::name(java_code_at_bci(bci)));
 }
 
 void ciMethod::assert_call_type_ok(int bci) {
   assert(java_code_at_bci(bci) == Bytecodes::_invokestatic ||
          java_code_at_bci(bci) == Bytecodes::_invokespecial ||
-         java_code_at_bci(bci) == Bytecodes::_invokedynamic, err_msg("unexpected bytecode %s", Bytecodes::name(java_code_at_bci(bci))));
+         java_code_at_bci(bci) == Bytecodes::_invokedynamic, "unexpected bytecode %s", Bytecodes::name(java_code_at_bci(bci)));
 }
 
 /**
@@ -742,7 +746,7 @@ ciMethod* ciMethod::find_monomorphic_target(ciInstanceKlass* caller,
 #ifndef PRODUCT
   if (TraceDependencies && target() != NULL && target() != root_m->get_Method()) {
     tty->print("found a non-root unique target method");
-    tty->print_cr("  context = %s", InstanceKlass::cast(actual_recv->get_Klass())->external_name());
+    tty->print_cr("  context = %s", actual_recv->get_Klass()->external_name());
     tty->print("  method  = ");
     target->print_short_name(tty);
     tty->cr();
@@ -784,11 +788,12 @@ ciMethod* ciMethod::resolve_invoke(ciKlass* caller, ciKlass* exact_receiver, boo
    Symbol* h_name      = name()->get_symbol();
    Symbol* h_signature = signature()->get_symbol();
 
-   LinkInfo link_info(h_resolved, h_name, h_signature, caller_klass, check_access);
+   LinkInfo link_info(h_resolved, h_name, h_signature, caller_klass,
+                      check_access ? LinkInfo::needs_access_check : LinkInfo::skip_access_check);
    methodHandle m;
    // Only do exact lookup if receiver klass has been linked.  Otherwise,
    // the vtable has not been setup, and the LinkResolver will fail.
-   if (h_recv->oop_is_array()
+   if (h_recv->is_array_klass()
         ||
        InstanceKlass::cast(h_recv())->is_linked() && !exact_receiver->is_interface()) {
      if (holder()->is_interface()) {
@@ -947,6 +952,13 @@ bool ciMethod::is_compiled_lambda_form() const {
 }
 
 // ------------------------------------------------------------------
+// ciMethod::is_object_initializer
+//
+bool ciMethod::is_object_initializer() const {
+   return name() == ciSymbol::object_initializer_name();
+}
+
+// ------------------------------------------------------------------
 // ciMethod::has_member_arg
 //
 // Return true if the method is a linker intrinsic like _linkToVirtual.
@@ -1041,63 +1053,6 @@ MethodCounters* ciMethod::ensure_method_counters() {
 }
 
 // ------------------------------------------------------------------
-// ciMethod::should_exclude
-//
-// Should this method be excluded from compilation?
-bool ciMethod::should_exclude() {
-  check_is_loaded();
-  VM_ENTRY_MARK;
-  methodHandle mh(THREAD, get_Method());
-  bool ignore;
-  return CompilerOracle::should_exclude(mh, ignore);
-}
-
-// ------------------------------------------------------------------
-// ciMethod::should_inline
-//
-// Should this method be inlined during compilation?
-bool ciMethod::should_inline() {
-  check_is_loaded();
-  VM_ENTRY_MARK;
-  methodHandle mh(THREAD, get_Method());
-  return CompilerOracle::should_inline(mh);
-}
-
-// ------------------------------------------------------------------
-// ciMethod::should_not_inline
-//
-// Should this method be disallowed from inlining during compilation?
-bool ciMethod::should_not_inline() {
-  check_is_loaded();
-  VM_ENTRY_MARK;
-  methodHandle mh(THREAD, get_Method());
-  return CompilerOracle::should_not_inline(mh);
-}
-
-// ------------------------------------------------------------------
-// ciMethod::should_print_assembly
-//
-// Should the compiler print the generated code for this method?
-bool ciMethod::should_print_assembly() {
-  check_is_loaded();
-  VM_ENTRY_MARK;
-  methodHandle mh(THREAD, get_Method());
-  return CompilerOracle::should_print(mh);
-}
-
-// ------------------------------------------------------------------
-// ciMethod::break_at_execute
-//
-// Should the compiler insert a breakpoint into the generated code
-// method?
-bool ciMethod::break_at_execute() {
-  check_is_loaded();
-  VM_ENTRY_MARK;
-  methodHandle mh(THREAD, get_Method());
-  return CompilerOracle::should_break_at(mh);
-}
-
-// ------------------------------------------------------------------
 // ciMethod::has_option
 //
 bool ciMethod::has_option(const char* option) {
@@ -1110,20 +1065,12 @@ bool ciMethod::has_option(const char* option) {
 // ------------------------------------------------------------------
 // ciMethod::has_option_value
 //
-template<typename T>
-bool ciMethod::has_option_value(const char* option, T& value) {
+bool ciMethod::has_option_value(const char* option, double& value) {
   check_is_loaded();
   VM_ENTRY_MARK;
   methodHandle mh(THREAD, get_Method());
   return CompilerOracle::has_option_value(mh, option, value);
 }
-// Explicit instantiation for all OptionTypes supported.
-template bool ciMethod::has_option_value<intx>(const char* option, intx& value);
-template bool ciMethod::has_option_value<uintx>(const char* option, uintx& value);
-template bool ciMethod::has_option_value<bool>(const char* option, bool& value);
-template bool ciMethod::has_option_value<ccstr>(const char* option, ccstr& value);
-template bool ciMethod::has_option_value<double>(const char* option, double& value);
-
 // ------------------------------------------------------------------
 // ciMethod::can_be_compiled
 //
@@ -1177,7 +1124,7 @@ bool ciMethod::has_compiled_code() {
 int ciMethod::comp_level() {
   check_is_loaded();
   VM_ENTRY_MARK;
-  nmethod* nm = get_Method()->code();
+  CompiledMethod* nm = get_Method()->code();
   if (nm != NULL) return nm->comp_level();
   return 0;
 }
@@ -1212,7 +1159,7 @@ int ciMethod::code_size_for_inlining() {
 int ciMethod::instructions_size() {
   if (_instructions_size == -1) {
     GUARDED_VM_ENTRY(
-                     nmethod* code = get_Method()->code();
+                     CompiledMethod* code = get_Method()->code();
                      if (code != NULL && (code->comp_level() == CompLevel_full_optimization)) {
                        _instructions_size = code->insts_end() - code->verified_entry_point();
                      } else {
@@ -1227,7 +1174,7 @@ int ciMethod::instructions_size() {
 // ciMethod::log_nmethod_identity
 void ciMethod::log_nmethod_identity(xmlStream* log) {
   GUARDED_VM_ENTRY(
-    nmethod* code = get_Method()->code();
+    CompiledMethod* code = get_Method()->code();
     if (code != NULL) {
       code->log_identity(log);
     }
@@ -1325,6 +1272,8 @@ bool ciMethod::is_empty_method() const {         FETCH_FLAG_FROM_VM(is_empty_met
 bool ciMethod::is_vanilla_constructor() const {  FETCH_FLAG_FROM_VM(is_vanilla_constructor); }
 bool ciMethod::has_loops      () const {         FETCH_FLAG_FROM_VM(has_loops); }
 bool ciMethod::has_jsrs       () const {         FETCH_FLAG_FROM_VM(has_jsrs);  }
+bool ciMethod::is_getter      () const {         FETCH_FLAG_FROM_VM(is_getter); }
+bool ciMethod::is_setter      () const {         FETCH_FLAG_FROM_VM(is_setter); }
 bool ciMethod::is_accessor    () const {         FETCH_FLAG_FROM_VM(is_accessor); }
 bool ciMethod::is_initializer () const {         FETCH_FLAG_FROM_VM(is_initializer); }
 
@@ -1467,12 +1416,103 @@ void ciMethod::print_impl(outputStream* st) {
   }
 }
 
+// ------------------------------------------------------------------
+
+static BasicType erase_to_word_type(BasicType bt) {
+  if (is_subword_type(bt)) return T_INT;
+  if (bt == T_ARRAY)       return T_OBJECT;
+  return bt;
+}
+
+static bool basic_types_match(ciType* t1, ciType* t2) {
+  if (t1 == t2)  return true;
+  return erase_to_word_type(t1->basic_type()) == erase_to_word_type(t2->basic_type());
+}
+
+bool ciMethod::is_consistent_info(ciMethod* declared_method, ciMethod* resolved_method) {
+  bool invoke_through_mh_intrinsic = declared_method->is_method_handle_intrinsic() &&
+                                  !resolved_method->is_method_handle_intrinsic();
+
+  if (!invoke_through_mh_intrinsic) {
+    // Method name & descriptor should stay the same.
+    // Signatures may reference unloaded types and thus they may be not strictly equal.
+    ciSymbol* declared_signature = declared_method->signature()->as_symbol();
+    ciSymbol* resolved_signature = resolved_method->signature()->as_symbol();
+
+    return (declared_method->name()->equals(resolved_method->name())) &&
+           (declared_signature->equals(resolved_signature));
+  }
+
+  ciMethod* linker = declared_method;
+  ciMethod* target = resolved_method;
+  // Linkers have appendix argument which is not passed to callee.
+  int has_appendix = MethodHandles::has_member_arg(linker->intrinsic_id()) ? 1 : 0;
+  if (linker->arg_size() != (target->arg_size() + has_appendix)) {
+    return false; // argument slot count mismatch
+  }
+
+  ciSignature* linker_sig = linker->signature();
+  ciSignature* target_sig = target->signature();
+
+  if (linker_sig->count() + (linker->is_static() ? 0 : 1) !=
+      target_sig->count() + (target->is_static() ? 0 : 1) + has_appendix) {
+    return false; // argument count mismatch
+  }
+
+  int sbase = 0, rbase = 0;
+  switch (linker->intrinsic_id()) {
+    case vmIntrinsics::_linkToVirtual:
+    case vmIntrinsics::_linkToInterface:
+    case vmIntrinsics::_linkToSpecial: {
+      if (target->is_static()) {
+        return false;
+      }
+      if (linker_sig->type_at(0)->is_primitive_type()) {
+        return false;  // receiver should be an oop
+      }
+      sbase = 1; // skip receiver
+      break;
+    }
+    case vmIntrinsics::_linkToStatic: {
+      if (!target->is_static()) {
+        return false;
+      }
+      break;
+    }
+    case vmIntrinsics::_invokeBasic: {
+      if (target->is_static()) {
+        if (target_sig->type_at(0)->is_primitive_type()) {
+          return false; // receiver should be an oop
+        }
+        rbase = 1; // skip receiver
+      }
+      break;
+    }
+  }
+  assert(target_sig->count() - rbase == linker_sig->count() - sbase - has_appendix, "argument count mismatch");
+  int arg_count = target_sig->count() - rbase;
+  for (int i = 0; i < arg_count; i++) {
+    if (!basic_types_match(linker_sig->type_at(sbase + i), target_sig->type_at(rbase + i))) {
+      return false;
+    }
+  }
+  // Only check the return type if the symbolic info has non-void return type.
+  // I.e. the return value of the resolved method can be dropped.
+  if (!linker->return_type()->is_void() &&
+      !basic_types_match(linker->return_type(), target->return_type())) {
+    return false;
+  }
+  return true; // no mismatch found
+}
+
+// ------------------------------------------------------------------
+
 #if INCLUDE_TRACE
-TraceStructCiMethod ciMethod::to_trace_struct() const {
-  TraceStructCiMethod result;
-  result.set_class(holder()->name()->as_utf8());
+TraceStructCalleeMethod ciMethod::to_trace_struct() const {
+  TraceStructCalleeMethod result;
+  result.set_type(holder()->name()->as_utf8());
   result.set_name(name()->as_utf8());
-  result.set_signature(signature()->as_symbol()->as_utf8());
+  result.set_descriptor(signature()->as_symbol()->as_utf8());
   return result;
 }
 #endif

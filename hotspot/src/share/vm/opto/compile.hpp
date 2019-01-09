@@ -39,10 +39,12 @@
 #include "opto/phase.hpp"
 #include "opto/regmask.hpp"
 #include "runtime/deoptimization.hpp"
+#include "runtime/timerTrace.hpp"
 #include "runtime/vmThread.hpp"
 #include "trace/tracing.hpp"
 #include "utilities/ticks.hpp"
 
+class AddPNode;
 class Block;
 class Bundle;
 class C2Compiler;
@@ -89,26 +91,26 @@ struct Final_Reshape_Counts;
 typedef unsigned int node_idx_t;
 class NodeCloneInfo {
  private:
-  uint64_t  _idx_clone_orig;
+  uint64_t _idx_clone_orig;
  public:
 
   void set_idx(node_idx_t idx) {
-    _idx_clone_orig = _idx_clone_orig & 0xFFFFFFFF00000000 | idx;
+    _idx_clone_orig = _idx_clone_orig & CONST64(0xFFFFFFFF00000000) | idx;
   }
   node_idx_t idx() const { return (node_idx_t)(_idx_clone_orig & 0xFFFFFFFF); }
 
   void set_gen(int generation) {
-    uint64_t  g = (uint64_t)generation << 32;
+    uint64_t g = (uint64_t)generation << 32;
     _idx_clone_orig = _idx_clone_orig & 0xFFFFFFFF | g;
   }
   int gen() const { return (int)(_idx_clone_orig >> 32); }
 
-  void set(uint64_t x) {  _idx_clone_orig = x; }
-  void set(node_idx_t x, int g) {  set_idx(x); set_gen(g); }
+  void set(uint64_t x) { _idx_clone_orig = x; }
+  void set(node_idx_t x, int g) { set_idx(x); set_gen(g); }
   uint64_t get() const { return _idx_clone_orig; }
 
   NodeCloneInfo(uint64_t idx_clone_orig) : _idx_clone_orig(idx_clone_orig) {}
-  NodeCloneInfo(node_idx_t x, int g) {set(x, g);}
+  NodeCloneInfo(node_idx_t x, int g) : _idx_clone_orig(0) { set(x, g); }
 
   void dump() const;
 };
@@ -140,6 +142,9 @@ class CloneMap {
   bool is_debug()                 const          { return _debug; }
   void set_debug(bool debug)                     { _debug = debug; }
   static const char* debug_option_name;
+
+  bool same_idx(node_idx_t k1, node_idx_t k2)  const { return idx(k1) == idx(k2); }
+  bool same_gen(node_idx_t k1, node_idx_t k2)  const { return gen(k1) == gen(k2); }
 };
 
 //------------------------------Compile----------------------------------------
@@ -209,6 +214,8 @@ class Compile : public Phase {
       _element = e;
     }
 
+    BasicType basic_type() const;
+
     void print_on(outputStream* st) PRODUCT_RETURN;
   };
 
@@ -257,6 +264,7 @@ class Compile : public Phase {
 
     BasicType type()      const    { return _type; }
 
+    jint    get_jint()    const    { return _v._value.i; }
     jlong   get_jlong()   const    { return _v._value.j; }
     jfloat  get_jfloat()  const    { return _v._value.f; }
     jdouble get_jdouble() const    { return _v._value.d; }
@@ -313,6 +321,14 @@ class Compile : public Phase {
     Constant add(MachConstantNode* n, BasicType type, jvalue value);
     Constant add(Metadata* metadata);
     Constant add(MachConstantNode* n, MachOper* oper);
+    Constant add(MachConstantNode* n, jint i) {
+      jvalue value; value.i = i;
+      return add(n, T_INT, value);
+    }
+    Constant add(MachConstantNode* n, jlong j) {
+      jvalue value; value.j = j;
+      return add(n, T_LONG, value);
+    }
     Constant add(MachConstantNode* n, jfloat f) {
       jvalue value; value.f = f;
       return add(n, T_FLOAT, value);
@@ -361,6 +377,7 @@ class Compile : public Phase {
   bool                  _has_unsafe_access;     // True if the method _may_ produce faults in unsafe loads or stores.
   bool                  _has_stringbuilder;     // True StringBuffers or StringBuilders are allocated
   bool                  _has_boxed_value;       // True if a boxed object is allocated
+  bool                  _has_reserved_stack_access; // True if the method or an inlined method is annotated with ReservedStackAccess
   int                   _max_vector_size;       // Maximum size of generated vectors
   uint                  _trap_hist[trapHistLength];  // Cumulative traps
   bool                  _trap_can_recompile;    // Have we emitted a recompiling trap?
@@ -371,6 +388,7 @@ class Compile : public Phase {
   bool                  _do_count_invocations;  // True if we generate code to count invocations
   bool                  _do_method_data_update; // True if we generate code to update MethodData*s
   bool                  _do_vector_loop;        // True if allowed to execute loop in parallel iterations
+  bool                  _use_cmove;             // True if CMove should be used without profitability analysis
   bool                  _age_code;              // True if we need to profile code age (decrement the aging counter)
   int                   _AliasLevel;            // Locally-adjusted version of AliasLevel flag.
   bool                  _print_assembly;        // True if we should dump assembly code for this compilation
@@ -388,12 +406,14 @@ class Compile : public Phase {
   // Compilation environment.
   Arena                 _comp_arena;            // Arena with lifetime equivalent to Compile
   ciEnv*                _env;                   // CI interface
+  DirectiveSet*         _directive;             // Compiler directive
   CompileLog*           _log;                   // from CompilerThread
   const char*           _failure_reason;        // for record_failure/failing pattern
   GrowableArray<CallGenerator*>* _intrinsics;   // List of intrinsics.
   GrowableArray<Node*>* _macro_nodes;           // List of nodes which need to be expanded before matching.
   GrowableArray<Node*>* _predicate_opaqs;       // List of Opaque1 nodes for the loop predicates.
   GrowableArray<Node*>* _expensive_nodes;       // List of nodes that are expensive to compute and that we'd better not let the GVN freely common
+  GrowableArray<Node*>* _range_check_casts;     // List of CastII nodes with a range check dependency
   ConnectionGraph*      _congraph;
 #ifndef PRODUCT
   IdealGraphPrinter*    _printer;
@@ -520,9 +540,13 @@ class Compile : public Phase {
 
   void print_inlining(ciMethod* method, int inline_level, int bci, const char* msg = NULL) {
     stringStream ss;
-    CompileTask::print_inlining(&ss, method, inline_level, bci, msg);
+    CompileTask::print_inlining_inner(&ss, method, inline_level, bci, msg);
     print_inlining_stream()->print("%s", ss.as_string());
   }
+
+#ifndef PRODUCT
+  IdealGraphPrinter* printer() { return _printer; }
+#endif
 
   void log_late_inline(CallGenerator* cg);
   void log_inline_id(CallGenerator* cg);
@@ -565,6 +589,8 @@ class Compile : public Phase {
   int                   _scratch_const_size;    // For temporary code buffers.
   bool                  _in_scratch_emit_size;  // true when in scratch_emit_size.
 
+  void reshape_address(AddPNode* n);
+
  public:
   // Accessors
 
@@ -575,6 +601,7 @@ class Compile : public Phase {
 
   // ID for this compilation.  Useful for setting breakpoints in the debugger.
   int               compile_id() const          { return _compile_id; }
+  DirectiveSet*     directive() const           { return _directive; }
 
   // Does this compilation allow instructions to subsume loads?  User
   // instructions that subsume a load may result in an unschedulable
@@ -627,6 +654,8 @@ class Compile : public Phase {
   void          set_has_stringbuilder(bool z)   { _has_stringbuilder = z; }
   bool              has_boxed_value() const     { return _has_boxed_value; }
   void          set_has_boxed_value(bool z)     { _has_boxed_value = z; }
+  bool              has_reserved_stack_access() const { return _has_reserved_stack_access; }
+  void          set_has_reserved_stack_access(bool z) { _has_reserved_stack_access = z; }
   int               max_vector_size() const     { return _max_vector_size; }
   void          set_max_vector_size(int s)      { _max_vector_size = s; }
   void          set_trap_count(uint r, uint c)  { assert(r < trapHistLength, "oob");        _trap_hist[r] = c; }
@@ -648,6 +677,8 @@ class Compile : public Phase {
   void          set_do_method_data_update(bool z) { _do_method_data_update = z; }
   bool              do_vector_loop() const      { return _do_vector_loop; }
   void          set_do_vector_loop(bool z)      { _do_vector_loop = z; }
+  bool              use_cmove() const           { return _use_cmove; }
+  void          set_use_cmove(bool z)           { _use_cmove = z; }
   bool              age_code() const             { return _age_code; }
   void          set_age_code(bool z)             { _age_code = z; }
   int               AliasLevel() const           { return _AliasLevel; }
@@ -668,10 +699,7 @@ class Compile : public Phase {
   bool          method_has_option(const char * option) {
     return method() != NULL && method()->has_option(option);
   }
-  template<typename T>
-  bool          method_has_option_value(const char * option, T& value) {
-    return method() != NULL && method()->has_option_value(option, value);
-  }
+
 #ifndef PRODUCT
   bool          trace_opto_output() const       { return _trace_opto_output; }
   bool              parsed_irreducible_loop() const { return _parsed_irreducible_loop; }
@@ -689,8 +717,8 @@ class Compile : public Phase {
 
   void begin_method() {
 #ifndef PRODUCT
-    if (_printer && _printer->should_print(_method)) {
-      _printer->begin_method(this);
+    if (_printer && _printer->should_print(1)) {
+      _printer->begin_method();
     }
 #endif
     C->_latest_stage_start_counter.stamp();
@@ -701,15 +729,15 @@ class Compile : public Phase {
     if (event.should_commit()) {
       event.set_starttime(C->_latest_stage_start_counter);
       event.set_phase((u1) cpt);
-      event.set_compileID(C->_compile_id);
+      event.set_compileId(C->_compile_id);
       event.set_phaseLevel(level);
       event.commit();
     }
 
 
 #ifndef PRODUCT
-    if (_printer && _printer->should_print(_method)) {
-      _printer->print_method(this, CompilerPhaseTypeHelper::to_string(cpt), level);
+    if (_printer && _printer->should_print(level)) {
+      _printer->print_method(CompilerPhaseTypeHelper::to_string(cpt), level);
     }
 #endif
     C->_latest_stage_start_counter.stamp();
@@ -720,12 +748,12 @@ class Compile : public Phase {
     if (event.should_commit()) {
       event.set_starttime(C->_latest_stage_start_counter);
       event.set_phase((u1) PHASE_END);
-      event.set_compileID(C->_compile_id);
+      event.set_compileId(C->_compile_id);
       event.set_phaseLevel(level);
       event.commit();
     }
 #ifndef PRODUCT
-    if (_printer && _printer->should_print(_method)) {
+    if (_printer && _printer->should_print(level)) {
       _printer->end_method();
     }
 #endif
@@ -741,7 +769,7 @@ class Compile : public Phase {
   void set_congraph(ConnectionGraph* congraph)  { _congraph = congraph;}
   void add_macro_node(Node * n) {
     //assert(n->is_macro(), "must be a macro node");
-    assert(!_macro_nodes->contains(n), " duplicate entry in expand list");
+    assert(!_macro_nodes->contains(n), "duplicate entry in expand list");
     _macro_nodes->append(n);
   }
   void remove_macro_node(Node * n) {
@@ -761,10 +789,23 @@ class Compile : public Phase {
     }
   }
   void add_predicate_opaq(Node * n) {
-    assert(!_predicate_opaqs->contains(n), " duplicate entry in predicate opaque1");
+    assert(!_predicate_opaqs->contains(n), "duplicate entry in predicate opaque1");
     assert(_macro_nodes->contains(n), "should have already been in macro list");
     _predicate_opaqs->append(n);
   }
+
+  // Range check dependent CastII nodes that can be removed after loop optimizations
+  void add_range_check_cast(Node* n);
+  void remove_range_check_cast(Node* n) {
+    if (_range_check_casts->contains(n)) {
+      _range_check_casts->remove(n);
+    }
+  }
+  Node* range_check_cast_node(int idx) const { return _range_check_casts->at(idx);  }
+  int   range_check_cast_count()       const { return _range_check_casts->length(); }
+  // Remove all range check dependent CastIINodes.
+  void  remove_range_check_casts(PhaseIterGVN &igvn);
+
   // remove the opaque nodes that protect the predicates so that the unused checks and
   // uncommon traps will be eliminated from the graph.
   void cleanup_loop_predicates(PhaseIterGVN &igvn);
@@ -791,15 +832,11 @@ class Compile : public Phase {
   }
 
   void record_failure(const char* reason);
-  void record_method_not_compilable(const char* reason, bool all_tiers = false) {
-    // All bailouts cover "all_tiers" when TieredCompilation is off.
-    if (!TieredCompilation) all_tiers = true;
-    env()->record_method_not_compilable(reason, all_tiers);
+  void record_method_not_compilable(const char* reason) {
+    // Bailouts cover "all_tiers" when TieredCompilation is off.
+    env()->record_method_not_compilable(reason, !TieredCompilation);
     // Record failure reason.
     record_failure(reason);
-  }
-  void record_method_not_compilable_all_tiers(const char* reason) {
-    record_method_not_compilable(reason, true);
   }
   bool check_node_count(uint margin, const char* reason) {
     if (live_nodes() + margin > max_node_limit()) {
@@ -840,7 +877,7 @@ class Compile : public Phase {
                                            }
   uint          live_nodes() const         {
     int  val = _unique - _dead_node_count;
-    assert (val >= 0, err_msg_res("number of tracked dead nodes %d more than created nodes %d", _unique, _dead_node_count));
+    assert (val >= 0, "number of tracked dead nodes %d more than created nodes %d", _unique, _dead_node_count);
             return (uint) val;
                                            }
 #ifdef ASSERT
@@ -1072,7 +1109,7 @@ class Compile : public Phase {
   int               code_size()                 { return _method_size; }
   CodeBuffer*       code_buffer()               { return &_code_buffer; }
   int               first_block_size()          { return _first_block_size; }
-  void              set_frame_complete(int off) { _code_offsets.set_value(CodeOffsets::Frame_Complete, off); }
+  void              set_frame_complete(int off) { if (!in_scratch_emit_size()) { _code_offsets.set_value(CodeOffsets::Frame_Complete, off); } }
   ExceptionHandlerTable*  handler_table()       { return &_handler_table; }
   ImplicitExceptionTable* inc_table()           { return &_inc_table; }
   OopMapSet*        oop_map_set()               { return _oop_map_set; }
@@ -1092,7 +1129,11 @@ class Compile : public Phase {
   bool           in_scratch_emit_size() const   { return _in_scratch_emit_size;     }
 
   enum ScratchBufferBlob {
+#if defined(PPC64)
+    MAX_inst_size       = 2048,
+#else
     MAX_inst_size       = 1024,
+#endif
     MAX_locs_size       = 128, // number of relocInfo elements
     MAX_const_size      = 128,
     MAX_stubs_size      = 128
@@ -1104,7 +1145,7 @@ class Compile : public Phase {
   // continuation.
   Compile(ciEnv* ci_env, C2Compiler* compiler, ciMethod* target,
           int entry_bci, bool subsume_loads, bool do_escape_analysis,
-          bool eliminate_boxing);
+          bool eliminate_boxing, DirectiveSet* directive);
 
   // Second major entry point.  From the TypeFunc signature, generate code
   // to pass arguments from the Java calling convention to the C calling
@@ -1112,7 +1153,7 @@ class Compile : public Phase {
   Compile(ciEnv* ci_env, const TypeFunc *(*gen)(),
           address stub_function, const char *stub_name,
           int is_fancy_jump, bool pass_tls,
-          bool save_arg_registers, bool return_pc);
+          bool save_arg_registers, bool return_pc, DirectiveSet* directive);
 
   // From the TypeFunc signature, generate code to pass arguments
   // from Compiled calling convention to Interpreter's calling convention
@@ -1205,12 +1246,6 @@ class Compile : public Phase {
   // Compute the name of old_SP.  See <arch>.ad for frame layout.
   OptoReg::Name compute_old_SP();
 
-#ifdef ENABLE_ZAP_DEAD_LOCALS
-  static bool is_node_getting_a_safepoint(Node*);
-  void Insert_zap_nodes();
-  Node* call_zap_node(MachSafePointNode* n, int block_no);
-#endif
-
  private:
   // Phase control:
   void Init(int aliaslevel);                     // Prepare for a single compilation
@@ -1230,7 +1265,7 @@ class Compile : public Phase {
   // Intrinsic setup.
   void           register_library_intrinsics();                            // initializer
   CallGenerator* make_vm_intrinsic(ciMethod* m, bool is_virtual);          // constructor
-  int            intrinsic_insertion_index(ciMethod* m, bool is_virtual);  // helper
+  int            intrinsic_insertion_index(ciMethod* m, bool is_virtual, bool& found);  // helper
   CallGenerator* find_intrinsic(ciMethod* m, bool is_virtual);             // query fn
   void           register_intrinsic(CallGenerator* cg);                    // update fn
 
@@ -1286,7 +1321,12 @@ class Compile : public Phase {
   enum { SSC_always_false, SSC_always_true, SSC_easy_test, SSC_full_test };
   int static_subtype_check(ciKlass* superk, ciKlass* subk);
 
-  static Node* conv_I2X_index(PhaseGVN *phase, Node* offset, const TypeInt* sizetype);
+  static Node* conv_I2X_index(PhaseGVN* phase, Node* offset, const TypeInt* sizetype,
+                              // Optional control dependency (for example, on range check)
+                              Node* ctrl = NULL);
+
+  // Convert integer value to a narrowed long type dependent on ctrl (for example, a range check)
+  static Node* constrained_convI2L(PhaseGVN* phase, Node* value, const TypeInt* itype, Node* ctrl);
 
   // Auxiliary method for randomized fuzzing/stressing
   static bool randomized_select(int count);

@@ -31,7 +31,7 @@ import java.security.PublicKey;
 import java.util.*;
 import javax.security.auth.x500.X500Principal;
 
-import sun.misc.HexDumpEncoder;
+import sun.security.util.HexDumpEncoder;
 import sun.security.util.Debug;
 import sun.security.util.DerInputStream;
 import sun.security.util.DerValue;
@@ -87,7 +87,7 @@ public class X509CertSelector implements CertSelector {
 
     private static final Debug debug = Debug.getInstance("certpath");
 
-    private final static ObjectIdentifier ANY_EXTENDED_KEY_USAGE =
+    private static final ObjectIdentifier ANY_EXTENDED_KEY_USAGE =
         ObjectIdentifier.newInternal(new int[] {2, 5, 29, 37, 0});
 
     static {

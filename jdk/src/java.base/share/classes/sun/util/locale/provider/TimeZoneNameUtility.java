@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,7 +47,7 @@ public final class TimeZoneNameUtility {
     /**
      * cache to hold time zone localized strings. Keyed by Locale
      */
-    private static ConcurrentHashMap<Locale, SoftReference<String[][]>> cachedZoneData =
+    private static final ConcurrentHashMap<Locale, SoftReference<String[][]>> cachedZoneData =
         new ConcurrentHashMap<>();
 
     /**
@@ -80,7 +80,17 @@ public final class TimeZoneNameUtility {
         LocaleProviderAdapter adapter = LocaleProviderAdapter.getAdapter(TimeZoneNameProvider.class, locale);
         TimeZoneNameProvider provider = adapter.getTimeZoneNameProvider();
         if (provider instanceof TimeZoneNameProviderImpl) {
-            return ((TimeZoneNameProviderImpl)provider).getZoneStrings(locale);
+            String[][] zoneStrings = ((TimeZoneNameProviderImpl)provider).getZoneStrings(locale);
+
+            if (zoneStrings.length == 0 && locale.equals(Locale.ROOT)) {
+                // Unlike other *Name provider, zoneStrings search won't do the fallback
+                // name search. If the ResourceBundle found for the root locale contains no
+                // zoneStrings, just use the one for English, assuming English bundle
+                // contains all the tzids and their names.
+                zoneStrings= getZoneStrings(Locale.ENGLISH);
+            }
+
+            return zoneStrings;
         }
 
         // Performs per-ID retrieval.

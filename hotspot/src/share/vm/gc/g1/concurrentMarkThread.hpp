@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,26 +27,20 @@
 
 #include "gc/shared/concurrentGCThread.hpp"
 
-// The Concurrent Mark GC Thread (could be several in the future).
-// This is copied from the Concurrent Mark Sweep GC Thread
-// Still under construction.
+// The Concurrent Mark GC Thread triggers the parallel G1CMConcurrentMarkingTasks
+// as well as handling various marking cleanup.
 
-class ConcurrentMark;
+class G1ConcurrentMark;
+class G1Policy;
 
 class ConcurrentMarkThread: public ConcurrentGCThread {
   friend class VMStructs;
 
   double _vtime_start;  // Initial virtual time.
   double _vtime_accum;  // Accumulated virtual time.
-
   double _vtime_mark_accum;
-  void cm_log(bool doit, bool join_sts, const char* fmt, ...) ATTRIBUTE_PRINTF(4, 5);
 
- public:
-  virtual void run();
-
- private:
-  ConcurrentMark*                  _cm;
+  G1ConcurrentMark*                _cm;
 
   enum State {
     Idle,
@@ -57,22 +51,21 @@ class ConcurrentMarkThread: public ConcurrentGCThread {
   volatile State _state;
 
   void sleepBeforeNextCycle();
+  void delay_to_keep_mmu(G1Policy* g1_policy, bool remark);
 
-  static SurrogateLockerThread*         _slt;
+  void run_service();
+  void stop_service();
 
  public:
   // Constructor
-  ConcurrentMarkThread(ConcurrentMark* cm);
+  ConcurrentMarkThread(G1ConcurrentMark* cm);
 
-  static void makeSurrogateLockerThread(TRAPS);
-  static SurrogateLockerThread* slt() { return _slt; }
-
-  // Total virtual time so far.
+  // Total virtual time so far for this thread and concurrent marking tasks.
   double vtime_accum();
-  // Marking virtual time so far
+  // Marking virtual time so far this thread and concurrent marking tasks.
   double vtime_mark_accum();
 
-  ConcurrentMark* cm()     { return _cm; }
+  G1ConcurrentMark* cm()   { return _cm; }
 
   void set_idle()          { assert(_state != Started, "must not be starting a new cycle"); _state = Idle; }
   bool idle()              { return _state == Idle; }
@@ -90,9 +83,6 @@ class ConcurrentMarkThread: public ConcurrentGCThread {
   // as the CM thread might take some time to wake up before noticing
   // that started() is set and set in_progress().
   bool during_cycle()      { return !idle(); }
-
-  // shutdown
-  void stop();
 };
 
 #endif // SHARE_VM_GC_G1_CONCURRENTMARKTHREAD_HPP

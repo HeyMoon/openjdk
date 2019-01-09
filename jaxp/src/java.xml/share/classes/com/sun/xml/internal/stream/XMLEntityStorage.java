@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,19 +25,18 @@
 
 package com.sun.xml.internal.stream;
 
-import java.util.Hashtable;
-
+import com.sun.org.apache.xerces.internal.impl.Constants;
+import com.sun.org.apache.xerces.internal.impl.PropertyManager;
+import com.sun.org.apache.xerces.internal.impl.XMLEntityManager;
+import com.sun.org.apache.xerces.internal.impl.XMLErrorReporter;
 import com.sun.org.apache.xerces.internal.impl.msg.XMLMessageFormatter;
 import com.sun.org.apache.xerces.internal.util.URI;
 import com.sun.org.apache.xerces.internal.util.XMLResourceIdentifierImpl;
+import com.sun.org.apache.xerces.internal.utils.SecuritySupport;
 import com.sun.org.apache.xerces.internal.xni.parser.XMLComponentManager;
 import com.sun.org.apache.xerces.internal.xni.parser.XMLConfigurationException;
-import com.sun.org.apache.xerces.internal.impl.XMLEntityManager;
-import com.sun.org.apache.xerces.internal.impl.PropertyManager;
-import com.sun.org.apache.xerces.internal.impl.XMLErrorReporter;
-import com.sun.org.apache.xerces.internal.impl.Constants;
-import com.sun.org.apache.xerces.internal.utils.SecuritySupport;
-import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  *
@@ -62,7 +61,7 @@ public class XMLEntityStorage {
     protected boolean fWarnDuplicateEntityDef;
 
     /** Entities. */
-    protected Hashtable fEntities = new Hashtable();
+    protected Map<String, Entity> fEntities = new HashMap<>();
 
     protected Entity.ScannedEntity fCurrentEntity ;
 
@@ -138,19 +137,11 @@ public class XMLEntityStorage {
      * @see SymbolTable
      */
     public Entity getEntity(String name) {
-        return (Entity)fEntities.get(name);
+        return fEntities.get(name);
     } // getEntity(String)
 
-    public boolean hasEntities() {
-            return (fEntities!=null);
-    } // getEntity(String)
-
-    public int getEntitySize() {
-        return fEntities.size();
-    } // getEntity(String)
-
-    public Enumeration getEntityKeys() {
-        return fEntities.keys();
+    public Map<String, Entity> getEntities() {
+        return fEntities;
     }
     /**
      * Adds an internal entity declaration.
@@ -263,7 +254,7 @@ public class XMLEntityStorage {
      */
     public boolean isExternalEntity(String entityName) {
 
-        Entity entity = (Entity)fEntities.get(entityName);
+        Entity entity = fEntities.get(entityName);
         if (entity == null) {
             return false;
         }
@@ -280,7 +271,7 @@ public class XMLEntityStorage {
      */
     public boolean isEntityDeclInExternalSubset(String entityName) {
 
-        Entity entity = (Entity)fEntities.get(entityName);
+        Entity entity = fEntities.get(entityName);
         if (entity == null) {
             return false;
         }
@@ -309,9 +300,9 @@ public class XMLEntityStorage {
 
         fCurrentEntity = fEntityManager.getCurrentEntity();
         if (!fEntities.containsKey(name)) {
-            Entity entity = new Entity.ExternalEntity(name, new XMLResourceIdentifierImpl(publicId, systemId, baseSystemId, null), notation, fInExternalSubset);
-            //                  (fCurrentEntity == null) ? fasle : fCurrentEntity.isEntityDeclInExternalSubset());
-            //                  fCurrentEntity.isEntityDeclInExternalSubset());
+            Entity entity = new Entity.ExternalEntity(name,
+                    new XMLResourceIdentifierImpl(publicId, systemId, baseSystemId, null),
+                    notation, fInExternalSubset);
             fEntities.put(name, entity);
         }
         else{
@@ -333,7 +324,7 @@ public class XMLEntityStorage {
      */
     public boolean isUnparsedEntity(String entityName) {
 
-        Entity entity = (Entity)fEntities.get(entityName);
+        Entity entity = fEntities.get(entityName);
         if (entity == null) {
             return false;
         }
@@ -348,7 +339,7 @@ public class XMLEntityStorage {
      */
     public boolean isDeclaredEntity(String entityName) {
 
-        Entity entity = (Entity)fEntities.get(entityName);
+        Entity entity = fEntities.get(entityName);
         return entity != null;
     }
     /**
@@ -437,7 +428,7 @@ public class XMLEntityStorage {
         userDir = userDir.replace(separator, '/');
 
         int len = userDir.length(), ch;
-        StringBuffer buffer = new StringBuffer(len*3);
+        StringBuilder buffer = new StringBuilder(len*3);
         // change C:/blah to /C:/blah
         if (len >= 2 && userDir.charAt(1) == ':') {
             ch = Character.toUpperCase(userDir.charAt(0));

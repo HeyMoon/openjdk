@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
- Copyright (c) 2012, 2014, Oracle and/or its affiliates. All rights reserved.
+ Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 
  This code is free software; you can redistribute it and/or modify it
@@ -36,7 +36,6 @@
 // Some parts of traceEvent.hpp are used outside of
 // INCLUDE_TRACE
 
-#include "memory/resourceArea.hpp"
 #include "tracefiles/traceTypes.hpp"
 #include "trace/traceEvent.hpp"
 #include "utilities/macros.hpp"
@@ -53,11 +52,12 @@
 class TraceEvent {
 public:
   TraceEvent() {}
-  void set_starttime(const Ticks&amp; time) {}
-  void set_endtime(const Ticks&amp; time) {}
+  void set_starttime(const Ticks&amp; ignore) {}
+  void set_endtime(const Ticks&amp; ignore) {}
   bool should_commit() const { return false; }
   static bool is_enabled() { return false; }
-  void commit() const {}
+  void commit() {}
+  void cancel() {}
 };
 
   <xsl:apply-templates select="trace/events/struct" mode="empty"/>
@@ -119,7 +119,7 @@ public:
 <xsl:apply-templates select="value|structvalue|transition_value|relation" mode="write-fields"/>
 
   void writeEventContent(void) {
-    TraceStream ts(*tty);
+    TraceStream ts;
     ts.print("<xsl:value-of select="@label"/>: [");
 <xsl:apply-templates select="value|structvalue" mode="write-data"/>
     ts.print("]\n");
@@ -136,7 +136,6 @@ public:
 </xsl:text>
   <xsl:value-of select="concat('  Event', @id, '(EventStartTime timing=TIMED) : TraceEvent&lt;Event', @id, '&gt;(timing) {}', $newline)"/>
   void writeEvent(void) {
-    ResourceMark rm;
     if (UseLockedTracing) {
       ttyLocker lock;
       writeEventContent();

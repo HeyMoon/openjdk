@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,7 +32,7 @@ import java.security.*;
 import java.security.cert.CertificateException;
 import java.util.zip.ZipEntry;
 
-import sun.misc.JarIndex;
+import jdk.internal.util.jar.JarIndex;
 import sun.security.util.ManifestDigester;
 import sun.security.util.ManifestEntryVerifier;
 import sun.security.util.SignatureFileVerifier;
@@ -180,10 +180,12 @@ class JarVerifier {
 
         // only set the jev object for entries that have a signature
         // (either verified or not)
-        if (sigFileSigners.get(name) != null ||
-                verifiedSigners.get(name) != null) {
-            mev.setEntry(name, je);
-            return;
+        if (!name.equals(JarFile.MANIFEST_NAME)) {
+            if (sigFileSigners.get(name) != null ||
+                    verifiedSigners.get(name) != null) {
+                mev.setEntry(name, je);
+                return;
+            }
         }
 
         // don't compute the digest for this entry

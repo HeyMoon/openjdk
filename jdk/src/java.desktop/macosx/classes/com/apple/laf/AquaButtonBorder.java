@@ -37,22 +37,22 @@ import com.apple.laf.AquaUtilControlSize.*;
 import com.apple.laf.AquaUtils.*;
 
 public abstract class AquaButtonBorder extends AquaBorder implements Border, UIResource {
-    public static final RecyclableSingleton<Dynamic> fDynamic = new RecyclableSingletonFromDefaultConstructor<Dynamic>(Dynamic.class);
-    static public AquaButtonBorder getDynamicButtonBorder() {
+    private static final RecyclableSingleton<Dynamic> fDynamic = new RecyclableSingletonFromDefaultConstructor<Dynamic>(Dynamic.class);
+    public static AquaButtonBorder getDynamicButtonBorder() {
         return fDynamic.get();
     }
 
     private static final RecyclableSingleton<Toggle> fToggle = new RecyclableSingletonFromDefaultConstructor<Toggle>(Toggle.class);
-    static public AquaButtonBorder getToggleButtonBorder() {
+    public static AquaButtonBorder getToggleButtonBorder() {
         return fToggle.get();
     }
 
-    public static final RecyclableSingleton<Toolbar> fToolBar = new RecyclableSingletonFromDefaultConstructor<Toolbar>(Toolbar.class);
-    static public Border getToolBarButtonBorder() {
+    private static final RecyclableSingleton<Toolbar> fToolBar = new RecyclableSingletonFromDefaultConstructor<Toolbar>(Toolbar.class);
+    public static Border getToolBarButtonBorder() {
         return fToolBar.get();
     }
 
-    public static final RecyclableSingleton<Named> fBevel = new RecyclableSingleton<Named>() {
+    private static final RecyclableSingleton<Named> fBevel = new RecyclableSingleton<Named>() {
         protected Named getInstance() {
             return new Named(Widget.BUTTON_BEVEL, new SizeDescriptor(new SizeVariant().alterMargins(2, 4, 2, 4)));
         }

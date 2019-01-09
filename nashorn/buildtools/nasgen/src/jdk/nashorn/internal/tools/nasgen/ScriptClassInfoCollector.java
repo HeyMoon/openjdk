@@ -41,7 +41,6 @@ import jdk.internal.org.objectweb.asm.FieldVisitor;
 import jdk.internal.org.objectweb.asm.MethodVisitor;
 import jdk.internal.org.objectweb.asm.Opcodes;
 import jdk.internal.org.objectweb.asm.Type;
-import jdk.nashorn.internal.objects.annotations.Where;
 import jdk.nashorn.internal.tools.nasgen.MemberInfo.Kind;
 
 /**
@@ -211,6 +210,7 @@ public class ScriptClassInfoCollector extends ClassVisitor {
                         private Where   where;
                         private boolean isSpecializedConstructor;
                         private boolean isOptimistic;
+                        private boolean convertsNumericArgs;
                         private Type    linkLogicClass = MethodGenerator.EMPTY_LINK_LOGIC_TYPE;
 
                         @Override
@@ -238,6 +238,10 @@ public class ScriptClassInfoCollector extends ClassVisitor {
                                 break;
                             case "linkLogic":
                                 this.linkLogicClass = (Type)annotationValue;
+                                break;
+                            case "convertsNumericArgs":
+                                assert annoKind == Kind.SPECIALIZED_FUNCTION;
+                                this.convertsNumericArgs = (Boolean)annotationValue;
                                 break;
                             default:
                                 break;
@@ -270,6 +274,7 @@ public class ScriptClassInfoCollector extends ClassVisitor {
                             } else {
                                 memInfo.setName(name == null ? methodName : name);
                             }
+
                             memInfo.setAttributes(attributes == null ? MemberInfo.DEFAULT_ATTRIBUTES : attributes);
 
                             memInfo.setArity((arity == null)? MemberInfo.DEFAULT_ARITY : arity);
@@ -298,6 +303,7 @@ public class ScriptClassInfoCollector extends ClassVisitor {
                             memInfo.setLinkLogicClass(linkLogicClass);
                             memInfo.setIsSpecializedConstructor(isSpecializedConstructor);
                             memInfo.setIsOptimistic(isOptimistic);
+                            memInfo.setConvertsNumericArgs(convertsNumericArgs);
                         }
                     };
                 }

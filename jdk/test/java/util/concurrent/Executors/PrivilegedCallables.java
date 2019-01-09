@@ -29,22 +29,30 @@
  * @author Martin Buchholz
  */
 
-import java.util.concurrent.*;
-import java.util.*;
-import java.security.*;
-import static java.util.concurrent.Executors.*;
+import static java.util.concurrent.Executors.privilegedCallable;
+import static java.util.concurrent.Executors.privilegedCallableUsingCurrentClassLoader;
+import static java.util.concurrent.Executors.privilegedThreadFactory;
+
+import java.security.AccessControlException;
+import java.security.CodeSource;
+import java.security.Permission;
+import java.security.PermissionCollection;
+import java.security.Permissions;
+import java.security.ProtectionDomain;
+import java.util.Random;
+import java.util.concurrent.Callable;
 
 public class PrivilegedCallables {
     Callable<Integer> real;
 
-    final Callable<Integer> realCaller = new Callable<Integer>() {
+    final Callable<Integer> realCaller = new Callable<>() {
         public Integer call() throws Exception {
             return real.call(); }};
 
     final Random rnd = new Random();
 
     @SuppressWarnings("serial")
-    Throwable[] throwables = {
+    final Throwable[] throwables = {
         new Exception() {},
         new RuntimeException() {},
         new Error() {}
@@ -124,7 +132,7 @@ public class PrivilegedCallables {
         for (int i = 0; i < 20; i++)
             if (rnd.nextBoolean()) {
                 final Throwable t = randomThrowable();
-                real = new Callable<Integer>() {
+                real = new Callable<>() {
                     public Integer call() throws Exception {
                         throwThrowable(t);
                         return null; }};
@@ -134,7 +142,7 @@ public class PrivilegedCallables {
                 } catch (Throwable tt) { check(t == tt); }
             } else {
                 final int n = rnd.nextInt();
-                real = new Callable<Integer>() {
+                real = new Callable<>() {
                     public Integer call() { return n; }};
                 equal(c.call(), n);
             }

@@ -81,8 +81,7 @@ class FreeBlock: public HeapBlock {
 
 class CodeHeap : public CHeapObj<mtCode> {
   friend class VMStructs;
-  friend class PregeneratedCodeHeap;
- private:
+ protected:
   VirtualSpace _memory;                          // the memory holding the blocks
   VirtualSpace _segmap;                          // the memory holding the segment map
 
@@ -100,7 +99,11 @@ class CodeHeap : public CHeapObj<mtCode> {
 
   const char*  _name;                            // Name of the CodeHeap
   const int    _code_blob_type;                  // CodeBlobType it contains
-  bool         _was_full;                        // True if the code heap was full
+  int          _blob_count;                      // Number of CodeBlobs
+  int          _nmethod_count;                   // Number of nmethods
+  int          _adapter_count;                   // Number of adapters
+  int          _full_count;                      // Number of times the code heap was full
+
 
   enum { free_sentinel = 0xFF };
 
@@ -150,8 +153,11 @@ class CodeHeap : public CHeapObj<mtCode> {
   char* high() const                             { return _memory.high(); }
   char* high_boundary() const                    { return _memory.high_boundary(); }
 
-  virtual bool  contains(const void* p) const    { return low_boundary() <= p && p < high(); }
+  virtual bool contains(const void* p) const     { return low_boundary() <= p && p < high(); }
+  virtual bool contains_blob(const CodeBlob* blob) const { return low_boundary() <= (char*) blob && (char*) blob < high(); }
+
   virtual void* find_start(void* p)     const;   // returns the block containing p or NULL
+  virtual CodeBlob* find_blob_unsafe(void* start) const;
   size_t alignment_unit()       const;           // alignment of any block
   size_t alignment_offset()     const;           // offset of first byte of any block, within the enclosing alignment unit
   static size_t header_size();                   // returns the header size for each heap block
@@ -179,8 +185,13 @@ class CodeHeap : public CHeapObj<mtCode> {
 
   // Debugging / Profiling
   const char* name() const                       { return _name; }
-  bool was_full()                                { return _was_full; }
-  void report_full()                             { _was_full = true; }
+  int         blob_count()                       { return _blob_count; }
+  int         nmethod_count()                    { return _nmethod_count; }
+  void    set_nmethod_count(int count)           {        _nmethod_count = count; }
+  int         adapter_count()                    { return _adapter_count; }
+  void    set_adapter_count(int count)           {        _adapter_count = count; }
+  int         full_count()                       { return _full_count; }
+  void        report_full()                      {        _full_count++; }
 
 private:
   size_t heap_unallocated_capacity() const;

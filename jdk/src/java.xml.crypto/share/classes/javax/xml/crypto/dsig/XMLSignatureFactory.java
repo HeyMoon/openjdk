@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,11 +43,10 @@ import java.security.InvalidAlgorithmParameterException;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.Provider;
+import java.security.Provider.Service;
 import java.security.Security;
 import java.util.List;
 
-import sun.security.jca.*;
-import sun.security.jca.GetInstance.Instance;
 
 /**
  * A factory for creating {@link XMLSignature} objects from scratch or
@@ -67,11 +66,10 @@ import sun.security.jca.GetInstance.Instance;
  *
  * <p>The objects that this factory produces will be based
  * on DOM and abide by the DOM interoperability requirements as defined in the
- * <a href="../../../../../technotes/guides/security/xmldsig/overview.html#DOM%20Mechanism%20Requirements">
- * DOM Mechanism Requirements</a> section of the API overview. See the
- * <a href="../../../../../technotes/guides/security/xmldsig/overview.html#Service%20Provider">
- * Service Providers</a> section of the API overview for a list of standard
- * mechanism types.
+ * {@extLink security_guide_xmldsig_rqmts DOM Mechanism Requirements} section
+ * of the API overview. See the
+ * {@extLink security_guide_xmldsig_provider Service Providers} section of
+ * the API overview for a list of standard mechanism types.
  *
  * <p><code>XMLSignatureFactory</code> implementations are registered and loaded
  * using the {@link java.security.Provider} mechanism.
@@ -173,10 +171,17 @@ public abstract class XMLSignatureFactory {
      * <p>Note that the list of registered providers may be retrieved via
      * the {@link Security#getProviders() Security.getProviders()} method.
      *
+     * @implNote
+     * The JDK Reference Implementation additionally uses the
+     * {@code jdk.security.provider.preferred}
+     * {@link Security#getProperty(String) Security} property to determine
+     * the preferred provider order for the specified algorithm. This
+     * may be different than the order of providers returned by
+     * {@link Security#getProviders() Security.getProviders()}.
+     *
      * @param mechanismType the type of the XML processing mechanism and
-     *    representation. See the <a
-     *    href="../../../../../technotes/guides/security/xmldsig/overview.html#Service%20Provider">
-     *    Service Providers</a> section of the API overview for a list of
+     *    representation. See the {@extLink security_guide_xmldsig_provider
+     *    Service Providers} section of the API overview for a list of
      *    standard mechanism types.
      * @return a new <code>XMLSignatureFactory</code>
      * @throws NullPointerException if <code>mechanismType</code> is
@@ -190,17 +195,26 @@ public abstract class XMLSignatureFactory {
         if (mechanismType == null) {
             throw new NullPointerException("mechanismType cannot be null");
         }
-        Instance instance;
-        try {
-            instance = GetInstance.getInstance
-                ("XMLSignatureFactory", null, mechanismType);
-        } catch (NoSuchAlgorithmException nsae) {
-            throw new NoSuchMechanismException(nsae);
+        Provider[] provs = Security.getProviders();
+        for (Provider p : provs) {
+            Service s = p.getService("XMLSignatureFactory", mechanismType);
+            if (s != null) {
+                Object obj = null;
+                try {
+                    obj = s.newInstance(null);
+                } catch (NoSuchAlgorithmException nsae) {
+                    throw new NoSuchMechanismException(nsae);
+                }
+                if (obj instanceof XMLSignatureFactory) {
+                    XMLSignatureFactory factory = (XMLSignatureFactory) obj;
+                    factory.mechanismType = mechanismType;
+                    factory.provider = p;
+                    return factory;
+                }
+            }
         }
-        XMLSignatureFactory factory = (XMLSignatureFactory) instance.impl;
-        factory.mechanismType = mechanismType;
-        factory.provider = instance.provider;
-        return factory;
+        throw new NoSuchMechanismException
+            ("Mechanism " + mechanismType + " not available");
     }
 
     /**
@@ -211,9 +225,8 @@ public abstract class XMLSignatureFactory {
      * provider list.
      *
      * @param mechanismType the type of the XML processing mechanism and
-     *    representation. See the <a
-     *    href="../../../../../technotes/guides/security/xmldsig/overview.html#Service%20Provider">
-     *    Service Providers</a> section of the API overview for a list of
+     *    representation. See the {@extLink security_guide_xmldsig_provider
+     *    Service Providers} section of the API overview for a list of
      *    standard mechanism types.
      * @param provider the <code>Provider</code> object
      * @return a new <code>XMLSignatureFactory</code>
@@ -232,17 +245,25 @@ public abstract class XMLSignatureFactory {
             throw new NullPointerException("provider cannot be null");
         }
 
-        Instance instance;
-        try {
-            instance = GetInstance.getInstance
-                ("XMLSignatureFactory", null, mechanismType, provider);
-        } catch (NoSuchAlgorithmException nsae) {
-            throw new NoSuchMechanismException(nsae);
+        Service s = provider.getService("XMLSignatureFactory", mechanismType);
+        if (s != null) {
+            Object obj = null;
+            try {
+                obj = s.newInstance(null);
+            } catch (NoSuchAlgorithmException nsae) {
+                throw new NoSuchMechanismException(nsae);
+            }
+
+            if (obj instanceof XMLSignatureFactory) {
+                XMLSignatureFactory factory = (XMLSignatureFactory) obj;
+                factory.mechanismType = mechanismType;
+                factory.provider = provider;
+                return factory;
+            }
         }
-        XMLSignatureFactory factory = (XMLSignatureFactory) instance.impl;
-        factory.mechanismType = mechanismType;
-        factory.provider = instance.provider;
-        return factory;
+        throw new NoSuchMechanismException
+            ("Mechanism " + mechanismType + " not available from " +
+             provider.getName());
     }
 
     /**
@@ -255,9 +276,8 @@ public abstract class XMLSignatureFactory {
      * the {@link Security#getProviders() Security.getProviders()} method.
      *
      * @param mechanismType the type of the XML processing mechanism and
-     *    representation. See the <a
-     *    href="../../../../../technotes/guides/security/xmldsig/overview.html#Service%20Provider">
-     *    Service Providers</a> section of the API overview for a list of
+     *    representation. See the {@extLink security_guide_xmldsig_provider
+     *    Service Providers} section of the API overview for a list of
      *    standard mechanism types.
      * @param provider the string name of the provider
      * @return a new <code>XMLSignatureFactory</code>
@@ -280,17 +300,28 @@ public abstract class XMLSignatureFactory {
             throw new NoSuchProviderException();
         }
 
-        Instance instance;
-        try {
-            instance = GetInstance.getInstance
-                ("XMLSignatureFactory", null, mechanismType, provider);
-        } catch (NoSuchAlgorithmException nsae) {
-            throw new NoSuchMechanismException(nsae);
+        Provider p = Security.getProvider(provider);
+        if (p == null) {
+            throw new NoSuchProviderException("No such provider: " +
+                                              provider);
         }
-        XMLSignatureFactory factory = (XMLSignatureFactory) instance.impl;
-        factory.mechanismType = mechanismType;
-        factory.provider = instance.provider;
-        return factory;
+        Service s = p.getService("XMLSignatureFactory", mechanismType);
+        if (s != null) {
+            Object obj = null;
+            try {
+                obj = s.newInstance(null);
+            } catch (NoSuchAlgorithmException nsae) {
+                throw new NoSuchMechanismException(nsae);
+            }
+            if (obj instanceof XMLSignatureFactory) {
+                XMLSignatureFactory factory = (XMLSignatureFactory) obj;
+                factory.mechanismType = mechanismType;
+                factory.provider = p;
+                return factory;
+            }
+        }
+        throw new NoSuchMechanismException
+            ("Mechanism " + mechanismType + " not available from " + provider);
     }
 
     /**

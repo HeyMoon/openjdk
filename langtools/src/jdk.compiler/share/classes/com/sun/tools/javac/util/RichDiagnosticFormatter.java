@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,6 +22,7 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package com.sun.tools.javac.util;
 
 import java.nio.file.Path;
@@ -234,16 +235,16 @@ public class RichDiagnosticFormatter extends
     }
 
     private boolean unique(TypeVar typevar) {
-        typevar = (TypeVar)typevar.stripMetadataIfNeeded();
+        typevar = (TypeVar) typevar.stripMetadata();
 
         int found = 0;
         for (Type t : whereClauses.get(WhereClauseKind.TYPEVAR).keySet()) {
-            if (t.toString().equals(typevar.toString())) {
+            if (t.stripMetadata().toString().equals(typevar.toString())) {
                 found++;
             }
         }
         if (found < 1)
-            throw new AssertionError("Missing type variable in where clause " + typevar);
+            throw new AssertionError("Missing type variable in where clause: " + typevar);
         return found == 1;
     }
     //where
@@ -555,7 +556,7 @@ public class RichDiagnosticFormatter extends
                 List<Type> bounds = (bound != null) &&
                         (bound.hasTag(CLASS) || bound.hasTag(TYPEVAR)) ?
                     types.getBounds(t) :
-                    List.<Type>nil();
+                    List.nil();
 
                 nameSimplifier.addUsage(t.tsym);
 
@@ -643,7 +644,7 @@ public class RichDiagnosticFormatter extends
                 EnumSet.of(RichFormatterFeature.SIMPLE_NAMES,
                     RichFormatterFeature.WHERE_CLAUSES,
                     RichFormatterFeature.UNIQUE_TYPEVAR_NAMES);
-            String diagOpts = options.get("diags");
+            String diagOpts = options.get("diags.formatterOptions");
             if (diagOpts != null) {
                 for (String args: diagOpts.split(",")) {
                     if (args.equals("-where")) {

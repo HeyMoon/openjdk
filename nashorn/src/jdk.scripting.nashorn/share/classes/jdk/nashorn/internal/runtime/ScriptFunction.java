@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +22,6 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package jdk.nashorn.internal.runtime;
 
 import static jdk.nashorn.internal.codegen.CompilerConstants.virtualCallNoLookup;
@@ -30,23 +29,31 @@ import static jdk.nashorn.internal.lookup.Lookup.MH;
 import static jdk.nashorn.internal.runtime.ECMAErrors.typeError;
 import static jdk.nashorn.internal.runtime.ScriptRuntime.UNDEFINED;
 import static jdk.nashorn.internal.runtime.UnwarrantedOptimismException.INVALID_PROGRAM_POINT;
+
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodHandles.Lookup;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.SwitchPoint;
+import java.security.AccessControlContext;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
-import jdk.internal.dynalink.CallSiteDescriptor;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.LinkRequest;
-import jdk.internal.dynalink.support.Guards;
+import java.util.concurrent.atomic.LongAdder;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.SecureLookupSupplier;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.LinkRequest;
+import jdk.dynalink.linker.support.Guards;
 import jdk.nashorn.internal.codegen.ApplySpecialization;
 import jdk.nashorn.internal.codegen.Compiler;
 import jdk.nashorn.internal.codegen.CompilerConstants.Call;
+import jdk.nashorn.internal.ir.FunctionNode;
 import jdk.nashorn.internal.objects.Global;
 import jdk.nashorn.internal.objects.NativeFunction;
 import jdk.nashorn.internal.objects.annotations.SpecializedFunction.LinkLogic;
@@ -55,38 +62,54 @@ import jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor;
 import jdk.nashorn.internal.runtime.logging.DebugLogger;
 
 /**
- * Runtime representation of a JavaScript function.
+ * Runtime representation of a JavaScript function. This class has only private
+ * and protected constructors. There are no *public* constructors - but only
+ * factory methods that follow the naming pattern "createXYZ".
  */
-public abstract class ScriptFunction extends ScriptObject {
+public class ScriptFunction extends ScriptObject {
 
-    /** Method handle for prototype getter for this ScriptFunction */
+    /**
+     * Method handle for prototype getter for this ScriptFunction
+     */
     public static final MethodHandle G$PROTOTYPE = findOwnMH_S("G$prototype", Object.class, Object.class);
 
-    /** Method handle for prototype setter for this ScriptFunction */
+    /**
+     * Method handle for prototype setter for this ScriptFunction
+     */
     public static final MethodHandle S$PROTOTYPE = findOwnMH_S("S$prototype", void.class, Object.class, Object.class);
 
-    /** Method handle for length getter for this ScriptFunction */
+    /**
+     * Method handle for length getter for this ScriptFunction
+     */
     public static final MethodHandle G$LENGTH = findOwnMH_S("G$length", int.class, Object.class);
 
-    /** Method handle for name getter for this ScriptFunction */
+    /**
+     * Method handle for name getter for this ScriptFunction
+     */
     public static final MethodHandle G$NAME = findOwnMH_S("G$name", Object.class, Object.class);
 
-    /** Method handle used for implementing sync() in mozilla_compat */
+    /**
+     * Method handle used for implementing sync() in mozilla_compat
+     */
     public static final MethodHandle INVOKE_SYNC = findOwnMH_S("invokeSync", Object.class, ScriptFunction.class, Object.class, Object.class, Object[].class);
 
-    /** Method handle for allocate function for this ScriptFunction */
+    /**
+     * Method handle for allocate function for this ScriptFunction
+     */
     static final MethodHandle ALLOCATE = findOwnMH_V("allocate", Object.class);
 
     private static final MethodHandle WRAPFILTER = findOwnMH_S("wrapFilter", Object.class, Object.class);
 
     private static final MethodHandle SCRIPTFUNCTION_GLOBALFILTER = findOwnMH_S("globalFilter", Object.class, Object.class);
 
-    /** method handle to scope getter for this ScriptFunction */
+    /**
+     * method handle to scope getter for this ScriptFunction
+     */
     public static final Call GET_SCOPE = virtualCallNoLookup(ScriptFunction.class, "getScope", ScriptObject.class);
 
-    private static final MethodHandle IS_FUNCTION_MH  = findOwnMH_S("isFunctionMH", boolean.class, Object.class, ScriptFunctionData.class);
+    private static final MethodHandle IS_FUNCTION_MH = findOwnMH_S("isFunctionMH", boolean.class, Object.class, ScriptFunctionData.class);
 
-    private static final MethodHandle IS_APPLY_FUNCTION  = findOwnMH_S("isApplyFunction", boolean.class, boolean.class, Object.class, Object.class);
+    private static final MethodHandle IS_APPLY_FUNCTION = findOwnMH_S("isApplyFunction", boolean.class, boolean.class, Object.class, Object.class);
 
     private static final MethodHandle IS_NONSTRICT_FUNCTION = findOwnMH_S("isNonStrictFunction", boolean.class, Object.class, Object.class, ScriptFunctionData.class);
 
@@ -94,55 +117,301 @@ public abstract class ScriptFunction extends ScriptObject {
 
     private static final MethodHandle WRAP_THIS = MH.findStatic(MethodHandles.lookup(), ScriptFunctionData.class, "wrapThis", MH.type(Object.class, Object.class));
 
-    /** The parent scope. */
+    // various property maps used for different kinds of functions
+    // property map for anonymous function that serves as Function.prototype
+    private static final PropertyMap anonmap$;
+    // property map for strict mode functions
+    private static final PropertyMap strictmodemap$;
+    // property map for bound functions
+    private static final PropertyMap boundfunctionmap$;
+    // property map for non-strict, non-bound functions.
+    private static final PropertyMap map$;
+
+    // Marker object for lazily initialized prototype object
+    private static final Object LAZY_PROTOTYPE = new Object();
+
+    private static final AccessControlContext GET_LOOKUP_PERMISSION_CONTEXT =
+            AccessControlContextFactory.createAccessControlContext(SecureLookupSupplier.GET_LOOKUP_PERMISSION_NAME);
+
+    private static PropertyMap createStrictModeMap(final PropertyMap map) {
+        final int flags = Property.NOT_ENUMERABLE | Property.NOT_CONFIGURABLE;
+        PropertyMap newMap = map;
+        // Need to add properties directly to map since slots are assigned speculatively by newUserAccessors.
+        newMap = newMap.addPropertyNoHistory(map.newUserAccessors("arguments", flags));
+        newMap = newMap.addPropertyNoHistory(map.newUserAccessors("caller", flags));
+        return newMap;
+    }
+
+    private static PropertyMap createBoundFunctionMap(final PropertyMap strictModeMap) {
+        // Bound function map is same as strict function map, but additionally lacks the "prototype" property, see
+        // ECMAScript 5.1 section 15.3.4.5
+        return strictModeMap.deleteProperty(strictModeMap.findProperty("prototype"));
+    }
+
+    static {
+        anonmap$ = PropertyMap.newMap();
+        final ArrayList<Property> properties = new ArrayList<>(3);
+        properties.add(AccessorProperty.create("prototype", Property.NOT_ENUMERABLE | Property.NOT_CONFIGURABLE, G$PROTOTYPE, S$PROTOTYPE));
+        properties.add(AccessorProperty.create("length", Property.NOT_ENUMERABLE | Property.NOT_CONFIGURABLE | Property.NOT_WRITABLE, G$LENGTH, null));
+        properties.add(AccessorProperty.create("name", Property.NOT_ENUMERABLE | Property.NOT_CONFIGURABLE | Property.NOT_WRITABLE, G$NAME, null));
+        map$ = PropertyMap.newMap(properties);
+        strictmodemap$ = createStrictModeMap(map$);
+        boundfunctionmap$ = createBoundFunctionMap(strictmodemap$);
+    }
+
+    private static boolean isStrict(final int flags) {
+        return (flags & ScriptFunctionData.IS_STRICT) != 0;
+    }
+
+    // Choose the map based on strict mode!
+    private static PropertyMap getMap(final boolean strict) {
+        return strict ? strictmodemap$ : map$;
+    }
+
+    /**
+     * The parent scope.
+     */
     private final ScriptObject scope;
 
     private final ScriptFunctionData data;
 
-    /** The property map used for newly allocated object when function is used as constructor. */
+    /**
+     * The property map used for newly allocated object when function is used as
+     * constructor.
+     */
     protected PropertyMap allocatorMap;
+
+    /**
+     * Reference to constructor prototype.
+     */
+    protected Object prototype;
 
     /**
      * Constructor
      *
-     * @param name          function name
-     * @param methodHandle  method handle to function (if specializations are present, assumed to be most generic)
-     * @param map           property map
-     * @param scope         scope
-     * @param specs         specialized version of this function - other method handles
-     * @param flags         {@link ScriptFunctionData} flags
+     * @param data static function data
+     * @param map property map
+     * @param scope scope
      */
-    protected ScriptFunction(
-            final String name,
-            final MethodHandle methodHandle,
+    private ScriptFunction(
+            final ScriptFunctionData data,
             final PropertyMap map,
             final ScriptObject scope,
-            final Specialization[] specs,
-            final int flags) {
+            final Global global) {
 
-        this(new FinalScriptFunctionData(name, methodHandle, specs, flags), map, scope);
+        super(map);
+
+        if (Context.DEBUG) {
+            constructorCount.increment();
+        }
+
+        this.data = data;
+        this.scope = scope;
+        this.setInitialProto(global.getFunctionPrototype());
+        this.prototype = LAZY_PROTOTYPE;
+
+        // We have to fill user accessor functions late as these are stored
+        // in this object rather than in the PropertyMap of this object.
+        assert objectSpill == null;
+        if (isStrict() || isBoundFunction()) {
+            final ScriptFunction typeErrorThrower = global.getTypeErrorThrower();
+            initUserAccessors("arguments", Property.NOT_CONFIGURABLE | Property.NOT_ENUMERABLE, typeErrorThrower, typeErrorThrower);
+            initUserAccessors("caller", Property.NOT_CONFIGURABLE | Property.NOT_ENUMERABLE, typeErrorThrower, typeErrorThrower);
+        }
     }
 
     /**
      * Constructor
      *
-     * @param data          static function data
-     * @param map           property map
-     * @param scope         scope
+     * @param name function name
+     * @param methodHandle method handle to function (if specializations are
+     * present, assumed to be most generic)
+     * @param map property map
+     * @param scope scope
+     * @param specs specialized version of this function - other method handles
+     * @param flags {@link ScriptFunctionData} flags
      */
-    protected ScriptFunction(
-            final ScriptFunctionData data,
+    private ScriptFunction(
+            final String name,
+            final MethodHandle methodHandle,
             final PropertyMap map,
-            final ScriptObject scope) {
+            final ScriptObject scope,
+            final Specialization[] specs,
+            final int flags,
+            final Global global) {
+        this(new FinalScriptFunctionData(name, methodHandle, specs, flags), map, scope, global);
+    }
 
-        super(map);
+    /**
+     * Constructor
+     *
+     * @param name name of function
+     * @param methodHandle handle for invocation
+     * @param scope scope object
+     * @param specs specialized versions of this method, if available, null
+     * otherwise
+     * @param flags {@link ScriptFunctionData} flags
+     */
+    private ScriptFunction(
+            final String name,
+            final MethodHandle methodHandle,
+            final ScriptObject scope,
+            final Specialization[] specs,
+            final int flags) {
+        this(name, methodHandle, getMap(isStrict(flags)), scope, specs, flags, Global.instance());
+    }
 
-        if (Context.DEBUG) {
-            constructorCount++;
+    /**
+     * Constructor called by Nasgen generated code, zero added members, use the
+     * default map. Creates builtin functions only.
+     *
+     * @param name name of function
+     * @param invokeHandle handle for invocation
+     * @param specs specialized versions of this method, if available, null
+     * otherwise
+     */
+    protected ScriptFunction(final String name, final MethodHandle invokeHandle, final Specialization[] specs) {
+        this(name, invokeHandle, map$, null, specs, ScriptFunctionData.IS_BUILTIN_CONSTRUCTOR, Global.instance());
+    }
+
+    /**
+     * Constructor called by Nasgen generated code, non zero member count, use
+     * the map passed as argument. Creates builtin functions only.
+     *
+     * @param name name of function
+     * @param invokeHandle handle for invocation
+     * @param map initial property map
+     * @param specs specialized versions of this method, if available, null
+     * otherwise
+     */
+    protected ScriptFunction(final String name, final MethodHandle invokeHandle, final PropertyMap map, final Specialization[] specs) {
+        this(name, invokeHandle, map.addAll(map$), null, specs, ScriptFunctionData.IS_BUILTIN_CONSTRUCTOR, Global.instance());
+    }
+
+    // Factory methods to create various functions
+    /**
+     * Factory method called by compiler generated code for functions that need
+     * parent scope.
+     *
+     * @param constants the generated class' constant array
+     * @param index the index of the {@code RecompilableScriptFunctionData}
+     * object in the constants array.
+     * @param scope the parent scope object
+     * @return a newly created function object
+     */
+    public static ScriptFunction create(final Object[] constants, final int index, final ScriptObject scope) {
+        final RecompilableScriptFunctionData data = (RecompilableScriptFunctionData) constants[index];
+        return new ScriptFunction(data, getMap(data.isStrict()), scope, Global.instance());
+    }
+
+    /**
+     * Factory method called by compiler generated code for functions that don't
+     * need parent scope.
+     *
+     * @param constants the generated class' constant array
+     * @param index the index of the {@code RecompilableScriptFunctionData}
+     * object in the constants array.
+     * @return a newly created function object
+     */
+    public static ScriptFunction create(final Object[] constants, final int index) {
+        return create(constants, index, null);
+    }
+
+    /**
+     * Create anonymous function that serves as Function.prototype
+     *
+     * @return anonymous function object
+     */
+    public static ScriptFunction createAnonymous() {
+        return new ScriptFunction("", GlobalFunctions.ANONYMOUS, anonmap$, null);
+    }
+
+    // builtin function create helper factory
+    private static ScriptFunction createBuiltin(final String name, final MethodHandle methodHandle, final Specialization[] specs, final int flags) {
+        final ScriptFunction func = new ScriptFunction(name, methodHandle, null, specs, flags);
+        func.setPrototype(UNDEFINED);
+        // Non-constructor built-in functions do not have "prototype" property
+        func.deleteOwnProperty(func.getMap().findProperty("prototype"));
+
+        return func;
+    }
+
+    /**
+     * Factory method for non-constructor built-in functions
+     *
+     * @param name function name
+     * @param methodHandle handle for invocation
+     * @param specs specialized versions of function if available, null
+     * otherwise
+     * @return new ScriptFunction
+     */
+    public static ScriptFunction createBuiltin(final String name, final MethodHandle methodHandle, final Specialization[] specs) {
+        return ScriptFunction.createBuiltin(name, methodHandle, specs, ScriptFunctionData.IS_BUILTIN);
+    }
+
+    /**
+     * Factory method for non-constructor built-in functions
+     *
+     * @param name function name
+     * @param methodHandle handle for invocation
+     * @return new ScriptFunction
+     */
+    public static ScriptFunction createBuiltin(final String name, final MethodHandle methodHandle) {
+        return ScriptFunction.createBuiltin(name, methodHandle, null);
+    }
+
+    /**
+     * Factory method for non-constructor built-in, strict functions
+     *
+     * @param name function name
+     * @param methodHandle handle for invocation
+     * @return new ScriptFunction
+     */
+    public static ScriptFunction createStrictBuiltin(final String name, final MethodHandle methodHandle) {
+        return ScriptFunction.createBuiltin(name, methodHandle, null, ScriptFunctionData.IS_BUILTIN | ScriptFunctionData.IS_STRICT);
+    }
+
+    // Subclass to represent bound functions
+    private static class Bound extends ScriptFunction {
+        private final ScriptFunction target;
+
+        Bound(final ScriptFunctionData boundData, final ScriptFunction target) {
+            super(boundData, boundfunctionmap$, null, Global.instance());
+            setPrototype(ScriptRuntime.UNDEFINED);
+            this.target = target;
         }
 
-        this.data  = data;
-        this.scope = scope;
+        @Override
+        protected ScriptFunction getTargetFunction() {
+            return target;
+        }
+    }
+
+    /**
+     * Creates a version of this function bound to a specific "self" and other
+     * arguments, as per {@code Function.prototype.bind} functionality in
+     * ECMAScript 5.1 section 15.3.4.5.
+     *
+     * @param self the self to bind to this function. Can be null (in which
+     * case, null is bound as this).
+     * @param args additional arguments to bind to this function. Can be null or
+     * empty to not bind additional arguments.
+     * @return a function with the specified self and parameters bound.
+     */
+    public final ScriptFunction createBound(final Object self, final Object[] args) {
+        return new Bound(data.makeBoundFunctionData(this, self, args), getTargetFunction());
+    }
+
+    /**
+     * Create a function that invokes this function synchronized on {@code sync}
+     * or the self object of the invocation.
+     *
+     * @param sync the Object to synchronize on, or undefined
+     * @return synchronized function
+     */
+    public final ScriptFunction createSynchronized(final Object sync) {
+        final MethodHandle mh = MH.insertArguments(ScriptFunction.INVOKE_SYNC, 0, this, sync);
+        return createBuiltin(getName(), mh);
     }
 
     @Override
@@ -151,8 +420,8 @@ public abstract class ScriptFunction extends ScriptObject {
     }
 
     /**
-     * ECMA 15.3.5.3 [[HasInstance]] (V)
-     * Step 3 if "prototype" value is not an Object, throw TypeError
+     * ECMA 15.3.5.3 [[HasInstance]] (V) Step 3 if "prototype" value is not an
+     * Object, throw TypeError
      */
     @Override
     public boolean isInstance(final ScriptObject instance) {
@@ -171,22 +440,25 @@ public abstract class ScriptFunction extends ScriptObject {
     }
 
     /**
-     * Returns the target function for this function. If the function was not created using
-     * {@link #makeBoundFunction(Object, Object[])}, its target function is itself. If it is bound, its target function
-     * is the target function of the function it was made from (therefore, the target function is always the final,
-     * unbound recipient of the calls).
+     * Returns the target function for this function. If the function was not
+     * created using {@link #createBound(Object, Object[])}, its target
+     * function is itself. If it is bound, its target function is the target
+     * function of the function it was made from (therefore, the target function
+     * is always the final, unbound recipient of the calls).
+     *
      * @return the target function for this function.
      */
     protected ScriptFunction getTargetFunction() {
         return this;
     }
 
-    boolean isBoundFunction() {
+    final boolean isBoundFunction() {
         return getTargetFunction() != this;
     }
 
     /**
      * Set the arity of this ScriptFunction
+     *
      * @param arity arity
      */
     public final void setArity(final int arity) {
@@ -195,111 +467,114 @@ public abstract class ScriptFunction extends ScriptObject {
 
     /**
      * Is this a ECMAScript 'use strict' function?
+     *
      * @return true if function is in strict mode
      */
-    public boolean isStrict() {
+    public final boolean isStrict() {
         return data.isStrict();
     }
 
     /**
-     * Returns true if this is a non-strict, non-built-in function that requires non-primitive this argument
-     * according to ECMA 10.4.3.
+     * Is this is a function with all variables in scope?
+     * @return true if function has all
+     */
+    public boolean hasAllVarsInScope() {
+        return data instanceof RecompilableScriptFunctionData &&
+                (((RecompilableScriptFunctionData) data).getFunctionFlags() & FunctionNode.HAS_ALL_VARS_IN_SCOPE) != 0;
+    }
+
+    /**
+     * Returns true if this is a non-strict, non-built-in function that requires
+     * non-primitive this argument according to ECMA 10.4.3.
+     *
      * @return true if this argument must be an object
      */
-    public boolean needsWrappedThis() {
+    public final boolean needsWrappedThis() {
         return data.needsWrappedThis();
     }
 
     private static boolean needsWrappedThis(final Object fn) {
-        return fn instanceof ScriptFunction ? ((ScriptFunction)fn).needsWrappedThis() : false;
+        return fn instanceof ScriptFunction ? ((ScriptFunction) fn).needsWrappedThis() : false;
     }
 
     /**
      * Execute this script function.
-     * @param self  Target object.
-     * @param arguments  Call arguments.
+     *
+     * @param self Target object.
+     * @param arguments Call arguments.
      * @return ScriptFunction result.
-     * @throws Throwable if there is an exception/error with the invocation or thrown from it
+     * @throws Throwable if there is an exception/error with the invocation or
+     * thrown from it
      */
-    Object invoke(final Object self, final Object... arguments) throws Throwable {
+    final Object invoke(final Object self, final Object... arguments) throws Throwable {
         if (Context.DEBUG) {
-            invokes++;
+            invokes.increment();
         }
         return data.invoke(this, self, arguments);
     }
 
     /**
      * Execute this script function as a constructor.
-     * @param arguments  Call arguments.
+     *
+     * @param arguments Call arguments.
      * @return Newly constructed result.
-     * @throws Throwable if there is an exception/error with the invocation or thrown from it
+     * @throws Throwable if there is an exception/error with the invocation or
+     * thrown from it
      */
-    Object construct(final Object... arguments) throws Throwable {
+    final Object construct(final Object... arguments) throws Throwable {
         return data.construct(this, arguments);
     }
 
     /**
-     * Allocate function. Called from generated {@link ScriptObject} code
-     * for allocation as a factory method
+     * Allocate function. Called from generated {@link ScriptObject} code for
+     * allocation as a factory method
      *
-     * @return a new instance of the {@link ScriptObject} whose allocator this is
+     * @return a new instance of the {@link ScriptObject} whose allocator this
+     * is
      */
     @SuppressWarnings("unused")
     private Object allocate() {
         if (Context.DEBUG) {
-            allocations++;
+            allocations.increment();
         }
 
         assert !isBoundFunction(); // allocate never invoked on bound functions
 
-        final ScriptObject object = data.allocate(getAllocatorMap());
+        final ScriptObject prototype = getAllocatorPrototype();
+        final ScriptObject object = data.allocate(getAllocatorMap(prototype));
 
         if (object != null) {
-            final Object prototype = getPrototype();
-            if (prototype instanceof ScriptObject) {
-                object.setInitialProto((ScriptObject)prototype);
-            }
-
-            if (object.getProto() == null) {
-                object.setInitialProto(getObjectPrototype());
-            }
+            object.setInitialProto(prototype);
         }
 
         return object;
     }
 
-    private PropertyMap getAllocatorMap() {
-        if (allocatorMap == null) {
-            allocatorMap = data.getAllocatorMap();
+    /**
+     * Get the property map used by "allocate"
+     * @param prototype actual prototype object
+     * @return property map
+     */
+    private PropertyMap getAllocatorMap(final ScriptObject prototype) {
+        if (allocatorMap == null || allocatorMap.isInvalidSharedMapFor(prototype)) {
+            // The prototype map has changed since this function was last used as constructor.
+            // Get a new allocator map.
+            allocatorMap = data.getAllocatorMap(prototype);
         }
         return allocatorMap;
     }
 
     /**
-     * Return Object.prototype - used by "allocate"
-     * @return Object.prototype
+     * Return the actual prototype used by "allocate"
+     * @return allocator prototype
      */
-    protected abstract ScriptObject getObjectPrototype();
-
-    /**
-     * Creates a version of this function bound to a specific "self" and other arguments, as per
-     * {@code Function.prototype.bind} functionality in ECMAScript 5.1 section 15.3.4.5.
-     * @param self the self to bind to this function. Can be null (in which case, null is bound as this).
-     * @param args additional arguments to bind to this function. Can be null or empty to not bind additional arguments.
-     * @return a function with the specified self and parameters bound.
-     */
-    protected ScriptFunction makeBoundFunction(final Object self, final Object[] args) {
-        return makeBoundFunction(data.makeBoundFunctionData(this, self, args));
+    private ScriptObject getAllocatorPrototype() {
+        final Object prototype = getPrototype();
+        if (prototype instanceof ScriptObject) {
+            return (ScriptObject) prototype;
+        }
+        return Global.objectPrototype();
     }
-
-    /**
-     * Create a version of this function as in {@link ScriptFunction#makeBoundFunction(Object, Object[])},
-     * but using a {@link ScriptFunctionData} for the bound data.
-     *
-     * @param boundData ScriptFuntionData for the bound function
-     * @return a function with the bindings performed according to the given data
-     */
-    protected abstract ScriptFunction makeBoundFunction(ScriptFunctionData boundData);
 
     @Override
     public final String safeToString() {
@@ -307,13 +582,15 @@ public abstract class ScriptFunction extends ScriptObject {
     }
 
     @Override
-    public String toString() {
+    public final String toString() {
         return data.toString();
     }
 
     /**
-     * Get this function as a String containing its source code. If no source code
-     * exists in this ScriptFunction, its contents will be displayed as {@code [native code]}
+     * Get this function as a String containing its source code. If no source
+     * code exists in this ScriptFunction, its contents will be displayed as
+     * {@code [native code]}
+     *
      * @return string representation of this function's source
      */
     public final String toSource() {
@@ -322,27 +599,32 @@ public abstract class ScriptFunction extends ScriptObject {
 
     /**
      * Get the prototype object for this function
+     *
      * @return prototype
      */
-    public abstract Object getPrototype();
+    public final Object getPrototype() {
+        if (prototype == LAZY_PROTOTYPE) {
+            prototype = new PrototypeObject(this);
+        }
+        return prototype;
+    }
 
     /**
      * Set the prototype object for this function
-     * @param prototype new prototype object
+     *
+     * @param newPrototype new prototype object
      */
-    public abstract void setPrototype(Object prototype);
+    public final void setPrototype(final Object newPrototype) {
+        if (newPrototype instanceof ScriptObject && newPrototype != this.prototype && allocatorMap != null) {
+            // Unset allocator map to be replaced with one matching the new prototype.
+            allocatorMap = null;
+        }
+        this.prototype = newPrototype;
+    }
 
     /**
-     * Create a function that invokes this function synchronized on {@code sync} or the self object
-     * of the invocation.
-     * @param sync the Object to synchronize on, or undefined
-     * @return synchronized function
-     */
-   public abstract ScriptFunction makeSynchronizedFunction(Object sync);
-
-    /**
-     * Return the invoke handle bound to a given ScriptObject self reference.
-     * If callee parameter is required result is rebound to this.
+     * Return the invoke handle bound to a given ScriptObject self reference. If
+     * callee parameter is required result is rebound to this.
      *
      * @param self self reference
      * @return bound invoke handle
@@ -352,9 +634,12 @@ public abstract class ScriptFunction extends ScriptObject {
     }
 
     /**
-     * Bind the method handle to this {@code ScriptFunction} instance if it needs a callee parameter. If this function's
-     * method handles don't have a callee parameter, the handle is returned unchanged.
-     * @param methodHandle the method handle to potentially bind to this function instance.
+     * Bind the method handle to this {@code ScriptFunction} instance if it
+     * needs a callee parameter. If this function's method handles don't have a
+     * callee parameter, the handle is returned unchanged.
+     *
+     * @param methodHandle the method handle to potentially bind to this
+     * function instance.
      * @return the potentially bound method handle
      */
     private MethodHandle bindToCalleeIfNeeded(final MethodHandle methodHandle) {
@@ -363,16 +648,44 @@ public abstract class ScriptFunction extends ScriptObject {
     }
 
     /**
+     * Get the documentation for this function
+     *
+     * @return the documentation
+     */
+    public final String getDocumentation() {
+        return data.getDocumentation();
+    }
+
+    /**
+     * Get the documentation key for this function
+     *
+     * @return the documentation key
+     */
+    public final String getDocumentationKey() {
+        return data.getDocumentationKey();
+    }
+
+    /**
+     * Set the documentation key for this function
+     *
+     * @param docKey documentation key String for this function
+     */
+    public final void setDocumentationKey(final String docKey) {
+        data.setDocumentationKey(docKey);
+    }
+
+    /**
      * Get the name for this function
+     *
      * @return the name
      */
     public final String getName() {
         return data.getName();
     }
 
-
     /**
      * Get the scope for this function
+     *
      * @return the scope
      */
     public final ScriptObject getScope() {
@@ -383,36 +696,37 @@ public abstract class ScriptFunction extends ScriptObject {
      * Prototype getter for this ScriptFunction - follows the naming convention
      * used by Nasgen and the code generator
      *
-     * @param self  self reference
+     * @param self self reference
      * @return self's prototype
      */
     public static Object G$prototype(final Object self) {
-        return self instanceof ScriptFunction ?
-            ((ScriptFunction)self).getPrototype() :
-            UNDEFINED;
+        return self instanceof ScriptFunction
+                ? ((ScriptFunction) self).getPrototype()
+                : UNDEFINED;
     }
 
     /**
      * Prototype setter for this ScriptFunction - follows the naming convention
      * used by Nasgen and the code generator
      *
-     * @param self  self reference
+     * @param self self reference
      * @param prototype prototype to set
      */
     public static void S$prototype(final Object self, final Object prototype) {
         if (self instanceof ScriptFunction) {
-            ((ScriptFunction)self).setPrototype(prototype);
+            ((ScriptFunction) self).setPrototype(prototype);
         }
     }
 
     /**
      * Length getter - ECMA 15.3.3.2: Function.length
+     *
      * @param self self reference
      * @return length
      */
     public static int G$length(final Object self) {
         if (self instanceof ScriptFunction) {
-            return ((ScriptFunction)self).data.getArity();
+            return ((ScriptFunction) self).data.getArity();
         }
 
         return 0;
@@ -420,12 +734,13 @@ public abstract class ScriptFunction extends ScriptObject {
 
     /**
      * Name getter - ECMA Function.name
-     * @param self self refence
+     *
+     * @param self self reference
      * @return the name, or undefined if none
      */
     public static Object G$name(final Object self) {
         if (self instanceof ScriptFunction) {
-            return ((ScriptFunction)self).getName();
+            return ((ScriptFunction) self).getName();
         }
 
         return UNDEFINED;
@@ -433,6 +748,7 @@ public abstract class ScriptFunction extends ScriptObject {
 
     /**
      * Get the prototype for this ScriptFunction
+     *
      * @param constructor constructor
      * @return prototype, or null if given constructor is not a ScriptFunction
      */
@@ -440,7 +756,7 @@ public abstract class ScriptFunction extends ScriptObject {
         if (constructor != null) {
             final Object proto = constructor.getPrototype();
             if (proto instanceof ScriptObject) {
-                return (ScriptObject)proto;
+                return (ScriptObject) proto;
             }
         }
 
@@ -448,29 +764,37 @@ public abstract class ScriptFunction extends ScriptObject {
     }
 
     // These counters are updated only in debug mode.
-    private static int constructorCount;
-    private static int invokes;
-    private static int allocations;
+    private static LongAdder constructorCount;
+    private static LongAdder invokes;
+    private static LongAdder allocations;
+
+    static {
+        if (Context.DEBUG) {
+            constructorCount = new LongAdder();
+            invokes = new LongAdder();
+            allocations = new LongAdder();
+        }
+    }
 
     /**
      * @return the constructorCount
      */
-    public static int getConstructorCount() {
-        return constructorCount;
+    public static long getConstructorCount() {
+        return constructorCount.longValue();
     }
 
     /**
      * @return the invokes
      */
-    public static int getInvokes() {
-        return invokes;
+    public static long getInvokes() {
+        return invokes.longValue();
     }
 
     /**
      * @return the allocations
      */
-    public static int getAllocations() {
-        return allocations;
+    public static long getAllocations() {
+        return allocations.longValue();
     }
 
     @Override
@@ -490,7 +814,6 @@ public abstract class ScriptFunction extends ScriptObject {
         return Context.getGlobal().wrapAsObject(obj);
     }
 
-
     @SuppressWarnings("unused")
     private static Object globalFilter(final Object object) {
         // replace whatever we get with the current global object
@@ -498,14 +821,16 @@ public abstract class ScriptFunction extends ScriptObject {
     }
 
     /**
-     * Some receivers are primitive, in that case, according to the Spec we create a new
-     * native object per callsite with the wrap filter. We can only apply optimistic builtins
-     * if there is no per instance state saved for these wrapped objects (e.g. currently NativeStrings),
-     * otherwise we can't create optimistic versions
+     * Some receivers are primitive, in that case, according to the Spec we
+     * create a new native object per callsite with the wrap filter. We can only
+     * apply optimistic builtins if there is no per instance state saved for
+     * these wrapped objects (e.g. currently NativeStrings), otherwise we can't
+     * create optimistic versions
      *
-     * @param self            receiver
-     * @param linkLogicClass  linkLogicClass, or null if no link logic exists
-     * @return link logic instance, or null if one could not be constructed for this receiver
+     * @param self receiver
+     * @param linkLogicClass linkLogicClass, or null if no link logic exists
+     * @return link logic instance, or null if one could not be constructed for
+     * this receiver
      */
     private static LinkLogic getLinkLogic(final Object self, final Class<? extends LinkLogic> linkLogicClass) {
         if (linkLogicClass == null) {
@@ -518,25 +843,25 @@ public abstract class ScriptFunction extends ScriptObject {
 
         final Object wrappedSelf = wrapFilter(self);
         if (wrappedSelf instanceof OptimisticBuiltins) {
-            if (wrappedSelf != self && ((OptimisticBuiltins)wrappedSelf).hasPerInstanceAssumptions()) {
+            if (wrappedSelf != self && ((OptimisticBuiltins) wrappedSelf).hasPerInstanceAssumptions()) {
                 return null; //pessimistic - we created a wrapped object different from the primitive, but the assumptions have instance state
             }
-            return ((OptimisticBuiltins)wrappedSelf).getLinkLogic(linkLogicClass);
+            return ((OptimisticBuiltins) wrappedSelf).getLinkLogic(linkLogicClass);
         }
         return null;
     }
 
     /**
-     * dyn:call call site signature: (callee, thiz, [args...])
-     * generated method signature:   (callee, thiz, [args...])
+     * StandardOperation.CALL call site signature: (callee, thiz, [args...]) generated method
+     * signature: (callee, thiz, [args...])
      *
      * cases:
      * (a) method has callee parameter
-     *   (1) for local/scope calls, we just bind thiz and drop the second argument.
-     *   (2) for normal this-calls, we have to swap thiz and callee to get matching signatures.
+     *     (1) for local/scope calls, we just bind thiz and drop the second argument.
+     *     (2) for normal this-calls, we have to swap thiz and callee to get matching signatures.
      * (b) method doesn't have callee parameter (builtin functions)
-     *   (3) for local/scope calls, bind thiz and drop both callee and thiz.
-     *   (4) for normal this-calls, drop callee.
+     *     (3) for local/scope calls, bind thiz and drop both callee and thiz.
+     *     (4) for normal this-calls, drop callee.
      *
      * @return guarded invocation for call
      */
@@ -544,11 +869,11 @@ public abstract class ScriptFunction extends ScriptObject {
     protected GuardedInvocation findCallMethod(final CallSiteDescriptor desc, final LinkRequest request) {
         final MethodType type = desc.getMethodType();
 
-        final String  name       = getName();
+        final String name = getName();
         final boolean isUnstable = request.isCallSiteUnstable();
-        final boolean scopeCall  = NashornCallSiteDescriptor.isScope(desc);
-        final boolean isCall     = !scopeCall && data.isBuiltin() && "call".equals(name);
-        final boolean isApply    = !scopeCall && data.isBuiltin() && "apply".equals(name);
+        final boolean scopeCall = NashornCallSiteDescriptor.isScope(desc);
+        final boolean isCall = !scopeCall && data.isBuiltin() && "call".equals(name);
+        final boolean isApply = !scopeCall && data.isBuiltin() && "apply".equals(name);
 
         final boolean isApplyOrCall = isCall | isApply;
 
@@ -569,7 +894,7 @@ public abstract class ScriptFunction extends ScriptObject {
             return new GuardedInvocation(
                     handle,
                     null,
-                    (SwitchPoint)null,
+                    (SwitchPoint) null,
                     ClassCastException.class);
         }
 
@@ -632,10 +957,14 @@ public abstract class ScriptFunction extends ScriptObject {
                 // It's already (callee, this, args...), just what we need
                 boundHandle = callHandle;
             }
-        } else if (data.isBuiltin() && "extend".equals(data.getName())) {
-            // NOTE: the only built-in named "extend" is NativeJava.extend. As a special-case we're binding the
-            // current lookup as its "this" so it can do security-sensitive creation of adapter classes.
-            boundHandle = MH.dropArguments(MH.bindTo(callHandle, desc.getLookup()), 0, type.parameterType(0), type.parameterType(1));
+        } else if (data.isBuiltin() && Global.isBuiltInJavaExtend(this)) {
+            // We're binding the current lookup as "self" so the function can do
+            // security-sensitive creation of adapter classes.
+            boundHandle = MH.dropArguments(MH.bindTo(callHandle, getLookupPrivileged(desc)), 0, type.parameterType(0), type.parameterType(1));
+        } else if (data.isBuiltin() && Global.isBuiltInJavaTo(this)) {
+            // We're binding the current call site descriptor as "self" so the function can do
+            // security-sensitive creation of adapter classes.
+            boundHandle = MH.dropArguments(MH.bindTo(callHandle, desc), 0, type.parameterType(0), type.parameterType(1));
         } else if (scopeCall && needsWrappedThis()) {
             // Make a handle that drops the passed "this" argument and substitutes either Global or Undefined
             // (this, args...) => ([this], args...)
@@ -658,12 +987,19 @@ public abstract class ScriptFunction extends ScriptObject {
             }
         }
 
+        // Is this an unstable callsite which was earlier apply-to-call optimized?
+        // If so, earlier apply2call would have exploded arguments. We have to convert
+        // that as an array again!
+        if (isUnstable && NashornCallSiteDescriptor.isApplyToCall(desc)) {
+            boundHandle = MH.asCollector(boundHandle, Object[].class, type.parameterCount() - 2);
+        }
+
         boundHandle = pairArguments(boundHandle, type);
 
         if (bestInvoker.getSwitchPoints() != null) {
             sps.addAll(Arrays.asList(bestInvoker.getSwitchPoints()));
         }
-        final SwitchPoint[] spsArray = sps.isEmpty() ? null : sps.toArray(new SwitchPoint[sps.size()]);
+        final SwitchPoint[] spsArray = sps.isEmpty() ? null : sps.toArray(new SwitchPoint[0]);
 
         return new GuardedInvocation(
                 boundHandle,
@@ -672,14 +1008,20 @@ public abstract class ScriptFunction extends ScriptObject {
                                 this,
                                 cf.getFlags()) :
                         guard,
-                        spsArray,
+                spsArray,
                 exceptionGuard);
+    }
+
+    private static Lookup getLookupPrivileged(final CallSiteDescriptor desc) {
+        // NOTE: we'd rather not make NashornCallSiteDescriptor.getLookupPrivileged public.
+        return AccessController.doPrivileged((PrivilegedAction<Lookup>)()->desc.getLookup(),
+                GET_LOOKUP_PERMISSION_CONTEXT);
     }
 
     private GuardedInvocation createApplyOrCallCall(final boolean isApply, final CallSiteDescriptor desc, final LinkRequest request, final Object[] args) {
         final MethodType descType = desc.getMethodType();
         final int paramCount = descType.parameterCount();
-        if(descType.parameterType(paramCount - 1).isArray()) {
+        if (descType.parameterType(paramCount - 1).isArray()) {
             // This is vararg invocation of apply or call. This can normally only happen when we do a recursive
             // invocation of createApplyOrCallCall (because we're doing apply-of-apply). In this case, create delegate
             // linkage by unpacking the vararg invocation and use pairArguments to introduce the necessary spreader.
@@ -778,15 +1120,22 @@ public abstract class ScriptFunction extends ScriptObject {
         assert appliedRequest != null; // Bootstrap.isCallable() returned true for args[1], so it must produce a linkage.
 
         final Class<?> applyFnType = descType.parameterType(0);
-        MethodHandle inv = appliedInvocation.getInvocation(); //method handle from apply invocation. the applied function invocation
+        // Invocation and guard handles from apply invocation.
+        MethodHandle inv = appliedInvocation.getInvocation();
+        MethodHandle guard = appliedInvocation.getGuard();
 
         if (isApply && !isFailedApplyToCall) {
             if (passesArgs) {
                 // Make sure that the passed argArray is converted to Object[] the same way NativeFunction.apply() would do it.
                 inv = MH.filterArguments(inv, 2, NativeFunction.TO_APPLY_ARGS);
+                // Some guards (non-strict functions with non-primitive this) have a this-object parameter, so we
+                // need to apply this transformations to them as well.
+                if (guard.type().parameterCount() > 2) {
+                    guard = MH.filterArguments(guard, 2, NativeFunction.TO_APPLY_ARGS);
+                }
             } else {
                 // If the original call site doesn't pass argArray, pass in an empty array
-                inv = MH.insertArguments(inv, 2, (Object)ScriptRuntime.EMPTY_ARRAY);
+                inv = MH.insertArguments(inv, 2, (Object) ScriptRuntime.EMPTY_ARRAY);
             }
         }
 
@@ -802,12 +1151,25 @@ public abstract class ScriptFunction extends ScriptObject {
 
         if (!passesThis) {
             // If the original call site doesn't pass in a thisArg, pass in Global/undefined as needed
-            inv = bindImplicitThis(appliedFn, inv);
+            inv = bindImplicitThis(appliedFnNeedsWrappedThis, inv);
+            // guard may have this-parameter that needs to be inserted
+            if (guard.type().parameterCount() > 1) {
+                guard = bindImplicitThis(appliedFnNeedsWrappedThis, guard);
+            }
         } else if (appliedFnNeedsWrappedThis) {
             // target function needs a wrapped this, so make sure we filter for that
             inv = MH.filterArguments(inv, 1, WRAP_THIS);
+            // guard may have this-parameter that needs to be wrapped
+            if (guard.type().parameterCount() > 1) {
+                guard = MH.filterArguments(guard, 1, WRAP_THIS);
+            }
         }
+
+        final MethodType guardType = guard.type(); // Needed for combining guards below
+
+        // We need to account for the dropped (apply|call) function argument.
         inv = MH.dropArguments(inv, 0, applyFnType);
+        guard = MH.dropArguments(guard, 0, applyFnType);
 
         /*
          * Dropargs can only be non-()V in the case of isApply && !isFailedApplyToCall, which
@@ -818,15 +1180,6 @@ public abstract class ScriptFunction extends ScriptObject {
             inv = MH.dropArguments(inv, 4 + i, dropArgs.parameterType(i));
         }
 
-        MethodHandle guard = appliedInvocation.getGuard();
-        // If the guard checks the value of "this" but we aren't passing thisArg, insert the default one
-        if (!passesThis && guard.type().parameterCount() > 1) {
-            guard = bindImplicitThis(appliedFn, guard);
-        }
-        final MethodType guardType = guard.type();
-
-        // We need to account for the dropped (apply|call) function argument.
-        guard = MH.dropArguments(guard, 0, descType.parameterType(0));
         // Take the "isApplyFunction" guard, and bind it to this function.
         MethodHandle applyFnGuard = MH.insertArguments(IS_APPLY_FUNCTION, 2, this); //TODO replace this with switchpoint
         // Adapt the guard to receive all the arguments that the original guard does.
@@ -851,7 +1204,7 @@ public abstract class ScriptFunction extends ScriptObject {
             final LinkRequest request, final Object[] args) {
         final MethodType descType = desc.getMethodType();
         final int paramCount = descType.parameterCount();
-        final Object[] varArgs = (Object[])args[paramCount - 1];
+        final Object[] varArgs = (Object[]) args[paramCount - 1];
         // -1 'cause we're not passing the vararg array itself
         final int copiedArgCount = args.length - 1;
         final int varArgCount = varArgs.length;
@@ -893,7 +1246,7 @@ public abstract class ScriptFunction extends ScriptObject {
         // If the last parameter type of the guard is an array, then it is already itself a guard for a vararg apply
         // invocation. We must filter the last argument with toApplyArgs otherwise deeper levels of nesting will fail
         // with ClassCastException of NativeArray to Object[].
-        if(guardType.parameterType(guardParamCount - 1).isArray()) {
+        if (guardType.parameterType(guardParamCount - 1).isArray()) {
             arrayConvertingGuard = MH.filterArguments(guard, guardParamCount - 1, NativeFunction.TO_APPLY_ARGS);
         } else {
             arrayConvertingGuard = guard;
@@ -902,20 +1255,21 @@ public abstract class ScriptFunction extends ScriptObject {
         return ScriptObject.adaptHandleToVarArgCallSite(arrayConvertingGuard, descParamCount);
     }
 
-    private static MethodHandle bindImplicitThis(final Object fn, final MethodHandle mh) {
-         final MethodHandle bound;
-         if(fn instanceof ScriptFunction && ((ScriptFunction)fn).needsWrappedThis()) {
-             bound = MH.filterArguments(mh, 1, SCRIPTFUNCTION_GLOBALFILTER);
-         } else {
-             bound = mh;
-         }
-         return MH.insertArguments(bound, 1, ScriptRuntime.UNDEFINED);
-     }
+    private static MethodHandle bindImplicitThis(final boolean needsWrappedThis, final MethodHandle mh) {
+        final MethodHandle bound;
+        if (needsWrappedThis) {
+            bound = MH.filterArguments(mh, 1, SCRIPTFUNCTION_GLOBALFILTER);
+        } else {
+            bound = mh;
+        }
+        return MH.insertArguments(bound, 1, ScriptRuntime.UNDEFINED);
+    }
 
     /**
      * Used for noSuchMethod/noSuchProperty and JSAdapter hooks.
      *
-     * These don't want a callee parameter, so bind that. Name binding is optional.
+     * These don't want a callee parameter, so bind that. Name binding is
+     * optional.
      */
     MethodHandle getCallMethodHandle(final MethodType type, final String bindName) {
         return pairArguments(bindToNameIfNeeded(bindToCalleeIfNeeded(data.getGenericInvoker(scope)), bindName), type);
@@ -930,7 +1284,11 @@ public abstract class ScriptFunction extends ScriptObject {
         // a new zeroth element that is set to bindName value.
         final MethodType methodType = methodHandle.type();
         final int parameterCount = methodType.parameterCount();
-        final boolean isVarArg = parameterCount > 0 && methodType.parameterType(parameterCount - 1).isArray();
+
+        if (parameterCount < 2) {
+            return methodHandle; // method does not have enough parameters
+        }
+        final boolean isVarArg = methodType.parameterType(parameterCount - 1).isArray();
 
         if (isVarArg) {
             return MH.filterArguments(methodHandle, 1, MH.insertArguments(ADD_ZEROTH_ELEMENT, 1, bindName));
@@ -939,10 +1297,11 @@ public abstract class ScriptFunction extends ScriptObject {
     }
 
     /**
-     * Get the guard that checks if a {@link ScriptFunction} is equal to
-     * a known ScriptFunction, using reference comparison
+     * Get the guard that checks if a {@link ScriptFunction} is equal to a known
+     * ScriptFunction, using reference comparison
      *
-     * @param function The ScriptFunction to check against. This will be bound to the guard method handle
+     * @param function The ScriptFunction to check against. This will be bound
+     * to the guard method handle
      *
      * @return method handle for guard
      */
@@ -957,11 +1316,12 @@ public abstract class ScriptFunction extends ScriptObject {
     }
 
     /**
-     * Get a guard that checks if a {@link ScriptFunction} is equal to
-     * a known ScriptFunction using reference comparison, and whether the type of
-     * the second argument (this-object) is not a JavaScript primitive type.
+     * Get a guard that checks if a {@link ScriptFunction} is equal to a known
+     * ScriptFunction using reference comparison, and whether the type of the
+     * second argument (this-object) is not a JavaScript primitive type.
      *
-     * @param function The ScriptFunction to check against. This will be bound to the guard method handle
+     * @param function The ScriptFunction to check against. This will be bound
+     * to the guard method handle
      *
      * @return method handle for guard
      */
@@ -972,12 +1332,12 @@ public abstract class ScriptFunction extends ScriptObject {
 
     @SuppressWarnings("unused")
     private static boolean isFunctionMH(final Object self, final ScriptFunctionData data) {
-        return self instanceof ScriptFunction && ((ScriptFunction)self).data == data;
+        return self instanceof ScriptFunction && ((ScriptFunction) self).data == data;
     }
 
     @SuppressWarnings("unused")
     private static boolean isNonStrictFunction(final Object self, final Object arg, final ScriptFunctionData data) {
-        return self instanceof ScriptFunction && ((ScriptFunction)self).data == data && arg instanceof ScriptObject;
+        return self instanceof ScriptFunction && ((ScriptFunction) self).data == data && arg instanceof ScriptObject;
     }
 
     //TODO this can probably be removed given that we have builtin switchpoints in the context
@@ -990,7 +1350,7 @@ public abstract class ScriptFunction extends ScriptObject {
     @SuppressWarnings("unused")
     private static Object[] addZerothElement(final Object[] args, final Object value) {
         // extends input array with by adding new zeroth element
-        final Object[] src = args == null? ScriptRuntime.EMPTY_ARRAY : args;
+        final Object[] src = args == null ? ScriptRuntime.EMPTY_ARRAY : args;
         final Object[] result = new Object[src.length + 1];
         System.arraycopy(src, 0, result, 1, src.length);
         result[0] = value;
@@ -1014,4 +1374,3 @@ public abstract class ScriptFunction extends ScriptObject {
         return MH.findVirtual(MethodHandles.lookup(), ScriptFunction.class, name, MH.type(rtype, types));
     }
 }
-

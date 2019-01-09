@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,18 +36,25 @@
  *          java.rmi/sun.rmi.server
  *          java.rmi/sun.rmi.transport
  *          java.rmi/sun.rmi.transport.tcp
- * @build TestLibrary RMID ActivationLibrary
+ *          java.base/sun.nio.ch
+ * @build TestLibrary RMID ActivationLibrary RMIDSelectorProvider
  *     DownloadActivationGroup MyActivationGroupImpl DownloadActivationGroup_Stub
  * @run main/othervm/policy=security.policy/timeout=240 DownloadActivationGroup
  */
 
-import java.io.*;
-import java.rmi.*;
-import java.net.*;
-import java.rmi.activation.*;
-import java.rmi.server.*;
-import java.rmi.registry.*;
-import java.util.Vector;
+import java.net.URL;
+import java.rmi.MarshalledObject;
+import java.rmi.Remote;
+import java.rmi.RemoteException;
+import java.rmi.activation.Activatable;
+import java.rmi.activation.ActivationDesc;
+import java.rmi.activation.ActivationException;
+import java.rmi.activation.ActivationGroup;
+import java.rmi.activation.ActivationGroupDesc;
+import java.rmi.activation.ActivationGroupDesc.CommandEnvironment;
+import java.rmi.activation.ActivationGroupID;
+import java.rmi.activation.ActivationID;
+import java.rmi.server.UnicastRemoteObject;
 import java.util.Properties;
 
 public class DownloadActivationGroup
@@ -117,7 +124,7 @@ public class DownloadActivationGroup
              * Start rmid.
              */
             RMID.removeLog();
-            rmid = RMID.createRMID();
+            rmid = RMID.createRMIDOnEphemeralPort();
             String execPolicyOption = "-Dsun.rmi.activation.execPolicy=none";
             rmid.addOptions(new String[] { execPolicyOption });
             rmid.start();
@@ -130,11 +137,18 @@ public class DownloadActivationGroup
 
             Properties p = new Properties();
             p.put("java.security.policy", TestParams.defaultGroupPolicy);
+            CommandEnvironment cmd = new ActivationGroupDesc.CommandEnvironment(
+                    null,
+                    new String[] {
+                        "--add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED",
+                        "--add-exports=java.rmi/sun.rmi.server=ALL-UNNAMED",
+                        "--add-exports=java.rmi/sun.rmi.transport=ALL-UNNAMED",
+                        "--add-exports=java.rmi/sun.rmi.transport.tcp=ALL-UNNAMED" });
 
             ActivationGroupDesc groupDesc =
                 new ActivationGroupDesc("MyActivationGroupImpl",
                                         groupURL.toExternalForm(),
-                                        null, p, null);
+                                        null, p, cmd);
             ActivationGroupID groupID =
                 ActivationGroup.getSystem().registerGroup(groupDesc);
 

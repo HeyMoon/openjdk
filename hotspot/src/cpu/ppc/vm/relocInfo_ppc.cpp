@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 2012, 2015 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 #include "asm/assembler.inline.hpp"
 #include "code/relocInfo.hpp"
 #include "nativeInst_ppc.hpp"
+#include "oops/klass.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/safepoint.hpp"
 
@@ -60,7 +61,7 @@ void Relocation::pd_set_data_value(address x, intptr_t o, bool verify_only) {
       nativeMovConstReg_at(addr())->set_narrow_oop(no, code());
     }
   } else {
-    assert((address) (nativeMovConstReg_at(addr())->data()) == x, "data must match");
+    guarantee((address) (nativeMovConstReg_at(addr())->data()) == x, "data must match");
   }
 }
 
@@ -83,13 +84,11 @@ address Relocation::pd_call_destination(address orig_addr) {
     NativeConditionalFarBranch* branch = NativeConditionalFarBranch_at(inst_loc);
     return branch->branch_destination();
   } else {
-    // There are two instructions at the beginning of a stub, therefore we
-    // load at orig_addr + 8.
     orig_addr = nativeCall_at(inst_loc)->get_trampoline();
     if (orig_addr == NULL) {
       return (address) -1;
     } else {
-      return (address) nativeMovConstReg_at(orig_addr + 8)->data();
+      return ((NativeCallTrampolineStub*)orig_addr)->destination();
     }
   }
 }
@@ -122,9 +121,6 @@ address Relocation::pd_get_address_from_code() {
 }
 
 void poll_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) {
-}
-
-void poll_return_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) {
 }
 
 void metadata_Relocation::pd_fix_value(address x) {

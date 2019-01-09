@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,20 +21,20 @@
  * questions.
  */
 
-import jdk.test.lib.ExitCode;
+import jdk.test.lib.process.ExitCode;
 import jdk.test.lib.cli.CommandLineOptionTest;
 
 /**
  * @test
  * @bug 8031323
  * @summary Verify SurvivorAlignmentInBytes option processing.
- * @library /testlibrary
+ * @library /test/lib
  * @requires vm.opt.SurvivorAlignmentInBytes == null
  *           & vm.opt.ObjectAlignmentInBytes == null
  *           & vm.opt.UnlockExperimentalVMOptions == null
  *           & (vm.opt.IgnoreUnrecognizedVMOptions == null
  *              | vm.opt.IgnoreUnrecognizedVMOptions == "false")
- * @modules java.base/sun.misc
+ * @modules java.base/jdk.internal.misc
  *          java.management
  * @run main TestSurvivorAlignmentInBytesOption
  */

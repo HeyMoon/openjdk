@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@
 #include "c1/c1_Defs.hpp"
 #include "c1/c1_ValueType.hpp"
 #include "oops/method.hpp"
+#include "utilities/globalDefinitions.hpp"
 
 class BlockBegin;
 class BlockList;
@@ -59,17 +60,9 @@ class LIR_OprVisitor;
 typedef LIR_OprDesc* LIR_Opr;
 typedef int          RegNr;
 
-define_array(LIR_OprArray, LIR_Opr)
-define_stack(LIR_OprList, LIR_OprArray)
-
-define_array(LIR_OprRefArray, LIR_Opr*)
-define_stack(LIR_OprRefList, LIR_OprRefArray)
-
-define_array(CodeEmitInfoArray, CodeEmitInfo*)
-define_stack(CodeEmitInfoList, CodeEmitInfoArray)
-
-define_array(LIR_OpArray, LIR_Op*)
-define_stack(LIR_OpList, LIR_OpArray)
+typedef GrowableArray<LIR_Opr> LIR_OprList;
+typedef GrowableArray<LIR_Op*> LIR_OpArray;
+typedef GrowableArray<LIR_Op*> LIR_OpList;
 
 // define LIR_OprPtr early so LIR_OprDesc can refer to it
 class LIR_OprPtr: public CompilationResourceObj {
@@ -446,15 +439,13 @@ class LIR_OprDesc: public CompilationResourceObj {
     return as_register();
   }
 
-#ifdef X86
-  XMMRegister as_xmm_float_reg() const;
-  XMMRegister as_xmm_double_reg() const;
-  // for compatibility with RInfo
-  int fpu () const                                  { return lo_reg_half(); }
-#endif
-#if defined(SPARC) || defined(ARM) || defined(PPC) || defined(AARCH64)
   FloatRegister as_float_reg   () const;
   FloatRegister as_double_reg  () const;
+#ifdef X86
+  XMMRegister as_xmm_float_reg () const;
+  XMMRegister as_xmm_double_reg() const;
+  // for compatibility with RInfo
+  int fpu() const { return lo_reg_half(); }
 #endif
 
   jint      as_jint()    const { return as_constant_ptr()->as_jint(); }
@@ -542,14 +533,19 @@ class LIR_Address: public LIR_OprPtr {
      , _type(type)
      , _disp(0) { verify(); }
 
-#if defined(X86) || defined(ARM) || defined(AARCH64)
+  LIR_Address(LIR_Opr base, LIR_Opr index, intx disp, BasicType type):
+       _base(base)
+     , _index(index)
+     , _scale(times_1)
+     , _type(type)
+     , _disp(disp) { verify(); }
+
   LIR_Address(LIR_Opr base, LIR_Opr index, Scale scale, intx disp, BasicType type):
        _base(base)
      , _index(index)
      , _scale(scale)
      , _type(type)
      , _disp(disp) { verify(); }
-#endif // X86 || ARM
 
   LIR_Opr base()  const                          { return _base;  }
   LIR_Opr index() const                          { return _index; }
@@ -562,13 +558,7 @@ class LIR_Address: public LIR_OprPtr {
   virtual BasicType type() const                 { return _type; }
   virtual void print_value_on(outputStream* out) const PRODUCT_RETURN;
 
-  void verify0() const PRODUCT_RETURN;
-#if defined(LIR_ADDRESS_PD_VERIFY) && !defined(PRODUCT)
-  void pd_verify() const;
-  void verify() const { pd_verify(); }
-#else
-  void verify() const { verify0(); }
-#endif
+  void verify() const PRODUCT_RETURN;
 
   static Scale scale(BasicType type);
 };
@@ -613,57 +603,49 @@ class LIR_OprFact: public AllStatic {
                                LIR_OprDesc::double_size);
   }
 
-  static LIR_Opr single_fpu(int reg)            { return (LIR_Opr)(intptr_t)((reg  << LIR_OprDesc::reg1_shift) |
-                                                                             LIR_OprDesc::float_type           |
-                                                                             LIR_OprDesc::fpu_register         |
-                                                                             LIR_OprDesc::single_size); }
-#if defined(ARM32)
-  static LIR_Opr double_fpu(int reg1, int reg2)    { return (LIR_Opr)((reg1 << LIR_OprDesc::reg1_shift) | (reg2 << LIR_OprDesc::reg2_shift) | LIR_OprDesc::double_type | LIR_OprDesc::fpu_register | LIR_OprDesc::double_size); }
-  static LIR_Opr single_softfp(int reg)            { return (LIR_Opr)((reg  << LIR_OprDesc::reg1_shift) |                                     LIR_OprDesc::float_type  | LIR_OprDesc::cpu_register | LIR_OprDesc::single_size); }
-  static LIR_Opr double_softfp(int reg1, int reg2) { return (LIR_Opr)((reg1 << LIR_OprDesc::reg1_shift) | (reg2 << LIR_OprDesc::reg2_shift) | LIR_OprDesc::double_type | LIR_OprDesc::cpu_register | LIR_OprDesc::double_size); }
-#endif
-#ifdef SPARC
-  static LIR_Opr double_fpu(int reg1, int reg2) { return (LIR_Opr)(intptr_t)((reg1 << LIR_OprDesc::reg1_shift) |
-                                                                             (reg2 << LIR_OprDesc::reg2_shift) |
-                                                                             LIR_OprDesc::double_type          |
-                                                                             LIR_OprDesc::fpu_register         |
-                                                                             LIR_OprDesc::double_size); }
-#endif
-#if defined(X86) || defined(AARCH64)
-  static LIR_Opr double_fpu(int reg)            { return (LIR_Opr)(intptr_t)((reg  << LIR_OprDesc::reg1_shift) |
-                                                                             (reg  << LIR_OprDesc::reg2_shift) |
-                                                                             LIR_OprDesc::double_type          |
-                                                                             LIR_OprDesc::fpu_register         |
-                                                                             LIR_OprDesc::double_size); }
+  static LIR_Opr single_fpu(int reg) {
+    return (LIR_Opr)(intptr_t)((reg  << LIR_OprDesc::reg1_shift) |
+                               LIR_OprDesc::float_type           |
+                               LIR_OprDesc::fpu_register         |
+                               LIR_OprDesc::single_size);
+  }
 
-  static LIR_Opr single_xmm(int reg)            { return (LIR_Opr)(intptr_t)((reg  << LIR_OprDesc::reg1_shift) |
-                                                                             LIR_OprDesc::float_type           |
-                                                                             LIR_OprDesc::fpu_register         |
-                                                                             LIR_OprDesc::single_size          |
-                                                                             LIR_OprDesc::is_xmm_mask); }
-  static LIR_Opr double_xmm(int reg)            { return (LIR_Opr)(intptr_t)((reg  << LIR_OprDesc::reg1_shift) |
-                                                                             (reg  << LIR_OprDesc::reg2_shift) |
-                                                                             LIR_OprDesc::double_type          |
-                                                                             LIR_OprDesc::fpu_register         |
-                                                                             LIR_OprDesc::double_size          |
-                                                                             LIR_OprDesc::is_xmm_mask); }
+  // Platform dependant.
+  static LIR_Opr double_fpu(int reg1, int reg2 = -1 /*fnoreg*/);
+
+#ifdef ARM32
+  static LIR_Opr single_softfp(int reg) {
+    return (LIR_Opr)(intptr_t)((reg  << LIR_OprDesc::reg1_shift) |
+                               LIR_OprDesc::float_type           |
+                               LIR_OprDesc::cpu_register         |
+                               LIR_OprDesc::single_size);
+  }
+  static LIR_Opr double_softfp(int reg1, int reg2) {
+    return (LIR_Opr)(intptr_t)((reg1 << LIR_OprDesc::reg1_shift) |
+                               (reg2 << LIR_OprDesc::reg2_shift) |
+                               LIR_OprDesc::double_type          |
+                               LIR_OprDesc::cpu_register         |
+                               LIR_OprDesc::double_size);
+  }
+#endif // ARM32
+
+#if defined(X86)
+  static LIR_Opr single_xmm(int reg) {
+    return (LIR_Opr)(intptr_t)((reg << LIR_OprDesc::reg1_shift) |
+                               LIR_OprDesc::float_type          |
+                               LIR_OprDesc::fpu_register        |
+                               LIR_OprDesc::single_size         |
+                               LIR_OprDesc::is_xmm_mask);
+  }
+  static LIR_Opr double_xmm(int reg) {
+    return (LIR_Opr)(intptr_t)((reg << LIR_OprDesc::reg1_shift) |
+                               (reg << LIR_OprDesc::reg2_shift) |
+                               LIR_OprDesc::double_type         |
+                               LIR_OprDesc::fpu_register        |
+                               LIR_OprDesc::double_size         |
+                               LIR_OprDesc::is_xmm_mask);
+  }
 #endif // X86
-#ifdef PPC
-  static LIR_Opr double_fpu(int reg)            { return (LIR_Opr)(intptr_t)((reg  << LIR_OprDesc::reg1_shift) |
-                                                                             (reg  << LIR_OprDesc::reg2_shift) |
-                                                                             LIR_OprDesc::double_type          |
-                                                                             LIR_OprDesc::fpu_register         |
-                                                                             LIR_OprDesc::double_size); }
-  static LIR_Opr single_softfp(int reg)            { return (LIR_Opr)((reg  << LIR_OprDesc::reg1_shift)        |
-                                                                             LIR_OprDesc::float_type           |
-                                                                             LIR_OprDesc::cpu_register         |
-                                                                             LIR_OprDesc::single_size); }
-  static LIR_Opr double_softfp(int reg1, int reg2) { return (LIR_Opr)((reg2 << LIR_OprDesc::reg1_shift)        |
-                                                                             (reg1 << LIR_OprDesc::reg2_shift) |
-                                                                             LIR_OprDesc::double_type          |
-                                                                             LIR_OprDesc::cpu_register         |
-                                                                             LIR_OprDesc::double_size); }
-#endif // PPC
 
   static LIR_Opr virtual_register(int index, BasicType type) {
     LIR_Opr res;
@@ -918,6 +900,7 @@ enum LIR_Code {
       , lir_membar_loadstore
       , lir_membar_storeload
       , lir_get_thread
+      , lir_on_spin_wait
   , end_op0
   , begin_op1
       , lir_fxch
@@ -956,13 +939,8 @@ enum LIR_Code {
       , lir_rem
       , lir_sqrt
       , lir_abs
-      , lir_sin
-      , lir_cos
       , lir_tan
-      , lir_log
       , lir_log10
-      , lir_exp
-      , lir_pow
       , lir_logic_and
       , lir_logic_or
       , lir_logic_xor
@@ -978,6 +956,8 @@ enum LIR_Code {
   , begin_op3
       , lir_idiv
       , lir_irem
+      , lir_fmad
+      , lir_fmaf
   , end_op3
   , begin_opJavaCall
       , lir_static_call
@@ -1477,37 +1457,15 @@ class LIR_OpConvert: public LIR_Op1 {
  private:
    Bytecodes::Code _bytecode;
    ConversionStub* _stub;
-#ifdef PPC
-  LIR_Opr _tmp1;
-  LIR_Opr _tmp2;
-#endif
 
  public:
    LIR_OpConvert(Bytecodes::Code code, LIR_Opr opr, LIR_Opr result, ConversionStub* stub)
      : LIR_Op1(lir_convert, opr, result)
      , _stub(stub)
-#ifdef PPC
-     , _tmp1(LIR_OprDesc::illegalOpr())
-     , _tmp2(LIR_OprDesc::illegalOpr())
-#endif
      , _bytecode(code)                           {}
-
-#ifdef PPC
-   LIR_OpConvert(Bytecodes::Code code, LIR_Opr opr, LIR_Opr result, ConversionStub* stub
-                 ,LIR_Opr tmp1, LIR_Opr tmp2)
-     : LIR_Op1(lir_convert, opr, result)
-     , _stub(stub)
-     , _tmp1(tmp1)
-     , _tmp2(tmp2)
-     , _bytecode(code)                           {}
-#endif
 
   Bytecodes::Code bytecode() const               { return _bytecode; }
   ConversionStub* stub() const                   { return _stub; }
-#ifdef PPC
-  LIR_Opr tmp1() const                           { return _tmp1; }
-  LIR_Opr tmp2() const                           { return _tmp2; }
-#endif
 
   virtual void emit_code(LIR_Assembler* masm);
   virtual LIR_OpConvert* as_OpConvert() { return this; }
@@ -2104,6 +2062,8 @@ class LIR_List: public CompilationResourceObj {
   void std_entry(LIR_Opr receiver)               { append(new LIR_Op0(lir_std_entry, receiver)); }
   void osr_entry(LIR_Opr osrPointer)             { append(new LIR_Op0(lir_osr_entry, osrPointer)); }
 
+  void on_spin_wait()                            { append(new LIR_Op0(lir_on_spin_wait)); }
+
   void branch_destination(Label* lbl)            { append(new LIR_OpLabel(lbl)); }
 
   void negate(LIR_Opr from, LIR_Opr to)          { append(new LIR_Op1(lir_neg, from, to)); }
@@ -2144,9 +2104,6 @@ class LIR_List: public CompilationResourceObj {
 
   void safepoint(LIR_Opr tmp, CodeEmitInfo* info)  { append(new LIR_Op1(lir_safepoint, tmp, info)); }
 
-#ifdef PPC
-  void convert(Bytecodes::Code code, LIR_Opr left, LIR_Opr dst, LIR_Opr tmp1, LIR_Opr tmp2) { append(new LIR_OpConvert(code, left, dst, NULL, tmp1, tmp2)); }
-#endif
   void convert(Bytecodes::Code code, LIR_Opr left, LIR_Opr dst, ConversionStub* stub = NULL/*, bool is_32bit = false*/) { append(new LIR_OpConvert(code, left, dst, stub)); }
 
   void logical_and (LIR_Opr left, LIR_Opr right, LIR_Opr dst) { append(new LIR_Op2(lir_logic_and,  left, right, dst)); }
@@ -2156,7 +2113,7 @@ class LIR_List: public CompilationResourceObj {
   void   pack64(LIR_Opr src, LIR_Opr dst) { append(new LIR_Op1(lir_pack64,   src, dst, T_LONG, lir_patch_none, NULL)); }
   void unpack64(LIR_Opr src, LIR_Opr dst) { append(new LIR_Op1(lir_unpack64, src, dst, T_LONG, lir_patch_none, NULL)); }
 
-  void null_check(LIR_Opr opr, CodeEmitInfo* info)         { append(new LIR_Op1(lir_null_check, opr, info)); }
+  void null_check(LIR_Opr opr, CodeEmitInfo* info, bool deoptimize_on_null = false);
   void throw_exception(LIR_Opr exceptionPC, LIR_Opr exceptionOop, CodeEmitInfo* info) {
     append(new LIR_Op2(lir_throw, exceptionPC, exceptionOop, LIR_OprFact::illegalOpr, info));
   }
@@ -2194,13 +2151,10 @@ class LIR_List: public CompilationResourceObj {
 
   void abs (LIR_Opr from, LIR_Opr to, LIR_Opr tmp)                { append(new LIR_Op2(lir_abs , from, tmp, to)); }
   void sqrt(LIR_Opr from, LIR_Opr to, LIR_Opr tmp)                { append(new LIR_Op2(lir_sqrt, from, tmp, to)); }
-  void log (LIR_Opr from, LIR_Opr to, LIR_Opr tmp)                { append(new LIR_Op2(lir_log,  from, LIR_OprFact::illegalOpr, to, tmp)); }
+  void fmad(LIR_Opr from, LIR_Opr from1, LIR_Opr from2, LIR_Opr to) { append(new LIR_Op3(lir_fmad, from, from1, from2, to)); }
+  void fmaf(LIR_Opr from, LIR_Opr from1, LIR_Opr from2, LIR_Opr to) { append(new LIR_Op3(lir_fmaf, from, from1, from2, to)); }
   void log10 (LIR_Opr from, LIR_Opr to, LIR_Opr tmp)              { append(new LIR_Op2(lir_log10, from, LIR_OprFact::illegalOpr, to, tmp)); }
-  void sin (LIR_Opr from, LIR_Opr to, LIR_Opr tmp1, LIR_Opr tmp2) { append(new LIR_Op2(lir_sin , from, tmp1, to, tmp2)); }
-  void cos (LIR_Opr from, LIR_Opr to, LIR_Opr tmp1, LIR_Opr tmp2) { append(new LIR_Op2(lir_cos , from, tmp1, to, tmp2)); }
   void tan (LIR_Opr from, LIR_Opr to, LIR_Opr tmp1, LIR_Opr tmp2) { append(new LIR_Op2(lir_tan , from, tmp1, to, tmp2)); }
-  void exp (LIR_Opr from, LIR_Opr to, LIR_Opr tmp1, LIR_Opr tmp2, LIR_Opr tmp3, LIR_Opr tmp4, LIR_Opr tmp5)                { append(new LIR_Op2(lir_exp , from, tmp1, to, tmp2, tmp3, tmp4, tmp5)); }
-  void pow (LIR_Opr arg1, LIR_Opr arg2, LIR_Opr res, LIR_Opr tmp1, LIR_Opr tmp2, LIR_Opr tmp3, LIR_Opr tmp4, LIR_Opr tmp5) { append(new LIR_Op2(lir_pow, arg1, arg2, res, tmp1, tmp2, tmp3, tmp4, tmp5)); }
 
   void add (LIR_Opr left, LIR_Opr right, LIR_Opr res)      { append(new LIR_Op2(lir_add, left, right, res)); }
   void sub (LIR_Opr left, LIR_Opr right, LIR_Opr res, CodeEmitInfo* info = NULL) { append(new LIR_Op2(lir_sub, left, right, res, info)); }

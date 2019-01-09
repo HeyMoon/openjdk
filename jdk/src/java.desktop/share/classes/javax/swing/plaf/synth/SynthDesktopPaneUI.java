@@ -119,7 +119,6 @@ public class SynthDesktopPaneUI extends BasicDesktopPaneUI implements
             uninstallKeyboardActions();
             installKeyboardActions();
         }
-        context.dispose();
     }
 
     /**
@@ -143,7 +142,6 @@ public class SynthDesktopPaneUI extends BasicDesktopPaneUI implements
         SynthContext context = getContext(desktop, ENABLED);
 
         style.uninstallDefaults(context);
-        context.dispose();
         style = null;
 
         if (taskBar != null) {
@@ -351,16 +349,17 @@ public class SynthDesktopPaneUI extends BasicDesktopPaneUI implements
             Container c = f.getParent();
             JDesktopPane d = f.getDesktopPane();
             boolean findNext = f.isSelected();
-
-            if (c == null) {
+            if (c == null || d == null) {
                 return;
             }
-
             desktopIcon = f.getDesktopIcon();
-
-            if (!f.isMaximum()) {
-                f.setNormalBounds(f.getBounds());
+            if (!wasIcon(f)) {
+                Rectangle r = getBoundsForIconOf(f);
+                desktopIcon.setBounds(r.x, r.y, r.width, r.height);
+                desktopIcon.revalidate();
+                setWasIcon(f, Boolean.TRUE);
             }
+
             c.remove(f);
             c.repaint(f.getX(), f.getY(), f.getWidth(), f.getHeight());
             try {
@@ -459,7 +458,6 @@ public class SynthDesktopPaneUI extends BasicDesktopPaneUI implements
         context.getPainter().paintDesktopPaneBackground(context, g, 0, 0,
                                                   c.getWidth(), c.getHeight());
         paint(context, g);
-        context.dispose();
     }
 
     /**
@@ -476,7 +474,6 @@ public class SynthDesktopPaneUI extends BasicDesktopPaneUI implements
         SynthContext context = getContext(c);
 
         paint(context, g);
-        context.dispose();
     }
 
     /**

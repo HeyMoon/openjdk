@@ -25,16 +25,19 @@
 
 package jdk.nashorn.internal.runtime.linker;
 
+import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Modifier;
-import jdk.internal.dynalink.CallSiteDescriptor;
-import jdk.internal.dynalink.beans.BeansLinker;
-import jdk.internal.dynalink.beans.StaticClass;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.GuardingDynamicLinker;
-import jdk.internal.dynalink.linker.LinkRequest;
-import jdk.internal.dynalink.linker.LinkerServices;
-import jdk.internal.dynalink.linker.TypeBasedGuardingDynamicLinker;
-import jdk.internal.dynalink.support.Guards;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.NamedOperation;
+import jdk.dynalink.StandardOperation;
+import jdk.dynalink.beans.BeansLinker;
+import jdk.dynalink.beans.StaticClass;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.GuardingDynamicLinker;
+import jdk.dynalink.linker.LinkRequest;
+import jdk.dynalink.linker.LinkerServices;
+import jdk.dynalink.linker.TypeBasedGuardingDynamicLinker;
+import jdk.dynalink.linker.support.Guards;
 import jdk.nashorn.internal.runtime.Context;
 import jdk.nashorn.internal.runtime.ECMAErrors;
 
@@ -51,7 +54,11 @@ import jdk.nashorn.internal.runtime.ECMAErrors;
  * </pre>
  */
 final class NashornStaticClassLinker implements TypeBasedGuardingDynamicLinker {
-    private static final GuardingDynamicLinker staticClassLinker = BeansLinker.getLinkerForClass(StaticClass.class);
+    private final GuardingDynamicLinker staticClassLinker;
+
+    NashornStaticClassLinker(final BeansLinker beansLinker) {
+        this.staticClassLinker = beansLinker.getLinkerForClass(StaticClass.class);
+    }
 
     @Override
     public boolean canLinkType(final Class<?> type) {
@@ -59,10 +66,9 @@ final class NashornStaticClassLinker implements TypeBasedGuardingDynamicLinker {
     }
 
     @Override
-    public GuardedInvocation getGuardedInvocation(final LinkRequest linkRequest, final LinkerServices linkerServices) throws Exception {
-        final LinkRequest request = linkRequest.withoutRuntimeContext(); // Nashorn has no runtime context
+    public GuardedInvocation getGuardedInvocation(final LinkRequest request, final LinkerServices linkerServices) throws Exception {
         final Object self = request.getReceiver();
-        if (self.getClass() != StaticClass.class) {
+        if (self == null || self.getClass() != StaticClass.class) {
             return null;
         }
         final Class<?> receiverClass = ((StaticClass) self).getRepresentedClass();
@@ -70,7 +76,7 @@ final class NashornStaticClassLinker implements TypeBasedGuardingDynamicLinker {
         Bootstrap.checkReflectionAccess(receiverClass, true);
         final CallSiteDescriptor desc = request.getCallSiteDescriptor();
         // We intercept "new" on StaticClass instances to provide additional capabilities
-        if ("new".equals(desc.getNameToken(CallSiteDescriptor.OPERATOR))) {
+        if (NamedOperation.getBaseOperation(desc.getOperation()) == StandardOperation.NEW) {
             if (! Modifier.isPublic(receiverClass.getModifiers())) {
                 throw ECMAErrors.typeError("new.on.nonpublic.javatype", receiverClass.getName());
             }
@@ -82,8 +88,10 @@ final class NashornStaticClassLinker implements TypeBasedGuardingDynamicLinker {
             if (NashornLinker.isAbstractClass(receiverClass)) {
                 // Change this link request into a link request on the adapter class.
                 final Object[] args = request.getArguments();
-                args[0] = JavaAdapterFactory.getAdapterClassFor(new Class<?>[] { receiverClass }, null,
-                        linkRequest.getCallSiteDescriptor().getLookup());
+                final MethodHandles.Lookup lookup =
+                        NashornCallSiteDescriptor.getLookupInternal(request.getCallSiteDescriptor());
+
+                args[0] = JavaAdapterFactory.getAdapterClassFor(new Class<?>[] { receiverClass }, null, lookup);
                 final LinkRequest adapterRequest = request.replaceArguments(request.getCallSiteDescriptor(), args);
                 final GuardedInvocation gi = checkNullConstructor(delegate(linkerServices, adapterRequest), receiverClass);
                 // Finally, modify the guard to test for the original abstract class.
@@ -99,7 +107,7 @@ final class NashornStaticClassLinker implements TypeBasedGuardingDynamicLinker {
         return delegate(linkerServices, request);
     }
 
-    private static GuardedInvocation delegate(final LinkerServices linkerServices, final LinkRequest request) throws Exception {
+    private GuardedInvocation delegate(final LinkerServices linkerServices, final LinkRequest request) throws Exception {
         return NashornBeansLinker.getGuardedInvocation(staticClassLinker, request, linkerServices);
     }
 

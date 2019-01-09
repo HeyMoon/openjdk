@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,8 +33,8 @@ import javax.net.ssl.*;
 /**
  * This file contains all the classes relevant to TLS Extensions for the
  * ClientHello and ServerHello messages. The extension mechanism and
- * several extensions are defined in RFC 3546. Additional extensions are
- * defined in the ECC RFC 4492.
+ * several extensions are defined in RFC 6066. Additional extensions are
+ * defined in the ECC RFC 4492 and the ALPN extension is defined in RFC 7301.
  *
  * Currently, only the two ECC extensions are fully supported.
  *
@@ -49,9 +49,10 @@ import javax.net.ssl.*;
  *      explicitly support.
  *  . ServerNameExtension: the server_name extension.
  *  . SignatureAlgorithmsExtension: the signature_algorithms extension.
- *  . SupportedEllipticCurvesExtension: the ECC supported curves extension.
- *  . SupportedEllipticPointFormatsExtension: the ECC supported point formats
+ *  . EllipticCurvesExtension: the ECC supported curves extension.
+ *  . EllipticPointFormatsExtension: the ECC supported point formats
  *      (compressed/uncompressed) extension.
+ *  . ALPNExtension: the application_layer_protocol_negotiation extension.
  *
  * @since   1.6
  * @author  Andreas Sterbenz
@@ -79,14 +80,19 @@ final class HelloExtensions {
             } else if (extType == ExtensionType.EXT_SIGNATURE_ALGORITHMS) {
                 extension = new SignatureAlgorithmsExtension(s, extlen);
             } else if (extType == ExtensionType.EXT_ELLIPTIC_CURVES) {
-                extension = new SupportedEllipticCurvesExtension(s, extlen);
+                extension = new EllipticCurvesExtension(s, extlen);
             } else if (extType == ExtensionType.EXT_EC_POINT_FORMATS) {
-                extension =
-                        new SupportedEllipticPointFormatsExtension(s, extlen);
+                extension = new EllipticPointFormatsExtension(s, extlen);
             } else if (extType == ExtensionType.EXT_RENEGOTIATION_INFO) {
                 extension = new RenegotiationInfoExtension(s, extlen);
+            } else if (extType == ExtensionType.EXT_ALPN) {
+                extension = new ALPNExtension(s, extlen);
             } else if (extType == ExtensionType.EXT_MAX_FRAGMENT_LENGTH) {
                 extension = new MaxFragmentLengthExtension(s, extlen);
+            } else if (extType == ExtensionType.EXT_STATUS_REQUEST) {
+                extension = new CertStatusReqExtension(s, extlen);
+            } else if (extType == ExtensionType.EXT_STATUS_REQUEST_V2) {
+                extension = new CertStatusReqListV2Extension(s, extlen);
             } else {
                 extension = new UnknownExtension(s, extlen, extType);
             }

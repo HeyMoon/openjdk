@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,7 @@
  * @test
  * @bug 8004727 8005647
  * @summary javac should generate method parameters correctly.
- * @modules jdk.jdeps
+ * @modules jdk.jdeps/com.sun.tools.javap
  */
 
 import java.io.*;
@@ -45,7 +45,7 @@ public class MethodParameters {
     static final String Init0_expected =
         ("  Foo();\n" +
          "    descriptor: ()V\n" +
-         "    flags:\n" +
+         "    flags: (0x0000)\n" +
          "    Code:\n" +
          "      stack=1, locals=1, args_size=1\n" +
          "         0: aload_0\n" +
@@ -57,7 +57,7 @@ public class MethodParameters {
     static final String Init1_expected =
         ("  Foo(int);\n" +
          "    descriptor: (I)V\n" +
-         "    flags:\n" +
+         "    flags: (0x0000)\n" +
          "    Code:\n" +
          "      stack=1, locals=2, args_size=2\n" +
          "         0: aload_0\n" +
@@ -72,7 +72,7 @@ public class MethodParameters {
     static final String foo0_expected =
         ("  void foo0();\n" +
          "    descriptor: ()V\n" +
-         "    flags:\n" +
+         "    flags: (0x0000)\n" +
          "    Code:\n" +
          "      stack=0, locals=1, args_size=1\n" +
          "         0: return\n" +
@@ -82,7 +82,7 @@ public class MethodParameters {
     static final String foo2_expected =
         ("  void foo2(int, int);\n" +
          "    descriptor: (II)V\n" +
-         "    flags:\n" +
+         "    flags: (0x0000)\n" +
          "    Code:\n" +
          "      stack=0, locals=3, args_size=3\n" +
          "         0: return\n" +

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,9 +34,9 @@ import java.util.Set;
 import java.util.Collection;
 import java.util.AbstractSet;
 import java.util.Iterator;
+import java.util.Locale;
 import sun.util.logging.PlatformLogger;
 import java.util.Comparator;
-import sun.misc.ASCIICaseInsensitiveComparator;
 
 /**
  * The Attributes class maps Manifest attribute names to associated string
@@ -44,7 +44,7 @@ import sun.misc.ASCIICaseInsensitiveComparator;
  * the ASCII characters in the set [0-9a-zA-Z_-], and cannot exceed 70
  * characters in length. Attribute values can contain any characters and
  * will be UTF8-encoded when written to the output stream.  See the
- * <a href="../../../../technotes/guides/jar/jar.html">JAR File Specification</a>
+ * <a href="{@docRoot}/../specs/jar/jar.html">JAR File Specification</a>
  * for more information about valid attribute names and values.
  *
  * <p>This map and its views have a predictable iteration order, namely the
@@ -443,7 +443,7 @@ public class Attributes implements Map<Object,Object>, Cloneable {
      * to the ASCII characters in the set [0-9a-zA-Z_-], and cannot exceed
      * 70 characters in length. Attribute values can contain any characters
      * and will be UTF8-encoded when written to the output stream.  See the
-     * <a href="../../../../technotes/guides/jar/jar.html">JAR File Specification</a>
+     * <a href="{@docRoot}/../specs/jar/jar.html">JAR File Specification</a>
      * for more information about valid attribute names and values.
      */
     public static class Name {
@@ -501,7 +501,7 @@ public class Attributes implements Map<Object,Object>, Cloneable {
          */
         public boolean equals(Object o) {
             if (o instanceof Name) {
-                Comparator<String> c = ASCIICaseInsensitiveComparator.CASE_INSENSITIVE_ORDER;
+                Comparator<String> c = String.CASE_INSENSITIVE_ORDER;
                 return c.compare(name, ((Name)o).name) == 0;
             } else {
                 return false;
@@ -513,7 +513,7 @@ public class Attributes implements Map<Object,Object>, Cloneable {
          */
         public int hashCode() {
             if (hashCode == -1) {
-                hashCode = ASCIICaseInsensitiveComparator.lowerCaseHashCode(name);
+                hashCode = name.toLowerCase(Locale.ROOT).hashCode();
             }
             return hashCode;
         }
@@ -526,67 +526,67 @@ public class Attributes implements Map<Object,Object>, Cloneable {
         }
 
         /**
-         * <code>Name</code> object for <code>Manifest-Version</code>
+         * {@code Name} object for {@code Manifest-Version}
          * manifest attribute. This attribute indicates the version number
          * of the manifest standard to which a JAR file's manifest conforms.
-         * @see <a href="../../../../technotes/guides/jar/jar.html#JAR_Manifest">
+         * @see <a href="{@docRoot}/../specs/jar/jar.html#JAR_Manifest">
          *      Manifest and Signature Specification</a>
          */
         public static final Name MANIFEST_VERSION = new Name("Manifest-Version");
 
         /**
-         * <code>Name</code> object for <code>Signature-Version</code>
+         * {@code Name} object for {@code Signature-Version}
          * manifest attribute used when signing JAR files.
-         * @see <a href="../../../../technotes/guides/jar/jar.html#JAR_Manifest">
+         * @see <a href="{@docRoot}/../specs/jar/jar.html#JAR_Manifest">
          *      Manifest and Signature Specification</a>
          */
         public static final Name SIGNATURE_VERSION = new Name("Signature-Version");
 
         /**
-         * <code>Name</code> object for <code>Content-Type</code>
+         * {@code Name} object for {@code Content-Type}
          * manifest attribute.
          */
         public static final Name CONTENT_TYPE = new Name("Content-Type");
 
         /**
-         * <code>Name</code> object for <code>Class-Path</code>
+         * {@code Name} object for {@code Class-Path}
          * manifest attribute.
-         * @see <a href="../../../../technotes/guides/jar/jar.html#classpath">
+         * @see <a href="{@docRoot}/../specs/jar/jar.html#classpath">
          *      JAR file specification</a>
          */
         public static final Name CLASS_PATH = new Name("Class-Path");
 
         /**
-         * <code>Name</code> object for <code>Main-Class</code> manifest
+         * {@code Name} object for {@code Main-Class} manifest
          * attribute used for launching applications packaged in JAR files.
-         * The <code>Main-Class</code> attribute is used in conjunction
-         * with the <code>-jar</code> command-line option of the
-         * <tt>java</tt> application launcher.
+         * The {@code Main-Class} attribute is used in conjunction
+         * with the {@code -jar} command-line option of the
+         * {@code java} application launcher.
          */
         public static final Name MAIN_CLASS = new Name("Main-Class");
 
         /**
-         * <code>Name</code> object for <code>Sealed</code> manifest attribute
+         * {@code Name} object for {@code Sealed} manifest attribute
          * used for sealing.
-         * @see <a href="../../../../technotes/guides/jar/jar.html#sealing">
+         * @see <a href="{@docRoot}/../specs/jar/jar.html#sealing">
          *      Package Sealing</a>
          */
         public static final Name SEALED = new Name("Sealed");
 
        /**
-         * <code>Name</code> object for <code>Extension-List</code> manifest attribute
+         * {@code Name} object for {@code Extension-List} manifest attribute
          * used for the extension mechanism that is no longer supported.
          */
         public static final Name EXTENSION_LIST = new Name("Extension-List");
 
         /**
-         * <code>Name</code> object for <code>Extension-Name</code> manifest attribute.
+         * {@code Name} object for {@code Extension-Name} manifest attribute.
          * used for the extension mechanism that is no longer supported.
          */
         public static final Name EXTENSION_NAME = new Name("Extension-Name");
 
         /**
-         * <code>Name</code> object for <code>Extension-Installation</code> manifest attribute.
+         * {@code Name} object for {@code Extension-Installation} manifest attribute.
          *
          * @deprecated Extension mechanism is no longer supported.
          */
@@ -594,25 +594,25 @@ public class Attributes implements Map<Object,Object>, Cloneable {
         public static final Name EXTENSION_INSTALLATION = new Name("Extension-Installation");
 
         /**
-         * <code>Name</code> object for <code>Implementation-Title</code>
+         * {@code Name} object for {@code Implementation-Title}
          * manifest attribute used for package versioning.
          */
         public static final Name IMPLEMENTATION_TITLE = new Name("Implementation-Title");
 
         /**
-         * <code>Name</code> object for <code>Implementation-Version</code>
+         * {@code Name} object for {@code Implementation-Version}
          * manifest attribute used for package versioning.
          */
         public static final Name IMPLEMENTATION_VERSION = new Name("Implementation-Version");
 
         /**
-         * <code>Name</code> object for <code>Implementation-Vendor</code>
+         * {@code Name} object for {@code Implementation-Vendor}
          * manifest attribute used for package versioning.
          */
         public static final Name IMPLEMENTATION_VENDOR = new Name("Implementation-Vendor");
 
         /**
-         * <code>Name</code> object for <code>Implementation-Vendor-Id</code>
+         * {@code Name} object for {@code Implementation-Vendor-Id}
          * manifest attribute.
          *
          * @deprecated Extension mechanism is no longer supported.
@@ -621,7 +621,7 @@ public class Attributes implements Map<Object,Object>, Cloneable {
         public static final Name IMPLEMENTATION_VENDOR_ID = new Name("Implementation-Vendor-Id");
 
        /**
-         * <code>Name</code> object for <code>Implementation-URL</code>
+         * {@code Name} object for {@code Implementation-URL}
          * manifest attribute.
          *
          * @deprecated Extension mechanism is no longer supported.
@@ -630,21 +630,29 @@ public class Attributes implements Map<Object,Object>, Cloneable {
         public static final Name IMPLEMENTATION_URL = new Name("Implementation-URL");
 
         /**
-         * <code>Name</code> object for <code>Specification-Title</code>
+         * {@code Name} object for {@code Specification-Title}
          * manifest attribute used for package versioning.
          */
         public static final Name SPECIFICATION_TITLE = new Name("Specification-Title");
 
         /**
-         * <code>Name</code> object for <code>Specification-Version</code>
+         * {@code Name} object for {@code Specification-Version}
          * manifest attribute used for package versioning.
          */
         public static final Name SPECIFICATION_VERSION = new Name("Specification-Version");
 
         /**
-         * <code>Name</code> object for <code>Specification-Vendor</code>
+         * {@code Name} object for {@code Specification-Vendor}
          * manifest attribute used for package versioning.
          */
         public static final Name SPECIFICATION_VENDOR = new Name("Specification-Vendor");
+
+        /**
+         * {@code Name} object for {@code Multi-Release}
+         * manifest attribute that indicates this is a multi-release JAR file.
+         *
+         * @since   9
+         */
+        public static final Name MULTI_RELEASE = new Name("Multi-Release");
     }
 }

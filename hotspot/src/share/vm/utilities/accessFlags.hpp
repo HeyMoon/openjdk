@@ -25,8 +25,9 @@
 #ifndef SHARE_VM_UTILITIES_ACCESSFLAGS_HPP
 #define SHARE_VM_UTILITIES_ACCESSFLAGS_HPP
 
+#include "memory/allocation.hpp"
 #include "prims/jvm.h"
-#include "utilities/top.hpp"
+#include "utilities/macros.hpp"
 
 // AccessFlags is an abstraction over Java access flags.
 
@@ -61,7 +62,7 @@ enum {
   JVM_ACC_HAS_MIRANDA_METHODS     = 0x10000000,     // True if this class has miranda methods in it's vtable
   JVM_ACC_HAS_VANILLA_CONSTRUCTOR = 0x20000000,     // True if klass has a vanilla default constructor
   JVM_ACC_HAS_FINALIZER           = 0x40000000,     // True if klass has a non-empty finalize() method
-  JVM_ACC_IS_CLONEABLE            = (int)0x80000000,// True if klass supports the Clonable interface
+  JVM_ACC_IS_CLONEABLE_FAST       = (int)0x80000000,// True if klass implements the Cloneable interface and can be optimized in generated code
   JVM_ACC_HAS_FINAL_METHOD        = 0x01000000,     // True if klass has final method
 
   // Klass* and Method* flags
@@ -76,11 +77,12 @@ enum {
   // These bits must not conflict with any other field-related access flags
   // (e.g., ACC_ENUM).
   // Note that the class-related ACC_ANNOTATION bit conflicts with these flags.
-  JVM_ACC_FIELD_ACCESS_WATCHED       = 0x00002000,  // field access is watched by JVMTI
-  JVM_ACC_FIELD_MODIFICATION_WATCHED = 0x00008000,  // field modification is watched by JVMTI
-  JVM_ACC_FIELD_INTERNAL             = 0x00000400,  // internal field, same as JVM_ACC_ABSTRACT
-  JVM_ACC_FIELD_STABLE               = 0x00000020,  // @Stable field, same as JVM_ACC_SYNCHRONIZED
-  JVM_ACC_FIELD_HAS_GENERIC_SIGNATURE = 0x00000800, // field has generic signature
+  JVM_ACC_FIELD_ACCESS_WATCHED            = 0x00002000, // field access is watched by JVMTI
+  JVM_ACC_FIELD_MODIFICATION_WATCHED      = 0x00008000, // field modification is watched by JVMTI
+  JVM_ACC_FIELD_INTERNAL                  = 0x00000400, // internal field, same as JVM_ACC_ABSTRACT
+  JVM_ACC_FIELD_STABLE                    = 0x00000020, // @Stable field, same as JVM_ACC_SYNCHRONIZED and JVM_ACC_SUPER
+  JVM_ACC_FIELD_INITIALIZED_FINAL_UPDATE  = 0x00000100, // (static) final field updated outside (class) initializer, same as JVM_ACC_NATIVE
+  JVM_ACC_FIELD_HAS_GENERIC_SIGNATURE     = 0x00000800, // field has generic signature
 
   JVM_ACC_FIELD_INTERNAL_FLAGS       = JVM_ACC_FIELD_ACCESS_WATCHED |
                                        JVM_ACC_FIELD_MODIFICATION_WATCHED |
@@ -100,6 +102,9 @@ class AccessFlags VALUE_OBJ_CLASS_SPEC {
   jint _flags;
 
  public:
+  AccessFlags() : _flags(0) {}
+  explicit AccessFlags(jint flags) : _flags(flags) {}
+
   // Java access flags
   bool is_public      () const         { return (_flags & JVM_ACC_PUBLIC      ) != 0; }
   bool is_private     () const         { return (_flags & JVM_ACC_PRIVATE     ) != 0; }
@@ -140,7 +145,7 @@ class AccessFlags VALUE_OBJ_CLASS_SPEC {
   bool has_vanilla_constructor () const { return (_flags & JVM_ACC_HAS_VANILLA_CONSTRUCTOR) != 0; }
   bool has_finalizer           () const { return (_flags & JVM_ACC_HAS_FINALIZER          ) != 0; }
   bool has_final_method        () const { return (_flags & JVM_ACC_HAS_FINAL_METHOD       ) != 0; }
-  bool is_cloneable            () const { return (_flags & JVM_ACC_IS_CLONEABLE           ) != 0; }
+  bool is_cloneable_fast       () const { return (_flags & JVM_ACC_IS_CLONEABLE_FAST      ) != 0; }
   // Klass* and Method* flags
   bool has_localvariable_table () const { return (_flags & JVM_ACC_HAS_LOCAL_VARIABLE_TABLE) != 0; }
   void set_has_localvariable_table()    { atomic_set_bits(JVM_ACC_HAS_LOCAL_VARIABLE_TABLE); }
@@ -150,6 +155,8 @@ class AccessFlags VALUE_OBJ_CLASS_SPEC {
   bool is_field_access_watched() const  { return (_flags & JVM_ACC_FIELD_ACCESS_WATCHED) != 0; }
   bool is_field_modification_watched() const
                                         { return (_flags & JVM_ACC_FIELD_MODIFICATION_WATCHED) != 0; }
+  bool has_field_initialized_final_update() const
+                                        { return (_flags & JVM_ACC_FIELD_INITIALIZED_FINAL_UPDATE) != 0; }
   bool on_stack() const                 { return (_flags & JVM_ACC_ON_STACK) != 0; }
   bool is_internal() const              { return (_flags & JVM_ACC_FIELD_INTERNAL) != 0; }
   bool is_stable() const                { return (_flags & JVM_ACC_FIELD_STABLE) != 0; }
@@ -207,7 +214,7 @@ class AccessFlags VALUE_OBJ_CLASS_SPEC {
   void set_has_vanilla_constructor()   { atomic_set_bits(JVM_ACC_HAS_VANILLA_CONSTRUCTOR); }
   void set_has_finalizer()             { atomic_set_bits(JVM_ACC_HAS_FINALIZER);           }
   void set_has_final_method()          { atomic_set_bits(JVM_ACC_HAS_FINAL_METHOD);        }
-  void set_is_cloneable()              { atomic_set_bits(JVM_ACC_IS_CLONEABLE);            }
+  void set_is_cloneable_fast()         { atomic_set_bits(JVM_ACC_IS_CLONEABLE_FAST);       }
   void set_has_miranda_methods()       { atomic_set_bits(JVM_ACC_HAS_MIRANDA_METHODS);     }
 
  public:
@@ -228,6 +235,15 @@ class AccessFlags VALUE_OBJ_CLASS_SPEC {
                                            atomic_clear_bits(JVM_ACC_FIELD_MODIFICATION_WATCHED);
                                          }
                                        }
+
+  void set_has_field_initialized_final_update(const bool value) {
+    if (value) {
+      atomic_set_bits(JVM_ACC_FIELD_INITIALIZED_FINAL_UPDATE);
+    } else {
+      atomic_clear_bits(JVM_ACC_FIELD_INITIALIZED_FINAL_UPDATE);
+    }
+  }
+
   void set_field_has_generic_signature()
                                        {
                                          atomic_set_bits(JVM_ACC_FIELD_HAS_GENERIC_SIGNATURE);

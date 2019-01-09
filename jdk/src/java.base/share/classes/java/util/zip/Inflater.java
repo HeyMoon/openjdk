@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,8 +34,8 @@ package java.util.zip;
  * package description</a>.
  *
  * <p>The following code fragment demonstrates a trivial compression
- * and decompression of a string using <tt>Deflater</tt> and
- * <tt>Inflater</tt>.
+ * and decompression of a string using {@code Deflater} and
+ * {@code Inflater}.
  *
  * <blockquote><pre>
  * try {
@@ -68,6 +68,7 @@ package java.util.zip;
  *
  * @see         Deflater
  * @author      David Connelly
+ * @since 1.1
  *
  */
 public
@@ -378,7 +379,17 @@ class Inflater {
 
     /**
      * Closes the decompressor when garbage is collected.
+     *
+     * @deprecated The {@code finalize} method has been deprecated.
+     *     Subclasses that override {@code finalize} in order to perform cleanup
+     *     should be modified to use alternative cleanup mechanisms and
+     *     to remove the overriding {@code finalize} method.
+     *     When overriding the {@code finalize} method, its implementation must explicitly
+     *     ensure that {@code super.finalize()} is invoked as described in {@link Object#finalize}.
+     *     See the specification for {@link Object#finalize()} for further
+     *     information about migration options.
      */
+    @Deprecated(since="9")
     protected void finalize() {
         end();
     }
@@ -395,13 +406,13 @@ class Inflater {
         }
     }
 
-    private native static void initIDs();
-    private native static long init(boolean nowrap);
-    private native static void setDictionary(long addr, byte[] b, int off,
+    private static native void initIDs();
+    private static native long init(boolean nowrap);
+    private static native void setDictionary(long addr, byte[] b, int off,
                                              int len);
     private native int inflateBytes(long addr, byte[] b, int off, int len)
             throws DataFormatException;
-    private native static int getAdler(long addr);
-    private native static void reset(long addr);
-    private native static void end(long addr);
+    private static native int getAdler(long addr);
+    private static native void reset(long addr);
+    private static native void end(long addr);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 #include "ci/ciSignature.hpp"
 #include "ci/ciUtilities.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/signature.hpp"
 
@@ -36,7 +37,7 @@
 
 // ------------------------------------------------------------------
 // ciSignature::ciSignature
-ciSignature::ciSignature(ciKlass* accessing_klass, constantPoolHandle cpool, ciSymbol* symbol) {
+ciSignature::ciSignature(ciKlass* accessing_klass, const constantPoolHandle& cpool, ciSymbol* symbol) {
   ASSERT_IN_VM;
   EXCEPTION_CONTEXT;
   _accessing_klass = accessing_klass;

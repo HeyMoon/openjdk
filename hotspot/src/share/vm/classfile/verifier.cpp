@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,6 +33,7 @@
 #include "classfile/vmSymbols.hpp"
 #include "interpreter/bytecodes.hpp"
 #include "interpreter/bytecodeStream.hpp"
+#include "logging/log.hpp"
 #include "memory/oopFactory.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/instanceKlass.hpp"
@@ -48,6 +49,7 @@
 #include "runtime/thread.hpp"
 #include "services/threadService.hpp"
 #include "utilities/bytes.hpp"
+#include "logging/log.hpp"
 
 #define NOFAILOVER_MAJOR_VERSION                       51
 #define NONZERO_PADDING_BYTES_IN_SWITCH_MAJOR_VERSION  51
@@ -65,12 +67,12 @@ static void* volatile _verify_byte_codes_fn = NULL;
 static volatile jint _is_new_verify_byte_codes_fn = (jint) true;
 
 static void* verify_byte_codes_fn() {
-  if (_verify_byte_codes_fn == NULL) {
+  if (OrderAccess::load_ptr_acquire(&_verify_byte_codes_fn) == NULL) {
     void *lib_handle = os::native_java_library();
     void *func = os::dll_lookup(lib_handle, "VerifyClassCodesForMajorVersion");
     OrderAccess::release_store_ptr(&_verify_byte_codes_fn, func);
     if (func == NULL) {
-      OrderAccess::release_store(&_is_new_verify_byte_codes_fn, false);
+      _is_new_verify_byte_codes_fn = false;
       func = os::dll_lookup(lib_handle, "VerifyClassCodes");
       OrderAccess::release_store_ptr(&_verify_byte_codes_fn, func);
     }
@@ -86,7 +88,7 @@ bool Verifier::should_verify_for(oop class_loader, bool should_verify_class) {
     BytecodeVerificationLocal : BytecodeVerificationRemote;
 }
 
-bool Verifier::relax_verify_for(oop loader) {
+bool Verifier::relax_access_for(oop loader) {
   bool trusted = java_lang_ClassLoader::is_trusted_loader(loader);
   bool need_verify =
     // verifyAll
@@ -105,10 +107,22 @@ void Verifier::trace_class_resolution(Klass* resolve_class, InstanceKlass* verif
   const char* resolve = resolve_class->external_name();
   // print in a single call to reduce interleaving between threads
   if (source_file != NULL) {
-    tty->print("RESOLVE %s %s %s (verification)\n", verify, resolve, source_file);
+    log_debug(class, resolve)("%s %s %s (verification)", verify, resolve, source_file);
   } else {
-    tty->print("RESOLVE %s %s (verification)\n", verify, resolve);
+    log_debug(class, resolve)("%s %s (verification)", verify, resolve);
   }
+}
+
+// Prints the end-verification message to the appropriate output.
+void Verifier::log_end_verification(outputStream* st, const char* klassName, Symbol* exception_name, TRAPS) {
+  if (HAS_PENDING_EXCEPTION) {
+    st->print("Verification for %s has", klassName);
+    st->print_cr(" exception pending %s ",
+                 PENDING_EXCEPTION->klass()->external_name());
+  } else if (exception_name != NULL) {
+    st->print_cr("Verification for %s failed", klassName);
+  }
+  st->print_cr("End class verification for: %s", klassName);
 }
 
 bool Verifier::verify(instanceKlassHandle klass, Verifier::Mode mode, bool should_verify_class, TRAPS) {
@@ -155,9 +169,7 @@ bool Verifier::verify(instanceKlassHandle klass, Verifier::Mode mode, bool shoul
   bool can_failover = FailOverToOldVerifier &&
      klass->major_version() < NOFAILOVER_MAJOR_VERSION;
 
-  if (TraceClassInitialization) {
-    tty->print_cr("Start class verification for: %s", klassName);
-  }
+  log_info(class, init)("Start class verification for: %s", klassName);
   if (klass->major_version() >= STACKMAP_ATTRIBUTE_MAJOR_VERSION) {
     ClassVerifier split_verifier(klass, THREAD);
     split_verifier.verify_class(THREAD);
@@ -165,10 +177,8 @@ bool Verifier::verify(instanceKlassHandle klass, Verifier::Mode mode, bool shoul
     if (can_failover && !HAS_PENDING_EXCEPTION &&
         (exception_name == vmSymbols::java_lang_VerifyError() ||
          exception_name == vmSymbols::java_lang_ClassFormatError())) {
-      if (TraceClassInitialization || VerboseVerification) {
-        tty->print_cr(
-          "Fail over class verification to old verifier for: %s", klassName);
-      }
+      log_info(verification)("Fail over class verification to old verifier for: %s", klassName);
+      log_info(class, init)("Fail over class verification to old verifier for: %s", klassName);
       exception_name = inference_verify(
         klass, message_buffer, message_buffer_len, THREAD);
     }
@@ -180,15 +190,11 @@ bool Verifier::verify(instanceKlassHandle klass, Verifier::Mode mode, bool shoul
         klass, message_buffer, message_buffer_len, THREAD);
   }
 
-  if (TraceClassInitialization || VerboseVerification) {
-    if (HAS_PENDING_EXCEPTION) {
-      tty->print("Verification for %s has", klassName);
-      tty->print_cr(" exception pending %s ",
-        InstanceKlass::cast(PENDING_EXCEPTION->klass())->external_name());
-    } else if (exception_name != NULL) {
-      tty->print_cr("Verification for %s failed", klassName);
-    }
-    tty->print_cr("End class verification for: %s", klassName);
+  if (log_is_enabled(Info, class, init)){
+    log_end_verification(Log(class, init)::info_stream(), klassName, exception_name, THREAD);
+  }
+  if (log_is_enabled(Info, verification)){
+    log_end_verification(Log(verification)::info_stream(), klassName, exception_name, THREAD);
   }
 
   if (HAS_PENDING_EXCEPTION) {
@@ -199,7 +205,7 @@ bool Verifier::verify(instanceKlassHandle klass, Verifier::Mode mode, bool shoul
     ResourceMark rm(THREAD);
     instanceKlassHandle kls =
       SystemDictionary::resolve_or_fail(exception_name, true, CHECK_false);
-    if (TraceClassResolution) {
+    if (log_is_enabled(Debug, class, resolve)) {
       Verifier::trace_class_resolution(kls(), klass());
     }
 
@@ -242,7 +248,7 @@ bool Verifier::is_eligible_for_verification(instanceKlassHandle klass, bool shou
     // As of the fix for 4486457 we disable verification for all of the
     // dynamically-generated bytecodes associated with the 1.4
     // reflection implementation, not just those associated with
-    // sun/reflect/SerializationConstructorAccessor.
+    // jdk/internal/reflect/SerializationConstructorAccessor.
     // NOTE: this is called too early in the bootstrapping process to be
     // guarded by Universe::is_gte_jdk14x_version().
     // Also for lambda generated code, gte jdk8
@@ -262,9 +268,7 @@ Symbol* Verifier::inference_verify(
   }
 
   ResourceMark rm(THREAD);
-  if (VerboseVerification) {
-    tty->print_cr("Verifying class %s with old format", klass->external_name());
-  }
+  log_info(verification)("Verifying class %s with old format", klass->external_name());
 
   jclass cls = (jclass) JNIHandles::make_local(env, klass->java_mirror());
   jint result;
@@ -537,8 +541,13 @@ void ErrorContext::stackmap_details(outputStream* ss, const Method* method) cons
     stack_map_frame* sm_frame = sm_table->entries();
     streamIndentor si2(ss);
     int current_offset = -1;
+    address end_of_sm_table = (address)sm_table + method->stackmap_data()->length();
     for (u2 i = 0; i < sm_table->number_of_entries(); ++i) {
       ss->indent();
+      if (!sm_frame->verify((address)sm_frame, end_of_sm_table)) {
+        sm_frame->print_truncated(ss, current_offset);
+        return;
+      }
       sm_frame->print_on(ss, current_offset);
       ss->cr();
       current_offset += sm_frame->offset_delta();
@@ -576,10 +585,7 @@ TypeOrigin ClassVerifier::ref_ctx(const char* sig, TRAPS) {
 }
 
 void ClassVerifier::verify_class(TRAPS) {
-  if (VerboseVerification) {
-    tty->print_cr("Verifying class %s with new format",
-      _klass->external_name());
-  }
+  log_info(verification)("Verifying class %s with new format", _klass->external_name());
 
   Array<Method*>* methods = _klass->methods();
   int num_methods = methods->length();
@@ -598,19 +604,17 @@ void ClassVerifier::verify_class(TRAPS) {
     verify_method(methodHandle(THREAD, m), CHECK_VERIFY(this));
   }
 
-  if (VerboseVerification || TraceClassInitialization) {
-    if (was_recursively_verified())
-      tty->print_cr("Recursive verification detected for: %s",
-          _klass->external_name());
+  if (was_recursively_verified()){
+    log_info(verification)("Recursive verification detected for: %s", _klass->external_name());
+    log_info(class, init)("Recursive verification detected for: %s",
+                        _klass->external_name());
   }
 }
 
-void ClassVerifier::verify_method(methodHandle m, TRAPS) {
+void ClassVerifier::verify_method(const methodHandle& m, TRAPS) {
   HandleMark hm(THREAD);
   _method = m;   // initialize _method
-  if (VerboseVerification) {
-    tty->print_cr("Verifying method %s", m->name_and_sig_as_C_string());
-  }
+  log_info(verification)("Verifying method %s", m->name_and_sig_as_C_string());
 
 // For clang, the only good constant format string is a literal constant format string.
 #define bad_type_msg "Bad type on operand stack in %s"
@@ -641,6 +645,7 @@ void ClassVerifier::verify_method(methodHandle m, TRAPS) {
   int ex_max = -1;
   // Look through each item on the exception table. Each of the fields must refer
   // to a legal instruction.
+  if (was_recursively_verified()) return;
   verify_exception_handler_table(
     code_length, code_data, ex_min, ex_max, CHECK_VERIFY(this));
 
@@ -656,8 +661,9 @@ void ClassVerifier::verify_method(methodHandle m, TRAPS) {
   StackMapTable stackmap_table(&reader, &current_frame, max_locals, max_stack,
                                code_data, code_length, CHECK_VERIFY(this));
 
-  if (VerboseVerification) {
-    stackmap_table.print_on(tty);
+  if (log_is_enabled(Info, verification)) {
+    ResourceMark rm(THREAD);
+    stackmap_table.print_on(Log(verification)::info_stream());
   }
 
   RawBytecodeStream bcs(m);
@@ -697,12 +703,11 @@ void ClassVerifier::verify_method(methodHandle m, TRAPS) {
       VerificationType type, type2;
       VerificationType atype;
 
-#ifndef PRODUCT
-      if (VerboseVerification) {
-        current_frame.print_on(tty);
-        tty->print_cr("offset = %d,  opcode = %s", bci, Bytecodes::name(opcode));
+      if (log_is_enabled(Info, verification)) {
+        ResourceMark rm(THREAD);
+        current_frame.print_on(Log(verification)::info_stream());
+        log_info(verification)("offset = %d,  opcode = %s", bci, Bytecodes::name(opcode));
       }
-#endif
 
       // Make sure wide instruction is in correct format
       if (bcs.is_wide()) {
@@ -727,10 +732,13 @@ void ClassVerifier::verify_method(methodHandle m, TRAPS) {
       // should be used for this check.  So, do the check here before a possible
       // local is added to the type state.
       if (Bytecodes::is_store_into_local(opcode) && bci >= ex_min && bci < ex_max) {
+        if (was_recursively_verified()) return;
         verify_exception_handler_targets(
           bci, this_uninit, &current_frame, &stackmap_table, CHECK_VERIFY(this));
         verified_exc_handlers = true;
       }
+
+      if (was_recursively_verified()) return;
 
       switch (opcode) {
         case Bytecodes::_nop :
@@ -1579,7 +1587,7 @@ void ClassVerifier::verify_method(methodHandle m, TRAPS) {
             return;
           }
           // Make sure "this" has been initialized if current method is an
-          // <init>
+          // <init>.
           if (_method->name() == vmSymbols::object_initializer_name() &&
               current_frame.flag_this_uninit()) {
             verify_error(ErrorContext::bad_code(bci),
@@ -1720,6 +1728,7 @@ void ClassVerifier::verify_method(methodHandle m, TRAPS) {
     assert(!(verified_exc_handlers && this_uninit),
       "Exception handler targets got verified before this_uninit got set");
     if (!verified_exc_handlers && bci >= ex_min && bci < ex_max) {
+      if (was_recursively_verified()) return;
       verify_exception_handler_targets(
         bci, this_uninit, &current_frame, &stackmap_table, CHECK_VERIFY(this));
     }
@@ -1735,7 +1744,7 @@ void ClassVerifier::verify_method(methodHandle m, TRAPS) {
 
 #undef bad_type_message
 
-char* ClassVerifier::generate_code_data(methodHandle m, u4 code_length, TRAPS) {
+char* ClassVerifier::generate_code_data(const methodHandle& m, u4 code_length, TRAPS) {
   char* code_data = NEW_RESOURCE_ARRAY(char, code_length);
   memset(code_data, 0, sizeof(char) * code_length);
   RawBytecodeStream bcs(m);
@@ -1757,6 +1766,9 @@ char* ClassVerifier::generate_code_data(methodHandle m, u4 code_length, TRAPS) {
   return code_data;
 }
 
+// Since this method references the constant pool, call was_recursively_verified()
+// before calling this method to make sure a prior class load did not cause the
+// current class to get verified.
 void ClassVerifier::verify_exception_handler_table(u4 code_length, char* code_data, int& min, int& max, TRAPS) {
   ExceptionTable exhandlers(_method());
   int exlength = exhandlers.length();
@@ -1804,9 +1816,9 @@ void ClassVerifier::verify_exception_handler_table(u4 code_length, char* code_da
 }
 
 void ClassVerifier::verify_local_variable_table(u4 code_length, char* code_data, TRAPS) {
-  int localvariable_table_length = _method()->localvariable_table_length();
+  int localvariable_table_length = _method->localvariable_table_length();
   if (localvariable_table_length > 0) {
-    LocalVariableTableElement* table = _method()->localvariable_table_start();
+    LocalVariableTableElement* table = _method->localvariable_table_start();
     for (int i = 0; i < localvariable_table_length; i++) {
       u2 start_bci = table[i].start_bci;
       u2 length = table[i].length;
@@ -1845,7 +1857,7 @@ u2 ClassVerifier::verify_stackmap_table(u2 stackmap_index, u2 bci,
       // If matched, current_frame will be updated by this method.
       bool matches = stackmap_table->match_stackmap(
         current_frame, this_offset, stackmap_index,
-        !no_control_flow, true, false, &ctx, CHECK_VERIFY_(this, 0));
+        !no_control_flow, true, &ctx, CHECK_VERIFY_(this, 0));
       if (!matches) {
         // report type error
         verify_error(ctx, "Instruction type does not match stack map");
@@ -1864,7 +1876,11 @@ u2 ClassVerifier::verify_stackmap_table(u2 stackmap_index, u2 bci,
   return stackmap_index;
 }
 
-void ClassVerifier::verify_exception_handler_targets(u2 bci, bool this_uninit, StackMapFrame* current_frame,
+// Since this method references the constant pool, call was_recursively_verified()
+// before calling this method to make sure a prior class load did not cause the
+// current class to get verified.
+void ClassVerifier::verify_exception_handler_targets(u2 bci, bool this_uninit,
+                                                     StackMapFrame* current_frame,
                                                      StackMapTable* stackmap_table, TRAPS) {
   constantPoolHandle cp (THREAD, _method->constants());
   ExceptionTable exhandlers(_method());
@@ -1879,6 +1895,7 @@ void ClassVerifier::verify_exception_handler_targets(u2 bci, bool this_uninit, S
       if (this_uninit) {  flags |= FLAG_THIS_UNINIT; }
       StackMapFrame* new_frame = current_frame->frame_in_exception_handler(flags);
       if (catch_type_index != 0) {
+        if (was_recursively_verified()) return;
         // We know that this index refers to a subclass of Throwable
         VerificationType catch_type = cp_index_to_type(
           catch_type_index, cp, CHECK_VERIFY(this));
@@ -1890,7 +1907,7 @@ void ClassVerifier::verify_exception_handler_targets(u2 bci, bool this_uninit, S
       }
       ErrorContext ctx;
       bool matches = stackmap_table->match_stackmap(
-        new_frame, handler_pc, true, false, true, &ctx, CHECK_VERIFY(this));
+        new_frame, handler_pc, true, false, &ctx, CHECK_VERIFY(this));
       if (!matches) {
         verify_error(ctx, "Stack map does not match the one at "
             "exception handler %d", handler_pc);
@@ -1901,7 +1918,7 @@ void ClassVerifier::verify_exception_handler_targets(u2 bci, bool this_uninit, S
 }
 
 void ClassVerifier::verify_cp_index(
-    u2 bci, constantPoolHandle cp, int index, TRAPS) {
+    u2 bci, const constantPoolHandle& cp, int index, TRAPS) {
   int nconstants = cp->length();
   if ((index <= 0) || (index >= nconstants)) {
     verify_error(ErrorContext::bad_cp_index(bci, index),
@@ -1912,7 +1929,7 @@ void ClassVerifier::verify_cp_index(
 }
 
 void ClassVerifier::verify_cp_type(
-    u2 bci, int index, constantPoolHandle cp, unsigned int types, TRAPS) {
+    u2 bci, int index, const constantPoolHandle& cp, unsigned int types, TRAPS) {
 
   // In some situations, bytecode rewriting may occur while we're verifying.
   // In this case, a constant pool cache exists and some indices refer to that
@@ -1931,7 +1948,7 @@ void ClassVerifier::verify_cp_type(
 }
 
 void ClassVerifier::verify_cp_class_type(
-    u2 bci, int index, constantPoolHandle cp, TRAPS) {
+    u2 bci, int index, const constantPoolHandle& cp, TRAPS) {
   verify_cp_index(bci, cp, index, CHECK_VERIFY(this));
   constantTag tag = cp->tag_at(index);
   if (!tag.is_klass() && !tag.is_unresolved_klass()) {
@@ -1982,7 +1999,7 @@ Klass* ClassVerifier::load_class(Symbol* name, TRAPS) {
     name, Handle(THREAD, loader), Handle(THREAD, protection_domain),
     true, THREAD);
 
-  if (TraceClassResolution) {
+  if (log_is_enabled(Debug, class, resolve)) {
     instanceKlassHandle cur_class = current_class();
     Verifier::trace_class_resolution(kls, cur_class());
   }
@@ -1994,7 +2011,7 @@ bool ClassVerifier::is_protected_access(instanceKlassHandle this_class,
                                         Symbol* field_name,
                                         Symbol* field_sig,
                                         bool is_method) {
-  No_Safepoint_Verifier nosafepoint;
+  NoSafepointVerifier nosafepoint;
 
   // If target class isn't a super class of this class, we don't worry about this case
   if (!this_class->is_subclass_of(target_class)) {
@@ -2023,7 +2040,7 @@ bool ClassVerifier::is_protected_access(instanceKlassHandle this_class,
 
 void ClassVerifier::verify_ldc(
     int opcode, u2 index, StackMapFrame* current_frame,
-    constantPoolHandle cp, u2 bci, TRAPS) {
+    const constantPoolHandle& cp, u2 bci, TRAPS) {
   verify_cp_index(bci, cp, index, CHECK_VERIFY(this));
   constantTag tag = cp->tag_at(index);
   unsigned int types;
@@ -2165,7 +2182,7 @@ bool ClassVerifier::name_in_supers(
 
 void ClassVerifier::verify_field_instructions(RawBytecodeStream* bcs,
                                               StackMapFrame* current_frame,
-                                              constantPoolHandle cp,
+                                              const constantPoolHandle& cp,
                                               bool allow_arrays,
                                               TRAPS) {
   u2 index = bcs->get_index_u2();
@@ -2259,6 +2276,7 @@ void ClassVerifier::verify_field_instructions(RawBytecodeStream* bcs,
     check_protected: {
       if (_this_type == stack_object_type)
         break; // stack_object_type must be assignable to _current_class_type
+      if (was_recursively_verified()) return;
       Symbol* ref_class_name =
         cp->klass_name_at(cp->klass_ref_index_at(index));
       if (!name_in_supers(ref_class_name, current_class()))
@@ -2364,9 +2382,17 @@ bool ClassVerifier::ends_in_athrow(u4 start_bc_offset) {
       case Bytecodes::_ifnonnull:
         target = bcs.dest();
         if (visited_branches->contains(bci)) {
-          if (bci_stack->is_empty()) return true;
-          // Pop a bytecode starting offset and scan from there.
-          bcs.set_start(bci_stack->pop());
+          if (bci_stack->is_empty()) {
+            if (handler_stack->is_empty()) {
+              return true;
+            } else {
+              // Parse the catch handlers for try blocks containing athrow.
+              bcs.set_start(handler_stack->pop());
+            }
+          } else {
+            // Pop a bytecode starting offset and scan from there.
+            bcs.set_start(bci_stack->pop());
+          }
         } else {
           if (target > bci) { // forward branch
             if (target >= code_length) return false;
@@ -2389,9 +2415,17 @@ bool ClassVerifier::ends_in_athrow(u4 start_bc_offset) {
       case Bytecodes::_goto_w:
         target = (opcode == Bytecodes::_goto ? bcs.dest() : bcs.dest_w());
         if (visited_branches->contains(bci)) {
-          if (bci_stack->is_empty()) return true;
-          // Been here before, pop new starting offset from stack.
-          bcs.set_start(bci_stack->pop());
+          if (bci_stack->is_empty()) {
+            if (handler_stack->is_empty()) {
+              return true;
+            } else {
+              // Parse the catch handlers for try blocks containing athrow.
+              bcs.set_start(handler_stack->pop());
+            }
+          } else {
+            // Been here before, pop new starting offset from stack.
+            bcs.set_start(bci_stack->pop());
+          }
         } else {
           if (target >= code_length) return false;
           // Continue scanning from the target onward.
@@ -2477,7 +2511,7 @@ bool ClassVerifier::ends_in_athrow(u4 start_bc_offset) {
 void ClassVerifier::verify_invoke_init(
     RawBytecodeStream* bcs, u2 ref_class_index, VerificationType ref_class_type,
     StackMapFrame* current_frame, u4 code_length, bool in_try_block,
-    bool *this_uninit, constantPoolHandle cp, StackMapTable* stackmap_table,
+    bool *this_uninit, const constantPoolHandle& cp, StackMapTable* stackmap_table,
     TRAPS) {
   u2 bci = bcs->bci();
   VerificationType type = current_frame->pop_stack(
@@ -2509,11 +2543,10 @@ void ClassVerifier::verify_invoke_init(
             verify_error(ErrorContext::bad_code(bci),
               "Bad <init> method call from after the start of a try block");
             return;
-          } else if (VerboseVerification) {
-            ResourceMark rm;
-            tty->print_cr(
-              "Survived call to ends_in_athrow(): %s",
-              current_class()->name()->as_C_string());
+          } else if (log_is_enabled(Info, verification)) {
+            ResourceMark rm(THREAD);
+            log_info(verification)("Survived call to ends_in_athrow(): %s",
+                                          current_class()->name()->as_C_string());
           }
         }
       }
@@ -2521,6 +2554,7 @@ void ClassVerifier::verify_invoke_init(
       // Check the exception handler target stackmaps with the locals from the
       // incoming stackmap (before initialize_object() changes them to outgoing
       // state).
+      if (was_recursively_verified()) return;
       verify_exception_handler_targets(bci, true, current_frame,
                                        stackmap_table, CHECK_VERIFY(this));
     } // in_try_block
@@ -2538,6 +2572,7 @@ void ClassVerifier::verify_invoke_init(
       return;
     }
     u2 new_class_index = Bytes::get_Java_u2(new_bcp + 1);
+    if (was_recursively_verified()) return;
     verify_cp_class_type(bci, new_class_index, cp, CHECK_VERIFY(this));
 
     // The method must be an <init> method of the indicated class
@@ -2557,6 +2592,7 @@ void ClassVerifier::verify_invoke_init(
     VerificationType objectref_type = new_class_type;
     if (name_in_supers(ref_class_type.name(), current_class())) {
       Klass* ref_klass = load_class(ref_class_type.name(), CHECK);
+      if (was_recursively_verified()) return;
       Method* m = InstanceKlass::cast(ref_klass)->uncached_lookup_method(
         vmSymbols::object_initializer_name(),
         cp->signature_ref_at(bcs->get_index_u2()),
@@ -2581,6 +2617,7 @@ void ClassVerifier::verify_invoke_init(
     // incoming stackmap (before initialize_object() changes them to outgoing
     // state).
     if (in_try_block) {
+      if (was_recursively_verified()) return;
       verify_exception_handler_targets(bci, *this_uninit, current_frame,
                                        stackmap_table, CHECK_VERIFY(this));
     }
@@ -2613,7 +2650,7 @@ bool ClassVerifier::is_same_or_direct_interface(
 void ClassVerifier::verify_invoke_instructions(
     RawBytecodeStream* bcs, u4 code_length, StackMapFrame* current_frame,
     bool in_try_block, bool *this_uninit, VerificationType return_type,
-    constantPoolHandle cp, StackMapTable* stackmap_table, TRAPS) {
+    const constantPoolHandle& cp, StackMapTable* stackmap_table, TRAPS) {
   // Make sure the constant pool item is the right type
   u2 index = bcs->get_index_u2();
   Bytecodes::Code opcode = bcs->raw_code();
@@ -2754,7 +2791,7 @@ void ClassVerifier::verify_invoke_instructions(
       // direct interface relative to the host class
       have_imr_indirect = (have_imr_indirect &&
                            !is_same_or_direct_interface(
-                             InstanceKlass::cast(current_class()->host_klass()),
+                             current_class()->host_klass(),
                              host_klass_type, ref_class_type));
     }
     if (!subtype) {
@@ -2781,6 +2818,7 @@ void ClassVerifier::verify_invoke_instructions(
       verify_invoke_init(bcs, index, ref_class_type, current_frame,
         code_length, in_try_block, this_uninit, cp, stackmap_table,
         CHECK_VERIFY(this));
+      if (was_recursively_verified()) return;
     } else {   // other methods
       // Ensures that target class is assignable to method class.
       if (opcode == Bytecodes::_invokespecial) {
@@ -2806,6 +2844,7 @@ void ClassVerifier::verify_invoke_instructions(
         VerificationType stack_object_type =
           current_frame->pop_stack(ref_class_type, CHECK_VERIFY(this));
         if (current_type() != stack_object_type) {
+          if (was_recursively_verified()) return;
           assert(cp->cache() == NULL, "not rewritten yet");
           Symbol* ref_class_name =
             cp->klass_name_at(cp->klass_ref_index_at(index));
@@ -2878,12 +2917,13 @@ VerificationType ClassVerifier::get_newarray_type(
 }
 
 void ClassVerifier::verify_anewarray(
-    u2 bci, u2 index, constantPoolHandle cp,
+    u2 bci, u2 index, const constantPoolHandle& cp,
     StackMapFrame* current_frame, TRAPS) {
   verify_cp_class_type(bci, index, cp, CHECK_VERIFY(this));
   current_frame->pop_stack(
     VerificationType::integer_type(), CHECK_VERIFY(this));
 
+  if (was_recursively_verified()) return;
   VerificationType component_type =
     cp_index_to_type(index, cp, CHECK_VERIFY(this));
   int length;

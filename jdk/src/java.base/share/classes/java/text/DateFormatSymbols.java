@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,7 +47,6 @@ import java.util.Arrays;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.ResourceBundle;
-import java.util.TimeZone;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import sun.util.locale.provider.LocaleProviderAdapter;
@@ -99,6 +98,7 @@ import sun.util.locale.provider.TimeZoneNameUtility;
  * @see          SimpleDateFormat
  * @see          java.util.SimpleTimeZone
  * @author       Chen-Lieh Huang
+ * @since 1.1
  */
 public class DateFormatSymbols implements Serializable, Cloneable {
 
@@ -144,6 +144,12 @@ public class DateFormatSymbols implements Serializable, Cloneable {
     public DateFormatSymbols(Locale locale)
     {
         initializeData(locale);
+    }
+
+    /**
+     * Constructs an uninitialized DateFormatSymbols.
+     */
+    private DateFormatSymbols(boolean flag) {
     }
 
     /**
@@ -216,7 +222,7 @@ public class DateFormatSymbols implements Serializable, Cloneable {
      * </ul>
      * The zone ID is <em>not</em> localized; it's one of the valid IDs of
      * the {@link java.util.TimeZone TimeZone} class that are not
-     * <a href="../java/util/TimeZone.html#CustomID">custom IDs</a>.
+     * <a href="../util/TimeZone.html#CustomID">custom IDs</a>.
      * All other entries are localized names.
      * @see java.util.TimeZone
      * @serial
@@ -394,7 +400,10 @@ public class DateFormatSymbols implements Serializable, Cloneable {
      * Calendar Elements in the Unicode Locale Data Markup Language
      * (LDML) specification</a> for more details.
      *
-     * @return the month strings.
+     * @return the month strings. Use
+     * {@link java.util.Calendar#JANUARY Calendar.JANUARY},
+     * {@link java.util.Calendar#FEBRUARY Calendar.FEBRUARY},
+     * etc. to index the result array.
      */
     public String[] getMonths() {
         return Arrays.copyOf(months, months.length);
@@ -402,7 +411,9 @@ public class DateFormatSymbols implements Serializable, Cloneable {
 
     /**
      * Sets month strings. For example: "January", "February", etc.
-     * @param newMonths the new month strings.
+     * @param newMonths the new month strings. The array should
+     * be indexed by {@link java.util.Calendar#JANUARY Calendar.JANUARY},
+     * {@link java.util.Calendar#FEBRUARY Calendar.FEBRUARY}, etc.
      */
     public void setMonths(String[] newMonths) {
         months = Arrays.copyOf(newMonths, newMonths.length);
@@ -413,7 +424,7 @@ public class DateFormatSymbols implements Serializable, Cloneable {
      * Gets short month strings. For example: "Jan", "Feb", etc.
      *
      * <p>If the language requires different forms for formatting and
-     * stand-alone usages, This method returns short month names in
+     * stand-alone usages, this method returns short month names in
      * the formatting form. For example, the preferred abbreviation
      * for January in the Catalan language is <em>de gen.</em> in the
      * formatting form, while it is <em>gen.</em> in the stand-alone
@@ -422,7 +433,10 @@ public class DateFormatSymbols implements Serializable, Cloneable {
      * Calendar Elements in the Unicode Locale Data Markup Language
      * (LDML) specification</a> for more details.
      *
-     * @return the short month strings.
+     * @return the short month strings. Use
+     * {@link java.util.Calendar#JANUARY Calendar.JANUARY},
+     * {@link java.util.Calendar#FEBRUARY Calendar.FEBRUARY},
+     * etc. to index the result array.
      */
     public String[] getShortMonths() {
         return Arrays.copyOf(shortMonths, shortMonths.length);
@@ -430,7 +444,9 @@ public class DateFormatSymbols implements Serializable, Cloneable {
 
     /**
      * Sets short month strings. For example: "Jan", "Feb", etc.
-     * @param newShortMonths the new short month strings.
+     * @param newShortMonths the new short month strings. The array should
+     * be indexed by {@link java.util.Calendar#JANUARY Calendar.JANUARY},
+     * {@link java.util.Calendar#FEBRUARY Calendar.FEBRUARY}, etc.
      */
     public void setShortMonths(String[] newShortMonths) {
         shortMonths = Arrays.copyOf(newShortMonths, newShortMonths.length);
@@ -439,8 +455,10 @@ public class DateFormatSymbols implements Serializable, Cloneable {
 
     /**
      * Gets weekday strings. For example: "Sunday", "Monday", etc.
-     * @return the weekday strings. Use <code>Calendar.SUNDAY</code>,
-     * <code>Calendar.MONDAY</code>, etc. to index the result array.
+     * @return the weekday strings. Use
+     * {@link java.util.Calendar#SUNDAY Calendar.SUNDAY},
+     * {@link java.util.Calendar#MONDAY Calendar.MONDAY}, etc. to index
+     * the result array.
      */
     public String[] getWeekdays() {
         return Arrays.copyOf(weekdays, weekdays.length);
@@ -449,8 +467,8 @@ public class DateFormatSymbols implements Serializable, Cloneable {
     /**
      * Sets weekday strings. For example: "Sunday", "Monday", etc.
      * @param newWeekdays the new weekday strings. The array should
-     * be indexed by <code>Calendar.SUNDAY</code>,
-     * <code>Calendar.MONDAY</code>, etc.
+     * be indexed by {@link java.util.Calendar#SUNDAY Calendar.SUNDAY},
+     * {@link java.util.Calendar#MONDAY Calendar.MONDAY}, etc.
      */
     public void setWeekdays(String[] newWeekdays) {
         weekdays = Arrays.copyOf(newWeekdays, newWeekdays.length);
@@ -459,8 +477,10 @@ public class DateFormatSymbols implements Serializable, Cloneable {
 
     /**
      * Gets short weekday strings. For example: "Sun", "Mon", etc.
-     * @return the short weekday strings. Use <code>Calendar.SUNDAY</code>,
-     * <code>Calendar.MONDAY</code>, etc. to index the result array.
+     * @return the short weekday strings. Use
+     * {@link java.util.Calendar#SUNDAY Calendar.SUNDAY},
+     * {@link java.util.Calendar#MONDAY Calendar.MONDAY}, etc. to index
+     * the result array.
      */
     public String[] getShortWeekdays() {
         return Arrays.copyOf(shortWeekdays, shortWeekdays.length);
@@ -469,8 +489,8 @@ public class DateFormatSymbols implements Serializable, Cloneable {
     /**
      * Sets short weekday strings. For example: "Sun", "Mon", etc.
      * @param newShortWeekdays the new short weekday strings. The array should
-     * be indexed by <code>Calendar.SUNDAY</code>,
-     * <code>Calendar.MONDAY</code>, etc.
+     * be indexed by {@link java.util.Calendar#SUNDAY Calendar.SUNDAY},
+     * {@link java.util.Calendar#MONDAY Calendar.MONDAY}, etc.
      */
     public void setShortWeekdays(String[] newShortWeekdays) {
         shortWeekdays = Arrays.copyOf(newShortWeekdays, newShortWeekdays.length);
@@ -630,7 +650,9 @@ public class DateFormatSymbols implements Serializable, Cloneable {
             hashCode = 11 * hashCode + Arrays.hashCode(ampms);
             hashCode = 11 * hashCode + Arrays.deepHashCode(getZoneStringsWrapper());
             hashCode = 11 * hashCode + Objects.hashCode(localPatternChars);
-            cachedHashCode = hashCode;
+            if (hashCode != 0) {
+                cachedHashCode = hashCode;
+            }
         }
 
         return hashCode;
@@ -670,61 +692,77 @@ public class DateFormatSymbols implements Serializable, Cloneable {
     private static final ConcurrentMap<Locale, SoftReference<DateFormatSymbols>> cachedInstances
         = new ConcurrentHashMap<>(3);
 
-    private transient int lastZoneIndex = 0;
+    private transient int lastZoneIndex;
 
     /**
      * Cached hash code
      */
-    transient volatile int cachedHashCode = 0;
+    transient volatile int cachedHashCode;
 
-    private void initializeData(Locale desiredLocale) {
-        locale = desiredLocale;
-
-        // Copy values of a cached instance if any.
+    /**
+     * Initializes this DateFormatSymbols with the locale data. This method uses
+     * a cached DateFormatSymbols instance for the given locale if available. If
+     * there's no cached one, this method creates an uninitialized instance and
+     * populates its fields from the resource bundle for the locale, and caches
+     * the instance. Note: zoneStrings isn't initialized in this method.
+     */
+    private void initializeData(Locale locale) {
         SoftReference<DateFormatSymbols> ref = cachedInstances.get(locale);
         DateFormatSymbols dfs;
-        if (ref != null && (dfs = ref.get()) != null) {
-            copyMembers(dfs, this);
-            return;
-        }
+        if (ref == null || (dfs = ref.get()) == null) {
+            if (ref != null) {
+                // Remove the empty SoftReference
+                cachedInstances.remove(locale, ref);
+            }
+            dfs = new DateFormatSymbols(false);
 
-        // Initialize the fields from the ResourceBundle for locale.
-        LocaleProviderAdapter adapter = LocaleProviderAdapter.getAdapter(DateFormatSymbolsProvider.class, locale);
-        // Avoid any potential recursions
-        if (!(adapter instanceof ResourceBundleBasedAdapter)) {
-            adapter = LocaleProviderAdapter.getResourceBundleBased();
-        }
-        ResourceBundle resource = ((ResourceBundleBasedAdapter)adapter).getLocaleData().getDateFormatData(locale);
+            // Initialize the fields from the ResourceBundle for locale.
+            LocaleProviderAdapter adapter
+                = LocaleProviderAdapter.getAdapter(DateFormatSymbolsProvider.class, locale);
+            // Avoid any potential recursions
+            if (!(adapter instanceof ResourceBundleBasedAdapter)) {
+                adapter = LocaleProviderAdapter.getResourceBundleBased();
+            }
+            ResourceBundle resource
+                = ((ResourceBundleBasedAdapter)adapter).getLocaleData().getDateFormatData(locale);
 
-        // JRE and CLDR use different keys
-        // JRE: Eras, short.Eras and narrow.Eras
-        // CLDR: long.Eras, Eras and narrow.Eras
-        if (resource.containsKey("Eras")) {
-            eras = resource.getStringArray("Eras");
-        } else if (resource.containsKey("long.Eras")) {
-            eras = resource.getStringArray("long.Eras");
-        } else if (resource.containsKey("short.Eras")) {
-            eras = resource.getStringArray("short.Eras");
-        }
-        months = resource.getStringArray("MonthNames");
-        shortMonths = resource.getStringArray("MonthAbbreviations");
-        ampms = resource.getStringArray("AmPmMarkers");
-        localPatternChars = resource.getString("DateTimePatternChars");
+            dfs.locale = locale;
+            // JRE and CLDR use different keys
+            // JRE: Eras, short.Eras and narrow.Eras
+            // CLDR: long.Eras, Eras and narrow.Eras
+            if (resource.containsKey("Eras")) {
+                dfs.eras = resource.getStringArray("Eras");
+            } else if (resource.containsKey("long.Eras")) {
+                dfs.eras = resource.getStringArray("long.Eras");
+            } else if (resource.containsKey("short.Eras")) {
+                dfs.eras = resource.getStringArray("short.Eras");
+            }
+            dfs.months = resource.getStringArray("MonthNames");
+            dfs.shortMonths = resource.getStringArray("MonthAbbreviations");
+            dfs.ampms = resource.getStringArray("AmPmMarkers");
+            dfs.localPatternChars = resource.getString("DateTimePatternChars");
 
-        // Day of week names are stored in a 1-based array.
-        weekdays = toOneBasedArray(resource.getStringArray("DayNames"));
-        shortWeekdays = toOneBasedArray(resource.getStringArray("DayAbbreviations"));
+            // Day of week names are stored in a 1-based array.
+            dfs.weekdays = toOneBasedArray(resource.getStringArray("DayNames"));
+            dfs.shortWeekdays = toOneBasedArray(resource.getStringArray("DayAbbreviations"));
 
-        // Put a clone in the cache
-        ref = new SoftReference<>((DateFormatSymbols)this.clone());
-        SoftReference<DateFormatSymbols> x = cachedInstances.putIfAbsent(locale, ref);
-        if (x != null) {
-            DateFormatSymbols y = x.get();
-            if (y == null) {
-                // Replace the empty SoftReference with ref.
-                cachedInstances.put(locale, ref);
+            // Put dfs in the cache
+            ref = new SoftReference<>(dfs);
+            SoftReference<DateFormatSymbols> x = cachedInstances.putIfAbsent(locale, ref);
+            if (x != null) {
+                DateFormatSymbols y = x.get();
+                if (y == null) {
+                    // Replace the empty SoftReference with ref.
+                    cachedInstances.replace(locale, x, ref);
+                } else {
+                    ref = x;
+                    dfs = y;
+                }
             }
         }
+
+        // Copy the field values from dfs to this instance.
+        copyMembers(dfs, this);
     }
 
     private static String[] toOneBasedArray(String[] src) {
@@ -806,12 +844,14 @@ public class DateFormatSymbols implements Serializable, Cloneable {
 
     /**
      * Clones all the data members from the source DateFormatSymbols to
-     * the target DateFormatSymbols. This is only for subclasses.
+     * the target DateFormatSymbols.
+     *
      * @param src the source DateFormatSymbols.
      * @param dst the target DateFormatSymbols.
      */
     private void copyMembers(DateFormatSymbols src, DateFormatSymbols dst)
     {
+        dst.locale = src.locale;
         dst.eras = Arrays.copyOf(src.eras, src.eras.length);
         dst.months = Arrays.copyOf(src.months, src.months.length);
         dst.shortMonths = Arrays.copyOf(src.shortMonths, src.shortMonths.length);

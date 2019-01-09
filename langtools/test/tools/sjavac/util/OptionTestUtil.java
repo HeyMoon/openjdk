@@ -4,9 +4,7 @@
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -64,9 +62,7 @@ public class OptionTestUtil {
 
             if (!sl1.getPath().equals(sl2.getPath()) ||
                     !sl1.getIncludes().equals(sl2.getIncludes()) ||
-                    !sl1.getExcludes().equals(sl2.getExcludes()) ||
-                    !sl1.getIncludedFiles().equals(sl2.getIncludedFiles()) ||
-                    !sl1.getExcludedFiles().equals(sl2.getExcludedFiles()))
+                    !sl1.getExcludes().equals(sl2.getExcludes()))
                 throw new AssertionError("Expected " + sl1 + " but got " + sl2);
         }
     }

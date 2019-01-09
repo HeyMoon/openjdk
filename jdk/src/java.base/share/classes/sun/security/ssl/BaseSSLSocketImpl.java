@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -55,8 +55,8 @@ abstract class BaseSSLSocketImpl extends SSLSocket {
      * recurse infinitely ... e.g. close() calling itself, or doing
      * I/O in terms of our own streams.
      */
-    final private Socket self;
-    final private InputStream consumedInput;
+    private final Socket self;
+    private final InputStream consumedInput;
 
     BaseSSLSocketImpl() {
         super();
@@ -88,10 +88,10 @@ abstract class BaseSSLSocketImpl extends SSLSocket {
      *
      * The default is "false", i.e. tolerate the broken behavior.
      */
-    private final static String PROP_NAME =
+    private static final String PROP_NAME =
                                 "com.sun.net.ssl.requireCloseNotify";
 
-    final static boolean requireCloseNotify =
+    static final boolean requireCloseNotify =
                                 Debug.getBooleanProperty(PROP_NAME, false);
 
     //
@@ -265,6 +265,7 @@ abstract class BaseSSLSocketImpl extends SSLSocket {
      * the penalty of prematurly killing SSL sessions.
      */
     @Override
+    @SuppressWarnings("deprecation")
     protected final void finalize() throws Throwable {
         try {
             close();

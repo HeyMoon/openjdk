@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2015, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -32,36 +32,35 @@
 // Sets the default values for platform dependent flags used by the runtime system.
 // (see globals.hpp)
 
-define_pd_global(bool, ConvertSleepToYield,      true);
 define_pd_global(bool, ShareVtableStubs,         true);
-define_pd_global(bool, CountInterpCalls,         true);
 define_pd_global(bool, NeedsDeoptSuspend,        false); // only register window machines need this
 
 define_pd_global(bool, ImplicitNullChecks,       true);  // Generate code for implicit null checks
 define_pd_global(bool, TrapBasedNullChecks,  false);
 define_pd_global(bool, UncommonNullCast,         true);  // Uncommon-trap NULLs past to check cast
 
-// See 4827828 for this change. There is no globals_core_i486.hpp. I can't
-// assign a different value for C2 without touching a number of files. Use
-// #ifdef to minimize the change as it's late in Mantis. -- FIXME.
-// c1 doesn't have this problem because the fix to 4858033 assures us
-// the the vep is aligned at CodeEntryAlignment whereas c2 only aligns
-// the uep and the vep doesn't get real alignment but just slops on by
-// only assured that the entry instruction meets the 5 byte size requirement.
-#ifdef COMPILER2
+define_pd_global(uintx, CodeCacheSegmentSize,    64 TIERED_ONLY(+64)); // Tiered compilation has large code-entry alignment.
 define_pd_global(intx, CodeEntryAlignment,       64);
-#else
-define_pd_global(intx, CodeEntryAlignment,       16);
-#endif // COMPILER2
 define_pd_global(intx, OptoLoopAlignment,        16);
 define_pd_global(intx, InlineFrequencyCount,     100);
 
-define_pd_global(intx, StackYellowPages, 2);
-define_pd_global(intx, StackRedPages, 1);
+#define DEFAULT_STACK_YELLOW_PAGES (2)
+#define DEFAULT_STACK_RED_PAGES (1)
+// Java_java_net_SocketOutputStream_socketWrite0() uses a 64k buffer on the
+// stack if compiled for unix and LP64. To pass stack overflow tests we need
+// 20 shadow pages.
+#define DEFAULT_STACK_SHADOW_PAGES (20 DEBUG_ONLY(+5))
+#define DEFAULT_STACK_RESERVED_PAGES (1)
 
-define_pd_global(intx, StackShadowPages, 4 DEBUG_ONLY(+5));
+#define MIN_STACK_YELLOW_PAGES DEFAULT_STACK_YELLOW_PAGES
+#define MIN_STACK_RED_PAGES    DEFAULT_STACK_RED_PAGES
+#define MIN_STACK_SHADOW_PAGES DEFAULT_STACK_SHADOW_PAGES
+#define MIN_STACK_RESERVED_PAGES (0)
 
-define_pd_global(intx, PreInflateSpin,           10);
+define_pd_global(intx, StackYellowPages, DEFAULT_STACK_YELLOW_PAGES);
+define_pd_global(intx, StackRedPages, DEFAULT_STACK_RED_PAGES);
+define_pd_global(intx, StackShadowPages, DEFAULT_STACK_SHADOW_PAGES);
+define_pd_global(intx, StackReservedPages, DEFAULT_STACK_RESERVED_PAGES);
 
 define_pd_global(bool, RewriteBytecodes,     true);
 define_pd_global(bool, RewriteFrequentPairs, true);
@@ -75,8 +74,10 @@ define_pd_global(uintx, CMSYoungGenPerWorker, 64*M);  // default max size of CMS
 
 define_pd_global(uintx, TypeProfileLevel, 111);
 
-// avoid biased locking while we are bootstrapping the aarch64 build
-define_pd_global(bool, UseBiasedLocking, false);
+define_pd_global(bool, CompactStrings, true);
+
+// Clear short arrays bigger than one word in an arch-specific way
+define_pd_global(intx, InitArrayShortSize, BytesPerLong);
 
 #if defined(COMPILER1) || defined(COMPILER2)
 define_pd_global(intx, InlineSmallCode,          1000);
@@ -84,7 +85,14 @@ define_pd_global(intx, InlineSmallCode,          1000);
 
 #ifdef BUILTIN_SIM
 #define UseBuiltinSim           true
-#define ARCH_FLAGS(develop, product, diagnostic, experimental, notproduct, range, constraint) \
+#define ARCH_FLAGS(develop, \
+                   product, \
+                   diagnostic, \
+                   experimental, \
+                   notproduct, \
+                   range, \
+                   constraint, \
+                   writeable) \
                                                                         \
   product(bool, NotifySimulator, UseBuiltinSim,                         \
          "tell the AArch64 sim where we are in method code")            \
@@ -103,16 +111,28 @@ define_pd_global(intx, InlineSmallCode,          1000);
                                                                         \
   product(bool, UseCRC32, false,                                        \
           "Use CRC32 instructions for CRC32 computation")               \
+                                                                        \
+  product(bool, UseLSE, false,                                          \
+          "Use LSE instructions")                                       \
 
 // Don't attempt to use Neon on builtin sim until builtin sim supports it
 #define UseCRC32 false
+#define UseSIMDForMemoryOps    false
+#define AvoidUnalignedAcesses false
 
 #else
 #define UseBuiltinSim           false
 #define NotifySimulator         false
 #define UseSimulatorCache       false
 #define DisableBCCheck          true
-#define ARCH_FLAGS(develop, product, diagnostic, experimental, notproduct, range, constraint) \
+#define ARCH_FLAGS(develop, \
+                   product, \
+                   diagnostic, \
+                   experimental, \
+                   notproduct, \
+                   range, \
+                   constraint, \
+                   writeable) \
                                                                         \
   product(bool, NearCpool, true,                                        \
          "constant pool is close to instructions")                      \
@@ -123,6 +143,17 @@ define_pd_global(intx, InlineSmallCode,          1000);
           "Use Neon for CRC32 computation")                             \
   product(bool, UseCRC32, false,                                        \
           "Use CRC32 instructions for CRC32 computation")               \
+  product(bool, UseSIMDForMemoryOps, false,                             \
+          "Use SIMD instructions in generated memory move code")        \
+  product(bool, AvoidUnalignedAccesses, false,                          \
+          "Avoid generating unaligned memory accesses")                 \
+  product(bool, UseLSE, false,                                          \
+          "Use LSE instructions")                                       \
+  product(bool, UseBlockZeroing, true,                                  \
+          "Use DC ZVA for block zeroing")                               \
+  product(intx, BlockZeroingLowLimit, 256,                              \
+          "Minimum size in bytes when block zeroing will be used")      \
+          range(1, max_jint)                                            \
   product(bool, TraceTraps, false, "Trace all traps the signal handler")
 
 #endif

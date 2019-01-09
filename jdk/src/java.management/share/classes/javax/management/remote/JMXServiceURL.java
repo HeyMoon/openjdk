@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,10 +34,16 @@ import java.io.InvalidObjectException;
 import java.io.ObjectInputStream;
 
 import java.io.Serializable;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.MalformedURLException;
+import java.net.NetworkInterface;
+import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.util.BitSet;
+import java.util.Enumeration;
+import java.util.Locale;
 import java.util.StringTokenizer;
 
 /**
@@ -168,7 +174,7 @@ public class JMXServiceURL implements Serializable {
         final int protoStart = requiredPrefixLength;
         final int protoEnd = indexOf(serviceURL, ':', protoStart);
         this.protocol =
-            serviceURL.substring(protoStart, protoEnd).toLowerCase();
+            serviceURL.substring(protoStart, protoEnd).toLowerCase(Locale.ENGLISH);
 
         if (!serviceURL.regionMatches(protoEnd, "://", 0, 3)) {
             throw new MalformedURLException("Missing \"://\" after " +
@@ -235,10 +241,13 @@ public class JMXServiceURL implements Serializable {
      * @param protocol the protocol part of the URL.  If null, defaults
      * to <code>jmxmp</code>.
      *
-     * @param host the host part of the URL.  If null, defaults to the
-     * local host name, as determined by
-     * <code>InetAddress.getLocalHost().getHostName()</code>.  If it
-     * is a numeric IPv6 address, it can optionally be enclosed in
+     * @param host the host part of the URL. If host is null and if
+     * local host name can be resolved to an IP, then host defaults
+     * to local host name as determined by
+     * <code>InetAddress.getLocalHost().getHostName()</code>. If host is null
+     * and if local host name cannot be resolved to an IP, then host
+     * defaults to numeric IP address of one of the active network interfaces.
+     * If host is a numeric IPv6 address, it can optionally be enclosed in
      * square brackets <code>[]</code>.
      *
      * @param port the port part of the URL.
@@ -259,10 +268,13 @@ public class JMXServiceURL implements Serializable {
      * @param protocol the protocol part of the URL.  If null, defaults
      * to <code>jmxmp</code>.
      *
-     * @param host the host part of the URL.  If null, defaults to the
-     * local host name, as determined by
-     * <code>InetAddress.getLocalHost().getHostName()</code>.  If it
-     * is a numeric IPv6 address, it can optionally be enclosed in
+     * @param host the host part of the URL. If host is null and if
+     * local host name can be resolved to an IP, then host defaults
+     * to local host name as determined by
+     * <code>InetAddress.getLocalHost().getHostName()</code>. If host is null
+     * and if local host name cannot be resolved to an IP, then host
+     * defaults to numeric IP address of one of the active network interfaces.
+     * If host is a numeric IPv6 address, it can optionally be enclosed in
      * square brackets <code>[]</code>.
      *
      * @param port the port part of the URL.
@@ -285,32 +297,45 @@ public class JMXServiceURL implements Serializable {
             InetAddress local;
             try {
                 local = InetAddress.getLocalHost();
-            } catch (UnknownHostException e) {
-                throw new MalformedURLException("Local host name unknown: " +
-                                                e);
-            }
+                host = local.getHostName();
 
-            host = local.getHostName();
-
-            /* We might have a hostname that violates DNS naming
-               rules, for example that contains an `_'.  While we
-               could be strict and throw an exception, this is rather
-               user-hostile.  Instead we use its numerical IP address.
-               We can only reasonably do this for the host==null case.
-               If we're given an explicit host name that is illegal we
-               have to reject it.  (Bug 5057532.)  */
-            try {
-                validateHost(host, port);
-            } catch (MalformedURLException e) {
-                if (logger.fineOn()) {
+                /* We might have a hostname that violates DNS naming
+                rules, for example that contains an `_'.  While we
+                could be strict and throw an exception, this is rather
+                user-hostile.  Instead we use its numerical IP address.
+                We can only reasonably do this for the host==null case.
+                If we're given an explicit host name that is illegal we
+                have to reject it.  (Bug 5057532.)  */
+                try {
+                    validateHost(host, port);
+                } catch (MalformedURLException e) {
+                   if (logger.fineOn()) {
                     logger.fine("JMXServiceURL",
                                 "Replacing illegal local host name " +
                                 host + " with numeric IP address " +
                                 "(see RFC 1034)", e);
                 }
                 host = local.getHostAddress();
-                /* Use the numeric address, which could be either IPv4
-                   or IPv6.  validateHost will accept either.  */
+                }
+            } catch (UnknownHostException e) {
+                try {
+                    /*
+                    If hostname cannot be resolved, we will try and use numeric
+                    IPv4/IPv6 address. If host=null while starting agent,
+                    we know that it will be started on all interfaces - 0.0.0.0.
+                    Hence we will use IP address of first active non-loopback
+                    interface
+                    */
+                    host = getActiveNetworkInterfaceIP();
+                    if (host == null) {
+                        throw new MalformedURLException("Unable"
+                                + " to resolve hostname or "
+                                + "get valid IP address");
+                    }
+                } catch (SocketException ex) {
+                    throw new MalformedURLException("Unable"
+                            + " to resolve hostname or get valid IP address");
+                }
             }
         }
 
@@ -328,7 +353,7 @@ public class JMXServiceURL implements Serializable {
                 throw new MalformedURLException("More than one [[...]]");
         }
 
-        this.protocol = protocol.toLowerCase();
+        this.protocol = protocol.toLowerCase(Locale.ENGLISH);
         this.host = host;
         this.port = port;
 
@@ -337,6 +362,33 @@ public class JMXServiceURL implements Serializable {
         this.urlPath = urlPath;
 
         validate();
+    }
+
+    private String getActiveNetworkInterfaceIP() throws SocketException {
+        Enumeration<NetworkInterface>
+                networkInterface = NetworkInterface.getNetworkInterfaces();
+        String ipv6AddrStr = null;
+        while (networkInterface.hasMoreElements()) {
+            NetworkInterface nic = networkInterface.nextElement();
+            if (nic.isUp() && !nic.isLoopback()) {
+                Enumeration<InetAddress> inet = nic.getInetAddresses();
+                while (inet.hasMoreElements()) {
+                    InetAddress addr = inet.nextElement();
+                    if (addr instanceof Inet4Address
+                            && !addr.isLinkLocalAddress()) {
+                        return addr.getHostAddress();
+                    }else if (addr instanceof Inet6Address
+                            && !addr.isLinkLocalAddress()) {
+                        /*
+                        We save last seen IPv6 address which we will return
+                        if we do not find any interface with IPv4 address.
+                        */
+                        ipv6AddrStr = addr.getHostAddress();
+                    }
+                }
+            }
+        }
+        return ipv6AddrStr;
     }
 
     private static final String INVALID_INSTANCE_MSG =
@@ -539,7 +591,9 @@ public class JMXServiceURL implements Serializable {
      * constructor that takes a separate host parameter, the result is
      * the string that was specified.  If that string was null, the
      * result is
-     * <code>InetAddress.getLocalHost().getHostName()</code>.</p>
+     * <code>InetAddress.getLocalHost().getHostName()</code> if local host name
+     * can be resolved to an IP. Else numeric IP address of an active
+     * network interface will be used.</p>
      *
      * <p>In either case, if the host was specified using the
      * <code>[...]</code> syntax for numeric IPv6 addresses, the

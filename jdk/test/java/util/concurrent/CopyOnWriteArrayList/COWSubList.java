@@ -26,6 +26,7 @@
  * @bug 8011645
  * @summary CopyOnWriteArrayList.COWSubList.subList does not validate range properly
  */
+
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -51,8 +52,7 @@ public class COWSubList {
             r.run();
             throw new RuntimeException("Failed: expected IOOBE to be thrown");
         } catch (IndexOutOfBoundsException x) {
-            // ok, excpeted
+            // ok, expected
         }
     }
 }
-

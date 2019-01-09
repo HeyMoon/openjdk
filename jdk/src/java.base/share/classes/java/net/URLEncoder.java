@@ -25,19 +25,12 @@
 
 package java.net;
 
-import java.io.ByteArrayOutputStream;
-import java.io.BufferedWriter;
-import java.io.OutputStreamWriter;
-import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.io.CharArrayWriter;
 import java.nio.charset.Charset;
 import java.nio.charset.IllegalCharsetNameException;
 import java.nio.charset.UnsupportedCharsetException ;
 import java.util.BitSet;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
-import sun.security.action.GetBooleanAction;
 import sun.security.action.GetPropertyAction;
 
 /**
@@ -140,9 +133,7 @@ public class URLEncoder {
         dontNeedEncoding.set('.');
         dontNeedEncoding.set('*');
 
-        dfltEncName = AccessController.doPrivileged(
-            new GetPropertyAction("file.encoding")
-        );
+        dfltEncName = GetPropertyAction.privilegedGetProperty("file.encoding");
     }
 
     /**
@@ -234,7 +225,7 @@ public class URLEncoder {
                     /*
                      * If this character represents the start of a Unicode
                      * surrogate pair, then pass in two characters. It's not
-                     * clear what should be done if a bytes reserved in the
+                     * clear what should be done if a byte reserved in the
                      * surrogate pairs range occurs outside of a legal
                      * surrogate pair. For now, just treat it as if it were
                      * any other character.

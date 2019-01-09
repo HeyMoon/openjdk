@@ -33,8 +33,8 @@ import sun.util.logging.PlatformLogger;
 
 final class XNETProtocol extends XProtocol implements XStateProtocol, XLayerProtocol
 {
-    private final static PlatformLogger log = PlatformLogger.getLogger("sun.awt.X11.XNETProtocol");
-    private final static PlatformLogger iconLog = PlatformLogger.getLogger("sun.awt.X11.icon.XNETProtocol");
+    private static final PlatformLogger log = PlatformLogger.getLogger("sun.awt.X11.XNETProtocol");
+    private static final PlatformLogger iconLog = PlatformLogger.getLogger("sun.awt.X11.icon.XNETProtocol");
     private static PlatformLogger stateLog = PlatformLogger.getLogger("sun.awt.X11.states.XNETProtocol");
 
     /**
@@ -280,9 +280,9 @@ final class XNETProtocol extends XProtocol implements XStateProtocol, XLayerProt
     XAtom XA_NET_WM_WINDOW_OPACITY = XAtom.get("_NET_WM_WINDOW_OPACITY");
 
 /* For _NET_WM_STATE ClientMessage requests */
-    final static int _NET_WM_STATE_REMOVE      =0; /* remove/unset property */
-    final static int _NET_WM_STATE_ADD         =1; /* add/set property      */
-    final static int _NET_WM_STATE_TOGGLE      =2; /* toggle property       */
+    static final int _NET_WM_STATE_REMOVE      =0; /* remove/unset property */
+    static final int _NET_WM_STATE_ADD         =1; /* add/set property      */
+    static final int _NET_WM_STATE_TOGGLE      =2; /* toggle property       */
 
     boolean supportChecked = false;
     long NetWindow = 0;
@@ -326,7 +326,7 @@ final class XNETProtocol extends XProtocol implements XStateProtocol, XLayerProt
         return res;
     }
 
-    public void setActiveWindow(XWindow window) {
+    public void setActiveWindow(long window) {
         if (!active() || !checkProtocol(XA_NET_SUPPORTED, XA_NET_ACTIVE_WINDOW)) {
             return;
         }
@@ -336,7 +336,7 @@ final class XNETProtocol extends XProtocol implements XStateProtocol, XLayerProt
         msg.set_type(XConstants.ClientMessage);
         msg.set_message_type(XA_NET_ACTIVE_WINDOW.getAtom());
         msg.set_display(XToolkit.getDisplay());
-        msg.set_window(window.getWindow());
+        msg.set_window(window);
         msg.set_format(32);
         msg.set_data(0, 1);
         msg.set_data(1, XToolkit.getCurrentServerTime());

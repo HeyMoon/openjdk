@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,8 +30,6 @@
 
 class VirtualSpaceNode;
 
-const size_t metadata_chunk_initialize = 0xf7f7f7f7;
-
 size_t Metachunk::object_alignment() {
   // Must align pointers and sizes to 8,
   // so that 64 bit types get correctly aligned.
@@ -58,12 +56,7 @@ Metachunk::Metachunk(size_t word_size,
   _top = initial_top();
 #ifdef ASSERT
   set_is_tagged_free(false);
-  size_t data_word_size = pointer_delta(end(),
-                                        _top,
-                                        sizeof(MetaWord));
-  Copy::fill_to_words((HeapWord*)_top,
-                      data_word_size,
-                      metadata_chunk_initialize);
+  mangle(uninitMetaWordVal);
 #endif
 }
 
@@ -98,12 +91,12 @@ void Metachunk::print_on(outputStream* st) const {
 }
 
 #ifndef PRODUCT
-void Metachunk::mangle() {
-  // Mangle the payload of the chunk and not the links that
+void Metachunk::mangle(juint word_value) {
+  // Overwrite the payload of the chunk and not the links that
   // maintain list of chunks.
-  HeapWord* start = (HeapWord*)(bottom() + overhead());
+  HeapWord* start = (HeapWord*)initial_top();
   size_t size = word_size() - overhead();
-  Copy::fill_to_words(start, size, metadata_chunk_initialize);
+  Copy::fill_to_words(start, size, word_value);
 }
 #endif // PRODUCT
 
@@ -118,61 +111,3 @@ void Metachunk::verify() {
   return;
 }
 
-/////////////// Unit tests ///////////////
-
-#ifndef PRODUCT
-
-class TestMetachunk {
- public:
-  static void test() {
-    size_t size = 2 * 1024 * 1024;
-    void* memory = malloc(size);
-    assert(memory != NULL, "Failed to malloc 2MB");
-
-    Metachunk* metachunk = ::new (memory) Metachunk(size / BytesPerWord, NULL);
-
-    assert(metachunk->bottom() == (MetaWord*)metachunk, "assert");
-    assert(metachunk->end() == (uintptr_t*)metachunk + metachunk->size(), "assert");
-
-    // Check sizes
-    assert(metachunk->size() == metachunk->word_size(), "assert");
-    assert(metachunk->word_size() == pointer_delta(metachunk->end(), metachunk->bottom(),
-        sizeof(MetaWord*)), "assert");
-
-    // Check usage
-    assert(metachunk->used_word_size() == metachunk->overhead(), "assert");
-    assert(metachunk->free_word_size() == metachunk->word_size() - metachunk->used_word_size(), "assert");
-    assert(metachunk->top() == metachunk->initial_top(), "assert");
-    assert(metachunk->is_empty(), "assert");
-
-    // Allocate
-    size_t alloc_size = 64; // Words
-    assert(is_size_aligned(alloc_size, Metachunk::object_alignment()), "assert");
-
-    MetaWord* mem = metachunk->allocate(alloc_size);
-
-    // Check post alloc
-    assert(mem == metachunk->initial_top(), "assert");
-    assert(mem + alloc_size == metachunk->top(), "assert");
-    assert(metachunk->used_word_size() == metachunk->overhead() + alloc_size, "assert");
-    assert(metachunk->free_word_size() == metachunk->word_size() - metachunk->used_word_size(), "assert");
-    assert(!metachunk->is_empty(), "assert");
-
-    // Clear chunk
-    metachunk->reset_empty();
-
-    // Check post clear
-    assert(metachunk->used_word_size() == metachunk->overhead(), "assert");
-    assert(metachunk->free_word_size() == metachunk->word_size() - metachunk->used_word_size(), "assert");
-    assert(metachunk->top() == metachunk->initial_top(), "assert");
-    assert(metachunk->is_empty(), "assert");
-
-    free(memory);
-  }
-};
-
-void TestMetachunk_test() {
-  TestMetachunk::test();
-}
-
-#endif

@@ -167,7 +167,7 @@ bool OverflowMulLNode::can_overflow(const Type* t1, const Type* t2) const {
 }
 
 const Type* OverflowNode::sub(const Type* t1, const Type* t2) const {
-  fatal(err_msg_res("sub() should not be called for '%s'", NodeClassNames[this->Opcode()]));
+  fatal("sub() should not be called for '%s'", NodeClassNames[this->Opcode()]);
   return TypeInt::CC;
 }
 
@@ -247,11 +247,11 @@ Node* OverflowLNode::Ideal(PhaseGVN* phase, bool can_reshape) {
   return IdealHelper<OverflowLNode>::Ideal(this, phase, can_reshape);
 }
 
-const Type* OverflowINode::Value(PhaseTransform* phase) const {
+const Type* OverflowINode::Value(PhaseGVN* phase) const {
   return IdealHelper<OverflowINode>::Value(this, phase);
 }
 
-const Type* OverflowLNode::Value(PhaseTransform* phase) const {
+const Type* OverflowLNode::Value(PhaseGVN* phase) const {
   return IdealHelper<OverflowLNode>::Value(this, phase);
 }
 

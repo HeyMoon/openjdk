@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,13 +25,12 @@
 #include "precompiled.hpp"
 #include "classfile/altHashing.hpp"
 #include "classfile/javaClasses.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/verifyOopClosure.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/thread.inline.hpp"
 #include "utilities/copy.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 bool always_do_update_barrier = false;
 
@@ -46,9 +45,8 @@ void oopDesc::print_on(outputStream* st) const {
 }
 
 void oopDesc::print_address_on(outputStream* st) const {
-  if (PrintOopAddress) {
-    st->print("{" INTPTR_FORMAT "}", this);
-  }
+  st->print("{" INTPTR_FORMAT "}", p2i(this));
+
 }
 
 void oopDesc::print()         { print_on(tty);         }
@@ -78,7 +76,7 @@ void oopDesc::print_value_on(outputStream* st) const {
     st->print("NULL");
   } else if (java_lang_String::is_instance(obj)) {
     java_lang_String::print(obj, st);
-    if (PrintOopAddress) print_address_on(st);
+    print_address_on(st);
   } else {
     klass()->oop_print_value_on(obj, st);
   }
@@ -123,7 +121,7 @@ VerifyOopClosure VerifyOopClosure::verify_oop;
 
 template <class T> void VerifyOopClosure::do_oop_work(T* p) {
   oop obj = oopDesc::load_decode_heap_oop(p);
-  guarantee(obj->is_oop_or_null(), err_msg("invalid oop: " INTPTR_FORMAT, p2i((oopDesc*) obj)));
+  guarantee(obj->is_oop_or_null(), "invalid oop: " INTPTR_FORMAT, p2i((oopDesc*) obj));
 }
 
 void VerifyOopClosure::do_oop(oop* p)       { VerifyOopClosure::do_oop_work(p); }
@@ -131,9 +129,6 @@ void VerifyOopClosure::do_oop(narrowOop* p) { VerifyOopClosure::do_oop_work(p); 
 
 // type test operations that doesn't require inclusion of oop.inline.hpp.
 bool oopDesc::is_instance_noinline()          const { return is_instance();            }
-bool oopDesc::is_instanceMirror_noinline()    const { return is_instanceMirror();      }
-bool oopDesc::is_instanceClassLoader_noline() const { return is_instanceClassLoader(); }
-bool oopDesc::is_instanceRef_noline()         const { return is_instanceRef();         }
 bool oopDesc::is_array_noinline()             const { return is_array();               }
 bool oopDesc::is_objArray_noinline()          const { return is_objArray();            }
 bool oopDesc::is_typeArray_noinline()         const { return is_typeArray();           }

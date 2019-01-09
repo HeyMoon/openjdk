@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -65,24 +65,39 @@ public class Block extends Node implements BreakableNode, Terminal, Flags<Block>
     private final LocalVariableConversion conversion;
 
     /** Flag indicating that this block needs scope */
-    public static final int NEEDS_SCOPE = 1 << 0;
+    public static final int NEEDS_SCOPE        = 1 << 0;
 
     /**
      * Is this block tagged as terminal based on its contents
      * (usually the last statement)
      */
-    public static final int IS_TERMINAL = 1 << 2;
+    public static final int IS_TERMINAL        = 1 << 2;
 
     /**
      * Is this block the eager global scope - i.e. the original program. This isn't true for the
      * outermost level of recompiles
      */
-    public static final int IS_GLOBAL_SCOPE = 1 << 3;
+    public static final int IS_GLOBAL_SCOPE    = 1 << 3;
 
     /**
      * Is this block a synthetic one introduced by Parser?
      */
-    public static final int IS_SYNTHETIC = 1 << 4;
+    public static final int IS_SYNTHETIC       = 1 << 4;
+
+    /**
+     * Is this the function body block? May not be the first, if parameter list contains expressions.
+     */
+    public static final int IS_BODY            = 1 << 5;
+
+    /**
+     * Is this the parameter initialization block? If present, must be the first block, immediately wrapping the function body block.
+     */
+    public static final int IS_PARAMETER_BLOCK = 1 << 6;
+
+    /**
+     * Marks the variable declaration block for case clauses of a switch statement.
+     */
+    public static final int IS_SWITCH_BLOCK    = 1 << 7;
 
     /**
      * Constructor
@@ -136,7 +151,7 @@ public class Block extends Node implements BreakableNode, Terminal, Flags<Block>
      * @param statements All statements in the block
      */
     public Block(final long token, final int finish, final int flags, final List<Statement> statements) {
-        this(token, finish, flags, statements.toArray(new Statement[statements.size()]));
+        this(token, finish, flags, statements.toArray(new Statement[0]));
     }
 
     private Block(final Block block, final int finish, final List<Statement> statements, final int flags, final Map<String, Symbol> symbols, final LocalVariableConversion conversion) {
@@ -159,11 +174,42 @@ public class Block extends Node implements BreakableNode, Terminal, Flags<Block>
     }
 
     /**
-     * Clear the symbols in the block.
-     * TODO: make this immutable.
+     * Returns true if this block defines any symbols.
+     * @return true if this block defines any symbols.
      */
-    public void clearSymbols() {
-        symbols.clear();
+    public boolean hasSymbols() {
+        return !symbols.isEmpty();
+    }
+
+    /**
+     * Replaces symbols defined in this block with different symbols. Used to ensure symbol tables are
+     * immutable upon construction and have copy-on-write semantics. Note that this method only replaces the
+     * symbols in the symbol table, it does not act on any contained AST nodes that might reference the symbols.
+     * Those should be updated separately as this method is meant to be used as part of such an update pass.
+     * @param lc the current lexical context
+     * @param replacements the map of symbol replacements
+     * @return a new block with replaced symbols, or this block if none of the replacements modified the symbol
+     * table.
+     */
+    public Block replaceSymbols(final LexicalContext lc, final Map<Symbol, Symbol> replacements) {
+        if (symbols.isEmpty()) {
+            return this;
+        }
+        final LinkedHashMap<String, Symbol> newSymbols = new LinkedHashMap<>(symbols);
+        for (final Map.Entry<String, Symbol> entry: newSymbols.entrySet()) {
+            final Symbol newSymbol = replacements.get(entry.getValue());
+            assert newSymbol != null : "Missing replacement for " + entry.getKey();
+            entry.setValue(newSymbol);
+        }
+        return Node.replaceInLexicalContext(lc, this, new Block(this, finish, statements, flags, newSymbols, conversion));
+    }
+
+    /**
+     * Returns a copy of this block with a shallow copy of the symbol table.
+     * @return a copy of this block with a shallow copy of the symbol table.
+     */
+    public Block copyWithNewSymbols() {
+        return new Block(this, finish, statements, flags, new LinkedHashMap<>(symbols), conversion);
     }
 
     @Override
@@ -191,7 +237,7 @@ public class Block extends Node implements BreakableNode, Terminal, Flags<Block>
      * @return symbol iterator
      */
     public List<Symbol> getSymbols() {
-        return Collections.unmodifiableList(new ArrayList<>(symbols.values()));
+        return symbols.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(symbols.values()));
     }
 
     /**
@@ -355,10 +401,9 @@ public class Block extends Node implements BreakableNode, Terminal, Flags<Block>
     /**
      * Add or overwrite an existing symbol in the block
      *
-     * @param lc     get lexical context
      * @param symbol symbol
      */
-    public void putSymbol(final LexicalContext lc, final Symbol symbol) {
+    public void putSymbol(final Symbol symbol) {
         symbols.put(symbol.getName(), symbol);
     }
 
@@ -432,6 +477,19 @@ public class Block extends Node implements BreakableNode, Terminal, Flags<Block>
         return next;
     }
 
+    /**
+     * Determine whether this block needs to provide its scope object creator for use by its child nodes.
+     * This is only necessary for synthetic parent blocks of for-in loops with lexical declarations.
+     *
+     * @see ForNode#needsScopeCreator()
+     * @return true if child nodes need access to this block's scope creator
+     */
+    public boolean providesScopeCreator() {
+        return needsScope() && isSynthetic()
+                && (getLastStatement() instanceof ForNode)
+                && ((ForNode) getLastStatement()).needsScopeCreator();
+    }
+
     @Override
     public boolean isBreakableWithoutLabel() {
         return false;
@@ -445,5 +503,32 @@ public class Block extends Node implements BreakableNode, Terminal, Flags<Block>
     @Override
     public Node accept(final NodeVisitor<? extends LexicalContext> visitor) {
         return Acceptor.accept(this, visitor);
+    }
+
+    /**
+     * Checks if this is a function body.
+     *
+     * @return true if the function body flag is set
+     */
+    public boolean isFunctionBody() {
+        return getFlag(IS_BODY);
+    }
+
+    /**
+     * Checks if this is a parameter block.
+     *
+     * @return true if the parameter block flag is set
+     */
+    public boolean isParameterBlock() {
+        return getFlag(IS_PARAMETER_BLOCK);
+    }
+
+    /**
+     * Checks whether this is a switch block.
+     *
+     * @return true if this is a switch block
+     */
+    public boolean isSwitchBlock() {
+        return getFlag(IS_SWITCH_BLOCK);
     }
 }

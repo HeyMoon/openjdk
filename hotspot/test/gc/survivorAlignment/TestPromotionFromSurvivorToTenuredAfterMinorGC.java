@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,12 +27,10 @@
  * @summary Verify that objects promoted from survivor space to tenured space
  *          when their age exceeded tenuring threshold are not aligned to
  *          SurvivorAlignmentInBytes value.
- * @library /testlibrary /../../test/lib
- * @ignore 8130308
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
- * @build TestPromotionFromSurvivorToTenuredAfterMinorGC
- *        SurvivorAlignmentTestMain AlignmentHelper
+ * @build sun.hotspot.WhiteBox
  * @run main ClassFileInstaller sun.hotspot.WhiteBox
  *                              sun.hotspot.WhiteBox$WhiteBoxPermission
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
@@ -99,11 +97,18 @@ public class TestPromotionFromSurvivorToTenuredAfterMinorGC {
                 .getActualMemoryUsage();
 
         test.allocate();
-        for (int i = 0; i <= SurvivorAlignmentTestMain.MAX_TENURING_THRESHOLD;
-             i++) {
+        for (int i = 0; i <= SurvivorAlignmentTestMain.MAX_TENURING_THRESHOLD; i++) {
             SurvivorAlignmentTestMain.WHITE_BOX.youngGC();
         }
 
+        // Sometimes we see that data unrelated to the test has been allocated during
+        // the loop. This data is included in the expectedMemoryUsage since we look
+        // through all threads to see what they allocated. If this data is still in
+        // the survivor area however, it should not be included in expectedMemoryUsage
+        // since the verification below only look at what's in tenured space.
+        expectedMemoryUsage -= SurvivorAlignmentTestMain.getAlignmentHelper(
+                                   SurvivorAlignmentTestMain.HeapSpace.SURVIVOR)
+                                   .getActualMemoryUsage();
         test.verifyMemoryUsage(expectedMemoryUsage);
     }
 }

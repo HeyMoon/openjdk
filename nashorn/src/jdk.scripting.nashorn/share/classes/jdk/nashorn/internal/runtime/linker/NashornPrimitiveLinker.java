@@ -29,18 +29,19 @@ import static jdk.nashorn.internal.lookup.Lookup.MH;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
-import jdk.internal.dynalink.linker.ConversionComparator;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.GuardedTypeConversion;
-import jdk.internal.dynalink.linker.GuardingTypeConverterFactory;
-import jdk.internal.dynalink.linker.LinkRequest;
-import jdk.internal.dynalink.linker.LinkerServices;
-import jdk.internal.dynalink.linker.TypeBasedGuardingDynamicLinker;
-import jdk.internal.dynalink.support.TypeUtilities;
+import java.util.function.Supplier;
+import jdk.dynalink.linker.ConversionComparator;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.GuardingTypeConverterFactory;
+import jdk.dynalink.linker.LinkRequest;
+import jdk.dynalink.linker.LinkerServices;
+import jdk.dynalink.linker.TypeBasedGuardingDynamicLinker;
+import jdk.dynalink.linker.support.TypeUtilities;
 import jdk.nashorn.internal.objects.Global;
 import jdk.nashorn.internal.runtime.ConsString;
 import jdk.nashorn.internal.runtime.JSType;
 import jdk.nashorn.internal.runtime.ScriptRuntime;
+import jdk.nashorn.internal.runtime.Symbol;
 
 /**
  * Internal linker for String, Boolean, and Number objects, only ever used by Nashorn engine and not exposed to other
@@ -48,8 +49,8 @@ import jdk.nashorn.internal.runtime.ScriptRuntime;
  * primitive type conversions for these types when linking to Java methods.
  */
 final class NashornPrimitiveLinker implements TypeBasedGuardingDynamicLinker, GuardingTypeConverterFactory, ConversionComparator {
-    private static final GuardedTypeConversion VOID_TO_OBJECT = new GuardedTypeConversion(
-            new GuardedInvocation(MethodHandles.constant(Object.class, ScriptRuntime.UNDEFINED)), true);
+    private static final GuardedInvocation VOID_TO_OBJECT =
+            new GuardedInvocation(MethodHandles.constant(Object.class, ScriptRuntime.UNDEFINED));
 
     @Override
     public boolean canLinkType(final Class<?> type) {
@@ -57,18 +58,16 @@ final class NashornPrimitiveLinker implements TypeBasedGuardingDynamicLinker, Gu
     }
 
     private static boolean canLinkTypeStatic(final Class<?> type) {
-        return type == String.class || type == Boolean.class || type == ConsString.class || Number.class.isAssignableFrom(type);
+        return type == String.class || type == Boolean.class || type == ConsString.class || type == Integer.class
+                || type == Double.class || type == Float.class || type == Short.class || type == Byte.class
+                || type == Symbol.class;
     }
 
     @Override
-    public GuardedInvocation getGuardedInvocation(final LinkRequest origRequest, final LinkerServices linkerServices)
+    public GuardedInvocation getGuardedInvocation(final LinkRequest request, final LinkerServices linkerServices)
             throws Exception {
-        final LinkRequest request = origRequest.withoutRuntimeContext(); // Nashorn has no runtime context
-
         final Object self = request.getReceiver();
-        final NashornCallSiteDescriptor desc = (NashornCallSiteDescriptor) request.getCallSiteDescriptor();
-
-        return Bootstrap.asTypeSafeReturn(Global.primitiveLookup(request, self), linkerServices, desc);
+        return Bootstrap.asTypeSafeReturn(Global.primitiveLookup(request, self), linkerServices, request.getCallSiteDescriptor());
     }
 
     /**
@@ -79,7 +78,7 @@ final class NashornPrimitiveLinker implements TypeBasedGuardingDynamicLinker, Gu
      * @return a conditional converter from source to target type
      */
     @Override
-    public GuardedTypeConversion convertToType(final Class<?> sourceType, final Class<?> targetType) {
+    public GuardedInvocation convertToType(final Class<?> sourceType, final Class<?> targetType, final Supplier<MethodHandles.Lookup> lookupSupplier) {
         final MethodHandle mh = JavaArgumentConverters.getConverter(targetType);
         if (mh == null) {
             if(targetType == Object.class && sourceType == void.class) {
@@ -88,7 +87,7 @@ final class NashornPrimitiveLinker implements TypeBasedGuardingDynamicLinker, Gu
             return null;
         }
 
-        return new GuardedTypeConversion(new GuardedInvocation(mh, canLinkTypeStatic(sourceType) ? null : GUARD_PRIMITIVE).asType(mh.type().changeParameterType(0, sourceType)), true);
+        return new GuardedInvocation(mh, canLinkTypeStatic(sourceType) ? null : GUARD_PRIMITIVE).asType(mh.type().changeParameterType(0, sourceType));
     }
 
     /**
@@ -97,7 +96,7 @@ final class NashornPrimitiveLinker implements TypeBasedGuardingDynamicLinker, Gu
      * @param sourceType the source type to convert from
      * @param targetType1 one candidate target type
      * @param targetType2 another candidate target type
-     * @return one of {@link jdk.internal.dynalink.linker.ConversionComparator.Comparison} values signifying which
+     * @return one of {@link jdk.dynalink.linker.ConversionComparator.Comparison} values signifying which
      * target type should be favored for conversion.
      */
     @Override
@@ -171,7 +170,7 @@ final class NashornPrimitiveLinker implements TypeBasedGuardingDynamicLinker, Gu
 
     @SuppressWarnings("unused")
     private static boolean isJavaScriptPrimitive(final Object o) {
-        return JSType.isString(o) || o instanceof Boolean || o instanceof Number || o == null;
+        return JSType.isString(o) || o instanceof Boolean || JSType.isNumber(o) || o == null || o instanceof Symbol;
     }
 
     private static final MethodHandle GUARD_PRIMITIVE = findOwnMH("isJavaScriptPrimitive", boolean.class, Object.class);

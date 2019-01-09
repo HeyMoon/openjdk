@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2014, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 package com.sun.tools.sjavac;
 
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.Arrays;
 
@@ -34,8 +35,10 @@ import javax.tools.JavaFileManager;
 import com.sun.tools.javac.api.JavacTool;
 import com.sun.tools.javac.code.ClassFinder;
 import com.sun.tools.javac.code.Symbol.ClassSymbol;
+import com.sun.tools.javac.code.Symtab;
 import com.sun.tools.javac.main.JavaCompiler;
 import com.sun.tools.javac.util.Context;
+import com.sun.tools.javac.util.Convert;
 import com.sun.tools.javac.util.Name;
 import com.sun.tools.javac.util.Names;
 import com.sun.tools.sjavac.comp.PubapiVisitor;
@@ -46,8 +49,10 @@ import com.sun.tools.sjavac.pubapi.PubApi;
 public class PubApiExtractor {
     // Setup a compiler context for finding classes in the classpath
     // and to execute annotation processors.
-    Context context;
-    CompilationTask task;
+    final Context context;
+    final CompilationTask task;
+
+    final SmartFileManager fileManager;
 
     /**
      * Setup a compilation context, used for reading public apis of classes on the classpath
@@ -55,7 +60,7 @@ public class PubApiExtractor {
      */
     public PubApiExtractor(Options options) {
         JavacTool compiler = com.sun.tools.javac.api.JavacTool.create();
-        SmartFileManager fileManager = new SmartFileManager(compiler.getStandardFileManager(null, null, null));
+        fileManager = new SmartFileManager(compiler.getStandardFileManager(null, null, null));
         context = new com.sun.tools.javac.util.Context();
         String[] args = options.prepJavacArgs();
         task = compiler.getTask(new PrintWriter(System.err),
@@ -74,12 +79,17 @@ public class PubApiExtractor {
     }
 
     public PubApi getPubApi(String fullyQualifiedClassName) {
+        Symtab syms = Symtab.instance(context);
         ClassFinder cr = ClassFinder.instance(context);
         Names ns = Names.instance(context);
         Name n = ns.fromString(fullyQualifiedClassName);
-        ClassSymbol cs = cr.loadClass(n);
+        ClassSymbol cs = cr.loadClass(syms.inferModule(Convert.packagePart(n)), n);
         PubapiVisitor v = new PubapiVisitor();
         v.visit(cs);
         return v.getCollectedPubApi();
+    }
+
+    public void close() throws IOException {
+        fileManager.close();
     }
 }

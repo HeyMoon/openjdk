@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,8 @@ package sun.invoke.util;
 
 import java.lang.reflect.Modifier;
 import static java.lang.reflect.Modifier.*;
-import sun.reflect.Reflection;
+import java.util.Objects;
+import jdk.internal.reflect.Reflection;
 
 /**
  * This class centralizes information about the JVM's linkage access control.
@@ -37,6 +38,8 @@ public class VerifyAccess {
 
     private VerifyAccess() { }  // cannot instantiate
 
+    private static final int UNCONDITIONAL_ALLOWED = java.lang.invoke.MethodHandles.Lookup.UNCONDITIONAL;
+    private static final int MODULE_ALLOWED = java.lang.invoke.MethodHandles.Lookup.MODULE;
     private static final int PACKAGE_ONLY = 0;
     private static final int PACKAGE_ALLOWED = java.lang.invoke.MethodHandles.Lookup.PACKAGE;
     private static final int PROTECTED_OR_PACKAGE_ALLOWED = (PACKAGE_ALLOWED|PROTECTED);
@@ -89,7 +92,7 @@ public class VerifyAccess {
                                              int      allowedModes) {
         if (allowedModes == 0)  return false;
         assert((allowedModes & PUBLIC) != 0 &&
-               (allowedModes & ~(ALL_ACCESS_MODES|PACKAGE_ALLOWED)) == 0);
+               (allowedModes & ~(ALL_ACCESS_MODES|PACKAGE_ALLOWED|MODULE_ALLOWED|UNCONDITIONAL_ALLOWED)) == 0);
         // The symbolic reference class (refc) must always be fully verified.
         if (!isClassAccessible(refc, lookupClass, allowedModes)) {
             return false;
@@ -157,8 +160,10 @@ public class VerifyAccess {
      * Evaluate the JVM linkage rules for access to the given class on behalf of caller.
      * <h3>JVM Specification, 5.4.4 "Access Control"</h3>
      * A class or interface C is accessible to a class or interface D
-     * if and only if either of the following conditions are true:<ul>
-     * <li>C is public.
+     * if and only if any of the following conditions are true:<ul>
+     * <li>C is public and in the same module as D.
+     * <li>D is in a module that reads the module containing C, C is public and in a
+     * package that is exported to the module that contains D.
      * <li>C and D are members of the same runtime package.
      * </ul>
      * @param refc the symbolic reference class to which access is being checked (C)
@@ -168,10 +173,47 @@ public class VerifyAccess {
                                             int allowedModes) {
         if (allowedModes == 0)  return false;
         assert((allowedModes & PUBLIC) != 0 &&
-               (allowedModes & ~(ALL_ACCESS_MODES|PACKAGE_ALLOWED)) == 0);
+               (allowedModes & ~(ALL_ACCESS_MODES|PACKAGE_ALLOWED|MODULE_ALLOWED|UNCONDITIONAL_ALLOWED)) == 0);
         int mods = getClassModifiers(refc);
-        if (isPublic(mods))
-            return true;
+        if (isPublic(mods)) {
+
+            Module lookupModule = lookupClass.getModule();
+            Module refModule = refc.getModule();
+
+            // early VM startup case, java.base not defined
+            if (lookupModule == null) {
+                assert refModule == null;
+                return true;
+            }
+
+            // trivially allow
+            if ((allowedModes & MODULE_ALLOWED) != 0 &&
+                (lookupModule == refModule))
+                return true;
+
+            // check readability when UNCONDITIONAL not allowed
+            if (((allowedModes & UNCONDITIONAL_ALLOWED) != 0)
+                || lookupModule.canRead(refModule)) {
+
+                // check that refc is in an exported package
+                if ((allowedModes & MODULE_ALLOWED) != 0) {
+                    if (refModule.isExported(refc.getPackageName(), lookupModule))
+                        return true;
+                } else {
+                    // exported unconditionally
+                    if (refModule.isExported(refc.getPackageName()))
+                        return true;
+                }
+
+                // not exported but allow access during VM initialization
+                // because java.base does not have its exports setup
+                if (!jdk.internal.misc.VM.isModuleSystemInited())
+                    return true;
+            }
+
+            // public class not accessible to lookupClass
+            return false;
+        }
         if ((allowedModes & PACKAGE_ALLOWED) != 0 &&
             isSamePackage(lookupClass, refc))
             return true;
@@ -185,22 +227,66 @@ public class VerifyAccess {
      * @param refc the class attempting to make the reference
      */
     public static boolean isTypeVisible(Class<?> type, Class<?> refc) {
-        if (type == refc)  return true;  // easy check
+        if (type == refc) {
+            return true;  // easy check
+        }
         while (type.isArray())  type = type.getComponentType();
-        if (type.isPrimitive() || type == Object.class)  return true;
-        ClassLoader parent = type.getClassLoader();
-        if (parent == null)  return true;
-        ClassLoader child  = refc.getClassLoader();
-        if (child == null)  return false;
-        if (parent == child || loadersAreRelated(parent, child, true))
+        if (type.isPrimitive() || type == Object.class) {
             return true;
-        // Do it the hard way:  Look up the type name from the refc loader.
-        try {
-            Class<?> res = child.loadClass(type.getName());
-            return (type == res);
-        } catch (ClassNotFoundException ex) {
+        }
+        ClassLoader typeLoader = type.getClassLoader();
+        ClassLoader refcLoader = refc.getClassLoader();
+        if (typeLoader == refcLoader) {
+            return true;
+        }
+        if (refcLoader == null && typeLoader != null) {
             return false;
         }
+        if (typeLoader == null && type.getName().startsWith("java.")) {
+            // Note:  The API for actually loading classes, ClassLoader.defineClass,
+            // guarantees that classes with names beginning "java." cannot be aliased,
+            // because class loaders cannot load them directly.
+            return true;
+        }
+
+        // Do it the hard way:  Look up the type name from the refc loader.
+        //
+        // Force the refc loader to report and commit to a particular binding for this type name (type.getName()).
+        //
+        // In principle, this query might force the loader to load some unrelated class,
+        // which would cause this query to fail (and the original caller to give up).
+        // This would be wasted effort, but it is expected to be very rare, occurring
+        // only when an attacker is attempting to create a type alias.
+        // In the normal case, one class loader will simply delegate to the other,
+        // and the same type will be visible through both, with no extra loading.
+        //
+        // It is important to go through Class.forName instead of ClassLoader.loadClass
+        // because Class.forName goes through the JVM system dictionary, which records
+        // the class lookup once for all. This means that even if a not-well-behaved class loader
+        // would "change its mind" about the meaning of the name, the Class.forName request
+        // will use the result cached in the JVM system dictionary. Note that the JVM system dictionary
+        // will record the first successful result. Unsuccessful results are not stored.
+        //
+        // We use doPrivileged in order to allow an unprivileged caller to ask an arbitrary
+        // class loader about the binding of the proposed name (type.getName()).
+        // The looked up type ("res") is compared for equality against the proposed
+        // type ("type") and then is discarded.  Thus, the worst that can happen to
+        // the "child" class loader is that it is bothered to load and report a class
+        // that differs from "type"; this happens once due to JVM system dictionary
+        // memoization.  And the caller never gets to look at the alternate type binding
+        // ("res"), whether it exists or not.
+        final String name = type.getName();
+        Class<?> res = java.security.AccessController.doPrivileged(
+                new java.security.PrivilegedAction<>() {
+                    public Class<?> run() {
+                        try {
+                            return Class.forName(name, false, refcLoader);
+                        } catch (ClassNotFoundException | LinkageError e) {
+                            return null; // Assume the class is not found
+                        }
+                    }
+            });
+        return (type == res);
     }
 
     /**
@@ -219,6 +305,16 @@ public class VerifyAccess {
     }
 
     /**
+     * Tests if two classes are in the same module.
+     * @param class1 a class
+     * @param class2 another class
+     * @return whether they are in the same module
+     */
+    public static boolean isSameModule(Class<?> class1, Class<?> class2) {
+        return class1.getModule() == class2.getModule();
+    }
+
+    /**
      * Test if two classes have the same class loader and package qualifier.
      * @param class1 a class
      * @param class2 another class
@@ -230,24 +326,16 @@ public class VerifyAccess {
             return true;
         if (class1.getClassLoader() != class2.getClassLoader())
             return false;
-        String name1 = class1.getName(), name2 = class2.getName();
-        int dot = name1.lastIndexOf('.');
-        if (dot != name2.lastIndexOf('.'))
-            return false;
-        for (int i = 0; i < dot; i++) {
-            if (name1.charAt(i) != name2.charAt(i))
-                return false;
-        }
-        return true;
+        return Objects.equals(class1.getPackageName(), class2.getPackageName());
     }
 
     /** Return the package name for this class.
      */
     public static String getPackageName(Class<?> cls) {
-        assert(!cls.isArray());
+        assert (!cls.isArray());
         String name = cls.getName();
         int dot = name.lastIndexOf('.');
-        if (dot < 0)  return "";
+        if (dot < 0) return "";
         return name.substring(0, dot);
     }
 

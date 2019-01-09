@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -61,15 +61,13 @@ public class EventsBalancedTest {
 
         test(null, Arrays.asList(a, b));
         test(null, Arrays.asList(b, a));
-        test(Arrays.asList("-XD-relax"), Arrays.asList(a, b));
-        test(Arrays.asList("-XD-relax"), Arrays.asList(b, a));
 
         for (CompileState stop : CompileState.values()) {
-            test(Arrays.asList("-XDshouldStopPolicyIfNoError=" + stop,
-                               "-XDshouldStopPolicyIfError=" + stop),
+            test(Arrays.asList("--should-stop:ifNoError=" + stop,
+                               "--should-stop:ifError=" + stop),
                  Arrays.asList(a, b));
-            test(Arrays.asList("-XDshouldStopPolicyIfNoError=" + stop,
-                               "-XDshouldStopPolicyIfError=" + stop),
+            test(Arrays.asList("--should-stop:ifNoError=" + stop,
+                               "--should-stop:ifError=" + stop),
                  Arrays.asList(b, a));
         }
     }

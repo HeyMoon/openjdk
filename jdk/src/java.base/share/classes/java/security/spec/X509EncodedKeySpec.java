@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -75,14 +75,14 @@ public class X509EncodedKeySpec extends EncodedKeySpec {
      * array are copied to protect against subsequent modification.
      * @param algorithm the algorithm name of the encoded public key
      * See the KeyFactory section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#KeyFactory">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#keyfactory-algorithms">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard algorithm names.
      * @throws NullPointerException if {@code encodedKey}
      * or {@code algorithm} is null.
      * @throws IllegalArgumentException if {@code algorithm} is
      * the empty string {@code ""}
-     * @since 1.9
+     * @since 9
      */
     public X509EncodedKeySpec(byte[] encodedKey, String algorithm) {
         super(encodedKey, algorithm);

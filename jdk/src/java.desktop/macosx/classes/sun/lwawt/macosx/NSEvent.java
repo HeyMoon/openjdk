@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,6 +32,13 @@ import java.awt.event.*;
  * JDK functionality.
  */
 final class NSEvent {
+
+    static final int SCROLL_PHASE_UNSUPPORTED = 1;
+    static final int SCROLL_PHASE_BEGAN = 2;
+    static final int SCROLL_PHASE_CONTINUED = 3;
+    static final int SCROLL_PHASE_MOMENTUM_BEGAN = 4;
+    static final int SCROLL_PHASE_ENDED = 5;
+
     private int type;
     private int modifierFlags;
 
@@ -42,6 +49,7 @@ final class NSEvent {
     private int y;
     private double scrollDeltaY;
     private double scrollDeltaX;
+    private int scrollPhase;
     private int absX;
     private int absY;
 
@@ -62,7 +70,7 @@ final class NSEvent {
     // Called from native
     NSEvent(int type, int modifierFlags, int clickCount, int buttonNumber,
                    int x, int y, int absX, int absY,
-                   double scrollDeltaY, double scrollDeltaX) {
+                   double scrollDeltaY, double scrollDeltaX, int scrollPhase) {
         this.type = type;
         this.modifierFlags = modifierFlags;
         this.clickCount = clickCount;
@@ -73,6 +81,7 @@ final class NSEvent {
         this.absY = absY;
         this.scrollDeltaY = scrollDeltaY;
         this.scrollDeltaX = scrollDeltaX;
+        this.scrollPhase = scrollPhase;
     }
 
     int getType() {
@@ -105,6 +114,10 @@ final class NSEvent {
 
     double getScrollDeltaX() {
         return scrollDeltaX;
+    }
+
+    int getScrollPhase() {
+        return scrollPhase;
     }
 
     int getAbsX() {
@@ -231,16 +244,14 @@ final class NSEvent {
         return jeventType;
     }
 
-    /*
-     * Converts NSEvent mouse modifiers to AWT mouse modifiers.
+    /**
+     * Converts NSEvent key modifiers to AWT key modifiers. Note that this
+     * method adds the current mouse state as a mouse modifiers.
+     *
+     * @param  modifierFlags the NSEvent key modifiers
+     * @return the java key and mouse modifiers
      */
-    static native int nsToJavaMouseModifiers(int buttonNumber,
-                                                    int modifierFlags);
-
-    /*
-     * Converts NSEvent key modifiers to AWT key modifiers.
-     */
-    static native int nsToJavaKeyModifiers(int modifierFlags);
+    static native int nsToJavaModifiers(int modifierFlags);
 
     /*
      * Converts NSEvent key info to AWT key info.
@@ -256,7 +267,7 @@ final class NSEvent {
      * There is a small number of NS characters that need to be converted
      * into other characters before we pass them to AWT.
      */
-    static native char nsToJavaChar(char nsChar, int modifierFlags);
+    static native char nsToJavaChar(char nsChar, int modifierFlags, boolean spaceKeyTyped);
 
     static boolean isPopupTrigger(int jmodifiers) {
         final boolean isRightButtonDown = ((jmodifiers & InputEvent.BUTTON3_DOWN_MASK) != 0);

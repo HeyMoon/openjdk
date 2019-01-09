@@ -390,13 +390,13 @@ void PhaseIdealLoop::handle_use( Node *use, Node *def, small_cache *cache, Node 
 // Found an If getting its condition-code input from a Phi in the same block.
 // Split thru the Region.
 void PhaseIdealLoop::do_split_if( Node *iff ) {
-#ifndef PRODUCT
-  if( PrintOpto && VerifyLoopOptimizations )
+  if (PrintOpto && VerifyLoopOptimizations) {
     tty->print_cr("Split-if");
+  }
   if (TraceLoopOpts) {
     tty->print_cr("SplitIf");
   }
-#endif
+
   C->set_major_progress();
   Node *region = iff->in(0);
   Node *region_dom = idom(region);
@@ -451,8 +451,8 @@ void PhaseIdealLoop::do_split_if( Node *iff ) {
 
   // Replace both uses of 'new_iff' with Regions merging True/False
   // paths.  This makes 'new_iff' go dead.
-  Node *old_false, *old_true;
-  Node *new_false, *new_true;
+  Node *old_false = NULL, *old_true = NULL;
+  Node *new_false = NULL, *new_true = NULL;
   for (DUIterator_Last j2min, j2 = iff->last_outs(j2min); j2 >= j2min; --j2) {
     Node *ifp = iff->last_out(j2);
     assert( ifp->Opcode() == Op_IfFalse || ifp->Opcode() == Op_IfTrue, "" );
@@ -472,7 +472,7 @@ void PhaseIdealLoop::do_split_if( Node *iff ) {
 
     // Replace in the graph with lazy-update mechanism
     new_iff->set_req(0, new_iff); // hook self so it does not go dead
-    lazy_replace_proj( ifp, ifpx );
+    lazy_replace(ifp, ifpx);
     new_iff->set_req(0, region);
 
     // Record bits for later xforms

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,24 +24,27 @@
 package test.astro;
 
 import static java.lang.String.valueOf;
-import static org.testng.Assert.assertEquals;
+import static jaxp.library.JAXPTestUtilities.USER_DIR;
+import static jaxp.library.JAXPTestUtilities.compareWithGold;
+import static org.testng.Assert.assertTrue;
 import static test.astro.AstroConstants.ASTROCAT;
 import static test.astro.AstroConstants.GOLDEN_DIR;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.List;
 
 import javax.xml.transform.sax.TransformerHandler;
 
-import jaxp.library.JAXPFileBaseTest;
-
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
+import org.testng.annotations.Listeners;
 import org.testng.annotations.Test;
 
 /*
+ * @test
+ * @library /javax/xml/jaxp/libs
+ * @run testng/othervm -DrunSecMngr=true test.astro.AstroTest
+ * @run testng/othervm test.astro.AstroTest
  * @summary run astro application, test xslt
  *
  * There are vast amounts of textual astronomical data, typically user is
@@ -66,16 +69,17 @@ import org.testng.annotations.Test;
  * AstroProcessor to test different JAXP classes and features.
  *
  */
-public class AstroTest extends JAXPFileBaseTest {
+@Listeners({jaxp.library.FilePolicy.class})
+public class AstroTest {
     private FiltersAndGolden[] data;
 
     @BeforeClass
     public void setup() throws Exception {
         data = new FiltersAndGolden[4];
-        data[0] = new FiltersAndGolden(getGoldenFileContent(1), astro -> astro.getRAFilter(0.106, 0.108));
-        data[1] = new FiltersAndGolden(getGoldenFileContent(2), astro -> astro.getStellarTypeFilter("K0IIIbCN-0.5"));
-        data[2] = new FiltersAndGolden(getGoldenFileContent(3), astro -> astro.getStellarTypeFilter("G"), astro -> astro.getDecFilter(-5.0, 60.0));
-        data[3] = new FiltersAndGolden(getGoldenFileContent(4), astro -> astro.getRADECFilter(0.084, 0.096, -5.75, 14.0));
+        data[0] = new FiltersAndGolden(getGoldenFileName(1), astro -> astro.getRAFilter(0.106, 0.108));
+        data[1] = new FiltersAndGolden(getGoldenFileName(2), astro -> astro.getStellarTypeFilter("K0IIIbCN-0.5"));
+        data[2] = new FiltersAndGolden(getGoldenFileName(3), astro -> astro.getStellarTypeFilter("G"), astro -> astro.getDecFilter(-5.0, 60.0));
+        data[3] = new FiltersAndGolden(getGoldenFileName(4), astro -> astro.getRADECFilter(0.084, 0.096, -5.75, 14.0));
     }
 
     /*
@@ -97,24 +101,24 @@ public class AstroTest extends JAXPFileBaseTest {
         AstroProcessor astro = new AstroProcessor(fFactClass, ASTROCAT, isFactClass);
 
         for (int i = 0; i < data.length; i++) {
-            runProcess(astro, valueOf(i + 1), data[i].getGolden(), data[i].getFilters());
+            runProcess(astro, valueOf(i + 1), data[i].getGoldenFileName(), data[i].getFilters());
         }
     }
 
-    private void runProcess(AstroProcessor astro, String processNum, List<String> goldenfileContent, FilterCreator... filterCreators) throws Exception {
+    private void runProcess(AstroProcessor astro, String processNum, String goldenFileName, FilterCreator... filterCreators) throws Exception {
         System.out.println("run process " + processNum);
         TransformerHandler[] filters = new TransformerHandler[filterCreators.length];
         for (int i = 0; i < filterCreators.length; i++)
             filters[i] = filterCreators[i].createFilter(astro);
 
-        String outputfile = Files.createTempFile(Paths.get("").toAbsolutePath(), "query" + processNum + ".out.", null).toString();
+        String outputfile = Files.createTempFile(Paths.get(USER_DIR), "query" + processNum + ".out.", null).toString();
         System.out.println("output file: " + outputfile);
         astro.process(outputfile, filters);
-        assertEquals(Files.readAllLines(Paths.get(outputfile)), goldenfileContent);
+        assertTrue(compareWithGold(goldenFileName, outputfile));
     }
 
-    private List<String>  getGoldenFileContent(int num) throws IOException {
-        return Files.readAllLines(Paths.get(GOLDEN_DIR + "query" + num + ".out"));
+    private String getGoldenFileName(int num) {
+        return GOLDEN_DIR + "query" + num + ".out";
     }
 
     @FunctionalInterface
@@ -124,19 +128,19 @@ public class AstroTest extends JAXPFileBaseTest {
 
     private static class FiltersAndGolden {
         private FilterCreator[] filters;
-        private List<String> golden;
+        private String goldenFileName;
 
-        FiltersAndGolden(List<String> golden, FilterCreator... filters) {
+        FiltersAndGolden(String goldenFileName, FilterCreator... filters) {
             this.filters = filters;
-            this.golden = golden;
+            this.goldenFileName = goldenFileName;
         }
 
         FilterCreator[] getFilters() {
             return filters;
         }
 
-        List<String> getGolden() {
-            return golden;
+        String getGoldenFileName() {
+            return goldenFileName;
         }
     }
 }

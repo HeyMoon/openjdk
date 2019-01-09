@@ -30,7 +30,7 @@
  *          is not initialized.
  *
  * @modules java.base/sun.util.logging
- * @compile -XDignore.symbol.file PlatformLoggerTest.java
+ *          java.logging/sun.util.logging.internal
  * @run main/othervm PlatformLoggerTest
  */
 
@@ -38,29 +38,34 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.logging.*;
 import sun.util.logging.PlatformLogger;
-import sun.util.logging.LoggingSupport;
 import static sun.util.logging.PlatformLogger.Level.*;
 
 public class PlatformLoggerTest {
+
+    static Logger logger;
+    static PlatformLogger bar;
+    static PlatformLogger goo;
+    static PlatformLogger foo;
+
     public static void main(String[] args) throws Exception {
         final String FOO_PLATFORM_LOGGER = "test.platformlogger.foo";
         final String BAR_PLATFORM_LOGGER = "test.platformlogger.bar";
         final String GOO_PLATFORM_LOGGER = "test.platformlogger.goo";
         final String BAR_LOGGER = "test.logger.bar";
-        PlatformLogger goo = PlatformLogger.getLogger(GOO_PLATFORM_LOGGER);
+        goo = PlatformLogger.getLogger(GOO_PLATFORM_LOGGER);
         // test the PlatformLogger methods
         testLogMethods(goo);
 
         // Create a platform logger using the default
-        PlatformLogger foo = PlatformLogger.getLogger(FOO_PLATFORM_LOGGER);
+        foo = PlatformLogger.getLogger(FOO_PLATFORM_LOGGER);
         checkPlatformLogger(foo, FOO_PLATFORM_LOGGER);
 
         // create a java.util.logging.Logger
         // now java.util.logging.Logger should be created for each platform logger
-        Logger logger = Logger.getLogger(BAR_LOGGER);
+        logger = Logger.getLogger(BAR_LOGGER);
         logger.setLevel(Level.WARNING);
 
-        PlatformLogger bar = PlatformLogger.getLogger(BAR_PLATFORM_LOGGER);
+        bar = PlatformLogger.getLogger(BAR_PLATFORM_LOGGER);
         checkPlatformLogger(bar, BAR_PLATFORM_LOGGER);
 
         // test the PlatformLogger methods
@@ -195,7 +200,9 @@ public class PlatformLoggerTest {
         System.out.println("Testing Java Level with: " + level.getName());
 
         // create a brand new java logger
-        Logger javaLogger = (Logger) LoggingSupport.getLogger(logger.getName()+"."+level.getName());
+        Logger javaLogger = sun.util.logging.internal.LoggingProviderImpl.getLogManagerAccess()
+                     .demandLoggerFor(LogManager.getLogManager(),
+                          logger.getName()+"."+level.getName(), Thread.class.getModule());
 
         // Set a non standard java.util.logging.Level on the java logger
         // (except for OFF & ALL - which will remain unchanged)

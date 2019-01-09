@@ -49,6 +49,9 @@
 #include "dither.h"
 #include "img_util_md.h"
 #include "Devices.h"
+#include <d2d1.h>
+#pragma comment(lib, "d2d1")
+#include "systemScale.h"
 
 uns_ordered_dither_array img_oda_alpha;
 
@@ -74,6 +77,8 @@ AwtWin32GraphicsDevice::AwtWin32GraphicsDevice(int screen,
 {
     this->screen  = screen;
     this->devicesArray = arr;
+    this->scaleX = 1;
+    this->scaleY = 1;
     javaDevice = NULL;
     colorData = new ImgColorData;
     colorData->grayscale = GS_NOTGRAY;
@@ -617,6 +622,55 @@ void AwtWin32GraphicsDevice::SetJavaDevice(JNIEnv *env, jobject objPtr)
 }
 
 /**
+ * Sets horizontal and vertical scale factors
+ */
+void AwtWin32GraphicsDevice::SetScale(float sx, float sy)
+{
+    scaleX = sx;
+    scaleY = sy;
+}
+
+int AwtWin32GraphicsDevice::ScaleUpX(int x)
+{
+    return (int)ceil(x * scaleX);
+}
+
+int AwtWin32GraphicsDevice::ScaleUpY(int y)
+{
+    return (int)ceil(y * scaleY);
+}
+
+int AwtWin32GraphicsDevice::ScaleDownX(int x)
+{
+    return (int)ceil(x / scaleX);
+}
+
+int AwtWin32GraphicsDevice::ScaleDownY(int y)
+{
+    return (int)ceil(y / scaleY);
+}
+
+void AwtWin32GraphicsDevice::InitDesktopScales()
+{
+    float dpiX = -1.0f;
+    float dpiY = -1.0f;
+    GetScreenDpi(GetMonitor(), &dpiX, &dpiY);
+    if (dpiX > 0 && dpiY > 0) {
+        SetScale(dpiX / 96, dpiY / 96);
+    }
+}
+
+float AwtWin32GraphicsDevice::GetScaleX()
+{
+    return scaleX;
+}
+
+float AwtWin32GraphicsDevice::GetScaleY()
+{
+    return scaleY;
+}
+
+/**
  * Disables offscreen acceleration for this device.  This
  * sets a flag in the java object that is used to determine
  * whether offscreen surfaces can be created on the device.
@@ -800,6 +854,10 @@ int AwtWin32GraphicsDevice::GetScreenFromHMONITOR(HMONITOR mon) {
                 "AwtWin32GraphicsDevice::GetScreenFromHMONITOR mhnd=%x", mon);
 
     DASSERT(mon != NULL);
+    JNIEnv *env = (JNIEnv*) JNU_GetEnv(jvm, JNI_VERSION_1_2);
+    if (!Devices::GetInstance()) {
+       Devices::UpdateInstance(env);
+    }
     Devices::InstanceAccess devices;
 
     for (int i = 0; i < devices->GetNumDevices(); i++) {
@@ -874,6 +932,9 @@ Java_sun_awt_Win32GraphicsDevice_initIDs(JNIEnv *env, jclass cls)
 
     // Only want to call this once per session
     make_uns_ordered_dither_array(img_oda_alpha, 256);
+
+    // workaround JDK-6477756, ignore return value to keep dll in memory
+    JDK_LoadSystemLibrary("opengl32.dll");
 
     CATCH_BAD_ALLOC;
 }
@@ -1304,3 +1365,66 @@ JNIEXPORT void JNICALL
     Devices::InstanceAccess devices;
     devices->GetDevice(screen)->SetJavaDevice(env, thisPtr);
 }
+
+/*
+ * Class:     sun_awt_Win32GraphicsDevice
+ * Method:    setNativeScale
+ * Signature: (I,F,F)V
+ */
+JNIEXPORT void JNICALL
+    Java_sun_awt_Win32GraphicsDevice_setNativeScale
+    (JNIEnv *env, jobject thisPtr, jint screen, jfloat scaleX, jfloat scaleY)
+{
+    Devices::InstanceAccess devices;
+    AwtWin32GraphicsDevice *device = devices->GetDevice(screen);
+
+    if (device != NULL ) {
+        device->SetScale(scaleX, scaleY);
+    }
+}
+
+/*
+ * Class:     sun_awt_Win32GraphicsDevice
+ * Method:    getNativeScaleX
+ * Signature: (I)F
+ */
+JNIEXPORT jfloat JNICALL
+    Java_sun_awt_Win32GraphicsDevice_getNativeScaleX
+    (JNIEnv *env, jobject thisPtr, jint screen)
+{
+    Devices::InstanceAccess devices;
+    AwtWin32GraphicsDevice *device = devices->GetDevice(screen);
+    return (device == NULL) ? 1 : device->GetScaleX();
+}
+
+/*
+ * Class:     sun_awt_Win32GraphicsDevice
+ * Method:    getNativeScaleY
+ * Signature: (I)F
+ */
+JNIEXPORT jfloat JNICALL
+    Java_sun_awt_Win32GraphicsDevice_getNativeScaleY
+    (JNIEnv *env, jobject thisPtr, jint screen)
+{
+    Devices::InstanceAccess devices;
+    AwtWin32GraphicsDevice *device = devices->GetDevice(screen);
+    return (device == NULL) ? 1 : device->GetScaleY();
+}
+
+/*
+* Class:     sun_awt_Win32GraphicsDevice
+* Method:    initNativeScale
+* Signature: (I)V;
+*/
+JNIEXPORT void JNICALL
+Java_sun_awt_Win32GraphicsDevice_initNativeScale
+(JNIEnv *env, jobject thisPtr, jint screen)
+{
+    Devices::InstanceAccess devices;
+    AwtWin32GraphicsDevice *device = devices->GetDevice(screen);
+
+    if (device != NULL) {
+        device->InitDesktopScales();
+    }
+}
+

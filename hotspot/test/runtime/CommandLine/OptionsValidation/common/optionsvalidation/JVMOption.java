@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,15 +25,19 @@ package optionsvalidation;
 import com.sun.tools.attach.VirtualMachine;
 import com.sun.tools.attach.AttachOperationFailedException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
-import jdk.test.lib.DynamicVMOption;
-import jdk.test.lib.OutputAnalyzer;
-import jdk.test.lib.ProcessTools;
+import java.util.Set;
+import jdk.test.lib.management.DynamicVMOption;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
 import jdk.test.lib.dcmd.CommandExecutor;
 import jdk.test.lib.dcmd.JMXExecutor;
 import sun.tools.attach.HotSpotVirtualMachine;
 
 import static optionsvalidation.JVMOptionsUtils.failedMessage;
+import static optionsvalidation.JVMOptionsUtils.GCType;
 import static optionsvalidation.JVMOptionsUtils.printOutputContent;
 import static optionsvalidation.JVMOptionsUtils.VMType;
 
@@ -55,6 +59,18 @@ public abstract class JVMOption {
     protected boolean withRange;
 
     /**
+     * Test valid min range value and additional small values
+     */
+    protected boolean testMinRange;
+
+    /**
+     * Test valid max range value and additional big values
+     */
+    protected boolean testMaxRange;
+
+    private Set<Integer> allowedExitCodes;
+
+    /**
      * Prepend string which added before testing option to the command line
      */
     private final List<String> prepend;
@@ -63,7 +79,12 @@ public abstract class JVMOption {
     protected JVMOption() {
         this.prepend = new ArrayList<>();
         prependString = new StringBuilder();
+        allowedExitCodes = new HashSet<>();
+        allowedExitCodes.add(0);
+        allowedExitCodes.add(1);
         withRange = false;
+        testMinRange = true;
+        testMaxRange = true;
     }
 
     /**
@@ -133,6 +154,24 @@ public abstract class JVMOption {
      */
     final void optionWithRange() {
         withRange = true;
+    }
+
+    /**
+     * Exclude testing of min range value for this option
+     */
+    public final void excludeTestMinRange() {
+        testMinRange = false;
+    }
+
+    /**
+     * Exclude testing of max range value for this option
+     */
+    public final void excludeTestMaxRange() {
+        testMaxRange = false;
+    }
+
+    public final void setAllowedExitCodes(Integer... allowedExitCodes) {
+        this.allowedExitCodes.addAll(Arrays.asList(allowedExitCodes));
     }
 
     /**
@@ -336,17 +375,21 @@ public abstract class JVMOption {
     private boolean runJavaWithParam(String optionValue, boolean valid) throws Exception {
         int exitCode;
         boolean result = true;
-        String value = optionValue.substring(optionValue.lastIndexOf("=") + 1);
-        String fullOptionString = prependString.toString() + optionValue;
+        String errorMessage = null;
         List<String> runJava = new ArrayList<>();
         OutputAnalyzer out;
 
         if (VMType != null) {
             runJava.add(VMType);
         }
+
+        if (GCType != null) {
+            runJava.add(GCType);
+        }
+
         runJava.addAll(prepend);
         runJava.add(optionValue);
-        runJava.add(JVMOptionsUtils.class.getName());
+        runJava.add(JVMStartup.class.getName());
 
         out = new OutputAnalyzer(ProcessTools.createJavaProcessBuilder(runJava.toArray(new String[0])).start());
 
@@ -354,38 +397,35 @@ public abstract class JVMOption {
 
         if (out.getOutput().contains("A fatal error has been detected by the Java Runtime Environment")) {
             /* Always consider "fatal error" in output as fail */
-            failedMessage(name, fullOptionString, valid, "JVM output reports a fatal error. JVM exited with code " + exitCode + "!");
-            printOutputContent(out);
-            result = false;
+            errorMessage = "JVM output reports a fatal error. JVM exited with code " + exitCode + "!";
         } else if (valid == true) {
-            if ((exitCode != 0) && (exitCode != 1)) {
-                failedMessage(name, fullOptionString, valid, "JVM exited with unexpected error code = " + exitCode);
-                printOutputContent(out);
-                result = false;
-            } else if ((exitCode == 1) && (out.getOutput().isEmpty() == true)) {
-                failedMessage(name, fullOptionString, valid, "JVM exited with error(exitcode == 1)"
-                        + ", but with empty stdout and stderr. Description of error is needed!");
-                result = false;
+            if (!allowedExitCodes.contains(exitCode)) {
+                errorMessage = "JVM exited with unexpected error code = " + exitCode;
+            } else if ((exitCode != 0) && (out.getOutput().isEmpty() == true)) {
+                errorMessage = "JVM exited with error(exitcode == " + exitCode + "), but with empty stdout and stderr. " +
+                       "Description of error is needed!";
             } else if (out.getOutput().contains("is outside the allowed range")) {
-                failedMessage(name, fullOptionString, valid, "JVM output contains \"is outside the allowed range\"");
-                printOutputContent(out);
-                result = false;
+                errorMessage = "JVM output contains \"is outside the allowed range\"";
             }
         } else {
             // valid == false
+            String value = optionValue.substring(optionValue.lastIndexOf("=") + 1);
+            String errorMessageCommandLineValue = getErrorMessageCommandLine(value);
             if (exitCode == 0) {
-                failedMessage(name, fullOptionString, valid, "JVM successfully exit");
-                result = false;
+                errorMessage = "JVM successfully exit";
             } else if (exitCode != 1) {
-                failedMessage(name, fullOptionString, valid, "JVM exited with code "
-                        + exitCode + " which not equal to 1");
-                result = false;
-            } else if (!out.getOutput().contains(getErrorMessageCommandLine(value))) {
-                failedMessage(name, fullOptionString, valid, "JVM output does not contain "
-                        + "expected output \"" + getErrorMessageCommandLine(value) + "\"");
-                printOutputContent(out);
-                result = false;
+                errorMessage = "JVM exited with code " + exitCode + " which not equal to 1";
+            } else if (!out.getOutput().contains(errorMessageCommandLineValue)) {
+                errorMessage = "JVM output does not contain expected output \"" + errorMessageCommandLineValue + "\"";
             }
+        }
+
+        if (errorMessage != null) {
+            String fullOptionString = String.format("%s %s %s %s",
+                    VMType == null ? "" : VMType, GCType == null ? "" : GCType, prependString.toString(), optionValue).trim().replaceAll("  +", " ");
+            failedMessage(name, fullOptionString, valid, errorMessage);
+            printOutputContent(out);
+            result = false;
         }
 
         System.out.println("");

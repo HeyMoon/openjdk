@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,12 +31,11 @@
 class HeapRegion;
 class G1CollectedHeap;
 class G1RemSet;
-class ConcurrentMark;
+class G1ConcurrentMark;
 class DirtyCardToOopClosure;
-class CMBitMap;
-class CMMarkStack;
+class G1CMBitMap;
 class G1ParScanThreadState;
-class CMTask;
+class G1CMTask;
 class ReferenceProcessor;
 
 // A class that scans oops in a given heap region (much as OopsInGenClosure
@@ -52,15 +51,12 @@ class G1ParClosureSuper : public OopsInHeapRegionClosure {
 protected:
   G1CollectedHeap* _g1;
   G1ParScanThreadState* _par_scan_state;
-  uint _worker_id;
-public:
-  // Initializes the instance, leaving _par_scan_state uninitialized. Must be done
-  // later using the set_par_scan_thread_state() method.
-  G1ParClosureSuper(G1CollectedHeap* g1);
-  G1ParClosureSuper(G1CollectedHeap* g1, G1ParScanThreadState* par_scan_state);
-  bool apply_to_weak_ref_discovered_field() { return true; }
 
-  void set_par_scan_thread_state(G1ParScanThreadState* par_scan_state);
+  G1ParClosureSuper(G1CollectedHeap* g1, G1ParScanThreadState* par_scan_state);
+  ~G1ParClosureSuper() { }
+
+public:
+  virtual bool apply_to_weak_ref_discovered_field() { return true; }
 };
 
 class G1ParPushHeapRSClosure : public G1ParClosureSuper {
@@ -76,42 +72,47 @@ public:
 
 class G1ParScanClosure : public G1ParClosureSuper {
 public:
-  G1ParScanClosure(G1CollectedHeap* g1, ReferenceProcessor* rp) :
-    G1ParClosureSuper(g1) {
-    assert(_ref_processor == NULL, "sanity");
-    _ref_processor = rp;
-  }
+  G1ParScanClosure(G1CollectedHeap* g1, G1ParScanThreadState* par_scan_state) :
+    G1ParClosureSuper(g1, par_scan_state) { }
 
   template <class T> void do_oop_nv(T* p);
   virtual void do_oop(oop* p)          { do_oop_nv(p); }
   virtual void do_oop(narrowOop* p)    { do_oop_nv(p); }
+
+  void set_ref_processor(ReferenceProcessor* rp) {
+    set_ref_processor_internal(rp);
+  }
 };
 
 // Add back base class for metadata
-class G1ParCopyHelper : public G1ParClosureSuper {
+class G1ParCopyHelper : public OopClosure {
 protected:
+  G1CollectedHeap* _g1;
+  G1ParScanThreadState* _par_scan_state;
+  uint _worker_id;              // Cache value from par_scan_state.
   Klass* _scanned_klass;
-  ConcurrentMark* _cm;
+  G1ConcurrentMark* _cm;
 
   // Mark the object if it's not already marked. This is used to mark
   // objects pointed to by roots that are guaranteed not to move
   // during the GC (i.e., non-CSet objects). It is MT-safe.
-  void mark_object(oop obj);
+  inline void mark_object(oop obj);
 
   // Mark the object if it's not already marked. This is used to mark
   // objects pointed to by roots that have been forwarded during a
   // GC. It is MT-safe.
-  void mark_forwarded_object(oop from_obj, oop to_obj);
- public:
-  G1ParCopyHelper(G1CollectedHeap* g1,  G1ParScanThreadState* par_scan_state);
+  inline void mark_forwarded_object(oop from_obj, oop to_obj);
 
+  G1ParCopyHelper(G1CollectedHeap* g1,  G1ParScanThreadState* par_scan_state);
+  ~G1ParCopyHelper() { }
+
+ public:
   void set_scanned_klass(Klass* k) { _scanned_klass = k; }
-  template <class T> void do_klass_barrier(T* p, oop new_obj);
+  template <class T> inline void do_klass_barrier(T* p, oop new_obj);
 };
 
 enum G1Barrier {
   G1BarrierNone,
-  G1BarrierEvac,
   G1BarrierKlass
 };
 
@@ -121,49 +122,36 @@ enum G1Mark {
   G1MarkPromotedFromRoot
 };
 
-template <G1Barrier barrier, G1Mark do_mark_object>
+template <G1Barrier barrier, G1Mark do_mark_object, bool use_ext>
 class G1ParCopyClosure : public G1ParCopyHelper {
-private:
-  template <class T> void do_oop_work(T* p);
-
 public:
-  G1ParCopyClosure(G1CollectedHeap* g1, G1ParScanThreadState* par_scan_state,
-                   ReferenceProcessor* rp) :
-      G1ParCopyHelper(g1, par_scan_state) {
-    assert(_ref_processor == NULL, "sanity");
-  }
+  G1ParCopyClosure(G1CollectedHeap* g1, G1ParScanThreadState* par_scan_state) :
+      G1ParCopyHelper(g1, par_scan_state) { }
 
-  template <class T> void do_oop_nv(T* p) { do_oop_work(p); }
-  virtual void do_oop(oop* p)       { do_oop_nv(p); }
-  virtual void do_oop(narrowOop* p) { do_oop_nv(p); }
-
-  G1CollectedHeap*      g1()  { return _g1; };
-  G1ParScanThreadState* pss() { return _par_scan_state; }
-  ReferenceProcessor*   rp()  { return _ref_processor; };
+  template <class T> void do_oop_work(T* p);
+  virtual void do_oop(oop* p)       { do_oop_work(p); }
+  virtual void do_oop(narrowOop* p) { do_oop_work(p); }
 };
 
-typedef G1ParCopyClosure<G1BarrierNone,  G1MarkNone>             G1ParScanExtRootClosure;
-typedef G1ParCopyClosure<G1BarrierNone,  G1MarkFromRoot>         G1ParScanAndMarkExtRootClosure;
-typedef G1ParCopyClosure<G1BarrierNone,  G1MarkPromotedFromRoot> G1ParScanAndMarkWeakExtRootClosure;
-// We use a separate closure to handle references during evacuation
-// failure processing.
+class G1KlassScanClosure : public KlassClosure {
+ G1ParCopyHelper* _closure;
+ bool             _process_only_dirty;
+ int              _count;
+ public:
+  G1KlassScanClosure(G1ParCopyHelper* closure, bool process_only_dirty)
+      : _process_only_dirty(process_only_dirty), _closure(closure), _count(0) {}
+  void do_klass(Klass* klass);
+};
 
-typedef G1ParCopyClosure<G1BarrierEvac, G1MarkNone> G1ParScanHeapEvacFailureClosure;
-
-class FilterIntoCSClosure: public ExtendedOopClosure {
+class FilterIntoCSClosure: public OopClosure {
   G1CollectedHeap* _g1;
   OopClosure* _oc;
-  DirtyCardToOopClosure* _dcto_cl;
 public:
-  FilterIntoCSClosure(  DirtyCardToOopClosure* dcto_cl,
-                        G1CollectedHeap* g1,
-                        OopClosure* oc) :
-    _dcto_cl(dcto_cl), _g1(g1), _oc(oc) { }
+  FilterIntoCSClosure(G1CollectedHeap* g1, OopClosure* oc) : _g1(g1), _oc(oc) { }
 
-  template <class T> void do_oop_nv(T* p);
-  virtual void do_oop(oop* p)        { do_oop_nv(p); }
-  virtual void do_oop(narrowOop* p)  { do_oop_nv(p); }
-  bool apply_to_weak_ref_discovered_field() { return true; }
+  template <class T> void do_oop_work(T* p);
+  virtual void do_oop(oop* p)        { do_oop_work(p); }
+  virtual void do_oop(narrowOop* p)  { do_oop_work(p); }
 };
 
 class FilterOutOfRegionClosure: public ExtendedOopClosure {
@@ -181,12 +169,12 @@ public:
 // Closure for iterating over object fields during concurrent marking
 class G1CMOopClosure : public MetadataAwareOopClosure {
 protected:
-  ConcurrentMark*    _cm;
+  G1ConcurrentMark*  _cm;
 private:
   G1CollectedHeap*   _g1h;
-  CMTask*            _task;
+  G1CMTask*          _task;
 public:
-  G1CMOopClosure(G1CollectedHeap* g1h, ConcurrentMark* cm, CMTask* task);
+  G1CMOopClosure(G1CollectedHeap* g1h, G1ConcurrentMark* cm, G1CMTask* task);
   template <class T> void do_oop_nv(T* p);
   virtual void do_oop(      oop* p) { do_oop_nv(p); }
   virtual void do_oop(narrowOop* p) { do_oop_nv(p); }
@@ -196,12 +184,10 @@ public:
 class G1RootRegionScanClosure : public MetadataAwareOopClosure {
 private:
   G1CollectedHeap* _g1h;
-  ConcurrentMark*  _cm;
-  uint _worker_id;
+  G1ConcurrentMark* _cm;
 public:
-  G1RootRegionScanClosure(G1CollectedHeap* g1h, ConcurrentMark* cm,
-                          uint worker_id) :
-    _g1h(g1h), _cm(cm), _worker_id(worker_id) { }
+  G1RootRegionScanClosure(G1CollectedHeap* g1h, G1ConcurrentMark* cm) :
+    _g1h(g1h), _cm(cm) { }
   template <class T> void do_oop_nv(T* p);
   virtual void do_oop(      oop* p) { do_oop_nv(p); }
   virtual void do_oop(narrowOop* p) { do_oop_nv(p); }
@@ -212,43 +198,43 @@ public:
 // during an evacuation pause) to record cards containing
 // pointers into the collection set.
 
-class G1Mux2Closure : public ExtendedOopClosure {
+class G1Mux2Closure : public OopClosure {
   OopClosure* _c1;
   OopClosure* _c2;
 public:
   G1Mux2Closure(OopClosure *c1, OopClosure *c2);
-  template <class T> void do_oop_nv(T* p);
-  virtual void do_oop(oop* p)        { do_oop_nv(p); }
-  virtual void do_oop(narrowOop* p)  { do_oop_nv(p); }
+  template <class T> inline void do_oop_work(T* p);
+  virtual inline void do_oop(oop* p);
+  virtual inline void do_oop(narrowOop* p);
 };
 
 // A closure that returns true if it is actually applied
 // to a reference
 
-class G1TriggerClosure : public ExtendedOopClosure {
+class G1TriggerClosure : public OopClosure {
   bool _triggered;
 public:
   G1TriggerClosure();
   bool triggered() const { return _triggered; }
-  template <class T> void do_oop_nv(T* p);
-  virtual void do_oop(oop* p)        { do_oop_nv(p); }
-  virtual void do_oop(narrowOop* p)  { do_oop_nv(p); }
+  template <class T> inline void do_oop_work(T* p);
+  virtual inline void do_oop(oop* p);
+  virtual inline void do_oop(narrowOop* p);
 };
 
 // A closure which uses a triggering closure to determine
 // whether to apply an oop closure.
 
-class G1InvokeIfNotTriggeredClosure: public ExtendedOopClosure {
+class G1InvokeIfNotTriggeredClosure: public OopClosure {
   G1TriggerClosure* _trigger_cl;
   OopClosure* _oop_cl;
 public:
   G1InvokeIfNotTriggeredClosure(G1TriggerClosure* t, OopClosure* oc);
-  template <class T> void do_oop_nv(T* p);
-  virtual void do_oop(oop* p)        { do_oop_nv(p); }
-  virtual void do_oop(narrowOop* p)  { do_oop_nv(p); }
+  template <class T> inline void do_oop_work(T* p);
+  virtual inline void do_oop(oop* p);
+  virtual inline void do_oop(narrowOop* p);
 };
 
-class G1UpdateRSOrPushRefOopClosure: public ExtendedOopClosure {
+class G1UpdateRSOrPushRefOopClosure: public OopClosure {
   G1CollectedHeap* _g1;
   G1RemSet* _g1_rem_set;
   HeapRegion* _from;
@@ -274,11 +260,9 @@ public:
     return result;
   }
 
-  bool apply_to_weak_ref_discovered_field() { return true; }
-
-  template <class T> void do_oop_nv(T* p);
-  virtual void do_oop(narrowOop* p) { do_oop_nv(p); }
-  virtual void do_oop(oop* p)       { do_oop_nv(p); }
+  template <class T> inline void do_oop_work(T* p);
+  virtual inline void do_oop(narrowOop* p);
+  virtual inline void do_oop(oop* p);
 };
 
 #endif // SHARE_VM_GC_G1_G1OOPCLOSURES_HPP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1994, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1994, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,8 +25,8 @@
 
 package java.lang;
 
-import sun.misc.FloatingDecimal;
-import sun.misc.DoubleConsts;
+import jdk.internal.math.FloatingDecimal;
+import jdk.internal.math.DoubleConsts;
 import jdk.internal.HotSpotIntrinsicCandidate;
 
 /**
@@ -255,9 +255,12 @@ public final class Double extends Number implements Comparable<Double> {
      *
      * </ul>
      *
-     * <table border>
+     * <table class="plain">
      * <caption>Examples</caption>
+     * <thead>
      * <tr><th>Floating-point Value</th><th>Hexadecimal String</th>
+     * </thead>
+     * <tbody>
      * <tr><td>{@code 1.0}</td> <td>{@code 0x1.0p0}</td>
      * <tr><td>{@code -1.0}</td>        <td>{@code -0x1.0p0}</td>
      * <tr><td>{@code 2.0}</td> <td>{@code 0x1.0p1}</td>
@@ -272,6 +275,7 @@ public final class Double extends Number implements Comparable<Double> {
      *     <td>{@code 0x0.fffffffffffffp-1022}</td>
      * <tr><td>{@code Double.MIN_VALUE}</td>
      *     <td>{@code 0x0.0000000000001p-1022}</td>
+     * </tbody>
      * </table>
      * @param   d   the {@code double} to be converted.
      * @return a hex string representation of the argument.
@@ -301,7 +305,7 @@ public final class Double extends Number implements Comparable<Double> {
             if(d == 0.0) {
                 answer.append("0.0p0");
             } else {
-                boolean subnormal = (d < DoubleConsts.MIN_NORMAL);
+                boolean subnormal = (d < Double.MIN_NORMAL);
 
                 // Isolate significand bits and OR in a high-order bit
                 // so that the string representation has a known
@@ -329,7 +333,7 @@ public final class Double extends Number implements Comparable<Double> {
                 // exponent (the representation of a subnormal uses
                 // E_min -1).
                 answer.append(subnormal ?
-                              DoubleConsts.MIN_EXPONENT:
+                              Double.MIN_EXPONENT:
                               Math.getExponent(d));
             }
             return answer.toString();
@@ -574,7 +578,7 @@ public final class Double extends Number implements Comparable<Double> {
      * @since 1.8
      */
     public static boolean isFinite(double d) {
-        return Math.abs(d) <= DoubleConsts.MAX_VALUE;
+        return Math.abs(d) <= Double.MAX_VALUE;
     }
 
     /**
@@ -589,7 +593,13 @@ public final class Double extends Number implements Comparable<Double> {
      * represents the primitive {@code double} argument.
      *
      * @param   value   the value to be represented by the {@code Double}.
+     *
+     * @deprecated
+     * It is rarely appropriate to use this constructor. The static factory
+     * {@link #valueOf(double)} is generally a better choice, as it is
+     * likely to yield significantly better space and time performance.
      */
+    @Deprecated(since="9")
     public Double(double value) {
         this.value = value;
     }
@@ -601,10 +611,16 @@ public final class Double extends Number implements Comparable<Double> {
      * {@code double} value as if by the {@code valueOf} method.
      *
      * @param  s  a string to be converted to a {@code Double}.
-     * @throws    NumberFormatException  if the string does not contain a
+     * @throws    NumberFormatException if the string does not contain a
      *            parsable number.
-     * @see       java.lang.Double#valueOf(java.lang.String)
+     *
+     * @deprecated
+     * It is rarely appropriate to use this constructor.
+     * Use {@link #parseDouble(String)} to convert a string to a
+     * {@code double} primitive, or use {@link #valueOf(String)}
+     * to convert a string to a {@code Double} object.
      */
+    @Deprecated(since="9")
     public Double(String s) throws NumberFormatException {
         value = parseDouble(s);
     }

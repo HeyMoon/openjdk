@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,8 +30,13 @@ import java.net.URI;
 import java.io.IOException;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
-import java.util.*;
 import java.lang.reflect.Constructor;
+import java.util.Collections;
+import java.util.Map;
+import java.util.ServiceConfigurationError;
+import java.util.ServiceLoader;
+
+import jdk.internal.misc.VM;
 
 /**
  * Factory methods for file systems. This class defines the {@link #getDefault
@@ -51,8 +56,7 @@ import java.lang.reflect.Constructor;
  * installed file system providers. Installed providers are loaded using the
  * service-provider loading facility defined by the {@link ServiceLoader} class.
  * Installed providers are loaded using the system class loader. If the
- * system class loader cannot be found then the extension class loader is used;
- * if there is no extension class loader then the bootstrap class loader is used.
+ * system class loader cannot be found then the platform class loader is used.
  * Providers are typically installed by placing them in a JAR file on the
  * application class path, the JAR file contains a
  * provider-configuration file named {@code java.nio.file.spi.FileSystemProvider}
@@ -82,7 +86,16 @@ import java.lang.reflect.Constructor;
  */
 
 public final class FileSystems {
-    private FileSystems() {
+    private FileSystems() { }
+
+    // Built-in file system provider
+    private static final FileSystemProvider builtinFileSystemProvider =
+        sun.nio.fs.DefaultFileSystemProvider.create();
+
+    // built-in file system
+    private static class BuiltinFileSystemHolder {
+        static final FileSystem builtinFileSystem =
+            builtinFileSystemProvider.getFileSystem(URI.create("file:///"));
     }
 
     // lazy initialization of default file system
@@ -105,12 +118,12 @@ public final class FileSystems {
 
         // returns default provider
         private static FileSystemProvider getDefaultProvider() {
-            FileSystemProvider provider = sun.nio.fs.DefaultFileSystemProvider.create();
+            FileSystemProvider provider = builtinFileSystemProvider;
 
             // if the property java.nio.file.spi.DefaultFileSystemProvider is
             // set then its value is the name of the default provider (or a list)
-            String propValue = System
-                .getProperty("java.nio.file.spi.DefaultFileSystemProvider");
+            String prop = "java.nio.file.spi.DefaultFileSystemProvider";
+            String propValue = System.getProperty(prop);
             if (propValue != null) {
                 for (String cn: propValue.split(",")) {
                     try {
@@ -173,7 +186,11 @@ public final class FileSystems {
      * @return  the default file system
      */
     public static FileSystem getDefault() {
-        return DefaultFileSystemHolder.defaultFileSystem;
+        if (VM.isModuleSystemInited()) {
+            return DefaultFileSystemHolder.defaultFileSystem;
+        } else {
+            return BuiltinFileSystemHolder.builtinFileSystem;
+        }
     }
 
     /**
@@ -321,9 +338,12 @@ public final class FileSystems {
         String scheme = uri.getScheme();
 
         // check installed providers
-        for (FileSystemProvider provider: FileSystemProvider.installedProviders()) {
+        for (FileSystemProvider provider : FileSystemProvider.installedProviders()) {
             if (scheme.equalsIgnoreCase(provider.getScheme())) {
-                return provider.newFileSystem(uri, env);
+                try {
+                    return provider.newFileSystem(uri, env);
+                } catch (UnsupportedOperationException uoe) {
+                }
             }
         }
 
@@ -331,9 +351,12 @@ public final class FileSystems {
         if (loader != null) {
             ServiceLoader<FileSystemProvider> sl = ServiceLoader
                 .load(FileSystemProvider.class, loader);
-            for (FileSystemProvider provider: sl) {
+            for (FileSystemProvider provider : sl) {
                 if (scheme.equalsIgnoreCase(provider.getScheme())) {
-                    return provider.newFileSystem(uri, env);
+                    try {
+                        return provider.newFileSystem(uri, env);
+                    } catch (UnsupportedOperationException uoe) {
+                    }
                 }
             }
         }

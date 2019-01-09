@@ -127,16 +127,26 @@ public class Resources extends java.util.ListResourceBundle {
                 "key bit size"}, //-keysize
         {"keystore.name",
                 "keystore name"}, //-keystore
+        {"access.the.cacerts.keystore",
+                "access the cacerts keystore"}, // -cacerts
+        {"warning.cacerts.option",
+                "Warning: use -cacerts option to access cacerts keystore"},
         {"new.password",
                 "new password"}, //-new
         {"do.not.prompt",
                 "do not prompt"}, //-noprompt
         {"password.through.protected.mechanism",
                 "password through protected mechanism"}, //-protected
-        {"provider.argument",
-                "provider argument"}, //-providerarg
-        {"provider.class.name",
-                "provider class name"}, //-providerclass
+
+        // The following 2 values should span 2 lines, the first for the
+        // option itself, the second for its -providerArg value.
+        {"addprovider.option",
+                "add security provider by name (e.g. SunPKCS11)\n" +
+                        "configure argument for -addprovider"}, //-addprovider
+        {"provider.class.option",
+                "add security provider by fully-qualified class name\n" +
+                        "configure argument for -providerclass"}, //-providerclass
+
         {"provider.name",
                 "provider name"}, //-providername
         {"provider.classpath",
@@ -188,6 +198,8 @@ public class Resources extends java.util.ListResourceBundle {
         {"Command.option.flag.needs.an.argument.", "Command option {0} needs an argument."},
         {"Warning.Different.store.and.key.passwords.not.supported.for.PKCS12.KeyStores.Ignoring.user.specified.command.value.",
                 "Warning:  Different store and key passwords not supported for PKCS12 KeyStores. Ignoring user-specified {0} value."},
+        {"the.keystore.or.storetype.option.cannot.be.used.with.the.cacerts.option",
+            "The -keystore or -storetype option cannot be used with the -cacerts option"},
         {".keystore.must.be.NONE.if.storetype.is.{0}",
                 "-keystore must be NONE if -storetype is {0}"},
         {"Too.many.retries.program.terminated",
@@ -209,7 +221,9 @@ public class Resources extends java.util.ListResourceBundle {
         {"Illegal.startdate.value", "Illegal startdate value"},
         {"Validity.must.be.greater.than.zero",
                 "Validity must be greater than zero"},
-        {"provName.not.a.provider", "{0} not a provider"},
+        {"provclass.not.a.provider", "%s not a provider"},
+        {"provider.name.not.found", "Provider named \"%s\" not found"},
+        {"provider.class.not.found", "Provider \"%s\" not found"},
         {"Usage.error.no.command.provided", "Usage error: no command provided"},
         {"Source.keystore.file.exists.but.is.empty.", "Source keystore file exists, but is empty: "},
         {"Please.specify.srckeystore", "Please specify -srckeystore"},
@@ -307,7 +321,7 @@ public class Resources extends java.util.ListResourceBundle {
         {"Entry.type.type.", "Entry type: {0}"},
         {"Certificate.chain.length.", "Certificate chain length: "},
         {"Certificate.i.1.", "Certificate[{0,number,integer}]:"},
-        {"Certificate.fingerprint.SHA1.", "Certificate fingerprint (SHA1): "},
+        {"Certificate.fingerprint.SHA.256.", "Certificate fingerprint (SHA-256): "},
         {"Keystore.type.", "Keystore type: "},
         {"Keystore.provider.", "Keystore provider: "},
         {"Your.keystore.contains.keyStore.size.entry",
@@ -346,8 +360,6 @@ public class Resources extends java.util.ListResourceBundle {
         {"Enter.alias.name.", "Enter alias name:  "},
         {".RETURN.if.same.as.for.otherAlias.",
                 "\t(RETURN if same as for <{0}>)"},
-        {".PATTERN.printX509Cert",
-                "Owner: {0}\nIssuer: {1}\nSerial number: {2}\nValid from: {3} until: {4}\nCertificate fingerprints:\n\t MD5:  {5}\n\t SHA1: {6}\n\t SHA256: {7}\nSignature algorithm name: {8}\nSubject Public Key Algorithm: {9} ({10,number,#})\nVersion: {11}"},
         {"What.is.your.first.and.last.name.",
                 "What is your first and last name?"},
         {"What.is.the.name.of.your.organizational.unit.",
@@ -414,16 +426,12 @@ public class Resources extends java.util.ListResourceBundle {
         {"Please.provide.keysize.for.secret.key.generation",
                 "Please provide -keysize for secret key generation"},
 
-        {"verified.by.s.in.s", "Verified by %s in %s"},
         {"warning.not.verified.make.sure.keystore.is.correct",
             "WARNING: not verified. Make sure -keystore is correct."},
 
         {"Extensions.", "Extensions: "},
         {".Empty.value.", "(Empty value)"},
         {"Extension.Request.", "Extension Request:"},
-        {"PKCS.10.Certificate.Request.Version.1.0.Subject.s.Public.Key.s.format.s.key.",
-                "PKCS #10 Certificate Request (Version 1.0)\n" +
-                "Subject: %s\nPublic Key: %s format %s key\n"},
         {"Unknown.keyUsage.type.", "Unknown keyUsage type: "},
         {"Unknown.extendedkeyUsage.type.", "Unknown extendedkeyUsage type: "},
         {"Unknown.AccessDescription.type.", "Unknown AccessDescription type: "},
@@ -432,7 +440,34 @@ public class Resources extends java.util.ListResourceBundle {
                  "This extension cannot be marked as critical. "},
         {"Odd.number.of.hex.digits.found.", "Odd number of hex digits found: "},
         {"Unknown.extension.type.", "Unknown extension type: "},
-        {"command.{0}.is.ambiguous.", "command {0} is ambiguous:"}
+        {"command.{0}.is.ambiguous.", "command {0} is ambiguous:"},
+
+        // 8171319: keytool should print out warnings when reading or
+        // generating cert/cert req using weak algorithms
+        {"the.certificate.request", "The certificate request"},
+        {"the.issuer", "The issuer"},
+        {"the.generated.certificate", "The generated certificate"},
+        {"the.generated.crl", "The generated CRL"},
+        {"the.generated.certificate.request", "The generated certificate request"},
+        {"the.certificate", "The certificate"},
+        {"the.crl", "The CRL"},
+        {"the.tsa.certificate", "The TSA certificate"},
+        {"the.input", "The input"},
+        {"reply", "Reply"},
+        {"one.in.many", "%s #%d of %d"},
+        {"alias.in.cacerts", "Issuer <%s> in cacerts"},
+        {"alias.in.keystore", "Issuer <%s>"},
+        {"with.weak", "%s (weak)"},
+        {"key.bit", "%d-bit %s key"},
+        {"key.bit.weak", "%d-bit %s key (weak)"},
+        {".PATTERN.printX509Cert.with.weak",
+                "Owner: {0}\nIssuer: {1}\nSerial number: {2}\nValid from: {3} until: {4}\nCertificate fingerprints:\n\t SHA1: {5}\n\t SHA256: {6}\nSignature algorithm name: {7}\nSubject Public Key Algorithm: {8}\nVersion: {9}"},
+        {"PKCS.10.with.weak",
+                "PKCS #10 Certificate Request (Version 1.0)\n" +
+                        "Subject: %s\nFormat: %s\nPublic Key: %s\nSignature algorithm: %s\n"},
+        {"verified.by.s.in.s.weak", "Verified by %s in %s with a %s"},
+        {"whose.sigalg.risk", "%s uses the %s signature algorithm which is considered a security risk."},
+        {"whose.key.risk", "%s uses a %s which is considered a security risk."},
     };
 
 

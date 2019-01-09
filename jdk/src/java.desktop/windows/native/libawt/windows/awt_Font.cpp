@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -256,7 +256,7 @@ AwtFont* AwtFont::Create(JNIEnv *env, jobject font, jint angle, jfloat awScale)
 
     AwtFont* awtFont = NULL;
     jobjectArray compFont = NULL;
-    int cfnum;
+    int cfnum = 0;
 
     try {
         if (env->EnsureLocalCapacity(3) < 0)
@@ -264,13 +264,15 @@ AwtFont* AwtFont::Create(JNIEnv *env, jobject font, jint angle, jfloat awScale)
 
         if (IsMultiFont(env, font)) {
             compFont = GetComponentFonts(env, font);
-            cfnum = env->GetArrayLength(compFont);
+            if (compFont != NULL) {
+                cfnum = env->GetArrayLength(compFont);
+            }
         } else {
             compFont = NULL;
             cfnum = 0;
         }
 
-        LPCWSTR wName;
+        LPCWSTR wName = NULL;
 
         awtFont = new AwtFont(cfnum, env, font);
 
@@ -398,6 +400,38 @@ static void strip_tail(wchar_t* text, wchar_t* tail) { // strips tail and any po
 
 }
 
+static int ScaleUpX(float x) {
+    int deviceIndex = AwtWin32GraphicsDevice::DeviceIndexForWindow(
+        ::GetDesktopWindow());
+    Devices::InstanceAccess devices;
+    AwtWin32GraphicsDevice *device = devices->GetDevice(deviceIndex);
+    return device == NULL ? x : device->ScaleUpX(x);
+}
+
+static int ScaleUpY(int y) {
+    int deviceIndex = AwtWin32GraphicsDevice::DeviceIndexForWindow(
+        ::GetDesktopWindow());
+    Devices::InstanceAccess devices;
+    AwtWin32GraphicsDevice *device = devices->GetDevice(deviceIndex);
+    return device == NULL ? y : device->ScaleUpY(y);
+}
+
+static int ScaleDownX(int x) {
+    int deviceIndex = AwtWin32GraphicsDevice::DeviceIndexForWindow(
+        ::GetDesktopWindow());
+    Devices::InstanceAccess devices;
+    AwtWin32GraphicsDevice *device = devices->GetDevice(deviceIndex);
+    return device == NULL ? x : device->ScaleDownX(x);
+}
+
+static int ScaleDownY(int y) {
+    int deviceIndex = AwtWin32GraphicsDevice::DeviceIndexForWindow(
+        ::GetDesktopWindow());
+    Devices::InstanceAccess devices;
+    AwtWin32GraphicsDevice *device = devices->GetDevice(deviceIndex);
+    return device == NULL ? y : device->ScaleDownY(y);
+}
+
 static HFONT CreateHFont_sub(LPCWSTR name, int style, int height,
                              int angle=0, float awScale=1.0f)
 {
@@ -424,7 +458,7 @@ static HFONT CreateHFont_sub(LPCWSTR name, int style, int height,
     logFont.lfUnderline = 0;//(style & java_awt_Font_UNDERLINE) != 0;
 
     // Get point size
-    logFont.lfHeight = -height;
+    logFont.lfHeight = ScaleUpY(-height);
 
     // Set font name
     WCHAR tmpname[80];
@@ -451,7 +485,7 @@ static HFONT CreateHFont_sub(LPCWSTR name, int style, int height,
             VERIFY(::DeleteObject(oldFont));
         }
         avgWidth = tm.tmAveCharWidth;
-        logFont.lfWidth = (LONG)((fabs)(avgWidth*awScale));
+        logFont.lfWidth = (LONG) ScaleUpX((fabs) (avgWidth * awScale));
         hFont = ::CreateFontIndirect(&logFont);
         DASSERT(hFont != NULL);
         VERIFY(::ReleaseDC(0, hDC));
@@ -535,19 +569,20 @@ void AwtFont::LoadMetrics(JNIEnv *env, jobject fontMetrics)
     int ascent = metrics.tmAscent;
     int descent = metrics.tmDescent;
     int leading = metrics.tmExternalLeading;
-    env->SetIntField(fontMetrics, AwtFont::ascentID, ascent);
-    env->SetIntField(fontMetrics, AwtFont::descentID, descent);
-    env->SetIntField(fontMetrics, AwtFont::leadingID, leading);
-    env->SetIntField(fontMetrics, AwtFont::heightID, metrics.tmAscent +
-                     metrics.tmDescent + leading);
-    env->SetIntField(fontMetrics, AwtFont::maxAscentID, ascent);
-    env->SetIntField(fontMetrics, AwtFont::maxDescentID, descent);
+
+    env->SetIntField(fontMetrics, AwtFont::ascentID, ScaleDownY(ascent));
+    env->SetIntField(fontMetrics, AwtFont::descentID, ScaleDownY(descent));
+    env->SetIntField(fontMetrics, AwtFont::leadingID, ScaleDownX(leading));
+    env->SetIntField(fontMetrics, AwtFont::heightID,
+        ScaleDownY(metrics.tmAscent + metrics.tmDescent + leading));
+    env->SetIntField(fontMetrics, AwtFont::maxAscentID, ScaleDownY(ascent));
+    env->SetIntField(fontMetrics, AwtFont::maxDescentID, ScaleDownY(descent));
 
     int maxHeight =  ascent + descent + leading;
-    env->SetIntField(fontMetrics, AwtFont::maxHeightID, maxHeight);
+    env->SetIntField(fontMetrics, AwtFont::maxHeightID, ScaleDownY(maxHeight));
 
     int maxAdvance = metrics.tmMaxCharWidth;
-    env->SetIntField(fontMetrics, AwtFont::maxAdvanceID, maxAdvance);
+    env->SetIntField(fontMetrics, AwtFont::maxAdvanceID, ScaleDownX(maxAdvance));
 
     awtFont->m_overhang = metrics.tmOverhang;
 
@@ -605,7 +640,7 @@ SIZE AwtFont::TextSize(AwtFont* font, int columns, int rows)
 int AwtFont::getFontDescriptorNumber(JNIEnv *env, jobject font,
                                      jobject fontDescriptor)
 {
-    int i, num;
+    int i, num = 0;
     jobject refFontDescriptor;
     jobjectArray array;
 
@@ -614,7 +649,9 @@ int AwtFont::getFontDescriptorNumber(JNIEnv *env, jobject font,
 
     if (IsMultiFont(env, font)) {
         array = GetComponentFonts(env, font);
-        num = env->GetArrayLength(array);
+        if (array != NULL) {
+            num = env->GetArrayLength(array);
+        }
     } else {
         array = NULL;
         num = 0;
@@ -672,14 +709,16 @@ SIZE  AwtFont::DrawStringSize_sub(jstring str, HDC hDC,
 
     if (IsMultiFont(env, font)) {
         jobject peer = env->CallObjectMethod(font, AwtFont::peerMID);
-        array =  (jobjectArray)(env->CallObjectMethod(
-        peer, AwtFont::makeConvertedMultiFontStringMID, str));
-        DASSERT(!safe_ExceptionOccurred(env));
+        if (peer != NULL) {
+            array = (jobjectArray)(env->CallObjectMethod(
+            peer, AwtFont::makeConvertedMultiFontStringMID, str));
+            DASSERT(!safe_ExceptionOccurred(env));
 
-        if (array != NULL) {
-            arrayLength = env->GetArrayLength(array);
+            if (array != NULL) {
+                arrayLength = env->GetArrayLength(array);
+            }
+            env->DeleteLocalRef(peer);
         }
-        env->DeleteLocalRef(peer);
     } else {
         array = NULL;
         arrayLength = 0;
@@ -818,6 +857,7 @@ Java_sun_awt_windows_WFontMetrics_stringWidth(JNIEnv *env, jobject self,
     jobject font = env->GetObjectField(self, AwtFont::fontID);
 
     long ret = AwtFont::getMFStringWidth(hDC, font, str);
+    ret = ScaleDownX(ret);
     VERIFY(::ReleaseDC(0, hDC));
     return ret;
 
@@ -924,7 +964,7 @@ Java_sun_awt_windows_WFontMetrics_bytesWidth(JNIEnv *env, jobject self,
     }
 
     env->ReleasePrimitiveArrayCritical(str, pStrBody, 0);
-    return result;
+    return ScaleDownX(result);
 
     CATCH_BAD_ALLOC_RET(0);
 }
@@ -1168,7 +1208,7 @@ void AwtFontCache::IncRefCount(HFONT hFont){
 }
 
 LONG AwtFontCache::IncRefCount(Item* item){
-    LONG    newVal;
+    LONG    newVal = 0;
 
     if(NULL != item){
         newVal = InterlockedIncrement((long*)&item->refCount);
@@ -1177,7 +1217,7 @@ LONG AwtFontCache::IncRefCount(Item* item){
 }
 
 LONG AwtFontCache::DecRefCount(Item* item){
-    LONG    newVal;
+    LONG    newVal = 0;
 
     if(NULL != item){
         newVal = InterlockedDecrement((long*)&item->refCount);
@@ -1645,6 +1685,8 @@ CSegTable* CSegTableManager::GetTable(LPCWSTR lpszFontName, BOOL fEUDC)
 
 CSegTableManager g_segTableManager;
 
+#define KEYLEN 16
+
 class CCombinedSegTable : public CSegTableComponent
 {
 public:
@@ -1655,7 +1697,7 @@ public:
 private:
     LPSTR GetCodePageSubkey();
     void GetEUDCFileName(LPWSTR lpszFileName, int cchFileName);
-    static char m_szCodePageSubkey[16];
+    static char m_szCodePageSubkey[KEYLEN];
     static WCHAR m_szDefaultEUDCFile[_MAX_PATH];
     static BOOL m_fEUDCSubKeyExist;
     static BOOL m_fTTEUDCFileExist;
@@ -1663,7 +1705,7 @@ private:
     CEUDCSegTable* m_pEUDCSegTable;
 };
 
-char CCombinedSegTable::m_szCodePageSubkey[16] = "";
+char CCombinedSegTable::m_szCodePageSubkey[KEYLEN] = "";
 
 WCHAR CCombinedSegTable::m_szDefaultEUDCFile[_MAX_PATH] = L"";
 
@@ -1695,8 +1737,11 @@ LPSTR CCombinedSegTable::GetCodePageSubkey()
     }
     lpszCP++; // cf lpszCP = "932"
 
-    char szSubKey[80];
+    char szSubKey[KEYLEN];
     strcpy(szSubKey, "EUDC\\");
+    if ((strlen(szSubKey) + strlen(lpszCP)) >= KEYLEN) {
+        return NULL;
+    }
     strcpy(&(szSubKey[strlen(szSubKey)]), lpszCP);
     strcpy(m_szCodePageSubkey, szSubKey);
     return m_szCodePageSubkey;

@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -25,14 +25,30 @@
 
 WIN_VERIFY_LIB := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libverify/verify.lib
 
+# Hook to include the corresponding custom file, if present.
+$(eval $(call IncludeCustomExtension, jdk, lib/CoreLibraries.gmk))
+
+
 ##########################################################################################
 # libfdlibm is statically linked with libjava below and not delivered into the
 # product on its own.
 
-BUILD_LIBFDLIBM_OPTIMIZATION := HIGH
+BUILD_LIBFDLIBM_OPTIMIZATION := NONE
 
-ifneq ($(OPENJDK_TARGET_OS), solaris)
-  BUILD_LIBFDLIBM_OPTIMIZATION := NONE
+ifeq ($(OPENJDK_TARGET_OS), solaris)
+  BUILD_LIBFDLIBM_OPTIMIZATION := HIGH
+endif
+
+ifeq ($(OPENJDK_TARGET_OS), linux)
+  ifeq ($(OPENJDK_TARGET_CPU), ppc64)
+    BUILD_LIBFDLIBM_OPTIMIZATION := HIGH
+  else ifeq ($(OPENJDK_TARGET_CPU), ppc64le)
+    BUILD_LIBFDLIBM_OPTIMIZATION := HIGH
+  else ifeq ($(OPENJDK_TARGET_CPU), s390x)
+    BUILD_LIBFDLIBM_OPTIMIZATION := HIGH
+  else ifeq ($(OPENJDK_TARGET_CPU), aarch64)
+    BUILD_LIBFDLIBM_OPTIMIZATION := HIGH
+  endif
 endif
 
 LIBFDLIBM_SRC := $(JDK_TOPDIR)/src/java.base/share/native/libfdlibm
@@ -47,11 +63,15 @@ ifneq ($(OPENJDK_TARGET_OS), macosx)
       CFLAGS := $(CFLAGS_JDKLIB) $(LIBFDLIBM_CFLAGS), \
       CFLAGS_windows_debug := -DLOGGING, \
       CFLAGS_aix := -qfloat=nomaf, \
+      CFLAGS_linux_ppc64 := -ffp-contract=off, \
+      CFLAGS_linux_ppc64le := -ffp-contract=off, \
+      CFLAGS_linux_s390x := -ffp-contract=off, \
+      CFLAGS_linux_aarch64 := -ffp-contract=off, \
       DISABLED_WARNINGS_gcc := sign-compare, \
       DISABLED_WARNINGS_microsoft := 4146 4244 4018, \
       ARFLAGS := $(ARFLAGS), \
       OBJECT_DIR := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libfdlibm, \
-      DEBUG_SYMBOLS := $(DEBUG_ALL_BINARIES)))
+  ))
 
 else
 
@@ -64,7 +84,7 @@ else
       CFLAGS := $(CFLAGS_JDKLIB) $(LIBFDLIBM_CFLAGS), \
       LDFLAGS := -nostdlib -r -arch x86_64, \
       OBJECT_DIR := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libfdlibm, \
-      DEBUG_SYMBOLS := $(DEBUG_ALL_BINARIES)))
+  ))
 
   BUILD_LIBFDLIBM := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/$(LIBRARY_PREFIX)fdlibm$(STATIC_LIBRARY_SUFFIX)
   $(BUILD_LIBFDLIBM): $(BUILD_LIBFDLIBM_MAC)
@@ -82,7 +102,7 @@ endif
 
 LIBVERIFY_OPTIMIZATION := HIGH
 ifneq ($(findstring $(OPENJDK_TARGET_OS), solaris linux), )
-  ifeq ($(ENABLE_DEBUG_SYMBOLS), true)
+  ifeq ($(COMPILE_WITH_DEBUG_SYMBOLS), true)
     LIBVERIFY_OPTIMIZATION := LOW
   endif
 endif
@@ -97,8 +117,8 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBVERIFY, \
     MAPFILE := $(JDK_TOPDIR)/make/mapfiles/libverify/mapfile-vers, \
     LDFLAGS := $(LDFLAGS_JDKLIB) \
         $(call SET_SHARED_LIBRARY_ORIGIN), \
-    LDFLAGS_SUFFIX_unix := -ljvm -lc, \
-    LDFLAGS_SUFFIX_windows := jvm.lib, \
+    LIBS_unix := -ljvm -lc, \
+    LIBS_windows := jvm.lib, \
     VERSIONINFO_RESOURCE := $(GLOBAL_VERSION_INFO_RESOURCE), \
     RC_FLAGS := $(RC_FLAGS) \
         -D "JDK_FNAME=verify.dll" \
@@ -106,7 +126,7 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBVERIFY, \
         -D "JDK_FTYPE=0x2L", \
     REORDER := $(BUILD_LIBVERIFY_REORDER), \
     OBJECT_DIR := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libverify, \
-    DEBUG_SYMBOLS := true))
+))
 
 TARGETS += $(BUILD_LIBVERIFY)
 
@@ -119,14 +139,8 @@ LIBJAVA_CFLAGS := $(addprefix -I, $(LIBJAVA_SRC_DIRS)) \
     -I$(SUPPORT_OUTPUTDIR)/headers/java.base \
     -DARCHPROPNAME='"$(OPENJDK_TARGET_CPU_OSARCH)"'
 
-LIBJAVA_CFLAGS += -DJDK_MAJOR_VERSION='"$(JDK_MAJOR_VERSION)"' \
-    -DJDK_MINOR_VERSION='"$(JDK_MINOR_VERSION)"' \
-    -DJDK_MICRO_VERSION='"$(JDK_MICRO_VERSION)"' \
-     -DJDK_BUILD_NUMBER='"$(JDK_BUILD_NUMBER)"'
-
-ifneq (, $(JDK_UPDATE_VERSION))
-  LIBJAVA_CFLAGS += -DJDK_UPDATE_VERSION='"$(JDK_UPDATE_VERSION)"'
-endif
+# Make it possible to override this variable
+LIBJAVA_MAPFILE ?= $(JDK_TOPDIR)/make/mapfiles/libjava/mapfile-vers
 
 ifeq ($(OPENJDK_TARGET_OS), macosx)
   BUILD_LIBJAVA_java_props_md.c_CFLAGS := -x objective-c
@@ -146,21 +160,28 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBJAVA, \
     OPTIMIZATION := HIGH, \
     CFLAGS := $(CFLAGS_JDKLIB) \
         $(LIBJAVA_CFLAGS), \
-    MAPFILE := $(JDK_TOPDIR)/make/mapfiles/libjava/mapfile-vers, \
+    System.c_CFLAGS := $(VERSION_CFLAGS), \
+    jdk_util.c_CFLAGS := $(VERSION_CFLAGS), \
+    WARNINGS_AS_ERRORS_xlc := false, \
+    DISABLED_WARNINGS_gcc := unused-result, \
+    DISABLED_WARNINGS_solstudio := E_STATEMENT_NOT_REACHED, \
+    MAPFILE := $(LIBJAVA_MAPFILE), \
     LDFLAGS := $(LDFLAGS_JDKLIB) \
         $(call SET_SHARED_LIBRARY_ORIGIN), \
-    LDFLAGS_SUFFIX_unix := -ljvm -lverify, \
-    LDFLAGS_SUFFIX_solaris := -lsocket -lnsl -lscf $(LIBDL) $(BUILD_LIBFDLIBM) -lc, \
-    LDFLAGS_SUFFIX_linux := $(LIBDL) $(BUILD_LIBFDLIBM), \
-    LDFLAGS_SUFFIX_aix := $(LIBDL) $(BUILD_LIBFDLIBM) -lm,\
-    LDFLAGS_SUFFIX_macosx := -L$(SUPPORT_OUTPUTDIR)/native/$(MODULE)/ -lfdlibm \
+    LDFLAGS_macosx := -L$(SUPPORT_OUTPUTDIR)/native/$(MODULE)/, \
+    LDFLAGS_windows := -export:winFileHandleOpen -export:handleLseek \
+        -export:getLastErrorString \
+        -export:getErrorString -delayload:shell32.dll, \
+    LIBS_unix := -ljvm -lverify, \
+    LIBS_linux := $(LIBDL) $(BUILD_LIBFDLIBM), \
+    LIBS_solaris := -lsocket -lnsl -lscf $(LIBDL) $(BUILD_LIBFDLIBM) -lc, \
+    LIBS_aix := $(LIBDL) $(BUILD_LIBFDLIBM) $(LIBM),\
+    LIBS_macosx := -lfdlibm \
         -framework CoreFoundation \
         -framework Foundation \
         -framework Security -framework SystemConfiguration, \
-    LDFLAGS_SUFFIX_windows := -export:winFileHandleOpen -export:handleLseek \
-        -export:getLastErrorString \
-        jvm.lib $(BUILD_LIBFDLIBM) $(WIN_VERIFY_LIB) \
-        shell32.lib delayimp.lib -DELAYLOAD:shell32.dll \
+    LIBS_windows := jvm.lib $(BUILD_LIBFDLIBM) $(WIN_VERIFY_LIB) \
+        shell32.lib delayimp.lib \
         advapi32.lib version.lib, \
     VERSIONINFO_RESOURCE := $(GLOBAL_VERSION_INFO_RESOURCE), \
     RC_FLAGS := $(RC_FLAGS) \
@@ -169,7 +190,7 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBJAVA, \
         -D "JDK_FTYPE=0x2L", \
     REORDER := $(LIBJAVA_REORDER), \
     OBJECT_DIR := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libjava, \
-    DEBUG_SYMBOLS := $(DEBUG_ALL_BINARIES)))
+))
 
 TARGETS += $(BUILD_LIBJAVA)
 
@@ -181,7 +202,7 @@ $(BUILD_LIBJAVA): $(BUILD_LIBFDLIBM)
 
 BUILD_LIBZIP_EXCLUDES :=
 ifeq ($(USE_EXTERNAL_LIBZ), true)
-  LIBZIP_EXCLUDES += zlib-1.2.8
+  LIBZIP_EXCLUDES += zlib
 endif
 
 BUILD_LIBZIP_REORDER :=
@@ -207,30 +228,23 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBZIP, \
         -I$(JDK_TOPDIR)/src/java.base/$(OPENJDK_TARGET_OS_TYPE)/native/libjava \
         -I$(SUPPORT_OUTPUTDIR)/headers/java.base, \
     CFLAGS_unix := $(BUILD_LIBZIP_MMAP) -UDEBUG, \
-    DISABLED_WARNINGS_gcc := parentheses, \
-    DISABLED_WARNINGS_clang := dangling-else, \
-    DISABLED_WARNINGS_microsoft := 4267, \
     MAPFILE := $(JDK_TOPDIR)/make/mapfiles/libzip/mapfile-vers, \
     REORDER := $(BUILD_LIBZIP_REORDER), \
     LDFLAGS := $(LDFLAGS_JDKLIB) \
-        $(call SET_SHARED_LIBRARY_ORIGIN) \
-        $(EXPORT_ZIP_FUNCS), \
+        $(call SET_SHARED_LIBRARY_ORIGIN), \
     LDFLAGS_windows := -export:ZIP_Open -export:ZIP_Close -export:ZIP_FindEntry \
         -export:ZIP_ReadEntry -export:ZIP_GetNextEntry \
-        -export:ZIP_InflateFully -export:ZIP_CRC32 \
-        jvm.lib $(WIN_JAVA_LIB), \
-    LDFLAGS_SUFFIX_linux := -ljvm -ljava $(LIBZ), \
-    LDFLAGS_SUFFIX_solaris := -ljvm -ljava $(LIBZ) -lc, \
-    LDFLAGS_SUFFIX_aix := -ljvm -ljava $(LIBZ),\
-    LDFLAGS_SUFFIX_macosx := $(LIBZ) -ljava -ljvm, \
+        -export:ZIP_InflateFully -export:ZIP_CRC32 -export:ZIP_FreeEntry, \
+    LIBS_unix := -ljvm -ljava $(LIBZ), \
+    LIBS_solaris := -lc, \
+    LIBS_windows := jvm.lib $(WIN_JAVA_LIB), \
     VERSIONINFO_RESOURCE := $(GLOBAL_VERSION_INFO_RESOURCE), \
     RC_FLAGS := $(RC_FLAGS) \
         -D "JDK_FNAME=zip.dll" \
         -D "JDK_INTERNAL_NAME=zip" \
         -D "JDK_FTYPE=0x2L", \
     OBJECT_DIR := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libzip, \
-    DEBUG_SYMBOLS := $(DEBUG_ALL_BINARIES)))
-
+))
 
 $(BUILD_LIBZIP): $(BUILD_LIBJAVA)
 
@@ -238,11 +252,54 @@ TARGETS += $(BUILD_LIBZIP)
 
 ##########################################################################################
 
+JIMAGELIB_CPPFLAGS := \
+    -I$(JDK_TOPDIR)/src/java.base/share/native/libjava \
+    -I$(JDK_TOPDIR)/src/java.base/$(OPENJDK_TARGET_OS_TYPE)/native/libjava \
+    -I$(JDK_TOPDIR)/src/java.base/share/native/libjimage \
+    -I$(SUPPORT_OUTPUTDIR)/headers/java.base \
+    #
+
+$(eval $(call SetupNativeCompilation,BUILD_LIBJIMAGE, \
+    LIBRARY := jimage, \
+    TOOLCHAIN := TOOLCHAIN_LINK_CXX, \
+    OUTPUT_DIR := $(INSTALL_LIBRARIES_HERE), \
+    OPTIMIZATION := LOW, \
+    SRC := $(JDK_TOPDIR)/src/java.base/share/native/libjimage \
+        $(JDK_TOPDIR)/src/java.base/$(OPENJDK_TARGET_OS_TYPE)/native/libjimage, \
+    EXCLUDES := $(LIBJIMAGE_EXCLUDES), \
+    CFLAGS := $(CFLAGS_JDKLIB) $(JIMAGELIB_CPPFLAGS), \
+    CXXFLAGS := $(CXXFLAGS_JDKLIB) $(JIMAGELIB_CPPFLAGS), \
+    CFLAGS_unix := -UDEBUG, \
+    MAPFILE := $(JDK_TOPDIR)/make/mapfiles/libjimage/mapfile-vers, \
+    LDFLAGS := $(LDFLAGS_JDKLIB) $(LDFLAGS_CXX_JDK) \
+        $(call SET_SHARED_LIBRARY_ORIGIN), \
+    LDFLAGS_windows := -export:JIMAGE_Open -export:JIMAGE_Close \
+        -export:JIMAGE_PackageToModule \
+        -export:JIMAGE_FindResource -export:JIMAGE_GetResource \
+        -export:JIMAGE_ResourceIterator -export:JIMAGE_ResourcePath, \
+    LIBS_unix := -ljvm -ldl $(LIBCXX), \
+    LIBS_solaris := -lc, \
+    LIBS_macosx := -lc++, \
+    LIBS_windows := jvm.lib, \
+    VERSIONINFO_RESOURCE := $(GLOBAL_VERSION_INFO_RESOURCE), \
+    RC_FLAGS := $(RC_FLAGS) \
+        -D "JDK_FNAME=jimage.dll" \
+        -D "JDK_INTERNAL_NAME=jimage" \
+        -D "JDK_FTYPE=0x2L", \
+    OBJECT_DIR := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libjimage, \
+))
+
+$(BUILD_LIBJIMAGE): $(BUILD_LIBJAVA)
+
+TARGETS += $(BUILD_LIBJIMAGE)
+
+##########################################################################################
+
 LIBJLI_SRC_DIRS := $(call FindSrcDirsForLib, java.base, jli)
 
 LIBJLI_CFLAGS := $(CFLAGS_JDKLIB)
 
-ifeq ($(JVM_VARIANT_ZERO), true)
+ifeq ($(call check-jvm-variant, zero zeroshark), true)
   ERGO_FAMILY := zero
 else
   ifeq ($(OPENJDK_TARGET_CPU_ARCH), x86)
@@ -283,13 +340,10 @@ endif
 
 LIBJLI_CFLAGS += $(addprefix -I, $(LIBJLI_SRC_DIRS))
 
-# Append defines depending on target platform
-LIBJLI_CFLAGS += $(OPENJDK_TARGET_CPU_JLI_CFLAGS)
-
 ifneq ($(USE_EXTERNAL_LIBZ), true)
   LIBJLI_CFLAGS += $(ZLIB_CPPFLAGS)
   LIBJLI_EXTRA_FILES += \
-      $(addprefix $(JDK_TOPDIR)/src/java.base/share/native/libzip/zlib-1.2.8/, \
+      $(addprefix $(JDK_TOPDIR)/src/java.base/share/native/libzip/zlib/, \
           inflate.c \
           inftrees.c \
           inffast.c \
@@ -307,18 +361,15 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBJLI, \
     EXTRA_FILES := $(LIBJLI_EXTRA_FILES), \
     OPTIMIZATION := HIGH, \
     CFLAGS := $(LIBJLI_CFLAGS), \
-    DISABLED_WARNINGS_solstudio := E_ASM_DISABLES_OPTIMIZATION, \
+    DISABLED_WARNINGS_solstudio := \
+        E_ASM_DISABLES_OPTIMIZATION \
+        E_STATEMENT_NOT_REACHED, \
     MAPFILE := $(JDK_TOPDIR)/make/mapfiles/libjli/mapfile-vers, \
     LDFLAGS := $(LDFLAGS_JDKLIB) \
         $(call SET_SHARED_LIBRARY_ORIGIN), \
     LDFLAGS_linux := $(call SET_SHARED_LIBRARY_ORIGIN,/..), \
     LDFLAGS_solaris := $(call SET_SHARED_LIBRARY_ORIGIN,/..), \
-    LDFLAGS_macosx := -framework Cocoa -framework Security -framework ApplicationServices, \
-    LDFLAGS_SUFFIX_solaris := $(LIBZ) $(LIBDL) -lc, \
-    LDFLAGS_SUFFIX_linux := $(LIBZ) $(LIBDL) -lc -lpthread, \
-    LDFLAGS_SUFFIX_aix := $(LIBZ) $(LIBDL),\
-    LDFLAGS_SUFFIX_macosx := $(LIBZ), \
-    LDFLAGS_SUFFIX_windows := \
+    LDFLAGS_windows := \
         -export:JLI_Launch \
         -export:JLI_ManifestIterate \
         -export:JLI_SetTraceLauncher \
@@ -330,16 +381,27 @@ $(eval $(call SetupNativeCompilation,BUILD_LIBJLI, \
         -export:JLI_CmdToArgs \
         -export:JLI_GetStdArgc \
         -export:JLI_GetStdArgs \
-        advapi32.lib \
-        comctl32.lib \
-        user32.lib, \
+        -export:JLI_List_new \
+        -export:JLI_List_add \
+        -export:JLI_StringDup \
+        -export:JLI_MemFree \
+        -export:JLI_InitArgProcessing \
+        -export:JLI_PreprocessArg \
+        -export:JLI_AddArgsFromEnvVar \
+        -export:JLI_GetAppArgIndex, \
+    LIBS_unix := $(LIBZ), \
+    LIBS_linux := $(LIBDL) -lc -lpthread, \
+    LIBS_solaris := $(LIBDL) -lc, \
+    LIBS_aix := $(LIBDL),\
+    LIBS_macosx := -framework Cocoa -framework Security -framework ApplicationServices, \
+    LIBS_windows := advapi32.lib comctl32.lib user32.lib, \
     VERSIONINFO_RESOURCE := $(GLOBAL_VERSION_INFO_RESOURCE), \
     RC_FLAGS := $(RC_FLAGS) \
         -D "JDK_FNAME=jli.dll" \
         -D "JDK_INTERNAL_NAME=jli" \
         -D "JDK_FTYPE=0x2L", \
     OBJECT_DIR := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libjli, \
-    DEBUG_SYMBOLS := $(DEBUG_ALL_BINARIES)))
+))
 
 TARGETS += $(BUILD_LIBJLI)
 
@@ -357,7 +419,7 @@ ifeq ($(OPENJDK_TARGET_OS), windows)
       CFLAGS := $(STATIC_LIBRARY_FLAGS) $(LIBJLI_CFLAGS), \
       ARFLAGS := $(ARFLAGS), \
       OBJECT_DIR := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libjli_static, \
-      DEBUG_SYMBOLS := $(DEBUG_ALL_BINARIES)))
+  ))
 
   TARGETS += $(BUILD_LIBJLI_STATIC)
 
@@ -376,12 +438,16 @@ else ifeq ($(OPENJDK_TARGET_OS), macosx)
       CFLAGS := $(CFLAGS_JDKLIB) $(LIBJLI_CFLAGS), \
       LDFLAGS := -nostdlib -r, \
       OBJECT_DIR := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libjli_static, \
-      DEBUG_SYMBOLS := $(DEBUG_ALL_BINARIES)))
+  ))
 
-  $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libjli_static.a: $(BUILD_LIBJLI_STATIC)
+  ifeq ($(STATIC_BUILD), true)
+    TARGETS += $(BUILD_LIBJLI_STATIC)
+  else
+    $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libjli_static.a: $(BUILD_LIBJLI_STATIC)
 	$(call install-file)
 
-  TARGETS += $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libjli_static.a
+    TARGETS += $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libjli_static.a
+  endif
 
 else ifeq ($(OPENJDK_TARGET_OS), aix)
   # AIX also requires a static libjli because the compiler doesn't support '-rpath'

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2017 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,8 +31,8 @@
 #include "frame_ppc.hpp"
 #include "interpreter/interpreter.hpp"
 #include "interpreter/interp_masm.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/compiledICHolder.hpp"
-#include "prims/jvmtiRedefineClassesTrace.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/vframeArray.hpp"
 #include "vmreg_ppc.inline.hpp"
@@ -40,9 +40,11 @@
 #include "c1/c1_Runtime1.hpp"
 #endif
 #ifdef COMPILER2
-#include "adfiles/ad_ppc_64.hpp"
+#include "opto/ad.hpp"
 #include "opto/runtime.hpp"
 #endif
+
+#include <alloca.h>
 
 #define __ masm->
 
@@ -62,7 +64,7 @@ class RegisterSaver {
   // Support different return pc locations.
   enum ReturnPCLocation {
     return_pc_is_lr,
-    return_pc_is_r4,
+    return_pc_is_pre_saved,
     return_pc_is_thread_saved_exception_pc
   };
 
@@ -241,16 +243,17 @@ OopMap* RegisterSaver::push_frame_reg_args_and_save_live_registers(MacroAssemble
   __ mfcr(R31);
   __ std(R31, _abi(cr), R1_SP);
   switch (return_pc_location) {
-    case return_pc_is_lr:    __ mflr(R31);           break;
-    case return_pc_is_r4:    __ mr(R31, R4);     break;
-    case return_pc_is_thread_saved_exception_pc:
-                             __ ld(R31, thread_(saved_exception_pc)); break;
+    case return_pc_is_lr: __ mflr(R31); break;
+    case return_pc_is_pre_saved: assert(return_pc_adjustment == 0, "unsupported"); break;
+    case return_pc_is_thread_saved_exception_pc: __ ld(R31, thread_(saved_exception_pc)); break;
     default: ShouldNotReachHere();
   }
-  if (return_pc_adjustment != 0) {
-    __ addi(R31, R31, return_pc_adjustment);
+  if (return_pc_location != return_pc_is_pre_saved) {
+    if (return_pc_adjustment != 0) {
+      __ addi(R31, R31, return_pc_adjustment);
+    }
+    __ std(R31, _abi(lr), R1_SP);
   }
-  __ std(R31, _abi(lr), R1_SP);
 
   // push a new frame
   __ push_frame(frame_size_in_bytes, R31);
@@ -475,11 +478,22 @@ void RegisterSaver::restore_result_registers(MacroAssembler* masm, int frame_siz
 
 // Is vector's size (in bytes) bigger than a size saved by default?
 bool SharedRuntime::is_wide_vector(int size) {
-  ResourceMark rm;
   // Note, MaxVectorSize == 8 on PPC64.
-  assert(size <= 8, err_msg_res("%d bytes vectors are not supported", size));
+  assert(size <= 8, "%d bytes vectors are not supported", size);
   return size > 8;
 }
+
+size_t SharedRuntime::trampoline_size() {
+  return Assembler::load_const_size + 8;
+}
+
+void SharedRuntime::generate_trampoline(MacroAssembler *masm, address destination) {
+  Register Rtemp = R12;
+  __ load_const(Rtemp, destination);
+  __ mtctr(Rtemp);
+  __ bctr();
+}
+
 #ifdef COMPILER2
 static int reg2slot(VMReg r) {
   return r->reg2stack() + SharedRuntime::out_preserve_stack_slots();
@@ -580,7 +594,7 @@ int SharedRuntime::java_calling_convention(const BasicType *sig_bt,
       regs[i].set1(reg);
       break;
     case T_LONG:
-      assert(sig_bt[i+1] == T_VOID, "expecting half");
+      assert((i + 1) < total_args_passed && sig_bt[i+1] == T_VOID, "expecting half");
       if (ireg < num_java_iarg_registers) {
         // Put long in register.
         reg = java_iarg_reg[ireg];
@@ -623,7 +637,7 @@ int SharedRuntime::java_calling_convention(const BasicType *sig_bt,
       regs[i].set1(reg);
       break;
     case T_DOUBLE:
-      assert(sig_bt[i+1] == T_VOID, "expecting half");
+      assert((i + 1) < total_args_passed && sig_bt[i+1] == T_VOID, "expecting half");
       if (freg < num_java_farg_registers) {
         // Put double in register.
         reg = java_farg_reg[freg];
@@ -647,7 +661,7 @@ int SharedRuntime::java_calling_convention(const BasicType *sig_bt,
   return round_to(stk, 2);
 }
 
-#ifdef COMPILER2
+#if defined(COMPILER1) || defined(COMPILER2)
 // Calling convention for calling C code.
 int SharedRuntime::c_calling_convention(const BasicType *sig_bt,
                                         VMRegPair *regs,
@@ -754,6 +768,21 @@ int SharedRuntime::c_calling_convention(const BasicType *sig_bt,
     // in farg_reg[j] if argument i is the j-th float argument of this call.
     //
     case T_FLOAT:
+#if defined(LINUX)
+      // Linux uses ELF ABI. Both original ELF and ELFv2 ABIs have float
+      // in the least significant word of an argument slot.
+#if defined(VM_LITTLE_ENDIAN)
+#define FLOAT_WORD_OFFSET_IN_SLOT 0
+#else
+#define FLOAT_WORD_OFFSET_IN_SLOT 1
+#endif
+#elif defined(AIX)
+      // Although AIX runs on big endian CPU, float is in the most
+      // significant word of an argument slot.
+#define FLOAT_WORD_OFFSET_IN_SLOT 0
+#else
+#error "unknown OS"
+#endif
       if (freg < Argument::n_float_register_parameters_c) {
         // Put float in register ...
         reg = farg_reg[freg];
@@ -767,20 +796,20 @@ int SharedRuntime::c_calling_convention(const BasicType *sig_bt,
         if (arg >= Argument::n_regs_not_on_stack_c) {
           // ... and on the stack.
           guarantee(regs2 != NULL, "must pass float in register and stack slot");
-          VMReg reg2 = VMRegImpl::stack2reg(stk LINUX_ONLY(+1));
+          VMReg reg2 = VMRegImpl::stack2reg(stk + FLOAT_WORD_OFFSET_IN_SLOT);
           regs2[i].set1(reg2);
           stk += inc_stk_for_intfloat;
         }
 
       } else {
         // Put float on stack.
-        reg = VMRegImpl::stack2reg(stk LINUX_ONLY(+1));
+        reg = VMRegImpl::stack2reg(stk + FLOAT_WORD_OFFSET_IN_SLOT);
         stk += inc_stk_for_intfloat;
       }
       regs[i].set1(reg);
       break;
     case T_DOUBLE:
-      assert(sig_bt[i+1] == T_VOID, "expecting half");
+      assert((i + 1) < total_args_passed && sig_bt[i+1] == T_VOID, "expecting half");
       if (freg < Argument::n_float_register_parameters_c) {
         // Put double in register ...
         reg = farg_reg[freg];
@@ -940,15 +969,10 @@ static address gen_c2i_adapter(MacroAssembler *masm,
 
   // Jump to the interpreter just as if interpreter was doing it.
 
-#ifdef CC_INTERP
-  const Register tos = R17_tos;
-#else
-  const Register tos = R15_esp;
   __ load_const_optimized(R25_templateTableBase, (address)Interpreter::dispatch_table((TosState)0), R11_scratch1);
-#endif
 
   // load TOS
-  __ addi(tos, R1_SP, st_off);
+  __ addi(R15_esp, R1_SP, st_off);
 
   // Frame_manager expects initial_caller_sp (= SP without resize by c2i) in R21_tmp1.
   assert(sender_SP == R21_sender_SP, "passing initial caller's SP in wrong register");
@@ -957,11 +981,11 @@ static address gen_c2i_adapter(MacroAssembler *masm,
   return c2i_entrypoint;
 }
 
-static void gen_i2c_adapter(MacroAssembler *masm,
-                            int total_args_passed,
-                            int comp_args_on_stack,
-                            const BasicType *sig_bt,
-                            const VMRegPair *regs) {
+void SharedRuntime::gen_i2c_adapter(MacroAssembler *masm,
+                                    int total_args_passed,
+                                    int comp_args_on_stack,
+                                    const BasicType *sig_bt,
+                                    const VMRegPair *regs) {
 
   // Load method's entry-point from method.
   __ ld(R12_scratch2, in_bytes(Method::from_compiled_offset()), R19_method);
@@ -982,12 +1006,7 @@ static void gen_i2c_adapter(MacroAssembler *masm,
   // save code can segv when fxsave instructions find improperly
   // aligned stack pointer.
 
-#ifdef CC_INTERP
-  const Register ld_ptr = R17_tos;
-#else
   const Register ld_ptr = R15_esp;
-#endif
-
   const Register value_regs[] = { R22_tmp2, R23_tmp3, R24_tmp4, R25_tmp5, R26_tmp6 };
   const int num_value_regs = sizeof(value_regs) / sizeof(Register);
   int value_regs_index = 0;
@@ -1470,7 +1489,7 @@ static void save_or_restore_arguments(MacroAssembler* masm,
   }
 }
 
-// Check GC_locker::needs_gc and enter the runtime if it's true. This
+// Check GCLocker::needs_gc and enter the runtime if it's true. This
 // keeps a new JNI critical region from starting until a GC has been
 // forced. Save down any oops in registers and describe them in an
 // OopMap.
@@ -1482,9 +1501,9 @@ static void check_needs_gc_for_critical_native(MacroAssembler* masm,
                                                VMRegPair* in_regs,
                                                BasicType* in_sig_bt,
                                                Register tmp_reg ) {
-  __ block_comment("check GC_locker::needs_gc");
+  __ block_comment("check GCLocker::needs_gc");
   Label cont;
-  __ lbz(tmp_reg, (RegisterOrConstant)(intptr_t)GC_locker::needs_gc_address());
+  __ lbz(tmp_reg, (RegisterOrConstant)(intptr_t)GCLocker::needs_gc_address());
   __ cmplwi(CCR0, tmp_reg, 0);
   __ beq(CCR0, cont);
 
@@ -1631,7 +1650,7 @@ static void gen_special_dispatch(MacroAssembler* masm,
   } else if (iid == vmIntrinsics::_invokeBasic) {
     has_receiver = true;
   } else {
-    fatal(err_msg_res("unexpected intrinsic id %d", iid));
+    fatal("unexpected intrinsic id %d", iid);
   }
 
   if (member_reg != noreg) {
@@ -1683,14 +1702,14 @@ static void gen_special_dispatch(MacroAssembler* masm,
 // GetPrimtiveArrayCritical and disallow the use of any other JNI
 // functions.  The wrapper is expected to unpack the arguments before
 // passing them to the callee and perform checks before and after the
-// native call to ensure that they GC_locker
+// native call to ensure that they GCLocker
 // lock_critical/unlock_critical semantics are followed.  Some other
 // parts of JNI setup are skipped like the tear down of the JNI handle
 // block and the check for pending exceptions it's impossible for them
 // to be thrown.
 //
 // They are roughly structured like this:
-//   if (GC_locker::needs_gc())
+//   if (GCLocker::needs_gc())
 //     SharedRuntime::block_for_jni_critical();
 //   tranistion to thread_in_native
 //   unpack arrray arguments and call native entry point
@@ -1702,7 +1721,7 @@ static void gen_special_dispatch(MacroAssembler* masm,
 //   return to caller
 //
 nmethod *SharedRuntime::generate_native_wrapper(MacroAssembler *masm,
-                                                methodHandle method,
+                                                const methodHandle& method,
                                                 int compile_id,
                                                 BasicType *in_sig_bt,
                                                 VMRegPair *in_regs,
@@ -2384,7 +2403,7 @@ nmethod *SharedRuntime::generate_native_wrapper(MacroAssembler *masm,
 
   Label no_reguard;
   __ lwz(r_temp_1, thread_(stack_guard_state));
-  __ cmpwi(CCR0, r_temp_1, JavaThread::stack_guard_yellow_disabled);
+  __ cmpwi(CCR0, r_temp_1, JavaThread::stack_guard_yellow_reserved_disabled);
   __ bne(CCR0, no_reguard);
 
   save_native_result(masm, ret_type, workspace_slot_offset);
@@ -2458,18 +2477,18 @@ nmethod *SharedRuntime::generate_native_wrapper(MacroAssembler *masm,
 
   __ reset_last_Java_frame();
 
-  // Unpack oop result.
+  // Unbox oop result, e.g. JNIHandles::resolve value.
   // --------------------------------------------------------------------------
 
   if (ret_type == T_OBJECT || ret_type == T_ARRAY) {
-    Label skip_unboxing;
-    __ cmpdi(CCR0, R3_RET, 0);
-    __ beq(CCR0, skip_unboxing);
-    __ ld(R3_RET, 0, R3_RET);
-    __ bind(skip_unboxing);
-    __ verify_oop(R3_RET);
+    __ resolve_jobject(R3_RET, r_temp_1, r_temp_2, /* needs_frame */ false); // kills R31
   }
 
+  if (CheckJNICalls) {
+    // clear_pending_jni_exception_check
+    __ load_const_optimized(R0, 0L);
+    __ st_ptr(R0, JavaThread::pending_jni_exception_check_fn_offset(), R16_thread);
+  }
 
   // Reset handle block.
   // --------------------------------------------------------------------------
@@ -2562,7 +2581,7 @@ uint SharedRuntime::out_preserve_stack_slots() {
 #endif
 }
 
-#ifdef COMPILER2
+#if defined(COMPILER1) || defined(COMPILER2)
 // Frame generation for deopt and uncommon trap blobs.
 static void push_skeleton_frame(MacroAssembler* masm, bool deopt,
                                 /* Read */
@@ -2579,15 +2598,11 @@ static void push_skeleton_frame(MacroAssembler* masm, bool deopt,
   __ ld(frame_size_reg, 0, frame_sizes_reg);
   __ std(pc_reg, _abi(lr), R1_SP);
   __ push_frame(frame_size_reg, R0/*tmp*/);
-#ifdef CC_INTERP
-  __ std(R1_SP, _parent_ijava_frame_abi(initial_caller_sp), R1_SP);
-#else
 #ifdef ASSERT
   __ load_const_optimized(pc_reg, 0x5afe);
   __ std(pc_reg, _ijava_state_neg(ijava_reserved), R1_SP);
 #endif
   __ std(R1_SP, _ijava_state_neg(sender_sp), R1_SP);
-#endif // CC_INTERP
   __ addi(number_of_frames_reg, number_of_frames_reg, -1);
   __ addi(frame_sizes_reg, frame_sizes_reg, wordSize);
   __ addi(pcs_reg, pcs_reg, wordSize);
@@ -2659,15 +2674,11 @@ static void push_skeleton_frames(MacroAssembler* masm, bool deopt,
   __ std(R12_scratch2, _abi(lr), R1_SP);
 
   // Initialize initial_caller_sp.
-#ifdef CC_INTERP
-  __ std(frame_size_reg/*old_sp*/, _parent_ijava_frame_abi(initial_caller_sp), R1_SP);
-#else
 #ifdef ASSERT
  __ load_const_optimized(pc_reg, 0x5afe);
  __ std(pc_reg, _ijava_state_neg(ijava_reserved), R1_SP);
 #endif
  __ std(frame_size_reg, _ijava_state_neg(sender_sp), R1_SP);
-#endif // CC_INTERP
 
 #ifdef ASSERT
   // Make sure that there is at least one entry in the array.
@@ -2694,9 +2705,6 @@ static void push_skeleton_frames(MacroAssembler* masm, bool deopt,
   // Store it in the top interpreter frame.
   __ std(R0, _abi(lr), R1_SP);
   // Initialize frame_manager_lr of interpreter top frame.
-#ifdef CC_INTERP
-  __ std(R0, _top_ijava_frame_abi(frame_manager_lr), R1_SP);
-#endif
 }
 #endif
 
@@ -2720,7 +2728,7 @@ void SharedRuntime::generate_deopt_blob() {
 
   const address start = __ pc();
 
-#ifdef COMPILER2
+#if defined(COMPILER1) || defined(COMPILER2)
   // --------------------------------------------------------------------------
   // Prolog for non exception case!
 
@@ -2769,27 +2777,42 @@ void SharedRuntime::generate_deopt_blob() {
 
   BLOCK_COMMENT("Prolog for exception case");
 
-  // The RegisterSaves doesn't need to adjust the return pc for this situation.
-  const int return_pc_adjustment_exception = 0;
-
-  // Push the "unpack frame".
-  // Save everything in sight.
-  assert(R4 == R4_ARG2, "exception pc must be in r4");
-  RegisterSaver::push_frame_reg_args_and_save_live_registers(masm,
-                                                             &first_frame_size_in_bytes,
-                                                             /*generate_oop_map=*/ false,
-                                                             return_pc_adjustment_exception,
-                                                             RegisterSaver::return_pc_is_r4);
-
-  // Deopt during an exception. Save exec mode for unpack_frames.
-  __ li(exec_mode_reg, Deoptimization::Unpack_exception);
-
   // Store exception oop and pc in thread (location known to GC).
   // This is needed since the call to "fetch_unroll_info()" may safepoint.
   __ std(R3_ARG1, in_bytes(JavaThread::exception_oop_offset()), R16_thread);
   __ std(R4_ARG2, in_bytes(JavaThread::exception_pc_offset()),  R16_thread);
+  __ std(R4_ARG2, _abi(lr), R1_SP);
+
+  // Vanilla deoptimization with an exception pending in exception_oop.
+  int exception_in_tls_offset = __ pc() - start;
+
+  // Push the "unpack frame".
+  // Save everything in sight.
+  RegisterSaver::push_frame_reg_args_and_save_live_registers(masm,
+                                                             &first_frame_size_in_bytes,
+                                                             /*generate_oop_map=*/ false,
+                                                             /*return_pc_adjustment_exception=*/ 0,
+                                                             RegisterSaver::return_pc_is_pre_saved);
+
+  // Deopt during an exception. Save exec mode for unpack_frames.
+  __ li(exec_mode_reg, Deoptimization::Unpack_exception);
 
   // fall through
+
+  int reexecute_offset = 0;
+#ifdef COMPILER1
+  __ b(exec_mode_initialized);
+
+  // Reexecute entry, similar to c2 uncommon trap
+  reexecute_offset = __ pc() - start;
+
+  RegisterSaver::push_frame_reg_args_and_save_live_registers(masm,
+                                                             &first_frame_size_in_bytes,
+                                                             /*generate_oop_map=*/ false,
+                                                             /*return_pc_adjustment_reexecute=*/ 0,
+                                                             RegisterSaver::return_pc_is_pre_saved);
+  __ li(exec_mode_reg, Deoptimization::Unpack_reexecute);
+#endif
 
   // --------------------------------------------------------------------------
   __ BIND(exec_mode_initialized);
@@ -2803,7 +2826,7 @@ void SharedRuntime::generate_deopt_blob() {
   __ set_last_Java_frame(R1_SP, noreg);
 
   // With EscapeAnalysis turned on, this call may safepoint!
-  __ call_VM_leaf(CAST_FROM_FN_PTR(address, Deoptimization::fetch_unroll_info), R16_thread);
+  __ call_VM_leaf(CAST_FROM_FN_PTR(address, Deoptimization::fetch_unroll_info), R16_thread, exec_mode_reg);
   address calls_return_pc = __ last_calls_return_pc();
   // Set an oopmap for the call site that describes all our saved registers.
   oop_maps->add_gc_map(calls_return_pc - start, map);
@@ -2816,6 +2839,8 @@ void SharedRuntime::generate_deopt_blob() {
   // by save_volatile_registers(...).
   RegisterSaver::restore_result_registers(masm, first_frame_size_in_bytes);
 
+  // reload the exec mode from the UnrollBlock (it might have changed)
+  __ lwz(exec_mode_reg, Deoptimization::UnrollBlock::unpack_kind_offset_in_bytes(), unroll_block_reg);
   // In excp_deopt_mode, restore and clear exception oop which we
   // stored in the thread during exception entry above. The exception
   // oop will be the return value of this stub.
@@ -2883,16 +2908,8 @@ void SharedRuntime::generate_deopt_blob() {
   // optional c2i, caller of deoptee, ...).
 
   // Initialize R14_state.
-#ifdef CC_INTERP
-  __ ld(R14_state, 0, R1_SP);
-  __ addi(R14_state, R14_state, -frame::interpreter_frame_cinterpreterstate_size_in_bytes());
-  // Also inititialize R15_prev_state.
-  __ restore_prev_state();
-#else
   __ restore_interpreter_state(R11_scratch1);
   __ load_const_optimized(R25_templateTableBase, (address)Interpreter::dispatch_table((TosState)0), R11_scratch1);
-#endif // CC_INTERP
-
 
   // Return to the interpreter entry point.
   __ blr();
@@ -2902,7 +2919,9 @@ void SharedRuntime::generate_deopt_blob() {
   int exception_offset = __ pc() - start;
 #endif // COMPILER2
 
-  _deopt_blob = DeoptimizationBlob::create(&buffer, oop_maps, 0, exception_offset, 0, first_frame_size_in_bytes / wordSize);
+  _deopt_blob = DeoptimizationBlob::create(&buffer, oop_maps, 0, exception_offset,
+                                           reexecute_offset, first_frame_size_in_bytes / wordSize);
+  _deopt_blob->set_unpack_with_exception_in_tls_offset(exception_in_tls_offset);
 }
 
 #ifdef COMPILER2
@@ -2946,8 +2965,9 @@ void SharedRuntime::generate_uncommon_trap_blob() {
   __ set_last_Java_frame(/*sp*/R1_SP, /*pc*/R11_scratch1);
 
   __ mr(klass_index_reg, R3);
+  __ li(R5_ARG3, Deoptimization::Unpack_uncommon_trap);
   __ call_VM_leaf(CAST_FROM_FN_PTR(address, Deoptimization::uncommon_trap),
-                  R16_thread, klass_index_reg);
+                  R16_thread, klass_index_reg, R5_ARG3);
 
   // Set an oopmap for the call site.
   oop_maps->add_gc_map(gc_map_pc - start, map);
@@ -2966,6 +2986,12 @@ void SharedRuntime::generate_uncommon_trap_blob() {
   __ pop_frame();
 
   // stack: (caller_of_deoptee, ...).
+
+#ifdef ASSERT
+  __ lwz(R22_tmp2, Deoptimization::UnrollBlock::unpack_kind_offset_in_bytes(), unroll_block_reg);
+  __ cmpdi(CCR0, R22_tmp2, (unsigned)Deoptimization::Unpack_uncommon_trap);
+  __ asm_assert_eq("SharedRuntime::generate_deopt_blob: expected Unpack_uncommon_trap", 0);
+#endif
 
   // Allocate new interpreter frame(s) and possibly a c2i adapter
   // frame.
@@ -3011,16 +3037,8 @@ void SharedRuntime::generate_uncommon_trap_blob() {
   // stack: (top interpreter frame, ..., optional interpreter frame,
   // optional c2i, caller of deoptee, ...).
 
-#ifdef CC_INTERP
-  // Initialize R14_state, ...
-  __ ld(R11_scratch1, 0, R1_SP);
-  __ addi(R14_state, R11_scratch1, -frame::interpreter_frame_cinterpreterstate_size_in_bytes());
-  // also initialize R15_prev_state.
-  __ restore_prev_state();
-#else
   __ restore_interpreter_state(R11_scratch1);
   __ load_const_optimized(R25_templateTableBase, (address)Interpreter::dispatch_table((TosState)0), R11_scratch1);
-#endif // CC_INTERP
 
   // Return to the interpreter entry point.
   __ blr();
@@ -3209,4 +3227,246 @@ RuntimeStub* SharedRuntime::generate_resolve_blob(address destination, const cha
   // frame_size_words or bytes??
   return RuntimeStub::new_runtime_stub(name, &buffer, frame_complete, frame_size_in_bytes/wordSize,
                                        oop_maps, true);
+}
+
+
+//------------------------------Montgomery multiplication------------------------
+//
+
+// Subtract 0:b from carry:a. Return carry.
+static unsigned long
+sub(unsigned long a[], unsigned long b[], unsigned long carry, long len) {
+  long i = 0;
+  unsigned long tmp, tmp2;
+  __asm__ __volatile__ (
+    "subfc  %[tmp], %[tmp], %[tmp]   \n" // pre-set CA
+    "mtctr  %[len]                   \n"
+    "0:                              \n"
+    "ldx    %[tmp], %[i], %[a]       \n"
+    "ldx    %[tmp2], %[i], %[b]      \n"
+    "subfe  %[tmp], %[tmp2], %[tmp]  \n" // subtract extended
+    "stdx   %[tmp], %[i], %[a]       \n"
+    "addi   %[i], %[i], 8            \n"
+    "bdnz   0b                       \n"
+    "addme  %[tmp], %[carry]         \n" // carry + CA - 1
+    : [i]"+b"(i), [tmp]"=&r"(tmp), [tmp2]"=&r"(tmp2)
+    : [a]"r"(a), [b]"r"(b), [carry]"r"(carry), [len]"r"(len)
+    : "ctr", "xer", "memory"
+  );
+  return tmp;
+}
+
+// Multiply (unsigned) Long A by Long B, accumulating the double-
+// length result into the accumulator formed of T0, T1, and T2.
+inline void MACC(unsigned long A, unsigned long B, unsigned long &T0, unsigned long &T1, unsigned long &T2) {
+  unsigned long hi, lo;
+  __asm__ __volatile__ (
+    "mulld  %[lo], %[A], %[B]    \n"
+    "mulhdu %[hi], %[A], %[B]    \n"
+    "addc   %[T0], %[T0], %[lo]  \n"
+    "adde   %[T1], %[T1], %[hi]  \n"
+    "addze  %[T2], %[T2]         \n"
+    : [hi]"=&r"(hi), [lo]"=&r"(lo), [T0]"+r"(T0), [T1]"+r"(T1), [T2]"+r"(T2)
+    : [A]"r"(A), [B]"r"(B)
+    : "xer"
+  );
+}
+
+// As above, but add twice the double-length result into the
+// accumulator.
+inline void MACC2(unsigned long A, unsigned long B, unsigned long &T0, unsigned long &T1, unsigned long &T2) {
+  unsigned long hi, lo;
+  __asm__ __volatile__ (
+    "mulld  %[lo], %[A], %[B]    \n"
+    "mulhdu %[hi], %[A], %[B]    \n"
+    "addc   %[T0], %[T0], %[lo]  \n"
+    "adde   %[T1], %[T1], %[hi]  \n"
+    "addze  %[T2], %[T2]         \n"
+    "addc   %[T0], %[T0], %[lo]  \n"
+    "adde   %[T1], %[T1], %[hi]  \n"
+    "addze  %[T2], %[T2]         \n"
+    : [hi]"=&r"(hi), [lo]"=&r"(lo), [T0]"+r"(T0), [T1]"+r"(T1), [T2]"+r"(T2)
+    : [A]"r"(A), [B]"r"(B)
+    : "xer"
+  );
+}
+
+// Fast Montgomery multiplication. The derivation of the algorithm is
+// in "A Cryptographic Library for the Motorola DSP56000,
+// Dusse and Kaliski, Proc. EUROCRYPT 90, pp. 230-237".
+static void
+montgomery_multiply(unsigned long a[], unsigned long b[], unsigned long n[],
+                    unsigned long m[], unsigned long inv, int len) {
+  unsigned long t0 = 0, t1 = 0, t2 = 0; // Triple-precision accumulator
+  int i;
+
+  assert(inv * n[0] == -1UL, "broken inverse in Montgomery multiply");
+
+  for (i = 0; i < len; i++) {
+    int j;
+    for (j = 0; j < i; j++) {
+      MACC(a[j], b[i-j], t0, t1, t2);
+      MACC(m[j], n[i-j], t0, t1, t2);
+    }
+    MACC(a[i], b[0], t0, t1, t2);
+    m[i] = t0 * inv;
+    MACC(m[i], n[0], t0, t1, t2);
+
+    assert(t0 == 0, "broken Montgomery multiply");
+
+    t0 = t1; t1 = t2; t2 = 0;
+  }
+
+  for (i = len; i < 2*len; i++) {
+    int j;
+    for (j = i-len+1; j < len; j++) {
+      MACC(a[j], b[i-j], t0, t1, t2);
+      MACC(m[j], n[i-j], t0, t1, t2);
+    }
+    m[i-len] = t0;
+    t0 = t1; t1 = t2; t2 = 0;
+  }
+
+  while (t0) {
+    t0 = sub(m, n, t0, len);
+  }
+}
+
+// Fast Montgomery squaring. This uses asymptotically 25% fewer
+// multiplies so it should be up to 25% faster than Montgomery
+// multiplication. However, its loop control is more complex and it
+// may actually run slower on some machines.
+static void
+montgomery_square(unsigned long a[], unsigned long n[],
+                  unsigned long m[], unsigned long inv, int len) {
+  unsigned long t0 = 0, t1 = 0, t2 = 0; // Triple-precision accumulator
+  int i;
+
+  assert(inv * n[0] == -1UL, "broken inverse in Montgomery multiply");
+
+  for (i = 0; i < len; i++) {
+    int j;
+    int end = (i+1)/2;
+    for (j = 0; j < end; j++) {
+      MACC2(a[j], a[i-j], t0, t1, t2);
+      MACC(m[j], n[i-j], t0, t1, t2);
+    }
+    if ((i & 1) == 0) {
+      MACC(a[j], a[j], t0, t1, t2);
+    }
+    for (; j < i; j++) {
+      MACC(m[j], n[i-j], t0, t1, t2);
+    }
+    m[i] = t0 * inv;
+    MACC(m[i], n[0], t0, t1, t2);
+
+    assert(t0 == 0, "broken Montgomery square");
+
+    t0 = t1; t1 = t2; t2 = 0;
+  }
+
+  for (i = len; i < 2*len; i++) {
+    int start = i-len+1;
+    int end = start + (len - start)/2;
+    int j;
+    for (j = start; j < end; j++) {
+      MACC2(a[j], a[i-j], t0, t1, t2);
+      MACC(m[j], n[i-j], t0, t1, t2);
+    }
+    if ((i & 1) == 0) {
+      MACC(a[j], a[j], t0, t1, t2);
+    }
+    for (; j < len; j++) {
+      MACC(m[j], n[i-j], t0, t1, t2);
+    }
+    m[i-len] = t0;
+    t0 = t1; t1 = t2; t2 = 0;
+  }
+
+  while (t0) {
+    t0 = sub(m, n, t0, len);
+  }
+}
+
+// The threshold at which squaring is advantageous was determined
+// experimentally on an i7-3930K (Ivy Bridge) CPU @ 3.5GHz.
+// Doesn't seem to be relevant for Power8 so we use the same value.
+#define MONTGOMERY_SQUARING_THRESHOLD 64
+
+// Copy len longwords from s to d, word-swapping as we go. The
+// destination array is reversed.
+static void reverse_words(unsigned long *s, unsigned long *d, int len) {
+  d += len;
+  while(len-- > 0) {
+    d--;
+    unsigned long s_val = *s;
+    // Swap words in a longword on little endian machines.
+#ifdef VM_LITTLE_ENDIAN
+     s_val = (s_val << 32) | (s_val >> 32);
+#endif
+    *d = s_val;
+    s++;
+  }
+}
+
+void SharedRuntime::montgomery_multiply(jint *a_ints, jint *b_ints, jint *n_ints,
+                                        jint len, jlong inv,
+                                        jint *m_ints) {
+  len = len & 0x7fffFFFF; // C2 does not respect int to long conversion for stub calls.
+  assert(len % 2 == 0, "array length in montgomery_multiply must be even");
+  int longwords = len/2;
+
+  // Make very sure we don't use so much space that the stack might
+  // overflow. 512 jints corresponds to an 16384-bit integer and
+  // will use here a total of 8k bytes of stack space.
+  int total_allocation = longwords * sizeof (unsigned long) * 4;
+  guarantee(total_allocation <= 8192, "must be");
+  unsigned long *scratch = (unsigned long *)alloca(total_allocation);
+
+  // Local scratch arrays
+  unsigned long
+    *a = scratch + 0 * longwords,
+    *b = scratch + 1 * longwords,
+    *n = scratch + 2 * longwords,
+    *m = scratch + 3 * longwords;
+
+  reverse_words((unsigned long *)a_ints, a, longwords);
+  reverse_words((unsigned long *)b_ints, b, longwords);
+  reverse_words((unsigned long *)n_ints, n, longwords);
+
+  ::montgomery_multiply(a, b, n, m, (unsigned long)inv, longwords);
+
+  reverse_words(m, (unsigned long *)m_ints, longwords);
+}
+
+void SharedRuntime::montgomery_square(jint *a_ints, jint *n_ints,
+                                      jint len, jlong inv,
+                                      jint *m_ints) {
+  len = len & 0x7fffFFFF; // C2 does not respect int to long conversion for stub calls.
+  assert(len % 2 == 0, "array length in montgomery_square must be even");
+  int longwords = len/2;
+
+  // Make very sure we don't use so much space that the stack might
+  // overflow. 512 jints corresponds to an 16384-bit integer and
+  // will use here a total of 6k bytes of stack space.
+  int total_allocation = longwords * sizeof (unsigned long) * 3;
+  guarantee(total_allocation <= 8192, "must be");
+  unsigned long *scratch = (unsigned long *)alloca(total_allocation);
+
+  // Local scratch arrays
+  unsigned long
+    *a = scratch + 0 * longwords,
+    *n = scratch + 1 * longwords,
+    *m = scratch + 2 * longwords;
+
+  reverse_words((unsigned long *)a_ints, a, longwords);
+  reverse_words((unsigned long *)n_ints, n, longwords);
+
+  if (len >= MONTGOMERY_SQUARING_THRESHOLD) {
+    ::montgomery_square(a, n, m, (unsigned long)inv, longwords);
+  } else {
+    ::montgomery_multiply(a, a, n, m, (unsigned long)inv, longwords);
+  }
+
+  reverse_words(m, (unsigned long *)m_ints, longwords);
 }

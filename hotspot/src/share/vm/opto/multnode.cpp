@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,14 +44,14 @@ Node *MultiNode::match( const ProjNode *proj, const Matcher *m ) { return proj->
 //------------------------------proj_out---------------------------------------
 // Get a named projection
 ProjNode* MultiNode::proj_out(uint which_proj) const {
-  assert(Opcode() != Op_If || which_proj == (uint)true || which_proj == (uint)false, "must be 1 or 0");
-  assert(Opcode() != Op_If || outcnt() == 2, "bad if #1");
+  assert((Opcode() != Op_If && Opcode() != Op_RangeCheck) || which_proj == (uint)true || which_proj == (uint)false, "must be 1 or 0");
+  assert((Opcode() != Op_If && Opcode() != Op_RangeCheck) || outcnt() == 2, "bad if #1");
   for( DUIterator_Fast imax, i = fast_outs(imax); i < imax; i++ ) {
     Node *p = fast_out(i);
     if (p->is_Proj()) {
       ProjNode *proj = p->as_Proj();
       if (proj->_con == which_proj) {
-        assert(Opcode() != Op_If || proj->Opcode() == (which_proj?Op_IfTrue:Op_IfFalse), "bad if #2");
+        assert((Opcode() != Op_If && Opcode() != Op_RangeCheck) || proj->Opcode() == (which_proj ? Op_IfTrue : Op_IfFalse), "bad if #2");
         return proj;
       }
     } else {
@@ -118,6 +118,20 @@ const TypePtr *ProjNode::adr_type() const {
 bool ProjNode::pinned() const { return in(0)->pinned(); }
 #ifndef PRODUCT
 void ProjNode::dump_spec(outputStream *st) const { st->print("#%d",_con); if(_is_io_use) st->print(" (i_o_use)");}
+
+void ProjNode::dump_compact_spec(outputStream *st) const {
+  for (DUIterator i = this->outs(); this->has_out(i); i++) {
+    Node* o = this->out(i);
+    if (NotANode(o)) {
+      st->print("[?]");
+    } else if (o == NULL) {
+      st->print("[_]");
+    } else {
+      st->print("[%d]", o->_idx);
+    }
+  }
+  st->print("#%d", _con);
+}
 #endif
 
 //----------------------------check_con----------------------------------------
@@ -133,7 +147,7 @@ void ProjNode::check_con() const {
 }
 
 //------------------------------Value------------------------------------------
-const Type *ProjNode::Value( PhaseTransform *phase ) const {
+const Type* ProjNode::Value(PhaseGVN* phase) const {
   if (in(0) == NULL) return Type::TOP;
   return proj_type(phase->type(in(0)));
 }

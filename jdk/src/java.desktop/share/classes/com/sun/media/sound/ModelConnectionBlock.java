@@ -22,6 +22,7 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package com.sun.media.sound;
 
 import java.util.Arrays;
@@ -39,7 +40,7 @@ public final class ModelConnectionBlock {
     //
     //   source1 * source2 * scale -> destination
     //
-    private final static ModelSource[] no_sources = new ModelSource[0];
+    private static final ModelSource[] no_sources = new ModelSource[0];
     private ModelSource[] sources = no_sources;
     private double scale = 1;
     private ModelDestination destination;

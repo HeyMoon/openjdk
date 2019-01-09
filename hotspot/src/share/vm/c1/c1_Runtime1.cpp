@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,6 @@
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/codeBlob.hpp"
-#include "code/codeCacheExtensions.hpp"
 #include "code/compiledIC.hpp"
 #include "code/pcDesc.hpp"
 #include "code/scopeDesc.hpp"
@@ -43,12 +42,13 @@
 #include "gc/shared/collectedHeap.hpp"
 #include "interpreter/bytecode.hpp"
 #include "interpreter/interpreter.hpp"
+#include "logging/log.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/oopFactory.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/biasedLocking.hpp"
 #include "runtime/compilationPolicy.hpp"
 #include "runtime/interfaceSupport.hpp"
@@ -188,52 +188,44 @@ void Runtime1::generate_blob_for(BufferBlob* buffer_blob, StubID id) {
   int frame_size;
   bool must_gc_arguments;
 
-  if (!CodeCacheExtensions::skip_compiler_support()) {
-    // bypass useless code generation
-    Compilation::setup_code_buffer(&code, 0);
+  Compilation::setup_code_buffer(&code, 0);
 
-    // create assembler for code generation
-    StubAssembler* sasm = new StubAssembler(&code, name_for(id), id);
-    // generate code for runtime stub
-    oop_maps = generate_code_for(id, sasm);
-    assert(oop_maps == NULL || sasm->frame_size() != no_frame_size,
-           "if stub has an oop map it must have a valid frame size");
+  // create assembler for code generation
+  StubAssembler* sasm = new StubAssembler(&code, name_for(id), id);
+  // generate code for runtime stub
+  oop_maps = generate_code_for(id, sasm);
+  assert(oop_maps == NULL || sasm->frame_size() != no_frame_size,
+         "if stub has an oop map it must have a valid frame size");
 
 #ifdef ASSERT
-    // Make sure that stubs that need oopmaps have them
-    switch (id) {
-      // These stubs don't need to have an oopmap
-    case dtrace_object_alloc_id:
-    case g1_pre_barrier_slow_id:
-    case g1_post_barrier_slow_id:
-    case slow_subtype_check_id:
-    case fpu2long_stub_id:
-    case unwind_exception_id:
-    case counter_overflow_id:
-#if defined(SPARC) || defined(PPC)
-    case handle_exception_nofpu_id:  // Unused on sparc
+  // Make sure that stubs that need oopmaps have them
+  switch (id) {
+    // These stubs don't need to have an oopmap
+  case dtrace_object_alloc_id:
+  case g1_pre_barrier_slow_id:
+  case g1_post_barrier_slow_id:
+  case slow_subtype_check_id:
+  case fpu2long_stub_id:
+  case unwind_exception_id:
+  case counter_overflow_id:
+#if defined(SPARC) || defined(PPC32)
+  case handle_exception_nofpu_id:  // Unused on sparc
 #endif
-      break;
+    break;
 
-      // All other stubs should have oopmaps
-    default:
-      assert(oop_maps != NULL, "must have an oopmap");
-    }
-#endif
-
-    // align so printing shows nop's instead of random code at the end (SimpleStubs are aligned)
-    sasm->align(BytesPerWord);
-    // make sure all code is in code buffer
-    sasm->flush();
-
-    frame_size = sasm->frame_size();
-    must_gc_arguments = sasm->must_gc_arguments();
-  } else {
-    /* ignored values */
-    oop_maps = NULL;
-    frame_size = 0;
-    must_gc_arguments = false;
+    // All other stubs should have oopmaps
+  default:
+    assert(oop_maps != NULL, "must have an oopmap");
   }
+#endif
+
+  // align so printing shows nop's instead of random code at the end (SimpleStubs are aligned)
+  sasm->align(BytesPerWord);
+  // make sure all code is in code buffer
+  sasm->flush();
+
+  frame_size = sasm->frame_size();
+  must_gc_arguments = sasm->must_gc_arguments();
   // create blob - distinguish a few special cases
   CodeBlob* blob = RuntimeStub::new_runtime_stub(name_for(id),
                                                  &code,
@@ -317,6 +309,15 @@ const char* Runtime1::name_for_address(address entry) {
   FUNCTION_CASE(entry, TRACE_TIME_METHOD);
 #endif
   FUNCTION_CASE(entry, StubRoutines::updateBytesCRC32());
+  FUNCTION_CASE(entry, StubRoutines::updateBytesCRC32C());
+  FUNCTION_CASE(entry, StubRoutines::vectorizedMismatch());
+  FUNCTION_CASE(entry, StubRoutines::dexp());
+  FUNCTION_CASE(entry, StubRoutines::dlog());
+  FUNCTION_CASE(entry, StubRoutines::dlog10());
+  FUNCTION_CASE(entry, StubRoutines::dpow());
+  FUNCTION_CASE(entry, StubRoutines::dsin());
+  FUNCTION_CASE(entry, StubRoutines::dcos());
+  FUNCTION_CASE(entry, StubRoutines::dtan());
 
 #undef FUNCTION_CASE
 
@@ -329,6 +330,7 @@ JRT_ENTRY(void, Runtime1::new_instance(JavaThread* thread, Klass* klass))
   NOT_PRODUCT(_new_instance_slowcase_cnt++;)
 
   assert(klass->is_klass(), "not a class");
+  Handle holder(THREAD, klass->klass_holder()); // keep the klass alive
   instanceKlassHandle h(thread, klass);
   h->check_valid_for_instantiation(true, CHECK);
   // make sure klass is initialized
@@ -364,6 +366,7 @@ JRT_ENTRY(void, Runtime1::new_object_array(JavaThread* thread, Klass* array_klas
   //       anymore after new_objArray() and no GC can happen before.
   //       (This may have to change if this code changes!)
   assert(array_klass->is_klass(), "not a class");
+  Handle holder(THREAD, array_klass->klass_holder()); // keep the klass alive
   Klass* elem_klass = ObjArrayKlass::cast(array_klass)->element_klass();
   objArrayOop obj = oopFactory::new_objArray(elem_klass, length, CHECK);
   thread->set_vm_result(obj);
@@ -380,6 +383,7 @@ JRT_ENTRY(void, Runtime1::new_multi_array(JavaThread* thread, Klass* klass, int 
 
   assert(klass->is_klass(), "not a class");
   assert(rank >= 1, "rank must be nonzero");
+  Handle holder(THREAD, klass->klass_holder()); // keep the klass alive
   oop obj = ArrayKlass::cast(klass)->multi_allocate(rank, dims, CHECK);
   thread->set_vm_result(obj);
 JRT_END
@@ -500,7 +504,7 @@ JRT_ENTRY_NO_ASYNC(static address, exception_handler_for_pc_helper(JavaThread* t
   // Check the stack guard pages and reenable them if necessary and there is
   // enough space on the stack to do so.  Use fast exceptions only if the guard
   // pages are enabled.
-  bool guard_pages_enabled = thread->stack_yellow_zone_enabled();
+  bool guard_pages_enabled = thread->stack_guards_enabled();
   if (!guard_pages_enabled) guard_pages_enabled = thread->reguard_stack();
 
   if (JvmtiExport::can_post_on_exceptions()) {
@@ -546,14 +550,16 @@ JRT_ENTRY_NO_ASYNC(static address, exception_handler_for_pc_helper(JavaThread* t
 
     // debugging support
     // tracing
-    if (TraceExceptions) {
-      ttyLocker ttyl;
+    if (log_is_enabled(Info, exceptions)) {
       ResourceMark rm;
-      tty->print_cr("Exception <%s> (" INTPTR_FORMAT ") thrown in compiled method <%s> at PC " INTPTR_FORMAT " for thread " INTPTR_FORMAT "",
-                    exception->print_value_string(), p2i((address)exception()), nm->method()->print_value_string(), p2i(pc), p2i(thread));
+      stringStream tempst;
+      tempst.print("compiled method <%s>\n"
+                   " at PC" INTPTR_FORMAT " for thread " INTPTR_FORMAT,
+                   nm->method()->print_value_string(), p2i(pc), p2i(thread));
+      Exceptions::log_exception(exception, tempst);
     }
     // for AbortVMOnException flag
-    NOT_PRODUCT(Exceptions::debug_check_abort(exception));
+    Exceptions::debug_check_abort(exception);
 
     // Clear out the exception oop and pc since looking up an
     // exception handler can cause class loading, which might throw an
@@ -561,9 +567,8 @@ JRT_ENTRY_NO_ASYNC(static address, exception_handler_for_pc_helper(JavaThread* t
     // normal bytecode execution.
     thread->clear_exception_oop_and_pc();
 
-    Handle original_exception(thread, exception());
-
-    continuation = SharedRuntime::compute_compiled_exc_handler(nm, pc, exception, false, false);
+    bool recursive_exception = false;
+    continuation = SharedRuntime::compute_compiled_exc_handler(nm, pc, exception, false, false, recursive_exception);
     // If an exception was thrown during exception dispatch, the exception oop may have changed
     thread->set_exception_oop(exception());
     thread->set_exception_pc(pc);
@@ -571,8 +576,9 @@ JRT_ENTRY_NO_ASYNC(static address, exception_handler_for_pc_helper(JavaThread* t
     // the exception cache is used only by non-implicit exceptions
     // Update the exception cache only when there didn't happen
     // another exception during the computation of the compiled
-    // exception handler.
-    if (continuation != NULL && original_exception() == exception()) {
+    // exception handler. Checking for exception oop equality is not
+    // sufficient because some exceptions are pre-allocated and reused.
+    if (continuation != NULL && !recursive_exception) {
       nm->add_handler_for_exception_and_pc(exception, pc, continuation);
     }
   }
@@ -581,11 +587,11 @@ JRT_ENTRY_NO_ASYNC(static address, exception_handler_for_pc_helper(JavaThread* t
   // Set flag if return address is a method handle call site.
   thread->set_is_method_handle_return(nm->is_method_handle_return(pc));
 
-  if (TraceExceptions) {
-    ttyLocker ttyl;
+  if (log_is_enabled(Info, exceptions)) {
     ResourceMark rm;
-    tty->print_cr("Thread " PTR_FORMAT " continuing at PC " PTR_FORMAT " for exception thrown at PC " PTR_FORMAT,
-                  p2i(thread), p2i(continuation), p2i(pc));
+    log_info(exceptions)("Thread " PTR_FORMAT " continuing at PC " PTR_FORMAT
+                         " for exception thrown at PC " PTR_FORMAT,
+                         p2i(thread), p2i(continuation), p2i(pc));
   }
 
   return continuation;
@@ -653,7 +659,7 @@ JRT_ENTRY(void, Runtime1::throw_class_cast_exception(JavaThread* thread, oopDesc
   NOT_PRODUCT(_throw_class_cast_exception_count++;)
   ResourceMark rm(thread);
   char* message = SharedRuntime::generate_class_cast_message(
-    thread, object->klass()->external_name());
+    thread, object->klass());
   SharedRuntime::throw_and_post_jvmti_exception(
     thread, vmSymbols::java_lang_ClassCastException(), message);
 JRT_END
@@ -744,10 +750,10 @@ static Klass* resolve_field_return_klass(methodHandle caller, int bci, TRAPS) {
   // This can be static or non-static field access
   Bytecodes::Code code       = field_access.code();
 
-  // We must load class, initialize class and resolvethe field
+  // We must load class, initialize class and resolve the field
   fieldDescriptor result; // initialize class if needed
   constantPoolHandle constants(THREAD, caller->constants());
-  LinkResolver::resolve_field_access(result, constants, field_access.index(), Bytecodes::java_code(code), CHECK_NULL);
+  LinkResolver::resolve_field_access(result, constants, field_access.index(), caller, Bytecodes::java_code(code), CHECK_NULL);
   return result.field_holder();
 }
 
@@ -864,7 +870,7 @@ JRT_ENTRY(void, Runtime1::patch_code(JavaThread* thread, Runtime1::StubID stub_i
     fieldDescriptor result; // initialize class if needed
     Bytecodes::Code code = field_access.code();
     constantPoolHandle constants(THREAD, caller_method->constants());
-    LinkResolver::resolve_field_access(result, constants, field_access.index(), Bytecodes::java_code(code), CHECK);
+    LinkResolver::resolve_field_access(result, constants, field_access.index(), caller_method, Bytecodes::java_code(code), CHECK);
     patch_field_offset = result.offset();
 
     // If we're patching a field which is volatile then at compile it
@@ -949,16 +955,19 @@ JRT_ENTRY(void, Runtime1::patch_code(JavaThread* thread, Runtime1::StubID stub_i
     constantPoolHandle pool(thread, caller_method->constants());
     int index = bytecode.index();
     LinkResolver::resolve_invoke(info, Handle(), pool, index, bc, CHECK);
-    appendix = info.resolved_appendix();
     switch (bc) {
       case Bytecodes::_invokehandle: {
         int cache_index = ConstantPool::decode_cpcache_index(index, true);
         assert(cache_index >= 0 && cache_index < pool->cache()->length(), "unexpected cache index");
-        pool->cache()->entry_at(cache_index)->set_method_handle(pool, info);
+        ConstantPoolCacheEntry* cpce = pool->cache()->entry_at(cache_index);
+        cpce->set_method_handle(pool, info);
+        appendix = cpce->appendix_if_resolved(pool); // just in case somebody already resolved the entry
         break;
       }
       case Bytecodes::_invokedynamic: {
-        pool->invokedynamic_cp_cache_entry_at(index)->set_dynamic_call(pool, info);
+        ConstantPoolCacheEntry* cpce = pool->invokedynamic_cp_cache_entry_at(index);
+        cpce->set_dynamic_call(pool, info);
+        appendix = cpce->appendix_if_resolved(pool); // just in case somebody already resolved the entry
         break;
       }
       default: fatal("unexpected bytecode for load_appendix_patching_id");
@@ -1025,6 +1034,7 @@ JRT_ENTRY(void, Runtime1::patch_code(JavaThread* thread, Runtime1::StubID stub_i
         address copy_buff = stub_location - *byte_skip - *byte_count;
         address being_initialized_entry = stub_location - *being_initialized_entry_offset;
         if (TracePatching) {
+          ttyLocker ttyl;
           tty->print_cr(" Patching %s at bci %d at address " INTPTR_FORMAT "  (%s)", Bytecodes::name(code), bci,
                         p2i(instr_pc), (stub_id == Runtime1::access_field_patching_id) ? "field" : "klass");
           nmethod* caller_code = CodeCache::find_nmethod(caller_frame.pc());
@@ -1095,7 +1105,7 @@ JRT_ENTRY(void, Runtime1::patch_code(JavaThread* thread, Runtime1::StubID stub_i
           ShouldNotReachHere();
         }
 
-#if defined(SPARC) || defined(PPC)
+#if defined(SPARC) || defined(PPC32)
         if (load_klass_or_mirror_patch_id ||
             stub_id == Runtime1::load_appendix_patching_id) {
           // Update the location in the nmethod with the proper
@@ -1161,7 +1171,7 @@ JRT_ENTRY(void, Runtime1::patch_code(JavaThread* thread, Runtime1::StubID stub_i
           }
 #endif
 
-          for (int i = NativeCall::instruction_size; i < *byte_count; i++) {
+          for (int i = NativeGeneralJump::instruction_size; i < *byte_count; i++) {
             address ptr = copy_buff + i;
             int a_byte = (*ptr) & 0xFF;
             address dst = instr_pc + i;
@@ -1193,7 +1203,7 @@ JRT_ENTRY(void, Runtime1::patch_code(JavaThread* thread, Runtime1::StubID stub_i
             relocInfo::change_reloc_info_for_address(&iter2, (address) instr_pc2,
                                                      relocInfo::none, rtype);
 #endif
-#ifdef PPC
+#ifdef PPC32
           { address instr_pc2 = instr_pc + NativeMovConstReg::lo_offset;
             RelocIterator iter2(nm, instr_pc2, instr_pc2 + 1);
             relocInfo::change_reloc_info_for_address(&iter2, (address) instr_pc2,

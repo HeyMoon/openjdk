@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,13 +44,19 @@ class Metaspace;
 class SharedClassPathEntry VALUE_OBJ_CLASS_SPEC {
 public:
   const char *_name;
-  time_t _timestamp;          // jar timestamp,  0 if is directory or other
-  long   _filesize;           // jar file size, -1 if is directory, -2 if other
-  bool is_jar() {
+  time_t _timestamp;          // jar/jimage timestamp,  0 if is directory or other
+  long   _filesize;           // jar/jimage file size, -1 if is directory, -2 if other
+
+  // The _timestamp only gets set for jar files and "modules" jimage.
+  bool is_jar_or_bootimage() {
     return _timestamp != 0;
   }
   bool is_dir() {
     return _filesize == -1;
+  }
+
+  bool is_jrt() {
+    return ClassLoader::is_jrt(_name);
   }
 };
 
@@ -95,10 +101,14 @@ public:
     size_t _alignment;                // how shared archive should be aligned
     int    _obj_alignment;            // value of ObjectAlignmentInBytes
     int    _narrow_oop_shift;         // compressed oop encoding shift
+    bool   _compact_strings;          // value of CompactStrings
     uintx  _max_heap_size;            // java max heap size during dumping
     Universe::NARROW_OOP_MODE _narrow_oop_mode; // compressed oop encoding mode
     int     _narrow_klass_shift;      // save narrow klass base and shift
     address _narrow_klass_base;
+    char*   _misc_data_patching_start;
+    address _cds_i2i_entry_code_buffers;
+    size_t  _cds_i2i_entry_code_buffers_size;
 
     struct space_info {
       int    _crc;           // crc checksum of the current space
@@ -184,6 +194,21 @@ public:
   int     narrow_klass_shift() const  { return _header->_narrow_klass_shift; }
   size_t space_capacity(int i)        { return _header->_space[i]._capacity; }
   struct FileMapHeader* header()      { return _header; }
+  char* misc_data_patching_start()            { return _header->_misc_data_patching_start; }
+  void set_misc_data_patching_start(char* p)  { _header->_misc_data_patching_start = p; }
+
+  address cds_i2i_entry_code_buffers() {
+    return _header->_cds_i2i_entry_code_buffers;
+  }
+  void set_cds_i2i_entry_code_buffers(address addr) {
+    _header->_cds_i2i_entry_code_buffers = addr;
+  }
+  size_t cds_i2i_entry_code_buffers_size() {
+    return _header->_cds_i2i_entry_code_buffers_size;
+  }
+  void set_cds_i2i_entry_code_buffers_size(size_t s) {
+    _header->_cds_i2i_entry_code_buffers_size = s;
+  }
 
   static FileMapInfo* current_info() {
     CDS_ONLY(return _current_info;)
@@ -208,7 +233,7 @@ public:
   bool  verify_string_regions();
   void  fixup_string_regions();
   void  unmap_region(int i);
-  void  unmap_string_regions();
+  void  dealloc_string_regions();
   bool  verify_region_checksum(int i);
   void  close();
   bool  is_open() { return _file_open; }
@@ -224,12 +249,30 @@ public:
 
   // Return true if given address is in the mapped shared space.
   bool is_in_shared_space(const void* p) NOT_CDS_RETURN_(false);
+  bool is_in_shared_region(const void* p, int idx) NOT_CDS_RETURN_(false);
   void print_shared_spaces() NOT_CDS_RETURN;
 
+  // The ro+rw+md+mc spaces size
+  static size_t core_spaces_size() {
+    return align_size_up((SharedReadOnlySize + SharedReadWriteSize +
+                          SharedMiscDataSize + SharedMiscCodeSize),
+                          os::vm_allocation_granularity());
+  }
+
+  // The estimated optional space size.
+  //
+  // Currently the optional space only has archived class bytes.
+  // The core_spaces_size is the size of all class metadata, which is a good
+  // estimate of the total class bytes to be archived. Only the portion
+  // containing data is written out to the archive and mapped at runtime.
+  // There is no memory waste due to unused portion in optional space.
+  static size_t optional_space_size() {
+    return core_spaces_size();
+  }
+
+  // Total shared_spaces size includes the ro, rw, md, mc and od spaces
   static size_t shared_spaces_size() {
-    return align_size_up(SharedReadOnlySize + SharedReadWriteSize +
-                         SharedMiscDataSize + SharedMiscCodeSize,
-                         os::vm_allocation_granularity());
+    return core_spaces_size() + optional_space_size();
   }
 
   // Stop CDS sharing and unmap CDS regions.
@@ -239,11 +282,15 @@ public:
   bool validate_classpath_entry_table();
 
   static SharedClassPathEntry* shared_classpath(int index) {
+    if (index < 0) {
+      return NULL;
+    }
     char* p = (char*)_classpath_entry_table;
     p += _classpath_entry_size * index;
     return (SharedClassPathEntry*)p;
   }
   static const char* shared_classpath_name(int index) {
+    assert(index >= 0, "Sanity");
     return shared_classpath(index)->_name;
   }
 

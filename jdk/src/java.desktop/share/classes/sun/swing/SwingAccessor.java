@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,7 @@
 
 package sun.swing;
 
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 import java.awt.*;
 import javax.swing.*;
@@ -48,6 +48,16 @@ public final class SwingAccessor {
      * and interfaces.
      */
     private SwingAccessor() {
+    }
+
+    /**
+     * An accessor for the JComponent class.
+     */
+    public interface JComponentAccessor {
+
+        boolean getFlag(JComponent comp, int aFlag);
+
+        void compWriteObjectNotify(JComponent comp);
     }
 
     /**
@@ -82,6 +92,16 @@ public final class SwingAccessor {
     }
 
     /**
+     * An accessor for the UIDefaults class.
+     */
+    public interface UIDefaultsAccessor {
+        /**
+         * Adds a resource bundle to the list of resource bundles.
+         */
+        void addInternalBundle(UIDefaults uiDefaults, String bundleName);
+    }
+
+    /**
      * An accessor for the RepaintManager class.
      */
     public interface RepaintManagerAccessor {
@@ -95,6 +115,37 @@ public final class SwingAccessor {
     public interface PopupFactoryAccessor {
         Popup getHeavyWeightPopup(PopupFactory factory, Component owner, Component contents,
                                   int ownerX, int ownerY);
+    }
+
+    /*
+     * An accessor for the KeyStroke class
+     */
+    public interface KeyStrokeAccessor {
+
+        KeyStroke create();
+    }
+
+    /**
+     * The javax.swing.JComponent class accessor object.
+     */
+    private static JComponentAccessor jComponentAccessor;
+
+    /**
+     * Set an accessor object for the javax.swing.JComponent class.
+     */
+    public static void setJComponentAccessor(JComponentAccessor jCompAccessor) {
+        jComponentAccessor = jCompAccessor;
+    }
+
+    /**
+     * Retrieve the accessor object for the javax.swing.JComponent class.
+     */
+    public static JComponentAccessor getJComponentAccessor() {
+        if (jComponentAccessor == null) {
+            unsafe.ensureClassInitialized(JComponent.class);
+        }
+
+        return jComponentAccessor;
     }
 
     /**
@@ -143,6 +194,28 @@ public final class SwingAccessor {
     }
 
     /**
+     * The UIDefaults class accessor object
+     */
+    private static UIDefaultsAccessor uiDefaultsAccessor;
+
+    /**
+     * Set an accessor object for the UIDefaults class.
+     */
+    public static void setUIDefaultsAccessor(UIDefaultsAccessor accessor) {
+        uiDefaultsAccessor = accessor;
+    }
+
+    /**
+     * Retrieve the accessor object for the JLightweightFrame class
+     */
+    public static UIDefaultsAccessor getUIDefaultsAccessor() {
+        if (uiDefaultsAccessor == null) {
+            unsafe.ensureClassInitialized(UIDefaults.class);
+        }
+        return uiDefaultsAccessor;
+    }
+
+    /**
      * The RepaintManager class accessor object.
      */
     private static RepaintManagerAccessor repaintManagerAccessor;
@@ -184,5 +257,27 @@ public final class SwingAccessor {
      */
     public static void setPopupFactoryAccessor(PopupFactoryAccessor popupFactoryAccessor) {
         SwingAccessor.popupFactoryAccessor = popupFactoryAccessor;
+    }
+
+    /**
+     * The KeyStroke class accessor object.
+     */
+    private static KeyStrokeAccessor keyStrokeAccessor;
+
+    /**
+     * Retrieve the accessor object for the KeyStroke class.
+     */
+    public static KeyStrokeAccessor getKeyStrokeAccessor() {
+        if (keyStrokeAccessor == null) {
+            unsafe.ensureClassInitialized(KeyStroke.class);
+        }
+        return keyStrokeAccessor;
+    }
+
+    /*
+     * Set the accessor object for the KeyStroke class.
+     */
+    public static void setKeyStrokeAccessor(KeyStrokeAccessor accessor) {
+        SwingAccessor.keyStrokeAccessor = accessor;
     }
 }

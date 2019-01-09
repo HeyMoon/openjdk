@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,12 +25,12 @@
 
 package com.sun.tools.javac.file;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStreamWriter;
 import java.lang.ref.SoftReference;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.ByteBuffer;
@@ -53,17 +53,14 @@ import javax.tools.JavaFileManager;
 import javax.tools.JavaFileObject;
 import javax.tools.JavaFileObject.Kind;
 
-import com.sun.tools.javac.code.Lint;
-import com.sun.tools.javac.code.Source;
-import com.sun.tools.javac.file.FSInfo;
-import com.sun.tools.javac.file.Locations;
 import com.sun.tools.javac.main.Option;
 import com.sun.tools.javac.main.OptionHelper;
 import com.sun.tools.javac.main.OptionHelper.GrumpyHelper;
+import com.sun.tools.javac.resources.CompilerProperties.Errors;
+import com.sun.tools.javac.util.Abort;
 import com.sun.tools.javac.util.Context;
 import com.sun.tools.javac.util.DefinedBy;
 import com.sun.tools.javac.util.DefinedBy.Api;
-import com.sun.tools.javac.util.JCDiagnostic.SimpleDiagnosticPosition;
 import com.sun.tools.javac.util.Log;
 import com.sun.tools.javac.util.Options;
 
@@ -87,7 +84,31 @@ public abstract class BaseFileManager implements JavaFileManager {
         log = Log.instance(context);
         options = Options.instance(context);
         classLoaderClass = options.get("procloader");
-        locations.update(log, Lint.instance(context), FSInfo.instance(context));
+
+        // Avoid initializing Lint
+        boolean warn = options.isLintSet("path");
+        locations.update(log, warn, FSInfo.instance(context));
+
+        // Setting this option is an indication that close() should defer actually closing
+        // the file manager until after a specified period of inactivity.
+        // This is to accomodate clients which save references to Symbols created for use
+        // within doclets or annotation processors, and which then attempt to use those
+        // references after the tool exits, having closed any internally managed file manager.
+        // Ideally, such clients should run the tool via the javax.tools API, providing their
+        // own file manager, which can be closed by the client when all use of that file
+        // manager is complete.
+        // If the option has a numeric value, it will be interpreted as the duration,
+        // in seconds, of the period of inactivity to wait for, before the file manager
+        // is actually closed.
+        // See also deferredClose().
+        String s = options.get("fileManager.deferClose");
+        if (s != null) {
+            try {
+                deferredCloseTimeout = (int) (Float.parseFloat(s) * 1000);
+            } catch (NumberFormatException e) {
+                deferredCloseTimeout = 60 * 1000;  // default: one minute, in millis
+            }
+        }
     }
 
     protected Locations createLocations() {
@@ -108,7 +129,7 @@ public abstract class BaseFileManager implements JavaFileManager {
 
     protected String classLoaderClass;
 
-    protected Locations locations;
+    protected final Locations locations;
 
     /**
      * A flag for clients to use to indicate that this file manager should
@@ -116,13 +137,41 @@ public abstract class BaseFileManager implements JavaFileManager {
      */
     public boolean autoClose;
 
-    protected Source getSource() {
-        String sourceName = options.get(Option.SOURCE);
-        Source source = null;
-        if (sourceName != null)
-            source = Source.lookup(sourceName);
-        return (source != null ? source : Source.DEFAULT);
+    /**
+     * Wait for a period of inactivity before calling close().
+     * The length of the period of inactivity is given by {@code deferredCloseTimeout}
+     */
+    protected void deferredClose() {
+        Thread t = new Thread(getClass().getName() + " DeferredClose") {
+            @Override
+            public void run() {
+                try {
+                    synchronized (BaseFileManager.this) {
+                        long now = System.currentTimeMillis();
+                        while (now < lastUsedTime + deferredCloseTimeout) {
+                            BaseFileManager.this.wait(lastUsedTime + deferredCloseTimeout - now);
+                            now = System.currentTimeMillis();
+                        }
+                        deferredCloseTimeout = 0;
+                        close();
+                    }
+                } catch (InterruptedException e) {
+                } catch (IOException e) {
+                }
+            }
+        };
+        t.setDaemon(true);
+        t.start();
     }
+
+    synchronized void updateLastUsedTime() {
+        if (deferredCloseTimeout > 0) { // avoid updating the time unnecessarily
+            lastUsedTime = System.currentTimeMillis();
+        }
+    }
+
+    private long lastUsedTime = System.currentTimeMillis();
+    protected long deferredCloseTimeout = 0;
 
     protected ClassLoader getClassLoader(URL[] urls) {
         ClassLoader thisClassLoader = getClass().getClassLoader();
@@ -155,7 +204,7 @@ public abstract class BaseFileManager implements JavaFileManager {
         OptionHelper helper = new GrumpyHelper(log) {
             @Override
             public String get(Option option) {
-                return options.get(option.getText());
+                return options.get(option);
             }
 
             @Override
@@ -174,23 +223,18 @@ public abstract class BaseFileManager implements JavaFileManager {
             }
         };
 
-        for (Option o: javacFileManagerOptions) {
-            if (o.matches(current))  {
-                if (o.hasArg()) {
-                    if (remaining.hasNext()) {
-                        if (!o.process(helper, current, remaining.next()))
-                            return true;
-                    }
-                } else {
-                    if (!o.process(helper, current))
-                        return true;
-                }
-                // operand missing, or process returned true
-                throw new IllegalArgumentException(current);
-            }
+        Option o = Option.lookup(current, javacFileManagerOptions);
+        if (o == null) {
+            return false;
         }
 
-        return false;
+        try {
+            o.handleOption(helper, current, remaining);
+        } catch (Option.InvalidValueException e) {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
+
+        return true;
     }
     // where
         private static final Set<Option> javacFileManagerOptions =
@@ -198,12 +242,11 @@ public abstract class BaseFileManager implements JavaFileManager {
 
     @Override @DefinedBy(Api.COMPILER)
     public int isSupportedOption(String option) {
-        for (Option o : javacFileManagerOptions) {
-            if (o.matches(option))
-                return o.hasArg() ? 1 : 0;
-        }
-        return -1;
+        Option o = Option.lookup(option, javacFileManagerOptions);
+        return (o == null) ? -1 : o.hasArg() ? 1 : 0;
     }
+
+    protected String multiReleaseValue;
 
     /**
      * Common back end for OptionHelper handleFileManagerOption.
@@ -212,7 +255,19 @@ public abstract class BaseFileManager implements JavaFileManager {
      * @return true if successful, and false otherwise
      */
     public boolean handleOption(Option option, String value) {
-        return locations.handleOption(option, value);
+        switch (option) {
+            case ENCODING:
+                encodingName = value;
+                return true;
+
+            case MULTIRELEASE:
+                multiReleaseValue = value;
+                locations.setMultiReleaseValue(value);
+                return true;
+
+            default:
+                return locations.handleOption(option, value);
+        }
     }
 
     /**
@@ -222,39 +277,41 @@ public abstract class BaseFileManager implements JavaFileManager {
      */
     public boolean handleOptions(Map<Option, String> map) {
         boolean ok = true;
-        for (Map.Entry<Option, String> e: map.entrySet())
-            ok = ok & handleOption(e.getKey(), e.getValue());
+        for (Map.Entry<Option, String> e: map.entrySet()) {
+            try {
+                ok = ok & handleOption(e.getKey(), e.getValue());
+            } catch (IllegalArgumentException ex) {
+                log.error(Errors.IllegalArgumentForOption(e.getKey().getPrimaryName(), ex.getMessage()));
+                ok = false;
+            }
+        }
         return ok;
     }
 
     // </editor-fold>
 
     // <editor-fold defaultstate="collapsed" desc="Encoding">
+    private String encodingName;
     private String defaultEncodingName;
     private String getDefaultEncodingName() {
         if (defaultEncodingName == null) {
-            defaultEncodingName =
-                new OutputStreamWriter(new ByteArrayOutputStream()).getEncoding();
+            defaultEncodingName = Charset.defaultCharset().name();
         }
         return defaultEncodingName;
     }
 
     public String getEncodingName() {
-        String encName = options.get(Option.ENCODING);
-        if (encName == null)
-            return getDefaultEncodingName();
-        else
-            return encName;
+        return (encodingName != null) ? encodingName : getDefaultEncodingName();
     }
 
     @SuppressWarnings("cast")
     public CharBuffer decode(ByteBuffer inbuf, boolean ignoreEncodingErrors) {
-        String encodingName = getEncodingName();
+        String encName = getEncodingName();
         CharsetDecoder decoder;
         try {
-            decoder = getDecoder(encodingName, ignoreEncodingErrors);
+            decoder = getDecoder(encName, ignoreEncodingErrors);
         } catch (IllegalCharsetNameException | UnsupportedCharsetException e) {
-            log.error("unsupported.encoding", encodingName);
+            log.error("unsupported.encoding", encName);
             return (CharBuffer)CharBuffer.allocate(1).flip();
         }
 
@@ -283,13 +340,17 @@ public abstract class BaseFileManager implements JavaFileManager {
                 dest = CharBuffer.allocate(newCapacity).put(dest);
             } else if (result.isMalformed() || result.isUnmappable()) {
                 // bad character in input
+                StringBuilder unmappable = new StringBuilder();
+                int len = result.length();
 
-                log.error(new SimpleDiagnosticPosition(dest.limit()),
-                          "illegal.char.for.encoding",
-                          charset == null ? encodingName : charset.name());
+                for (int i = 0; i < len; i++) {
+                    unmappable.append(String.format("%02X", inbuf.get()));
+                }
 
-                // skip past the coding error
-                inbuf.position(inbuf.position() + result.length());
+                String charsetName = charset == null ? encName : charset.name();
+
+                log.error(dest.limit(),
+                          Errors.IllegalCharForEncoding(unmappable.toString(), charsetName));
 
                 // undo the flip() to prepare the output buffer
                 // for more translation

@@ -51,6 +51,9 @@ import sun.java2d.windows.WindowsFlags;
 
 public final class Win32GraphicsEnvironment extends SunGraphicsEnvironment {
 
+    static final float debugScaleX;
+    static final float debugScaleY;
+
     static {
         // Ensure awt is loaded already.  Also, this forces static init
         // of WToolkit and Toolkit, which we depend upon
@@ -61,6 +64,21 @@ public final class Win32GraphicsEnvironment extends SunGraphicsEnvironment {
 
         // Install correct surface manager factory.
         SurfaceManagerFactory.setInstance(new WindowsSurfaceManagerFactory());
+
+        double sx = -1;
+        double sy = -1;
+        if (isUIScaleEnabled()) {
+            sx = getScaleFactor("sun.java2d.win.uiScaleX");
+            sy = getScaleFactor("sun.java2d.win.uiScaleY");
+            if (sx <= 0 || sy <= 0) {
+                double s = getDebugScale();
+                sx = s;
+                sy = s;
+            }
+        }
+
+        debugScaleX = (float) sx;
+        debugScaleY = (float) sy;
     }
 
     /**
@@ -97,14 +115,14 @@ public final class Win32GraphicsEnvironment extends SunGraphicsEnvironment {
      * Returns the number of pixels per logical inch along the screen width.
      * In a system with multiple display monitors, this value is the same for
      * all monitors.
-     * @returns number of pixels per logical inch in X direction
+     * @return number of pixels per logical inch in X direction
      */
     public native int getXResolution();
     /**
      * Returns the number of pixels per logical inch along the screen height.
      * In a system with multiple display monitors, this value is the same for
      * all monitors.
-     * @returns number of pixels per logical inch in Y direction
+     * @return number of pixels per logical inch in Y direction
      */
     public native int getYResolution();
 
@@ -185,9 +203,6 @@ public final class Win32GraphicsEnvironment extends SunGraphicsEnvironment {
                 }
             }
         }
-        // Reset the static GC for the (possibly new) default screen
-        WToolkit.resetGC();
-
         // notify SunDisplayChanger list (e.g. VolatileSurfaceManagers and
         // CachingSurfaceManagers) about the display change event
         displayChanger.notifyListeners();

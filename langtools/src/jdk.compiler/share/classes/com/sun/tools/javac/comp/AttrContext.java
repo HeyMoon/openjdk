@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 package com.sun.tools.javac.comp;
 
+import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.util.*;
 import com.sun.tools.javac.code.*;
 import com.sun.tools.javac.code.Scope.WriteableScope;
@@ -55,9 +56,14 @@ public class AttrContext {
      */
     boolean selectSuper = false;
 
-    /** Is the current target of lambda expression or method reference serializable?
+    /** Is the current target of lambda expression or method reference serializable or is this a
+     *  serializable class?
      */
     boolean isSerializable = false;
+
+    /** Is this a lambda environment?
+     */
+    boolean isLambda = false;
 
     /** Is this a speculative attribution environment?
      */
@@ -72,6 +78,10 @@ public class AttrContext {
      *  Is this an attribution environment for an instance creation expression?
      */
     boolean isNewClass = false;
+
+    /** Indicate if the type being visited is a service implementation
+     */
+    boolean visitingServiceImplementation = false;
 
     /** Are arguments to current function applications boxed into an array for varargs?
      */
@@ -95,6 +105,13 @@ public class AttrContext {
      */
     Type defaultSuperCallSite = null;
 
+    /** Tree that when non null, is to be preferentially used in diagnostics.
+     *  Usually Env<AttrContext>.tree is the tree to be referred to in messages,
+     *  but this may not be true during the window a method is looked up in enclosing
+     *  contexts (JDK-8145466)
+     */
+    JCTree preferredTreeForDiagnostics;
+
     /** Duplicate this context, replacing scope field and copying all others.
      */
     AttrContext dup(WriteableScope scope) {
@@ -109,9 +126,12 @@ public class AttrContext {
         info.returnResult = returnResult;
         info.defaultSuperCallSite = defaultSuperCallSite;
         info.isSerializable = isSerializable;
+        info.isLambda = isLambda;
         info.isSpeculative = isSpeculative;
         info.isAnonymousDiamond = isAnonymousDiamond;
         info.isNewClass = isNewClass;
+        info.preferredTreeForDiagnostics = preferredTreeForDiagnostics;
+        info.visitingServiceImplementation = visitingServiceImplementation;
         return info;
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #include "precompiled.hpp"
 #include "asm/macroAssembler.hpp"
 #include "asm/macroAssembler.inline.hpp"
+#include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
 #include "runtime/java.hpp"
 #include "runtime/os.hpp"
@@ -35,9 +36,7 @@
 int VM_Version::_cpu;
 int VM_Version::_model;
 int VM_Version::_stepping;
-uint64_t VM_Version::_cpuFeatures;
-const char*           VM_Version::_features_str = "";
-VM_Version::CpuidInfo VM_Version::_cpuid_info   = { 0, };
+VM_Version::CpuidInfo VM_Version::_cpuid_info = { 0, };
 
 // Address of instruction which causes SEGV
 address VM_Version::_cpuinfo_segv_addr = 0;
@@ -66,6 +65,7 @@ class VM_Version_StubGenerator: public StubCodeGenerator {
     const int      CPU_FAMILY_SHIFT = 8;
     const uint32_t CPU_FAMILY_386 = (3 << CPU_FAMILY_SHIFT);
     const uint32_t CPU_FAMILY_486 = (4 << CPU_FAMILY_SHIFT);
+    bool use_evex = FLAG_IS_DEFAULT(UseAVX) || (UseAVX > 2);
 
     Label detect_486, cpu486, detect_586, std_cpuid1, std_cpuid4;
     Label sef_cpuid, ext_cpuid, ext_cpuid1, ext_cpuid5, ext_cpuid7, done, wrapup;
@@ -359,39 +359,62 @@ class VM_Version_StubGenerator: public StubCodeGenerator {
     __ cmpl(rax, 0xE0);
     __ jccb(Assembler::notEqual, legacy_setup); // jump if EVEX is not supported
 
-    // EVEX setup: run in lowest evex mode
-    VM_Version::set_evex_cpuFeatures(); // Enable temporary to pass asserts
-    UseAVX = 3;
-    UseSSE = 2;
-    // load value into all 64 bytes of zmm7 register
-    __ movl(rcx, VM_Version::ymm_test_value());
-    __ movdl(xmm0, rcx);
-    __ movl(rcx, 0xffff);
+    // If UseAVX is unitialized or is set by the user to include EVEX
+    if (use_evex) {
+      // EVEX setup: run in lowest evex mode
+      VM_Version::set_evex_cpuFeatures(); // Enable temporary to pass asserts
+      UseAVX = 3;
+      UseSSE = 2;
+#ifdef _WINDOWS
+      // xmm5-xmm15 are not preserved by caller on windows
+      // https://msdn.microsoft.com/en-us/library/9z1stfyw.aspx
+      __ subptr(rsp, 64);
+      __ evmovdqul(Address(rsp, 0), xmm7, Assembler::AVX_512bit);
 #ifdef _LP64
-    __ kmovql(k1, rcx);
-#else
-    __ kmovdl(k1, rcx);
-#endif
-    __ evpbroadcastd(xmm0, xmm0, Assembler::AVX_512bit);
-    __ evmovdqu(xmm7, xmm0, Assembler::AVX_512bit);
+      __ subptr(rsp, 64);
+      __ evmovdqul(Address(rsp, 0), xmm8, Assembler::AVX_512bit);
+      __ subptr(rsp, 64);
+      __ evmovdqul(Address(rsp, 0), xmm31, Assembler::AVX_512bit);
+#endif // _LP64
+#endif // _WINDOWS
+
+      // load value into all 64 bytes of zmm7 register
+      __ movl(rcx, VM_Version::ymm_test_value());
+      __ movdl(xmm0, rcx);
+      __ movl(rcx, 0xffff);
+      __ kmovwl(k1, rcx);
+      __ evpbroadcastd(xmm0, xmm0, Assembler::AVX_512bit);
+      __ evmovdqul(xmm7, xmm0, Assembler::AVX_512bit);
 #ifdef _LP64
-    __ evmovdqu(xmm8, xmm0, Assembler::AVX_512bit);
-    __ evmovdqu(xmm31, xmm0, Assembler::AVX_512bit);
+      __ evmovdqul(xmm8, xmm0, Assembler::AVX_512bit);
+      __ evmovdqul(xmm31, xmm0, Assembler::AVX_512bit);
 #endif
-    VM_Version::clean_cpuFeatures();
-    __ jmp(save_restore_except);
+      VM_Version::clean_cpuFeatures();
+      __ jmp(save_restore_except);
+    }
 
     __ bind(legacy_setup);
     // AVX setup
     VM_Version::set_avx_cpuFeatures(); // Enable temporary to pass asserts
     UseAVX = 1;
     UseSSE = 2;
+#ifdef _WINDOWS
+    __ subptr(rsp, 32);
+    __ vmovdqu(Address(rsp, 0), xmm7);
+#ifdef _LP64
+    __ subptr(rsp, 32);
+    __ vmovdqu(Address(rsp, 0), xmm8);
+    __ subptr(rsp, 32);
+    __ vmovdqu(Address(rsp, 0), xmm15);
+#endif // _LP64
+#endif // _WINDOWS
+
     // load value into all 32 bytes of ymm7 register
     __ movl(rcx, VM_Version::ymm_test_value());
 
     __ movdl(xmm0, rcx);
     __ pshufd(xmm0, xmm0, 0x00);
-    __ vinsertf128h(xmm0, xmm0, xmm0);
+    __ vinsertf128_high(xmm0, xmm0);
     __ vmovdqu(xmm7, xmm0);
 #ifdef _LP64
     __ vmovdqu(xmm8, xmm0);
@@ -422,21 +445,35 @@ class VM_Version_StubGenerator: public StubCodeGenerator {
     __ cmpl(rax, 0xE0);
     __ jccb(Assembler::notEqual, legacy_save_restore);
 
-    // EVEX check: run in lowest evex mode
-    VM_Version::set_evex_cpuFeatures(); // Enable temporary to pass asserts
-    UseAVX = 3;
-    UseSSE = 2;
-    __ lea(rsi, Address(rbp, in_bytes(VM_Version::zmm_save_offset())));
-    __ evmovdqu(Address(rsi, 0), xmm0, Assembler::AVX_512bit);
-    __ evmovdqu(Address(rsi, 64), xmm7, Assembler::AVX_512bit);
+    // If UseAVX is unitialized or is set by the user to include EVEX
+    if (use_evex) {
+      // EVEX check: run in lowest evex mode
+      VM_Version::set_evex_cpuFeatures(); // Enable temporary to pass asserts
+      UseAVX = 3;
+      UseSSE = 2;
+      __ lea(rsi, Address(rbp, in_bytes(VM_Version::zmm_save_offset())));
+      __ evmovdqul(Address(rsi, 0), xmm0, Assembler::AVX_512bit);
+      __ evmovdqul(Address(rsi, 64), xmm7, Assembler::AVX_512bit);
 #ifdef _LP64
-    __ evmovdqu(Address(rsi, 128), xmm8, Assembler::AVX_512bit);
-    __ evmovdqu(Address(rsi, 192), xmm31, Assembler::AVX_512bit);
+      __ evmovdqul(Address(rsi, 128), xmm8, Assembler::AVX_512bit);
+      __ evmovdqul(Address(rsi, 192), xmm31, Assembler::AVX_512bit);
 #endif
-    VM_Version::clean_cpuFeatures();
-    UseAVX = saved_useavx;
-    UseSSE = saved_usesse;
-    __ jmp(wrapup);
+
+#ifdef _WINDOWS
+#ifdef _LP64
+      __ evmovdqul(xmm31, Address(rsp, 0), Assembler::AVX_512bit);
+      __ addptr(rsp, 64);
+      __ evmovdqul(xmm8, Address(rsp, 0), Assembler::AVX_512bit);
+      __ addptr(rsp, 64);
+#endif // _LP64
+      __ evmovdqul(xmm7, Address(rsp, 0), Assembler::AVX_512bit);
+      __ addptr(rsp, 64);
+#endif // _WINDOWS
+      VM_Version::clean_cpuFeatures();
+      UseAVX = saved_useavx;
+      UseSSE = saved_usesse;
+      __ jmp(wrapup);
+    }
 
     __ bind(legacy_save_restore);
     // AVX check
@@ -450,6 +487,17 @@ class VM_Version_StubGenerator: public StubCodeGenerator {
     __ vmovdqu(Address(rsi, 64), xmm8);
     __ vmovdqu(Address(rsi, 96), xmm15);
 #endif
+
+#ifdef _WINDOWS
+#ifdef _LP64
+    __ vmovdqu(xmm15, Address(rsp, 0));
+    __ addptr(rsp, 32);
+    __ vmovdqu(xmm8, Address(rsp, 0));
+    __ addptr(rsp, 32);
+#endif // _LP64
+    __ vmovdqu(xmm7, Address(rsp, 0));
+    __ addptr(rsp, 32);
+#endif // _WINDOWS
     VM_Version::clean_cpuFeatures();
     UseAVX = saved_useavx;
     UseSSE = saved_usesse;
@@ -472,28 +520,26 @@ void VM_Version::get_processor_features() {
   _cpu = 4; // 486 by default
   _model = 0;
   _stepping = 0;
-  _cpuFeatures = 0;
+  _features = 0;
   _logical_processors_per_package = 1;
   // i486 internal cache is both I&D and has a 16-byte line size
   _L1_data_cache_line_size = 16;
 
-  if (!Use486InstrsOnly) {
-    // Get raw processor info
+  // Get raw processor info
 
-    get_cpu_info_stub(&_cpuid_info);
+  get_cpu_info_stub(&_cpuid_info);
 
-    assert_is_initialized();
-    _cpu = extended_cpu_family();
-    _model = extended_cpu_model();
-    _stepping = cpu_stepping();
+  assert_is_initialized();
+  _cpu = extended_cpu_family();
+  _model = extended_cpu_model();
+  _stepping = cpu_stepping();
 
-    if (cpu_family() > 4) { // it supports CPUID
-      _cpuFeatures = feature_flags();
-      // Logical processors are only available on P4s and above,
-      // and only if hyperthreading is available.
-      _logical_processors_per_package = logical_processor_count();
-      _L1_data_cache_line_size = L1_line_size();
-    }
+  if (cpu_family() > 4) { // it supports CPUID
+    _features = feature_flags();
+    // Logical processors are only available on P4s and above,
+    // and only if hyperthreading is available.
+    _logical_processors_per_package = logical_processor_count();
+    _L1_data_cache_line_size = L1_line_size();
   }
 
   _supports_cx8 = supports_cmpxchg8();
@@ -528,24 +574,24 @@ void VM_Version::get_processor_features() {
 
   // If the OS doesn't support SSE, we can't use this feature even if the HW does
   if (!os::supports_sse())
-    _cpuFeatures &= ~(CPU_SSE|CPU_SSE2|CPU_SSE3|CPU_SSSE3|CPU_SSE4A|CPU_SSE4_1|CPU_SSE4_2);
+    _features &= ~(CPU_SSE|CPU_SSE2|CPU_SSE3|CPU_SSSE3|CPU_SSE4A|CPU_SSE4_1|CPU_SSE4_2);
 
   if (UseSSE < 4) {
-    _cpuFeatures &= ~CPU_SSE4_1;
-    _cpuFeatures &= ~CPU_SSE4_2;
+    _features &= ~CPU_SSE4_1;
+    _features &= ~CPU_SSE4_2;
   }
 
   if (UseSSE < 3) {
-    _cpuFeatures &= ~CPU_SSE3;
-    _cpuFeatures &= ~CPU_SSSE3;
-    _cpuFeatures &= ~CPU_SSE4A;
+    _features &= ~CPU_SSE3;
+    _features &= ~CPU_SSSE3;
+    _features &= ~CPU_SSE4A;
   }
 
   if (UseSSE < 2)
-    _cpuFeatures &= ~CPU_SSE2;
+    _features &= ~CPU_SSE2;
 
   if (UseSSE < 1)
-    _cpuFeatures &= ~CPU_SSE;
+    _features &= ~CPU_SSE;
 
   // first try initial setting and detect what we can support
   if (UseAVX > 0) {
@@ -563,29 +609,29 @@ void VM_Version::get_processor_features() {
   }
 
   if (UseAVX < 3) {
-    _cpuFeatures &= ~CPU_AVX512F;
-    _cpuFeatures &= ~CPU_AVX512DQ;
-    _cpuFeatures &= ~CPU_AVX512CD;
-    _cpuFeatures &= ~CPU_AVX512BW;
-    _cpuFeatures &= ~CPU_AVX512VL;
+    _features &= ~CPU_AVX512F;
+    _features &= ~CPU_AVX512DQ;
+    _features &= ~CPU_AVX512CD;
+    _features &= ~CPU_AVX512BW;
+    _features &= ~CPU_AVX512VL;
   }
 
   if (UseAVX < 2)
-    _cpuFeatures &= ~CPU_AVX2;
+    _features &= ~CPU_AVX2;
 
   if (UseAVX < 1)
-    _cpuFeatures &= ~CPU_AVX;
+    _features &= ~CPU_AVX;
 
   if (!UseAES && !FLAG_IS_DEFAULT(UseAES))
-    _cpuFeatures &= ~CPU_AES;
+    _features &= ~CPU_AES;
 
   if (logical_processors_per_package() == 1) {
     // HT processor could be installed on a system which doesn't support HT.
-    _cpuFeatures &= ~CPU_HT;
+    _features &= ~CPU_HT;
   }
 
   char buf[256];
-  jio_snprintf(buf, sizeof(buf), "(%u cores per cpu, %u threads per core) family %d model %d stepping %d%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
+  jio_snprintf(buf, sizeof(buf), "(%u cores per cpu, %u threads per core) family %d model %d stepping %d%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
                cores_per_cpu(), threads_per_core(),
                cpu_family(), _model, _stepping,
                (supports_cmov() ? ", cmov" : ""),
@@ -616,8 +662,10 @@ void VM_Version::get_processor_features() {
                (supports_bmi1() ? ", bmi1" : ""),
                (supports_bmi2() ? ", bmi2" : ""),
                (supports_adx() ? ", adx" : ""),
-               (supports_evex() ? ", evex" : ""));
-  _features_str = os::strdup(buf);
+               (supports_evex() ? ", evex" : ""),
+               (supports_sha() ? ", sha" : ""),
+               (supports_fma() ? ", fma" : ""));
+  _features_string = os::strdup(buf);
 
   // UseSSE is set to the smaller of what hardware supports and what
   // the command line requires.  I.e., you cannot set UseSSE to 2 on
@@ -636,12 +684,62 @@ void VM_Version::get_processor_features() {
   // Use AES instructions if available.
   if (supports_aes()) {
     if (FLAG_IS_DEFAULT(UseAES)) {
-      UseAES = true;
+      FLAG_SET_DEFAULT(UseAES, true);
     }
-  } else if (UseAES) {
-    if (!FLAG_IS_DEFAULT(UseAES))
+    if (!UseAES) {
+      if (UseAESIntrinsics && !FLAG_IS_DEFAULT(UseAESIntrinsics)) {
+        warning("AES intrinsics require UseAES flag to be enabled. Intrinsics will be disabled.");
+      }
+      FLAG_SET_DEFAULT(UseAESIntrinsics, false);
+    } else {
+      if (UseSSE > 2) {
+        if (FLAG_IS_DEFAULT(UseAESIntrinsics)) {
+          FLAG_SET_DEFAULT(UseAESIntrinsics, true);
+        }
+      } else {
+        // The AES intrinsic stubs require AES instruction support (of course)
+        // but also require sse3 mode or higher for instructions it use.
+        if (UseAESIntrinsics && !FLAG_IS_DEFAULT(UseAESIntrinsics)) {
+          warning("X86 AES intrinsics require SSE3 instructions or higher. Intrinsics will be disabled.");
+        }
+        FLAG_SET_DEFAULT(UseAESIntrinsics, false);
+      }
+
+      // --AES-CTR begins--
+      if (!UseAESIntrinsics) {
+        if (UseAESCTRIntrinsics && !FLAG_IS_DEFAULT(UseAESCTRIntrinsics)) {
+          warning("AES-CTR intrinsics require UseAESIntrinsics flag to be enabled. Intrinsics will be disabled.");
+          FLAG_SET_DEFAULT(UseAESCTRIntrinsics, false);
+        }
+      } else {
+        if(supports_sse4_1()) {
+          if (FLAG_IS_DEFAULT(UseAESCTRIntrinsics)) {
+            FLAG_SET_DEFAULT(UseAESCTRIntrinsics, true);
+          }
+        } else {
+           // The AES-CTR intrinsic stubs require AES instruction support (of course)
+           // but also require sse4.1 mode or higher for instructions it use.
+          if (UseAESCTRIntrinsics && !FLAG_IS_DEFAULT(UseAESCTRIntrinsics)) {
+             warning("X86 AES-CTR intrinsics require SSE4.1 instructions or higher. Intrinsics will be disabled.");
+           }
+           FLAG_SET_DEFAULT(UseAESCTRIntrinsics, false);
+        }
+      }
+      // --AES-CTR ends--
+    }
+  } else if (UseAES || UseAESIntrinsics || UseAESCTRIntrinsics) {
+    if (UseAES && !FLAG_IS_DEFAULT(UseAES)) {
       warning("AES instructions are not available on this CPU");
-    FLAG_SET_DEFAULT(UseAES, false);
+      FLAG_SET_DEFAULT(UseAES, false);
+    }
+    if (UseAESIntrinsics && !FLAG_IS_DEFAULT(UseAESIntrinsics)) {
+      warning("AES intrinsics are not available on this CPU");
+      FLAG_SET_DEFAULT(UseAESIntrinsics, false);
+    }
+    if (UseAESCTRIntrinsics && !FLAG_IS_DEFAULT(UseAESCTRIntrinsics)) {
+      warning("AES-CTR intrinsics are not available on this CPU");
+      FLAG_SET_DEFAULT(UseAESCTRIntrinsics, false);
+    }
   }
 
   // Use CLMUL instructions if available.
@@ -665,16 +763,15 @@ void VM_Version::get_processor_features() {
     FLAG_SET_DEFAULT(UseCRC32Intrinsics, false);
   }
 
-  // The AES intrinsic stubs require AES instruction support (of course)
-  // but also require sse3 mode for instructions it use.
-  if (UseAES && (UseSSE > 2)) {
-    if (FLAG_IS_DEFAULT(UseAESIntrinsics)) {
-      UseAESIntrinsics = true;
+  if (supports_sse4_2() && supports_clmul()) {
+    if (FLAG_IS_DEFAULT(UseCRC32CIntrinsics)) {
+      UseCRC32CIntrinsics = true;
     }
-  } else if (UseAESIntrinsics) {
-    if (!FLAG_IS_DEFAULT(UseAESIntrinsics))
-      warning("AES intrinsics are not available on this CPU");
-    FLAG_SET_DEFAULT(UseAESIntrinsics, false);
+  } else if (UseCRC32CIntrinsics) {
+    if (!FLAG_IS_DEFAULT(UseCRC32CIntrinsics)) {
+      warning("CRC32C intrinsics are not available on this CPU");
+    }
+    FLAG_SET_DEFAULT(UseCRC32CIntrinsics, false);
   }
 
   // GHASH/GCM intrinsics
@@ -688,33 +785,60 @@ void VM_Version::get_processor_features() {
     FLAG_SET_DEFAULT(UseGHASHIntrinsics, false);
   }
 
-  if (UseSHA) {
+  if (supports_fma() && UseSSE >= 2) {
+    if (FLAG_IS_DEFAULT(UseFMA)) {
+      UseFMA = true;
+    }
+  } else if (UseFMA) {
+    warning("FMA instructions are not available on this CPU");
+    FLAG_SET_DEFAULT(UseFMA, false);
+  }
+
+  if (supports_sha() LP64_ONLY(|| supports_avx2() && supports_bmi2())) {
+    if (FLAG_IS_DEFAULT(UseSHA)) {
+      UseSHA = true;
+    }
+  } else if (UseSHA) {
     warning("SHA instructions are not available on this CPU");
     FLAG_SET_DEFAULT(UseSHA, false);
   }
 
-  if (UseSHA1Intrinsics) {
+  if (supports_sha() && UseSHA) {
+    if (FLAG_IS_DEFAULT(UseSHA1Intrinsics)) {
+      FLAG_SET_DEFAULT(UseSHA1Intrinsics, true);
+    }
+  } else if (UseSHA1Intrinsics) {
     warning("Intrinsics for SHA-1 crypto hash functions not available on this CPU.");
     FLAG_SET_DEFAULT(UseSHA1Intrinsics, false);
   }
 
-  if (UseSHA256Intrinsics) {
+  if (UseSHA) {
+    if (FLAG_IS_DEFAULT(UseSHA256Intrinsics)) {
+      FLAG_SET_DEFAULT(UseSHA256Intrinsics, true);
+    }
+  } else if (UseSHA256Intrinsics) {
     warning("Intrinsics for SHA-224 and SHA-256 crypto hash functions not available on this CPU.");
     FLAG_SET_DEFAULT(UseSHA256Intrinsics, false);
   }
 
-  if (UseSHA512Intrinsics) {
+  if (UseSHA) {
+    if (FLAG_IS_DEFAULT(UseSHA512Intrinsics)) {
+      FLAG_SET_DEFAULT(UseSHA512Intrinsics, true);
+    }
+  } else if (UseSHA512Intrinsics) {
     warning("Intrinsics for SHA-384 and SHA-512 crypto hash functions not available on this CPU.");
     FLAG_SET_DEFAULT(UseSHA512Intrinsics, false);
   }
 
-  if (UseCRC32CIntrinsics) {
-    if (!FLAG_IS_DEFAULT(UseCRC32CIntrinsics))
-      warning("CRC32C intrinsics are not available on this CPU");
-    FLAG_SET_DEFAULT(UseCRC32CIntrinsics, false);
+  if (!(UseSHA1Intrinsics || UseSHA256Intrinsics || UseSHA512Intrinsics)) {
+    FLAG_SET_DEFAULT(UseSHA, false);
   }
 
-  // Adjust RTM (Restricted Transactional Memory) flags
+  if (UseAdler32Intrinsics) {
+    warning("Adler32Intrinsics not available on this CPU.");
+    FLAG_SET_DEFAULT(UseAdler32Intrinsics, false);
+  }
+
   if (!supports_rtm() && UseRTMLocking) {
     // Can't continue because UseRTMLocking affects UseBiasedLocking flag
     // setting during arguments processing. See use_biased_locking().
@@ -725,6 +849,12 @@ void VM_Version::get_processor_features() {
 
 #if INCLUDE_RTM_OPT
   if (UseRTMLocking) {
+    if (is_client_compilation_mode_vm()) {
+      // Only C2 does RTM locking optimization.
+      // Can't continue because UseRTMLocking affects UseBiasedLocking flag
+      // setting during arguments processing. See use_biased_locking().
+      vm_exit_during_initialization("RTM locking optimization is not supported in emulated client VM");
+    }
     if (is_intel_family_core()) {
       if ((_model == CPU_MODEL_HASWELL_E3) ||
           (_model == CPU_MODEL_HASWELL_E7 && _stepping < 3) ||
@@ -780,6 +910,8 @@ void VM_Version::get_processor_features() {
       FLAG_SET_DEFAULT(UseFPUForSpilling, false);
     }
   }
+#endif
+#if defined(COMPILER2) || INCLUDE_JVMCI
   if (MaxVectorSize > 0) {
     if (!is_power_of_2(MaxVectorSize)) {
       warning("MaxVectorSize must be a power of 2");
@@ -796,7 +928,7 @@ void VM_Version::get_processor_features() {
       // Vectors (in XMM) are only supported with SSE2+
       FLAG_SET_DEFAULT(MaxVectorSize, 0);
     }
-#ifdef ASSERT
+#if defined(COMPILER2) && defined(ASSERT)
     if (supports_avx() && PrintMiscellaneous && Verbose && TraceNewVectors) {
       tty->print_cr("State of YMM registers after signal handle:");
       int nreg = 2 LP64_ONLY(+2);
@@ -809,9 +941,11 @@ void VM_Version::get_processor_features() {
         tty->cr();
       }
     }
-#endif
+#endif // COMPILER2 && ASSERT
   }
+#endif // COMPILER2 || INCLUDE_JVMCI
 
+#ifdef COMPILER2
 #ifdef _LP64
   if (FLAG_IS_DEFAULT(UseMultiplyToLenIntrinsic)) {
     UseMultiplyToLenIntrinsic = true;
@@ -880,7 +1014,7 @@ void VM_Version::get_processor_features() {
       UseNewLongLShift = true;
     }
     if( FLAG_IS_DEFAULT(UseXmmLoadAndClearUpper) ) {
-      if( supports_sse4a() ) {
+      if (supports_sse4a()) {
         UseXmmLoadAndClearUpper = true; // use movsd only on '10h' Opteron
       } else {
         UseXmmLoadAndClearUpper = false;
@@ -907,10 +1041,15 @@ void VM_Version::get_processor_features() {
         UseXmmI2D = false;
       }
     }
-    if( FLAG_IS_DEFAULT(UseSSE42Intrinsics) ) {
-      if( supports_sse4_2() && UseSSE >= 4 ) {
-        UseSSE42Intrinsics = true;
+    if (supports_sse4_2()) {
+      if (FLAG_IS_DEFAULT(UseSSE42Intrinsics)) {
+        FLAG_SET_DEFAULT(UseSSE42Intrinsics, true);
       }
+    } else {
+      if (UseSSE42Intrinsics && !FLAG_IS_DEFAULT(UseAESIntrinsics)) {
+        warning("SSE4.2 intrinsics require SSE4.2 instructions or higher. Intrinsics will be disabled.");
+      }
+      FLAG_SET_DEFAULT(UseSSE42Intrinsics, false);
     }
 
     // some defaults for AMD family 15h
@@ -982,10 +1121,15 @@ void VM_Version::get_processor_features() {
           UseUnalignedLoadStores = true; // use movdqu on newest Intel cpus
         }
       }
-      if (supports_sse4_2() && UseSSE >= 4) {
+      if (supports_sse4_2()) {
         if (FLAG_IS_DEFAULT(UseSSE42Intrinsics)) {
-          UseSSE42Intrinsics = true;
+          FLAG_SET_DEFAULT(UseSSE42Intrinsics, true);
         }
+      } else {
+        if (UseSSE42Intrinsics && !FLAG_IS_DEFAULT(UseAESIntrinsics)) {
+          warning("SSE4.2 intrinsics require SSE4.2 instructions or higher. Intrinsics will be disabled.");
+        }
+        FLAG_SET_DEFAULT(UseSSE42Intrinsics, false);
       }
     }
     if ((cpu_family() == 0x06) &&
@@ -1007,6 +1151,25 @@ void VM_Version::get_processor_features() {
       AllocatePrefetchInstr = 3;
     }
   }
+
+#ifdef _LP64
+  if (UseSSE42Intrinsics) {
+    if (FLAG_IS_DEFAULT(UseVectorizedMismatchIntrinsic)) {
+      UseVectorizedMismatchIntrinsic = true;
+    }
+  } else if (UseVectorizedMismatchIntrinsic) {
+    if (!FLAG_IS_DEFAULT(UseVectorizedMismatchIntrinsic))
+      warning("vectorizedMismatch intrinsics are not available on this CPU");
+    FLAG_SET_DEFAULT(UseVectorizedMismatchIntrinsic, false);
+  }
+#else
+  if (UseVectorizedMismatchIntrinsic) {
+    if (!FLAG_IS_DEFAULT(UseVectorizedMismatchIntrinsic)) {
+      warning("vectorizedMismatch intrinsic is not available in 32-bit VM");
+    }
+    FLAG_SET_DEFAULT(UseVectorizedMismatchIntrinsic, false);
+  }
+#endif // _LP64
 
   // Use count leading zeros count instruction if available.
   if (supports_lzcnt()) {
@@ -1081,11 +1244,6 @@ void VM_Version::get_processor_features() {
   }
 #endif // COMPILER2
 
-  assert(0 <= AllocatePrefetchInstr && AllocatePrefetchInstr <= 3, "invalid value");
-
-  // set valid Prefetch instruction
-  if( AllocatePrefetchInstr < 0 ) AllocatePrefetchInstr = 0;
-  if( AllocatePrefetchInstr > 3 ) AllocatePrefetchInstr = 3;
   if( AllocatePrefetchInstr == 3 && !supports_3dnow_prefetch() ) AllocatePrefetchInstr=0;
   if( !supports_sse() && supports_3dnow_prefetch() ) AllocatePrefetchInstr = 3;
 
@@ -1093,13 +1251,6 @@ void VM_Version::get_processor_features() {
   intx cache_line_size = prefetch_data_size();
   if( cache_line_size > AllocatePrefetchStepSize )
     AllocatePrefetchStepSize = cache_line_size;
-
-  assert(AllocatePrefetchLines > 0, "invalid value");
-  if( AllocatePrefetchLines < 1 )     // set valid value in product VM
-    AllocatePrefetchLines = 3;
-  assert(AllocateInstancePrefetchLines > 0, "invalid value");
-  if( AllocateInstancePrefetchLines < 1 ) // set valid value in product VM
-    AllocateInstancePrefetchLines = 1;
 
   AllocatePrefetchDistance = allocate_prefetch_distance();
   AllocatePrefetchStyle    = allocate_prefetch_style();
@@ -1114,7 +1265,9 @@ void VM_Version::get_processor_features() {
     }
     if (supports_sse4_2() && supports_ht()) { // Nehalem based cpus
       AllocatePrefetchDistance = 192;
-      AllocatePrefetchLines = 4;
+      if (FLAG_IS_DEFAULT(AllocatePrefetchLines)) {
+        FLAG_SET_DEFAULT(AllocatePrefetchLines, 4);
+      }
     }
 #ifdef COMPILER2
     if (supports_sse4_2()) {
@@ -1124,7 +1277,6 @@ void VM_Version::get_processor_features() {
     }
 #endif
   }
-  assert(AllocatePrefetchDistance % AllocatePrefetchStepSize == 0, "invalid value");
 
 #ifdef _LP64
   // Prefetch settings
@@ -1143,59 +1295,60 @@ void VM_Version::get_processor_features() {
   }
 
 #ifndef PRODUCT
-  if (PrintMiscellaneous && Verbose) {
-    tty->print_cr("Logical CPUs per core: %u",
+  if (log_is_enabled(Info, os, cpu)) {
+    outputStream* log = Log(os, cpu)::info_stream();
+    log->print_cr("Logical CPUs per core: %u",
                   logical_processors_per_package());
-    tty->print_cr("L1 data cache line size: %u", L1_data_cache_line_size());
-    tty->print("UseSSE=%d", (int) UseSSE);
+    log->print_cr("L1 data cache line size: %u", L1_data_cache_line_size());
+    log->print("UseSSE=%d", (int) UseSSE);
     if (UseAVX > 0) {
-      tty->print("  UseAVX=%d", (int) UseAVX);
+      log->print("  UseAVX=%d", (int) UseAVX);
     }
     if (UseAES) {
-      tty->print("  UseAES=1");
+      log->print("  UseAES=1");
     }
 #ifdef COMPILER2
     if (MaxVectorSize > 0) {
-      tty->print("  MaxVectorSize=%d", (int) MaxVectorSize);
+      log->print("  MaxVectorSize=%d", (int) MaxVectorSize);
     }
 #endif
-    tty->cr();
-    tty->print("Allocation");
+    log->cr();
+    log->print("Allocation");
     if (AllocatePrefetchStyle <= 0 || UseSSE == 0 && !supports_3dnow_prefetch()) {
-      tty->print_cr(": no prefetching");
+      log->print_cr(": no prefetching");
     } else {
-      tty->print(" prefetching: ");
+      log->print(" prefetching: ");
       if (UseSSE == 0 && supports_3dnow_prefetch()) {
-        tty->print("PREFETCHW");
+        log->print("PREFETCHW");
       } else if (UseSSE >= 1) {
         if (AllocatePrefetchInstr == 0) {
-          tty->print("PREFETCHNTA");
+          log->print("PREFETCHNTA");
         } else if (AllocatePrefetchInstr == 1) {
-          tty->print("PREFETCHT0");
+          log->print("PREFETCHT0");
         } else if (AllocatePrefetchInstr == 2) {
-          tty->print("PREFETCHT2");
+          log->print("PREFETCHT2");
         } else if (AllocatePrefetchInstr == 3) {
-          tty->print("PREFETCHW");
+          log->print("PREFETCHW");
         }
       }
       if (AllocatePrefetchLines > 1) {
-        tty->print_cr(" at distance %d, %d lines of %d bytes", (int) AllocatePrefetchDistance, (int) AllocatePrefetchLines, (int) AllocatePrefetchStepSize);
+        log->print_cr(" at distance %d, %d lines of %d bytes", (int) AllocatePrefetchDistance, (int) AllocatePrefetchLines, (int) AllocatePrefetchStepSize);
       } else {
-        tty->print_cr(" at distance %d, one line of %d bytes", (int) AllocatePrefetchDistance, (int) AllocatePrefetchStepSize);
+        log->print_cr(" at distance %d, one line of %d bytes", (int) AllocatePrefetchDistance, (int) AllocatePrefetchStepSize);
       }
     }
 
     if (PrefetchCopyIntervalInBytes > 0) {
-      tty->print_cr("PrefetchCopyIntervalInBytes %d", (int) PrefetchCopyIntervalInBytes);
+      log->print_cr("PrefetchCopyIntervalInBytes %d", (int) PrefetchCopyIntervalInBytes);
     }
     if (PrefetchScanIntervalInBytes > 0) {
-      tty->print_cr("PrefetchScanIntervalInBytes %d", (int) PrefetchScanIntervalInBytes);
+      log->print_cr("PrefetchScanIntervalInBytes %d", (int) PrefetchScanIntervalInBytes);
     }
     if (PrefetchFieldsAhead > 0) {
-      tty->print_cr("PrefetchFieldsAhead %d", (int) PrefetchFieldsAhead);
+      log->print_cr("PrefetchFieldsAhead %d", (int) PrefetchFieldsAhead);
     }
     if (ContendedPaddingWidth > 0) {
-      tty->print_cr("ContendedPaddingWidth %d", (int) ContendedPaddingWidth);
+      log->print_cr("ContendedPaddingWidth %d", (int) ContendedPaddingWidth);
     }
   }
 #endif // !PRODUCT

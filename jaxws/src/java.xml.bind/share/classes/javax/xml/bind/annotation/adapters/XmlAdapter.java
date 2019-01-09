@@ -31,10 +31,10 @@ package javax.xml.bind.annotation.adapters;
  * <p> <b> Usage: </b> </p>
  *
  * <p>
- * Some Java types do not map naturally to a XML representation, for
- * example <tt>HashMap</tt> or other non JavaBean classes. Conversely,
- * a XML repsentation may map to a Java type but an application may
- * choose to accesss the XML representation using another Java
+ * Some Java types do not map naturally to an XML representation, for
+ * example {@code HashMap} or other non JavaBean classes. Conversely,
+ * an XML representation may map to a Java type but an application may
+ * choose to access the XML representation using another Java
  * type. For example, the schema to Java binding rules bind
  * xs:DateTime by default to XmlGregorianCalendar. But an application
  * may desire to bind xs:DateTime to a custom type,
@@ -68,10 +68,10 @@ package javax.xml.bind.annotation.adapters;
  *        XmlJavaTypeAdapter} </li>
  * </ul>
  *
- * <p><b>Example:</b> Customized mapping of <tt>HashMap</tt></p>
+ * <p><b>Example:</b> Customized mapping of {@code HashMap}</p>
  * <p> The following example illustrates the use of
- * <tt>&#64;XmlAdapter</tt> and <tt>&#64;XmlJavaTypeAdapter</tt> to
- * customize the mapping of a <tt>HashMap</tt>.
+ * {@code @XmlAdapter} and {@code @XmlJavaTypeAdapter} to
+ * customize the mapping of a {@code HashMap}.
  *
  * <p> <b> Step 1: </b> Determine the desired XML representation for HashMap.
  *
@@ -154,7 +154,7 @@ package javax.xml.bind.annotation.adapters;
  * @param <BoundType>
  *      The type that JAXB doesn't know how to handle. An adapter is written
  *      to allow this type to be used as an in-memory representation through
- *      the <tt>ValueType</tt>.
+ *      the {@code ValueType}.
  * @param <ValueType>
  *      The type that JAXB knows how to handle out of the box.
  *

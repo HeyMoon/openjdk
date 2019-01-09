@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,68 +26,42 @@
 /*
  * @test TestStableObject
  * @summary tests on stable fields and arrays
- * @library /testlibrary /../../test/lib
- * @build TestStableObject StableConfiguration sun.hotspot.WhiteBox
- * @run main ClassFileInstaller sun.hotspot.WhiteBox sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main ClassFileInstaller
- *           java/lang/invoke/StableConfiguration
- *           java/lang/invoke/TestStableObject
- *           java/lang/invoke/TestStableObject$ObjectStable
- *           java/lang/invoke/TestStableObject$StaticObjectStable
- *           java/lang/invoke/TestStableObject$VolatileObjectStable
- *           java/lang/invoke/TestStableObject$ObjectArrayDim1
- *           java/lang/invoke/TestStableObject$ObjectArrayDim2
- *           java/lang/invoke/TestStableObject$ObjectArrayDim3
- *           java/lang/invoke/TestStableObject$ObjectArrayDim4
- *           java/lang/invoke/TestStableObject$ObjectArrayLowerDim0
- *           java/lang/invoke/TestStableObject$ObjectArrayLowerDim1
- *           java/lang/invoke/TestStableObject$NestedStableField
- *           java/lang/invoke/TestStableObject$NestedStableField$A
- *           java/lang/invoke/TestStableObject$NestedStableField1
- *           java/lang/invoke/TestStableObject$NestedStableField1$A
- *           java/lang/invoke/TestStableObject$NestedStableField2
- *           java/lang/invoke/TestStableObject$NestedStableField2$A
- *           java/lang/invoke/TestStableObject$NestedStableField3
- *           java/lang/invoke/TestStableObject$NestedStableField3$A
- *           java/lang/invoke/TestStableObject$Values
- *           java/lang/invoke/TestStableObject$DefaultValue
- *           java/lang/invoke/TestStableObject$DefaultStaticValue
- *           java/lang/invoke/TestStableObject$ObjectArrayLowerDim2
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ * @modules java.base/jdk.internal.vm.annotation
+ * @build sun.hotspot.WhiteBox
  *
- * @run main/othervm -Xbootclasspath/a:.
- *                   -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
- *                   -XX:-TieredCompilation
- *                   -XX:+FoldStableValues
- *                   -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
- *                   java.lang.invoke.TestStableObject
- * @run main/othervm -Xbootclasspath/a:.
- *                   -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
- *                   -XX:-TieredCompilation
- *                   -XX:-FoldStableValues
- *                   -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
- *                   java.lang.invoke.TestStableObject
+ * @run main/bootclasspath/othervm -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
+ *                                 -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
+ *                                 -XX:-TieredCompilation
+ *                                 -XX:+FoldStableValues
+ *                                 compiler.stable.TestStableObject
+ * @run main/bootclasspath/othervm -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
+ *                                 -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
+ *                                 -XX:-TieredCompilation
+ *                                 -XX:+FoldStableValues
+ *                                 compiler.stable.TestStableObject
  *
- * @run main/othervm -Xbootclasspath/a:.
- *                   -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
- *                   -XX:+TieredCompilation -XX:TieredStopAtLevel=1
- *                   -XX:+FoldStableValues
- *                   -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
- *                   java.lang.invoke.TestStableObject
- * @run main/othervm -Xbootclasspath/a:.
- *                   -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
- *                   -XX:+TieredCompilation -XX:TieredStopAtLevel=1
- *                   -XX:-FoldStableValues
- *                   -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
- *                   java.lang.invoke.TestStableObject
- *
+ * @run main/bootclasspath/othervm -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
+ *                                 -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
+ *                                 -XX:-TieredCompilation
+ *                                 -XX:+FoldStableValues
+ *                                 compiler.stable.TestStableObject
+ * @run main/bootclasspath/othervm -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xcomp
+ *                                 -XX:CompileOnly=::get,::get1,::get2,::get3,::get4
+ *                                 -XX:-TieredCompilation
+ *                                 -XX:+FoldStableValues
+ *                                 compiler.stable.TestStableObject
  */
-package java.lang.invoke;
+
+package compiler.stable;
+
+import jdk.internal.vm.annotation.Stable;
 
 import java.lang.reflect.InvocationTargetException;
 
 public class TestStableObject {
     static final boolean isStableEnabled    = StableConfiguration.isStableEnabled;
-    static final boolean isServerWithStable = StableConfiguration.isServerWithStable;
 
     public static void main(String[] args) throws Exception {
         run(DefaultValue.class);
@@ -210,10 +184,10 @@ public class TestStableObject {
                 c.v = new Object[1]; c.v[0] = Values.A; Object val1 = get();
                                      c.v[0] = Values.B; Object val2 = get();
                 assertEquals(val1, Values.A);
-                assertEquals(val2, (isServerWithStable ? Values.A : Values.B));
+                assertEquals(val2, (isStableEnabled ? Values.A : Values.B));
 
                 c.v = new Object[1]; c.v[0] = Values.C; Object val3 = get();
-                assertEquals(val3, (isStableEnabled ? (isServerWithStable ? Values.A : Values.B)
+                assertEquals(val3, (isStableEnabled ? (isStableEnabled ? Values.A : Values.B)
                                                     : Values.C));
             }
 
@@ -221,10 +195,10 @@ public class TestStableObject {
                 c.v = new Object[20]; c.v[10] = Values.A; Object val1 = get1();
                                       c.v[10] = Values.B; Object val2 = get1();
                 assertEquals(val1, Values.A);
-                assertEquals(val2, (isServerWithStable ? Values.A : Values.B));
+                assertEquals(val2, (isStableEnabled ? Values.A : Values.B));
 
                 c.v = new Object[20]; c.v[10] = Values.C; Object val3 = get1();
-                assertEquals(val3, (isStableEnabled ? (isServerWithStable ? Values.A : Values.B)
+                assertEquals(val3, (isStableEnabled ? (isStableEnabled ? Values.A : Values.B)
                                                     : Values.C));
             }
 
@@ -250,21 +224,21 @@ public class TestStableObject {
                 c.v = new Object[1][1]; c.v[0][0] = Values.A; Object val1 = get();
                                         c.v[0][0] = Values.B; Object val2 = get();
                 assertEquals(val1, Values.A);
-                assertEquals(val2, (isServerWithStable ? Values.A : Values.B));
+                assertEquals(val2, (isStableEnabled ? Values.A : Values.B));
 
                 c.v = new Object[1][1]; c.v[0][0] = Values.C; Object val3 = get();
-                assertEquals(val3, (isStableEnabled ? (isServerWithStable ? Values.A : Values.B)
+                assertEquals(val3, (isStableEnabled ? (isStableEnabled ? Values.A : Values.B)
                                                     : Values.C));
 
                 c.v[0] = new Object[1]; c.v[0][0] = Values.D; Object val4 = get();
-                assertEquals(val4, (isStableEnabled ? (isServerWithStable ? Values.A : Values.B)
+                assertEquals(val4, (isStableEnabled ? (isStableEnabled ? Values.A : Values.B)
                                                     : Values.D));
             }
 
             {
                 c.v = new Object[1][1]; Object[] val1 = get1();
                 c.v[0] = new Object[1]; Object[] val2 = get1();
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
@@ -290,31 +264,31 @@ public class TestStableObject {
                 c.v = new Object[1][1][1]; c.v[0][0][0] = Values.A; Object val1 = get();
                                            c.v[0][0][0] = Values.B; Object val2 = get();
                 assertEquals(val1, Values.A);
-                assertEquals(val2, (isServerWithStable ? Values.A : Values.B));
+                assertEquals(val2, (isStableEnabled ? Values.A : Values.B));
 
                 c.v = new Object[1][1][1]; c.v[0][0][0] = Values.C; Object val3 = get();
-                assertEquals(val3, (isStableEnabled ? (isServerWithStable ? Values.A : Values.B)
+                assertEquals(val3, (isStableEnabled ? (isStableEnabled ? Values.A : Values.B)
                                                     : Values.C));
 
                 c.v[0] = new Object[1][1]; c.v[0][0][0] = Values.D; Object val4 = get();
-                assertEquals(val4, (isStableEnabled ? (isServerWithStable ? Values.A : Values.B)
+                assertEquals(val4, (isStableEnabled ? (isStableEnabled ? Values.A : Values.B)
                                                     : Values.D));
 
                 c.v[0][0] = new Object[1]; c.v[0][0][0] = Values.E; Object val5 = get();
-                assertEquals(val5, (isStableEnabled ? (isServerWithStable ? Values.A : Values.B)
+                assertEquals(val5, (isStableEnabled ? (isStableEnabled ? Values.A : Values.B)
                                                     : Values.E));
             }
 
             {
                 c.v = new Object[1][1][1]; Object[] val1 = get1();
                 c.v[0][0] = new Object[1]; Object[] val2 = get1();
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
                 c.v = new Object[1][1][1]; Object[][] val1 = get2();
                 c.v[0] = new Object[1][1]; Object[][] val2 = get2();
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
@@ -341,41 +315,41 @@ public class TestStableObject {
                 c.v = new Object[1][1][1][1]; c.v[0][0][0][0] = Values.A; Object val1 = get();
                                               c.v[0][0][0][0] = Values.B; Object val2 = get();
                 assertEquals(val1, Values.A);
-                assertEquals(val2, (isServerWithStable ? Values.A : Values.B));
+                assertEquals(val2, (isStableEnabled ? Values.A : Values.B));
 
                 c.v = new Object[1][1][1][1]; c.v[0][0][0][0] = Values.C; Object val3 = get();
-                assertEquals(val3, (isStableEnabled ? (isServerWithStable ? Values.A : Values.B)
+                assertEquals(val3, (isStableEnabled ? (isStableEnabled ? Values.A : Values.B)
                                                     : Values.C));
 
                 c.v[0] = new Object[1][1][1]; c.v[0][0][0][0] = Values.D; Object val4 = get();
-                assertEquals(val4, (isStableEnabled ? (isServerWithStable ? Values.A : Values.B)
+                assertEquals(val4, (isStableEnabled ? (isStableEnabled ? Values.A : Values.B)
                                                     : Values.D));
 
                 c.v[0][0] = new Object[1][1]; c.v[0][0][0][0] = Values.E; Object val5 = get();
-                assertEquals(val5, (isStableEnabled ? (isServerWithStable ? Values.A : Values.B)
+                assertEquals(val5, (isStableEnabled ? (isStableEnabled ? Values.A : Values.B)
                                                     : Values.E));
 
                 c.v[0][0][0] = new Object[1]; c.v[0][0][0][0] = Values.F; Object val6 = get();
-                assertEquals(val6, (isStableEnabled ? (isServerWithStable ? Values.A : Values.B)
+                assertEquals(val6, (isStableEnabled ? (isStableEnabled ? Values.A : Values.B)
                                                     : Values.F));
             }
 
             {
                 c.v = new Object[1][1][1][1]; Object[] val1 = get1();
                 c.v[0][0][0] = new Object[1]; Object[] val2 = get1();
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
                 c.v = new Object[1][1][1][1]; Object[][] val1 = get2();
                 c.v[0][0] = new Object[1][1]; Object[][] val2 = get2();
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
                 c.v = new Object[1][1][1][1]; Object[][][] val1 = get3();
                 c.v[0] = new Object[1][1][1]; Object[][][] val2 = get3();
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
@@ -433,9 +407,9 @@ public class TestStableObject {
 
             {
                 c.v = new Object[1][1]; c.v[0] = new Object[0]; Object[] val1 = get1();
-                                     c.v[0] = new Object[0]; Object[] val2 = get1();
+                                        c.v[0] = new Object[0]; Object[] val2 = get1();
 
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
@@ -471,14 +445,14 @@ public class TestStableObject {
                 c.v = new Object[1][1][1]; c.v[0][0] = new Object[0]; Object[] val1 = get1();
                                            c.v[0][0] = new Object[0]; Object[] val2 = get1();
 
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
                 c.v = new Object[1][1][1]; c.v[0] = new Object[0][0]; Object[][] val1 = get2();
                                            c.v[0] = new Object[0][0]; Object[][] val2 = get2();
 
-                assertTrue((isServerWithStable ? (val1 == val2) : (val1 != val2)));
+                assertTrue((isStableEnabled ? (val1 == val2) : (val1 != val2)));
             }
 
             {
@@ -613,7 +587,7 @@ public class TestStableObject {
                                elem.a = Values.B; Object val3 = get(); Object val4 = get1();
 
                 assertEquals(val1, Values.A);
-                assertEquals(val3, (isServerWithStable ? Values.A : Values.B));
+                assertEquals(val3, (isStableEnabled ? Values.A : Values.B));
 
                 assertEquals(val2, Values.A);
                 assertEquals(val4, Values.B);

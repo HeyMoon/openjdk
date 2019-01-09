@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,11 +24,16 @@
 
 #include "precompiled.hpp"
 #include "classfile/classLoaderExt.hpp"
+#include "classfile/javaClasses.inline.hpp"
+#include "classfile/stringTable.hpp"
+#include "classfile/modules.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "interpreter/bytecodeStream.hpp"
 #include "interpreter/interpreter.hpp"
 #include "jvmtifiles/jvmtiEnv.hpp"
+#include "logging/log.hpp"
+#include "logging/logConfiguration.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.inline.hpp"
 #include "oops/instanceKlass.hpp"
@@ -57,6 +62,7 @@
 #include "runtime/reflectionUtils.hpp"
 #include "runtime/signature.hpp"
 #include "runtime/thread.inline.hpp"
+#include "runtime/timerTrace.hpp"
 #include "runtime/vframe.hpp"
 #include "runtime/vmThread.hpp"
 #include "services/threadService.hpp"
@@ -185,6 +191,172 @@ JvmtiEnv::GetThreadLocalStorage(jthread thread, void** data_ptr) {
 } /* end GetThreadLocalStorage */
 
   //
+  // Module functions
+  //
+
+// module_count_ptr - pre-checked for NULL
+// modules_ptr - pre-checked for NULL
+jvmtiError
+JvmtiEnv::GetAllModules(jint* module_count_ptr, jobject** modules_ptr) {
+    JvmtiModuleClosure jmc;
+
+    return jmc.get_all_modules(this, module_count_ptr, modules_ptr);
+} /* end GetAllModules */
+
+
+// class_loader - NULL is a valid value, must be pre-checked
+// package_name - pre-checked for NULL
+// module_ptr - pre-checked for NULL
+jvmtiError
+JvmtiEnv::GetNamedModule(jobject class_loader, const char* package_name, jobject* module_ptr) {
+  JavaThread* THREAD = JavaThread::current(); // pass to macros
+  ResourceMark rm(THREAD);
+
+  Handle h_loader (THREAD, JNIHandles::resolve(class_loader));
+  // Check that loader is a subclass of java.lang.ClassLoader.
+  if (h_loader.not_null() && !java_lang_ClassLoader::is_subclass(h_loader->klass())) {
+    return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+  }
+  jobject module = Modules::get_named_module(h_loader, package_name, THREAD);
+  if (HAS_PENDING_EXCEPTION) {
+    CLEAR_PENDING_EXCEPTION;
+    return JVMTI_ERROR_INTERNAL; // unexpected exception
+  }
+  *module_ptr = module;
+  return JVMTI_ERROR_NONE;
+} /* end GetNamedModule */
+
+
+// module - pre-checked for NULL
+// to_module - pre-checked for NULL
+jvmtiError
+JvmtiEnv::AddModuleReads(jobject module, jobject to_module) {
+  JavaThread* THREAD = JavaThread::current();
+
+  // check module
+  Handle h_module(THREAD, JNIHandles::resolve(module));
+  if (!java_lang_Module::is_instance(h_module())) {
+    return JVMTI_ERROR_INVALID_MODULE;
+  }
+  // check to_module
+  Handle h_to_module(THREAD, JNIHandles::resolve(to_module));
+  if (!java_lang_Module::is_instance(h_to_module())) {
+    return JVMTI_ERROR_INVALID_MODULE;
+  }
+  return JvmtiExport::add_module_reads(h_module, h_to_module, THREAD);
+} /* end AddModuleReads */
+
+
+// module - pre-checked for NULL
+// pkg_name - pre-checked for NULL
+// to_module - pre-checked for NULL
+jvmtiError
+JvmtiEnv::AddModuleExports(jobject module, const char* pkg_name, jobject to_module) {
+  JavaThread* THREAD = JavaThread::current();
+  Handle h_pkg = java_lang_String::create_from_str(pkg_name, THREAD);
+
+  // check module
+  Handle h_module(THREAD, JNIHandles::resolve(module));
+  if (!java_lang_Module::is_instance(h_module())) {
+    return JVMTI_ERROR_INVALID_MODULE;
+  }
+  // check to_module
+  Handle h_to_module(THREAD, JNIHandles::resolve(to_module));
+  if (!java_lang_Module::is_instance(h_to_module())) {
+    return JVMTI_ERROR_INVALID_MODULE;
+  }
+  return JvmtiExport::add_module_exports(h_module, h_pkg, h_to_module, THREAD);
+} /* end AddModuleExports */
+
+
+// module - pre-checked for NULL
+// pkg_name - pre-checked for NULL
+// to_module - pre-checked for NULL
+jvmtiError
+JvmtiEnv::AddModuleOpens(jobject module, const char* pkg_name, jobject to_module) {
+  JavaThread* THREAD = JavaThread::current();
+  Handle h_pkg = java_lang_String::create_from_str(pkg_name, THREAD);
+
+  // check module
+  Handle h_module(THREAD, JNIHandles::resolve(module));
+  if (!java_lang_Module::is_instance(h_module())) {
+    return JVMTI_ERROR_INVALID_MODULE;
+  }
+  // check to_module
+  Handle h_to_module(THREAD, JNIHandles::resolve(to_module));
+  if (!java_lang_Module::is_instance(h_to_module())) {
+    return JVMTI_ERROR_INVALID_MODULE;
+  }
+  return JvmtiExport::add_module_opens(h_module, h_pkg, h_to_module, THREAD);
+} /* end AddModuleOpens */
+
+
+// module - pre-checked for NULL
+// service - pre-checked for NULL
+jvmtiError
+JvmtiEnv::AddModuleUses(jobject module, jclass service) {
+  JavaThread* THREAD = JavaThread::current();
+
+  // check module
+  Handle h_module(THREAD, JNIHandles::resolve(module));
+  if (!java_lang_Module::is_instance(h_module())) {
+    return JVMTI_ERROR_INVALID_MODULE;
+  }
+  // check service
+  Handle h_service(THREAD, JNIHandles::resolve_external_guard(service));
+  if (!java_lang_Class::is_instance(h_service()) ||
+      java_lang_Class::is_primitive(h_service())) {
+    return JVMTI_ERROR_INVALID_CLASS;
+  }
+  return JvmtiExport::add_module_uses(h_module, h_service, THREAD);
+} /* end AddModuleUses */
+
+
+// module - pre-checked for NULL
+// service - pre-checked for NULL
+// impl_class - pre-checked for NULL
+jvmtiError
+JvmtiEnv::AddModuleProvides(jobject module, jclass service, jclass impl_class) {
+  JavaThread* THREAD = JavaThread::current();
+
+  // check module
+  Handle h_module(THREAD, JNIHandles::resolve(module));
+  if (!java_lang_Module::is_instance(h_module())) {
+    return JVMTI_ERROR_INVALID_MODULE;
+  }
+  // check service
+  Handle h_service(THREAD, JNIHandles::resolve_external_guard(service));
+  if (!java_lang_Class::is_instance(h_service()) ||
+      java_lang_Class::is_primitive(h_service())) {
+    return JVMTI_ERROR_INVALID_CLASS;
+  }
+  // check impl_class
+  Handle h_impl_class(THREAD, JNIHandles::resolve_external_guard(impl_class));
+  if (!java_lang_Class::is_instance(h_impl_class()) ||
+      java_lang_Class::is_primitive(h_impl_class())) {
+    return JVMTI_ERROR_INVALID_CLASS;
+  }
+  return JvmtiExport::add_module_provides(h_module, h_service, h_impl_class, THREAD);
+} /* end AddModuleProvides */
+
+// module - pre-checked for NULL
+// is_modifiable_class_ptr - pre-checked for NULL
+jvmtiError
+JvmtiEnv::IsModifiableModule(jobject module, jboolean* is_modifiable_module_ptr) {
+  JavaThread* THREAD = JavaThread::current();
+
+  // check module
+  Handle h_module(THREAD, JNIHandles::resolve(module));
+  if (!java_lang_Module::is_instance(h_module())) {
+    return JVMTI_ERROR_INVALID_MODULE;
+  }
+
+  *is_modifiable_module_ptr = JNI_TRUE;
+  return JVMTI_ERROR_NONE;
+} /* end IsModifiableModule */
+
+
+  //
   // Class functions
   //
 
@@ -240,7 +412,7 @@ JvmtiEnv::RetransformClasses(jint class_count, const jclass* classes) {
       return JVMTI_ERROR_INVALID_CLASS;
     }
 
-    if (java_lang_Class::is_primitive(k_mirror)) {
+    if (!VM_RedefineClasses::is_modifiable_class(k_mirror)) {
       return JVMTI_ERROR_UNMODIFIABLE_CLASS;
     }
 
@@ -250,9 +422,6 @@ JvmtiEnv::RetransformClasses(jint class_count, const jclass* classes) {
     jint status = klass->jvmti_class_status();
     if (status & (JVMTI_CLASS_STATUS_ERROR)) {
       return JVMTI_ERROR_INVALID_CLASS;
-    }
-    if (status & (JVMTI_CLASS_STATUS_ARRAY)) {
-      return JVMTI_ERROR_UNMODIFIABLE_CLASS;
     }
 
     instanceKlassHandle ikh(current_thread, k_oop);
@@ -302,15 +471,7 @@ jvmtiError
 JvmtiEnv::GetObjectSize(jobject object, jlong* size_ptr) {
   oop mirror = JNIHandles::resolve_external_guard(object);
   NULL_CHECK(mirror, JVMTI_ERROR_INVALID_OBJECT);
-
-  if (mirror->klass() == SystemDictionary::Class_klass() &&
-      !java_lang_Class::is_primitive(mirror)) {
-    Klass* k = java_lang_Class::as_Klass(mirror);
-    assert(k != NULL, "class for non-primitive mirror must exist");
-    *size_ptr = (jlong)k->size() * wordSize;
-  } else {
-    *size_ptr = (jlong)mirror->size() * wordSize;
-    }
+  *size_ptr = (jlong)mirror->size() * wordSize;
   return JVMTI_ERROR_NONE;
 } /* end GetObjectSize */
 
@@ -459,7 +620,7 @@ JvmtiEnv::AddToBootstrapClassLoaderSearch(const char* segment) {
     // terminating the VM so we check one more time.
 
     // create the zip entry
-    ClassPathZipEntry* zip_entry = ClassLoader::create_class_path_zip_entry(segment);
+    ClassPathZipEntry* zip_entry = ClassLoader::create_class_path_zip_entry(segment, true);
     if (zip_entry == NULL) {
       return JVMTI_ERROR_ILLEGAL_ARGUMENT;
     }
@@ -472,9 +633,7 @@ JvmtiEnv::AddToBootstrapClassLoaderSearch(const char* segment) {
     ObjectLocker ol(loader_lock, thread);
 
     // add the jar file to the bootclasspath
-    if (TraceClassLoading) {
-      tty->print_cr("[Opened %s]", zip_entry->name());
-    }
+    log_info(class, load)("opened: %s", zip_entry->name());
     ClassLoaderExt::append_boot_classpath(zip_entry);
     return JVMTI_ERROR_NONE;
   } else {
@@ -505,7 +664,7 @@ JvmtiEnv::AddToSystemClassLoaderSearch(const char* segment) {
 
     // create the zip entry (which will open the zip file and hence
     // check that the segment is indeed a zip file).
-    ClassPathZipEntry* zip_entry = ClassLoader::create_class_path_zip_entry(segment);
+    ClassPathZipEntry* zip_entry = ClassLoader::create_class_path_zip_entry(segment, false);
     if (zip_entry == NULL) {
       return JVMTI_ERROR_ILLEGAL_ARGUMENT;
     }
@@ -563,7 +722,7 @@ JvmtiEnv::AddToSystemClassLoaderSearch(const char* segment) {
 // phase_ptr - pre-checked for NULL
 jvmtiError
 JvmtiEnv::GetPhase(jvmtiPhase* phase_ptr) {
-  *phase_ptr = get_phase();
+  *phase_ptr = phase();
   return JVMTI_ERROR_NONE;
 } /* end GetPhase */
 
@@ -619,16 +778,21 @@ JvmtiEnv::GetErrorName(jvmtiError error, char** name_ptr) {
 
 jvmtiError
 JvmtiEnv::SetVerboseFlag(jvmtiVerboseFlag flag, jboolean value) {
+  LogLevelType level = value == 0 ? LogLevel::Off : LogLevel::Info;
   switch (flag) {
   case JVMTI_VERBOSE_OTHER:
     // ignore
     break;
   case JVMTI_VERBOSE_CLASS:
-    TraceClassLoading = value != 0;
-    TraceClassUnloading = value != 0;
+    LogConfiguration::configure_stdout(level, false, LOG_TAGS(class, unload));
+    LogConfiguration::configure_stdout(level, false, LOG_TAGS(class, load));
     break;
   case JVMTI_VERBOSE_GC:
-    PrintGC = value != 0;
+    if (value == 0) {
+      LogConfiguration::configure_stdout(LogLevel::Off, true, LOG_TAGS(gc));
+    } else {
+      LogConfiguration::configure_stdout(LogLevel::Info, true, LOG_TAGS(gc));
+    }
     break;
   case JVMTI_VERBOSE_JNI:
     PrintJNIResolving = value != 0;
@@ -966,7 +1130,8 @@ JvmtiEnv::GetThreadInfo(jthread thread, jvmtiThreadInfo* info_ptr) {
     if (name() != NULL) {
       n = java_lang_String::as_utf8_string(name());
     } else {
-      n = UNICODE::as_utf8(NULL, 0);
+      int utf8_length = 0;
+      n = UNICODE::as_utf8((jchar*) NULL, utf8_length);
     }
 
     info_ptr->name = (char *) jvmtiMalloc(strlen(n)+1);
@@ -1187,15 +1352,14 @@ JvmtiEnv::GetThreadGroupInfo(jthreadGroup group, jvmtiThreadGroupInfo* info_ptr)
   Handle group_obj (current_thread, JNIHandles::resolve_external_guard(group));
   NULL_CHECK(group_obj(), JVMTI_ERROR_INVALID_THREAD_GROUP);
 
-  typeArrayHandle name;
+  const char* name;
   Handle parent_group;
   bool is_daemon;
   ThreadPriority max_priority;
 
   { MutexLocker mu(Threads_lock);
 
-    name         = typeArrayHandle(current_thread,
-                                   java_lang_ThreadGroup::name(group_obj()));
+    name         = java_lang_ThreadGroup::name(group_obj());
     parent_group = Handle(current_thread, java_lang_ThreadGroup::parent(group_obj()));
     is_daemon    = java_lang_ThreadGroup::is_daemon(group_obj());
     max_priority = java_lang_ThreadGroup::maxPriority(group_obj());
@@ -1205,11 +1369,10 @@ JvmtiEnv::GetThreadGroupInfo(jthreadGroup group, jvmtiThreadGroupInfo* info_ptr)
   info_ptr->max_priority = max_priority;
   info_ptr->parent       = jni_reference(parent_group);
 
-  if (name() != NULL) {
-    const char* n = UNICODE::as_utf8((jchar*) name->base(T_CHAR), name->length());
-    info_ptr->name = (char *)jvmtiMalloc(strlen(n)+1);
+  if (name != NULL) {
+    info_ptr->name = (char*)jvmtiMalloc(strlen(name)+1);
     NULL_CHECK(info_ptr->name, JVMTI_ERROR_OUT_OF_MEMORY);
-    strcpy(info_ptr->name, n);
+    strcpy(info_ptr->name, name);
   } else {
     info_ptr->name = NULL;
   }
@@ -1649,11 +1812,18 @@ JvmtiEnv::FollowReferences(jint heap_filter, jclass klass, jobject initial_objec
     }
   }
 
+  if (initial_object != NULL) {
+    oop init_obj = JNIHandles::resolve_external_guard(initial_object);
+    if (init_obj == NULL) {
+      return JVMTI_ERROR_INVALID_OBJECT;
+    }
+  }
+
   Thread *thread = Thread::current();
   HandleMark hm(thread);
   KlassHandle kh (thread, k_oop);
 
-  TraceTime t("FollowReferences", TraceJVMTIObjectTagging);
+  TraceTime t("FollowReferences", TRACETIME_LOG(Debug, jvmti, objecttagging));
   JvmtiTagMap::tag_map_for(this)->follow_references(heap_filter, kh, initial_object, callbacks, user_data);
   return JVMTI_ERROR_NONE;
 } /* end FollowReferences */
@@ -1684,7 +1854,7 @@ JvmtiEnv::IterateThroughHeap(jint heap_filter, jclass klass, const jvmtiHeapCall
   HandleMark hm(thread);
   KlassHandle kh (thread, k_oop);
 
-  TraceTime t("IterateThroughHeap", TraceJVMTIObjectTagging);
+  TraceTime t("IterateThroughHeap", TRACETIME_LOG(Debug, jvmti, objecttagging));
   JvmtiTagMap::tag_map_for(this)->iterate_through_heap(heap_filter, kh, callbacks, user_data);
   return JVMTI_ERROR_NONE;
 } /* end IterateThroughHeap */
@@ -1716,7 +1886,7 @@ JvmtiEnv::SetTag(jobject object, jlong tag) {
 // tag_result_ptr - NULL is a valid value, must be checked
 jvmtiError
 JvmtiEnv::GetObjectsWithTags(jint tag_count, const jlong* tags, jint* count_ptr, jobject** object_result_ptr, jlong** tag_result_ptr) {
-  TraceTime t("GetObjectsWithTags", TraceJVMTIObjectTagging);
+  TraceTime t("GetObjectsWithTags", TRACETIME_LOG(Debug, jvmti, objecttagging));
   return JvmtiTagMap::tag_map_for(this)->get_objects_with_tags((jlong*)tags, tag_count, count_ptr, object_result_ptr, tag_result_ptr);
 } /* end GetObjectsWithTags */
 
@@ -1749,7 +1919,7 @@ JvmtiEnv::IterateOverObjectsReachableFromObject(jobject object, jvmtiObjectRefer
 // user_data - NULL is a valid value, must be checked
 jvmtiError
 JvmtiEnv::IterateOverReachableObjects(jvmtiHeapRootCallback heap_root_callback, jvmtiStackReferenceCallback stack_ref_callback, jvmtiObjectReferenceCallback object_ref_callback, const void* user_data) {
-  TraceTime t("IterateOverReachableObjects", TraceJVMTIObjectTagging);
+  TraceTime t("IterateOverReachableObjects", TRACETIME_LOG(Debug, jvmti, objecttagging));
   JvmtiTagMap::tag_map_for(this)->iterate_over_reachable_objects(heap_root_callback, stack_ref_callback, object_ref_callback, user_data);
   return JVMTI_ERROR_NONE;
 } /* end IterateOverReachableObjects */
@@ -1759,7 +1929,7 @@ JvmtiEnv::IterateOverReachableObjects(jvmtiHeapRootCallback heap_root_callback, 
 // user_data - NULL is a valid value, must be checked
 jvmtiError
 JvmtiEnv::IterateOverHeap(jvmtiHeapObjectFilter object_filter, jvmtiHeapObjectCallback heap_object_callback, const void* user_data) {
-  TraceTime t("IterateOverHeap", TraceJVMTIObjectTagging);
+  TraceTime t("IterateOverHeap", TRACETIME_LOG(Debug, jvmti, objecttagging));
   Thread *thread = Thread::current();
   HandleMark hm(thread);
   JvmtiTagMap::tag_map_for(this)->iterate_over_heap(object_filter, KlassHandle(), heap_object_callback, user_data);
@@ -1783,7 +1953,7 @@ JvmtiEnv::IterateOverInstancesOfClass(oop k_mirror, jvmtiHeapObjectFilter object
   Thread *thread = Thread::current();
   HandleMark hm(thread);
   KlassHandle klass (thread, k_oop);
-  TraceTime t("IterateOverInstancesOfClass", TraceJVMTIObjectTagging);
+  TraceTime t("IterateOverInstancesOfClass", TRACETIME_LOG(Debug, jvmti, objecttagging));
   JvmtiTagMap::tag_map_for(this)->iterate_over_heap(object_filter, klass, heap_object_callback, user_data);
   return JVMTI_ERROR_NONE;
 } /* end IterateOverInstancesOfClass */
@@ -2139,7 +2309,7 @@ JvmtiEnv::GetClassSignature(oop k_mirror, char** signature_ptr, char** generic_p
   }
   if (generic_ptr != NULL) {
     *generic_ptr = NULL;
-    if (!isPrimitive && k->oop_is_instance()) {
+    if (!isPrimitive && k->is_instance_klass()) {
       Symbol* soo = InstanceKlass::cast(k)->generic_signature();
       if (soo != NULL) {
         const char *gen_sig = soo->as_C_string();
@@ -2188,7 +2358,7 @@ JvmtiEnv::GetSourceFileName(oop k_mirror, char** source_name_ptr) {
   Klass* k_klass = java_lang_Class::as_Klass(k_mirror);
   NULL_CHECK(k_klass, JVMTI_ERROR_INVALID_CLASS);
 
-  if (!k_klass->oop_is_instance()) {
+  if (!k_klass->is_instance_klass()) {
     return JVMTI_ERROR_ABSENT_INFORMATION;
   }
 
@@ -2256,7 +2426,7 @@ JvmtiEnv::GetClassMethods(oop k_mirror, jint* method_count_ptr, jmethodID** meth
     return JVMTI_ERROR_CLASS_NOT_PREPARED;
   }
 
-  if (!k->oop_is_instance()) {
+  if (!k->is_instance_klass()) {
     *method_count_ptr = 0;
     *methods_ptr = (jmethodID*) jvmtiMalloc(0 * sizeof(jmethodID));
     return JVMTI_ERROR_NONE;
@@ -2340,7 +2510,7 @@ JvmtiEnv::GetClassFields(oop k_mirror, jint* field_count_ptr, jfieldID** fields_
     return JVMTI_ERROR_CLASS_NOT_PREPARED;
   }
 
-  if (!k->oop_is_instance()) {
+  if (!k->is_instance_klass()) {
     *field_count_ptr = 0;
     *fields_ptr = (jfieldID*) jvmtiMalloc(0 * sizeof(jfieldID));
     return JVMTI_ERROR_NONE;
@@ -2394,7 +2564,7 @@ JvmtiEnv::GetImplementedInterfaces(oop k_mirror, jint* interface_count_ptr, jcla
     if (!(k->jvmti_class_status() & (JVMTI_CLASS_STATUS_PREPARED|JVMTI_CLASS_STATUS_ARRAY) ))
       return JVMTI_ERROR_CLASS_NOT_PREPARED;
 
-    if (!k->oop_is_instance()) {
+    if (!k->is_instance_klass()) {
       *interface_count_ptr = 0;
       *interfaces_ptr = (jclass*) jvmtiMalloc(0 * sizeof(jclass));
       return JVMTI_ERROR_NONE;
@@ -2528,7 +2698,7 @@ JvmtiEnv::IsArrayClass(oop k_mirror, jboolean* is_array_class_ptr) {
     bool result = false;
     if (!java_lang_Class::is_primitive(k_mirror)) {
       Klass* k = java_lang_Class::as_Klass(k_mirror);
-      if (k != NULL && k->oop_is_array()) {
+      if (k != NULL && k->is_array_klass()) {
         result = true;
       }
     }
@@ -2576,10 +2746,10 @@ JvmtiEnv::GetSourceDebugExtension(oop k_mirror, char** source_debug_extension_pt
     }
     Klass* k = java_lang_Class::as_Klass(k_mirror);
     NULL_CHECK(k, JVMTI_ERROR_INVALID_CLASS);
-    if (!k->oop_is_instance()) {
+    if (!k->is_instance_klass()) {
       return JVMTI_ERROR_ABSENT_INFORMATION;
     }
-    char* sde = InstanceKlass::cast(k)->source_debug_extension();
+    const char* sde = InstanceKlass::cast(k)->source_debug_extension();
     NULL_CHECK(sde, JVMTI_ERROR_ABSENT_INFORMATION);
 
     {
@@ -3064,7 +3234,7 @@ JvmtiEnv::RawMonitorEnter(JvmtiRawMonitor * rmonitor) {
     // in thread.cpp.
     JvmtiPendingMonitors::enter(rmonitor);
   } else {
-    int r;
+    int r = 0;
     Thread* thread = Thread::current();
 
     if (thread->is_Java_thread()) {
@@ -3127,7 +3297,7 @@ JvmtiEnv::RawMonitorExit(JvmtiRawMonitor * rmonitor) {
       err = JVMTI_ERROR_NOT_MONITOR_OWNER;
     }
   } else {
-    int r;
+    int r = 0;
     Thread* thread = Thread::current();
 
     if (thread->is_Java_thread()) {
@@ -3161,7 +3331,7 @@ JvmtiEnv::RawMonitorExit(JvmtiRawMonitor * rmonitor) {
 // rmonitor - pre-checked for validity
 jvmtiError
 JvmtiEnv::RawMonitorWait(JvmtiRawMonitor * rmonitor, jlong millis) {
-  int r;
+  int r = 0;
   Thread* thread = Thread::current();
 
   if (thread->is_Java_thread()) {
@@ -3220,7 +3390,7 @@ JvmtiEnv::RawMonitorWait(JvmtiRawMonitor * rmonitor, jlong millis) {
 // rmonitor - pre-checked for validity
 jvmtiError
 JvmtiEnv::RawMonitorNotify(JvmtiRawMonitor * rmonitor) {
-  int r;
+  int r = 0;
   Thread* thread = Thread::current();
 
   if (thread->is_Java_thread()) {
@@ -3251,7 +3421,7 @@ JvmtiEnv::RawMonitorNotify(JvmtiRawMonitor * rmonitor) {
 // rmonitor - pre-checked for validity
 jvmtiError
 JvmtiEnv::RawMonitorNotifyAll(JvmtiRawMonitor * rmonitor) {
-  int r;
+  int r = 0;
   Thread* thread = Thread::current();
 
   if (thread->is_Java_thread()) {
@@ -3428,28 +3598,35 @@ jvmtiError
 JvmtiEnv::GetSystemProperties(jint* count_ptr, char*** property_ptr) {
   jvmtiError err = JVMTI_ERROR_NONE;
 
-  *count_ptr = Arguments::PropertyList_count(Arguments::system_properties());
+  // Get the number of readable properties.
+  *count_ptr = Arguments::PropertyList_readable_count(Arguments::system_properties());
 
+  // Allocate memory to hold the exact number of readable properties.
   err = allocate(*count_ptr * sizeof(char *), (unsigned char **)property_ptr);
   if (err != JVMTI_ERROR_NONE) {
     return err;
   }
-  int i = 0 ;
-  for (SystemProperty* p = Arguments::system_properties(); p != NULL && i < *count_ptr; p = p->next(), i++) {
-    const char *key = p->key();
-    char **tmp_value = *property_ptr+i;
-    err = allocate((strlen(key)+1) * sizeof(char), (unsigned char**)tmp_value);
-    if (err == JVMTI_ERROR_NONE) {
-      strcpy(*tmp_value, key);
-    } else {
-      // clean up previously allocated memory.
-      for (int j=0; j<i; j++) {
-        Deallocate((unsigned char*)*property_ptr+j);
+  int readable_count = 0;
+  // Loop through the system properties until all the readable properties are found.
+  for (SystemProperty* p = Arguments::system_properties(); p != NULL && readable_count < *count_ptr; p = p->next()) {
+    if (p->is_readable()) {
+      const char *key = p->key();
+      char **tmp_value = *property_ptr+readable_count;
+      readable_count++;
+      err = allocate((strlen(key)+1) * sizeof(char), (unsigned char**)tmp_value);
+      if (err == JVMTI_ERROR_NONE) {
+        strcpy(*tmp_value, key);
+      } else {
+        // clean up previously allocated memory.
+        for (int j=0; j<readable_count; j++) {
+          Deallocate((unsigned char*)*property_ptr+j);
+        }
+        Deallocate((unsigned char*)property_ptr);
+        break;
       }
-      Deallocate((unsigned char*)property_ptr);
-      break;
     }
   }
+  assert(err != JVMTI_ERROR_NONE || readable_count == *count_ptr, "Bad readable property count");
   return err;
 } /* end GetSystemProperties */
 
@@ -3461,7 +3638,8 @@ JvmtiEnv::GetSystemProperty(const char* property, char** value_ptr) {
   jvmtiError err = JVMTI_ERROR_NONE;
   const char *value;
 
-  value = Arguments::PropertyList_get_value(Arguments::system_properties(), property);
+  // Return JVMTI_ERROR_NOT_AVAILABLE if property is not readable or doesn't exist.
+  value = Arguments::PropertyList_get_readable_value(Arguments::system_properties(), property);
   if (value == NULL) {
     err =  JVMTI_ERROR_NOT_AVAILABLE;
   } else {
@@ -3482,7 +3660,7 @@ JvmtiEnv::SetSystemProperty(const char* property, const char* value_ptr) {
 
   for (SystemProperty* p = Arguments::system_properties(); p != NULL; p = p->next()) {
     if (strcmp(property, p->key()) == 0) {
-      if (p->set_value((char *)value_ptr)) {
+      if (p->set_writeable_value(value_ptr)) {
         err =  JVMTI_ERROR_NONE;
       }
     }

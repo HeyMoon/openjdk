@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -84,7 +84,7 @@ class BytecodePrinter: public BytecodeClosure {
 
   // This method is called while executing the raw bytecodes, so none of
   // the adjustments that BytecodeStream performs applies.
-  void trace(methodHandle method, address bcp, uintptr_t tos, uintptr_t tos2, outputStream* st) {
+  void trace(const methodHandle& method, address bcp, uintptr_t tos, uintptr_t tos2, outputStream* st) {
     ResourceMark rm;
     if (_current_method != method()) {
       // Note 1: This code will not work as expected with true MT/MP.
@@ -126,7 +126,7 @@ class BytecodePrinter: public BytecodeClosure {
 
   // Used for Method*::print_codes().  The input bcp comes from
   // BytecodeStream, which will skip wide bytecodes.
-  void trace(methodHandle method, address bcp, outputStream* st) {
+  void trace(const methodHandle& method, address bcp, outputStream* st) {
     _current_method = method();
     ResourceMark rm;
     Bytecodes::Code code = Bytecodes::code_at(method(), bcp);
@@ -166,7 +166,7 @@ BytecodeClosure* BytecodeTracer::std_closure() {
 }
 
 
-void BytecodeTracer::trace(methodHandle method, address bcp, uintptr_t tos, uintptr_t tos2, outputStream* st) {
+void BytecodeTracer::trace(const methodHandle& method, address bcp, uintptr_t tos, uintptr_t tos2, outputStream* st) {
   if (TraceBytecodes && BytecodeCounter::counter_value() >= TraceBytecodesAt) {
     ttyLocker ttyl;  // 5065316: keep the following output coherent
     // The ttyLocker also prevents races between two threads
@@ -185,7 +185,7 @@ void BytecodeTracer::trace(methodHandle method, address bcp, uintptr_t tos, uint
   }
 }
 
-void BytecodeTracer::trace(methodHandle method, address bcp, outputStream* st) {
+void BytecodeTracer::trace(const methodHandle& method, address bcp, outputStream* st) {
   ttyLocker ttyl;  // 5065316: keep the following output coherent
   _closure->trace(method, bcp, st);
 }
@@ -264,7 +264,7 @@ bool BytecodePrinter::check_cp_cache_index(int i, int& cp_index, outputStream* s
     return true;
   }
   //climit = cache->length();  // %%% private!
-  size_t size = cache->size() * HeapWordSize;
+  size_t size = cache->size() * wordSize;
   size -= sizeof(ConstantPoolCache);
   size /= sizeof(ConstantPoolCacheEntry);
   climit = (int) size;
@@ -390,7 +390,6 @@ void BytecodePrinter::print_field_or_method(int orig_i, int i, outputStream* st)
 }
 
 
-PRAGMA_FORMAT_NONLITERAL_IGNORED_EXTERNAL
 void BytecodePrinter::print_attributes(int bci, outputStream* st) {
   // Show attributes of pre-rewritten codes
   Bytecodes::Code code = Bytecodes::java_code(raw_code());
@@ -512,15 +511,11 @@ void BytecodePrinter::print_attributes(int bci, outputStream* st) {
         }
         st->print(" %d " INT32_FORMAT " " INT32_FORMAT " ",
                       default_dest, lo, hi);
-        int first = true;
-        for (int ll = lo; ll <= hi; ll++, first = false)  {
+        const char *comma = "";
+        for (int ll = lo; ll <= hi; ll++) {
           int idx = ll - lo;
-          const char *format = first ? " %d:" INT32_FORMAT " (delta: %d)" :
-                                       ", %d:" INT32_FORMAT " (delta: %d)";
-PRAGMA_DIAG_PUSH
-PRAGMA_FORMAT_NONLITERAL_IGNORED_INTERNAL
-          st->print(format, ll, dest[idx], dest[idx]-bci);
-PRAGMA_DIAG_POP
+          st->print("%s %d:" INT32_FORMAT " (delta: %d)", comma, ll, dest[idx], dest[idx]-bci);
+          comma = ",";
         }
         st->cr();
       }
@@ -536,14 +531,10 @@ PRAGMA_DIAG_POP
           dest[i] = bci + get_int();
         };
         st->print(" %d %d ", default_dest, len);
-        bool first = true;
-        for (int ll = 0; ll < len; ll++, first = false)  {
-          const char *format = first ? " " INT32_FORMAT ":" INT32_FORMAT :
-                                       ", " INT32_FORMAT ":" INT32_FORMAT ;
-PRAGMA_DIAG_PUSH
-PRAGMA_FORMAT_NONLITERAL_IGNORED_INTERNAL
-          st->print(format, key[ll], dest[ll]);
-PRAGMA_DIAG_POP
+        const char *comma = "";
+        for (int ll = 0; ll < len; ll++)  {
+          st->print("%s " INT32_FORMAT ":" INT32_FORMAT, comma, key[ll], dest[ll]);
+          comma = ",";
         }
         st->cr();
       }

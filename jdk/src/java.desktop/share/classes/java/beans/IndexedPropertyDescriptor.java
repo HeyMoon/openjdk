@@ -152,7 +152,7 @@ public class IndexedPropertyDescriptor extends PropertyDescriptor {
      *               and the {@code value} is the automatically generated property info
      * @param bound  the flag indicating whether it is possible to treat this property as a bound property
      *
-     * @since 1.9
+     * @since 9
      */
     IndexedPropertyDescriptor(Entry<String,PropertyInfo> entry, boolean bound) {
         super(entry, bound);
@@ -393,8 +393,8 @@ public class IndexedPropertyDescriptor extends PropertyDescriptor {
     }
 
     /**
-     * Compares this <code>PropertyDescriptor</code> against the specified object.
-     * Returns true if the objects are the same. Two <code>PropertyDescriptor</code>s
+     * Compares this {@code PropertyDescriptor} against the specified object.
+     * Returns true if the objects are the same. Two {@code PropertyDescriptor}s
      * are the same if the read, write, property types, property editor and
      * flags  are equivalent.
      *

@@ -35,7 +35,7 @@ import java.io.IOException;
 /**
  * A Java virtual machine.
  *
- * <p> A <code>VirtualMachine</code> represents a Java virtual machine to which this
+ * <p> A {@code VirtualMachine} represents a Java virtual machine to which this
  * Java virtual machine has attached. The Java virtual machine to which it is
  * attached is sometimes called the <i>target virtual machine</i>, or <i>target VM</i>.
  * An application (typically a tool such as a managemet console or profiler) uses a
@@ -47,7 +47,7 @@ import java.io.IOException;
  * with an identifier that identifies the target virtual machine. The identifier is
  * implementation-dependent but is typically the process identifier (or pid) in
  * environments where each Java virtual machine runs in its own operating system process.
- * Alternatively, a <code>VirtualMachine</code> instance is obtained by invoking the
+ * Alternatively, a {@code VirtualMachine} instance is obtained by invoking the
  * {@link #attach(VirtualMachineDescriptor) attach} method with a {@link
  * com.sun.tools.attach.VirtualMachineDescriptor VirtualMachineDescriptor} obtained
  * from the list of virtual machine descriptors returned by the {@link #list list} method.
@@ -59,14 +59,14 @@ import java.io.IOException;
  * {@link java.lang.instrument} for a detailed description on how these agents
  * are loaded and started). The {@link #loadAgentLibrary loadAgentLibrary} and
  * {@link #loadAgentPath loadAgentPath} methods are used to load agents that
- * are deployed either in a dynamic library or statically linked into the VM and make use of the <a
- * href="../../../../../../../../technotes/guides/jvmti/index.html">JVM Tools
- * Interface</a>. </p>
+ * are deployed either in a dynamic library or statically linked into the VM and
+ * make use of the <a href="{@docRoot}/../specs/jvmti.html">JVM Tools Interface</a>.
+ * </p>
  *
  * <p> In addition to loading agents a VirtualMachine provides read access to the
  * {@link java.lang.System#getProperties() system properties} in the target VM.
  * This can be useful in some environments where properties such as
- * <code>java.home</code>, <code>os.name</code>, or <code>os.arch</code> are
+ * {@code java.home}, {@code os.name}, or {@code os.arch} are
  * used to construct the path to agent that will be loaded into the target VM.
  *
  * <p> The following example demonstrates how VirtualMachine may be used:</p>
@@ -87,7 +87,7 @@ import java.io.IOException;
  * </pre>
  *
  * <p> In this example we attach to a Java virtual machine that is identified by
- * the process identifier <code>2177</code>. Then the JMX management agent is
+ * the process identifier {@code 2177}. Then the JMX management agent is
  * started in the target process using the supplied arguments. Finally, the
  * client detaches from the target VM. </p>
  *
@@ -96,7 +96,6 @@ import java.io.IOException;
  * @since 1.6
  */
 
-@jdk.Exported
 public abstract class VirtualMachine {
     private AttachProvider provider;
     private String id;
@@ -111,7 +110,7 @@ public abstract class VirtualMachine {
      *          The abstract identifier that identifies the Java virtual machine.
      *
      * @throws  NullPointerException
-     *          If <code>provider</code> or <code>id</code> is <code>null</code>.
+     *          If {@code provider} or {@code id} is {@code null}.
      */
     protected VirtualMachine(AttachProvider provider, String id) {
         if (provider == null) {
@@ -160,10 +159,10 @@ public abstract class VirtualMachine {
      * attachVirtualMachine} method in turn. If a provider successfully
      * attaches then the iteration terminates, and the VirtualMachine created
      * by the provider that successfully attached is returned by this method.
-     * If the <code>attachVirtualMachine</code> method of all providers throws
+     * If the {@code attachVirtualMachine} method of all providers throws
      * {@link com.sun.tools.attach.AttachNotSupportedException AttachNotSupportedException}
-     * then this method also throws <code>AttachNotSupportedException</code>.
-     * This means that <code>AttachNotSupportedException</code> is thrown when
+     * then this method also throws {@code AttachNotSupportedException}.
+     * This means that {@code AttachNotSupportedException} is thrown when
      * the identifier provided to this method is invalid, or the identifier
      * corresponds to a Java virtual machine that does not exist, or none
      * of the providers can attach to it. This exception is also thrown if
@@ -178,19 +177,19 @@ public abstract class VirtualMachine {
      * @throws  SecurityException
      *          If a security manager has been installed and it denies
      *          {@link com.sun.tools.attach.AttachPermission AttachPermission}
-     *          <tt>("attachVirtualMachine")</tt>, or another permission
+     *          {@code ("attachVirtualMachine")}, or another permission
      *          required by the implementation.
      *
      * @throws  AttachNotSupportedException
-     *          If the <code>attachVirtualmachine</code> method of all installed
-     *          providers throws <code>AttachNotSupportedException</code>, or
+     *          If the {@code attachVirtualmachine} method of all installed
+     *          providers throws {@code AttachNotSupportedException}, or
      *          there aren't any providers installed.
      *
      * @throws  IOException
      *          If an I/O error occurs
      *
      * @throws  NullPointerException
-     *          If <code>id</code> is <code>null</code>.
+     *          If {@code id} is {@code null}.
      */
     public static VirtualMachine attach(String id)
         throws AttachNotSupportedException, IOException
@@ -231,18 +230,18 @@ public abstract class VirtualMachine {
      * @throws  SecurityException
      *          If a security manager has been installed and it denies
      *          {@link com.sun.tools.attach.AttachPermission AttachPermission}
-     *          <tt>("attachVirtualMachine")</tt>, or another permission
+     *          {@code ("attachVirtualMachine")}, or another permission
      *          required by the implementation.
      *
      * @throws  AttachNotSupportedException
-     *          If the attach provider's <code>attachVirtualmachine</code>
-     *          throws <code>AttachNotSupportedException</code>.
+     *          If the attach provider's {@code attachVirtualmachine}
+     *          throws {@code AttachNotSupportedException}.
      *
      * @throws  IOException
      *          If an I/O error occurs
      *
      * @throws  NullPointerException
-     *          If <code>vmd</code> is <code>null</code>.
+     *          If {@code vmd} is {@code null}.
      */
     public static VirtualMachine attach(VirtualMachineDescriptor vmd)
         throws AttachNotSupportedException, IOException
@@ -259,7 +258,7 @@ public abstract class VirtualMachine {
      * loadAgent} for example) is in progress when this method is invoked then
      * the behaviour is implementation dependent. In other words, it is
      * implementation specific if the operation completes or throws
-     * <tt>IOException</tt>.
+     * {@code IOException}.
      *
      * <p> If already detached from the virtual machine then invoking this
      * method has no effect. </p>
@@ -290,32 +289,32 @@ public abstract class VirtualMachine {
     /**
      * Loads an agent library.
      *
-     * <p> A <a href="../../../../../../../../technotes/guides/jvmti/index.html">JVM
-     * TI</a> client is called an <i>agent</i>. It is developed in a native language.
+     * <p> A <a href="{@docRoot}/../specs/jvmti.html">JVM TI</a>
+     * client is called an <i>agent</i>. It is developed in a native language.
      * A JVM TI agent is deployed in a platform specific manner but it is typically the
      * platform equivalent of a dynamic library. Alternatively, it may be statically linked into the VM.
      * This method causes the given agent library to be loaded into the target
      * VM (if not already loaded or if not statically linked into the VM).
-     * It then causes the target VM to invoke the <code>Agent_OnAttach</code> function
-     * or, for a statically linked agent named 'L', the <code>Agent_OnAttach_L</code> function
+     * It then causes the target VM to invoke the {@code Agent_OnAttach} function
+     * or, for a statically linked agent named 'L', the {@code Agent_OnAttach_L} function
      * as specified in the
-     * <a href="../../../../../../../../technotes/guides/jvmti/index.html"> JVM Tools
-     * Interface</a> specification. Note that the <code>Agent_OnAttach[_L]</code>
+     * <a href="{@docRoot}/../specs/jvmti.html">JVM Tools Interface</a> specification.
+     * Note that the {@code Agent_OnAttach[_L]}
      * function is invoked even if the agent library was loaded prior to invoking
      * this method.
      *
      * <p> The agent library provided is the name of the agent library. It is interpreted
      * in the target virtual machine in an implementation-dependent manner. Typically an
      * implementation will expand the library name into an operating system specific file
-     * name. For example, on UNIX systems, the name <tt>L</tt> might be expanded to
-     * <tt>libL.so</tt>, and located using the search path specified by the
-     * <tt>LD_LIBRARY_PATH</tt> environment variable. If the agent named 'L' is
+     * name. For example, on UNIX systems, the name {@code L} might be expanded to
+     * {@code libL.so}, and located using the search path specified by the
+     * {@code LD_LIBRARY_PATH} environment variable. If the agent named 'L' is
      * statically linked into the VM then the VM must export a function named
-     * <code>Agent_OnAttach_L</code>.</p>
+     * {@code Agent_OnAttach_L}.</p>
      *
-     * <p> If the <code>Agent_OnAttach[_L]</code> function in the agent library returns
+     * <p> If the {@code Agent_OnAttach[_L]} function in the agent library returns
      * an error then an {@link com.sun.tools.attach.AgentInitializationException} is
-     * thrown. The return value from the <code>Agent_OnAttach[_L]</code> can then be
+     * thrown. The return value from the {@code Agent_OnAttach[_L]} can then be
      * obtained by invoking the {@link
      * com.sun.tools.attach.AgentInitializationException#returnValue() returnValue}
      * method on the exception. </p>
@@ -324,8 +323,8 @@ public abstract class VirtualMachine {
      *          The name of the agent library.
      *
      * @param   options
-     *          The options to provide to the <code>Agent_OnAttach[_L]</code>
-     *          function (can be <code>null</code>).
+     *          The options to provide to the {@code Agent_OnAttach[_L]}
+     *          function (can be {@code null}).
      *
      * @throws  AgentLoadException
      *          If the agent library does not exist, the agent library is not
@@ -333,13 +332,13 @@ public abstract class VirtualMachine {
      *          loaded for another reason.
      *
      * @throws  AgentInitializationException
-     *          If the <code>Agent_OnAttach[_L]</code> function returns an error.
+     *          If the {@code Agent_OnAttach[_L]} function returns an error.
      *
      * @throws  IOException
      *          If an I/O error occurs
      *
      * @throws  NullPointerException
-     *          If <code>agentLibrary</code> is <code>null</code>.
+     *          If {@code agentLibrary} is {@code null}.
      *
      * @see     com.sun.tools.attach.AgentInitializationException#returnValue()
      */
@@ -351,9 +350,9 @@ public abstract class VirtualMachine {
      *
      * <p> This convenience method works as if by invoking:
      *
-     * <blockquote><tt>
+     * <blockquote><code>
      * {@link #loadAgentLibrary(String, String) loadAgentLibrary}(agentLibrary,&nbsp;null);
-     * </tt></blockquote>
+     * </code></blockquote>
      *
      * @param   agentLibrary
      *          The name of the agent library.
@@ -364,13 +363,13 @@ public abstract class VirtualMachine {
      *          loaded for another reason.
      *
      * @throws  AgentInitializationException
-     *          If the <code>Agent_OnAttach[_L]</code> function returns an error.
+     *          If the {@code Agent_OnAttach[_L]} function returns an error.
      *
      * @throws  IOException
      *          If an I/O error occurs
      *
      * @throws  NullPointerException
-     *          If <code>agentLibrary</code> is <code>null</code>.
+     *          If {@code agentLibrary} is {@code null}.
      */
     public void loadAgentLibrary(String agentLibrary)
         throws AgentLoadException, AgentInitializationException, IOException
@@ -381,26 +380,25 @@ public abstract class VirtualMachine {
     /**
      * Load a native agent library by full pathname.
      *
-     * <p> A <a href="../../../../../../../../technotes/guides/jvmti/index.html">JVM
-     * TI</a> client is called an <i>agent</i>. It is developed in a native language.
+     * <p> A <a href="{@docRoot}/../specs/jvmti.html">JVM TI</a>
+     * client is called an <i>agent</i>. It is developed in a native language.
      * A JVM TI agent is deployed in a platform specific manner but it is typically the
      * platform equivalent of a dynamic library. Alternatively, the native
      * library specified by the agentPath parameter may be statically
      * linked with the VM. The parsing of the agentPath parameter into
      * a statically linked library name is done in a platform
      * specific manner in the VM. For example, in UNIX, an agentPath parameter
-     * of <code>/a/b/libL.so</code> would name a library 'L'.
+     * of {@code /a/b/libL.so} would name a library 'L'.
      *
      * See the JVM TI Specification for more details.
      *
      * This method causes the given agent library to be loaded into the target
      * VM (if not already loaded or if not statically linked into the VM).
-     * It then causes the target VM to invoke the <code>Agent_OnAttach</code>
+     * It then causes the target VM to invoke the {@code Agent_OnAttach}
      * function or, for a statically linked agent named 'L', the
-     * <code>Agent_OnAttach_L</code> function as specified in the
-     * <a href="../../../../../../../../technotes/guides/jvmti/index.html"> JVM Tools
-     * Interface</a> specification.
-     * Note that the <code>Agent_OnAttach[_L]</code>
+     * {@code Agent_OnAttach_L} function as specified in the
+     * <a href="{@docRoot}/../specs/jvmti.html">JVM Tools Interface</a> specification.
+     * Note that the {@code Agent_OnAttach[_L]}
      * function is invoked even if the agent library was loaded prior to invoking
      * this method.
      *
@@ -408,9 +406,9 @@ public abstract class VirtualMachine {
      * agent library. Unlike {@link #loadAgentLibrary loadAgentLibrary}, the library name
      * is not expanded in the target virtual machine. </p>
      *
-     * <p> If the <code>Agent_OnAttach[_L]</code> function in the agent library returns
+     * <p> If the {@code Agent_OnAttach[_L]} function in the agent library returns
      * an error then an {@link com.sun.tools.attach.AgentInitializationException} is
-     * thrown. The return value from the <code>Agent_OnAttach[_L]</code> can then be
+     * thrown. The return value from the {@code Agent_OnAttach[_L]} can then be
      * obtained by invoking the {@link
      * com.sun.tools.attach.AgentInitializationException#returnValue() returnValue}
      * method on the exception. </p>
@@ -419,8 +417,8 @@ public abstract class VirtualMachine {
      *          The full path of the agent library.
      *
      * @param   options
-     *          The options to provide to the <code>Agent_OnAttach[_L]</code>
-     *          function (can be <code>null</code>).
+     *          The options to provide to the {@code Agent_OnAttach[_L]}
+     *          function (can be {@code null}).
      *
      * @throws  AgentLoadException
      *          If the agent library does not exist, the agent library is not
@@ -428,13 +426,13 @@ public abstract class VirtualMachine {
      *          loaded for another reason.
      *
      * @throws  AgentInitializationException
-     *          If the <code>Agent_OnAttach[_L]</code> function returns an error.
+     *          If the {@code Agent_OnAttach[_L]} function returns an error.
      *
      * @throws  IOException
      *          If an I/O error occurs
      *
      * @throws  NullPointerException
-     *          If <code>agentPath</code> is <code>null</code>.
+     *          If {@code agentPath} is {@code null}.
      *
      * @see     com.sun.tools.attach.AgentInitializationException#returnValue()
      */
@@ -446,9 +444,9 @@ public abstract class VirtualMachine {
      *
      * <p> This convenience method works as if by invoking:
      *
-     * <blockquote><tt>
+     * <blockquote><code>
      * {@link #loadAgentPath(String, String) loadAgentPath}(agentLibrary,&nbsp;null);
-     * </tt></blockquote>
+     * </code></blockquote>
      *
      * @param   agentPath
      *          The full path to the agent library.
@@ -459,13 +457,13 @@ public abstract class VirtualMachine {
      *          loaded for another reason.
      *
      * @throws  AgentInitializationException
-     *          If the <code>Agent_OnAttach[_L]</code> function returns an error.
+     *          If the {@code Agent_OnAttach[_L]} function returns an error.
      *
      * @throws  IOException
      *          If an I/O error occurs
      *
      * @throws  NullPointerException
-     *          If <code>agentPath</code> is <code>null</code>.
+     *          If {@code agentPath} is {@code null}.
      */
     public void loadAgentPath(String agentPath)
        throws AgentLoadException, AgentInitializationException, IOException
@@ -482,29 +480,29 @@ public abstract class VirtualMachine {
      * machine where it is interpreted. The target virtual machine attempts to start
      * the agent as specified by the {@link java.lang.instrument} specification.
      * That is, the specified JAR file is added to the system class path (of the target
-     * virtual machine), and the <code>agentmain</code> method of the agent class, specified
-     * by the <code>Agent-Class</code> attribute in the JAR manifest, is invoked. This
-     * method completes when the <code>agentmain</code> method completes.
+     * virtual machine), and the {@code agentmain} method of the agent class, specified
+     * by the {@code Agent-Class} attribute in the JAR manifest, is invoked. This
+     * method completes when the {@code agentmain} method completes.
      *
      * @param   agent
      *          Path to the JAR file containing the agent.
      *
      * @param   options
-     *          The options to provide to the agent's <code>agentmain</code>
-     *          method (can be <code>null</code>).
+     *          The options to provide to the agent's {@code agentmain}
+     *          method (can be {@code null}).
      *
      * @throws  AgentLoadException
      *          If the agent does not exist, or cannot be started in the manner
      *          specified in the {@link java.lang.instrument} specification.
      *
      * @throws  AgentInitializationException
-     *          If the <code>agentmain</code> throws an exception
+     *          If the {@code agentmain} throws an exception
      *
      * @throws  IOException
      *          If an I/O error occurs
      *
      * @throws  NullPointerException
-     *          If <code>agent</code> is <code>null</code>.
+     *          If {@code agent} is {@code null}.
      */
     public abstract void loadAgent(String agent, String options)
         throws AgentLoadException, AgentInitializationException, IOException;
@@ -514,9 +512,9 @@ public abstract class VirtualMachine {
      *
      * <p> This convenience method works as if by invoking:
      *
-     * <blockquote><tt>
+     * <blockquote><code>
      * {@link #loadAgent(String, String) loadAgent}(agent,&nbsp;null);
-     * </tt></blockquote>
+     * </code></blockquote>
      *
      * @param   agent
      *          Path to the JAR file containing the agent.
@@ -526,13 +524,13 @@ public abstract class VirtualMachine {
      *          specified in the {@link java.lang.instrument} specification.
      *
      * @throws  AgentInitializationException
-     *          If the <code>agentmain</code> throws an exception
+     *          If the {@code agentmain} throws an exception
      *
      * @throws  IOException
      *          If an I/O error occurs
      *
      * @throws  NullPointerException
-     *          If <code>agent</code> is <code>null</code>.
+     *          If {@code agent} is {@code null}.
      */
     public void loadAgent(String agent)
         throws AgentLoadException, AgentInitializationException, IOException
@@ -544,16 +542,16 @@ public abstract class VirtualMachine {
      * Returns the current system properties in the target virtual machine.
      *
      * <p> This method returns the system properties in the target virtual
-     * machine. Properties whose key or value is not a <tt>String</tt> are
+     * machine. Properties whose key or value is not a {@code String} are
      * omitted. The method is approximately equivalent to the invocation of the
      * method {@link java.lang.System#getProperties System.getProperties}
      * in the target virtual machine except that properties with a key or
-     * value that is not a <tt>String</tt> are not included.
+     * value that is not a {@code String} are not included.
      *
      * <p> This method is typically used to decide which agent to load into
      * the target virtual machine with {@link #loadAgent loadAgent}, or
      * {@link #loadAgentLibrary loadAgentLibrary}. For example, the
-     * <code>java.home</code> or <code>user.dir</code> properties might be
+     * {@code java.home} or {@code user.dir} properties might be
      * use to create the path to the agent library or JAR file.
      *
      * @return  The system properties
@@ -586,7 +584,7 @@ public abstract class VirtualMachine {
      * agent might create an agent property for its transport address.
      *
      * <p> This method returns the agent properties whose key and value is a
-     * <tt>String</tt>. Properties whose key or value is not a <tt>String</tt>
+     * {@code String}. Properties whose key or value is not a {@code String}
      * are omitted. If there are no agent properties maintained in the target
      * virtual machine then an empty property list is returned.
      *
@@ -612,9 +610,9 @@ public abstract class VirtualMachine {
      * way as on the command line, you need to specify at least the
      * {@code com.sun.management.jmxremote.port} property.
      *
-     * <p> See the online documentation for <a
-     * href="../../../../../../../../technotes/guides/management/agent.html">
-     * Monitoring and Management Using JMX Technology</a> for further details.
+     * <p> See the online documentation for
+     * {@extLink monitoring_and_management_using_jmx_technology
+     * Monitoring and Management Using JMX Technology} for further details.
      *
      * @param   agentProperties
      *          A Properties object containing the configuration properties
@@ -643,9 +641,9 @@ public abstract class VirtualMachine {
     /**
      * Starts the local JMX management agent in the target virtual machine.
      *
-     * <p> See the online documentation for <a
-     * href="../../../../../../../../technotes/guides/management/agent.html">
-     * Monitoring and Management Using JMX Technology</a> for further details.
+     * <p> See the online documentation for
+     * {@extLink monitoring_and_management_using_jmx_technology
+     * Monitoring and Management Using JMX Technology} for further details.
      *
      * @return  The String representation of the local connector's service address.
      *          The value can be parsed by the
@@ -686,7 +684,7 @@ public abstract class VirtualMachine {
      * Tests this VirtualMachine for equality with another object.
      *
      * <p> If the given object is not a VirtualMachine then this
-     * method returns <tt>false</tt>. For two VirtualMachines to
+     * method returns {@code false}. For two VirtualMachines to
      * be considered equal requires that they both reference the same
      * provider, and their {@link VirtualMachineDescriptor#id() identifiers} are equal. </p>
      *
@@ -695,7 +693,7 @@ public abstract class VirtualMachine {
      *
      * @param   ob   The object to which this object is to be compared
      *
-     * @return  <tt>true</tt> if, and only if, the given object is
+     * @return  {@code true} if, and only if, the given object is
      *                a VirtualMachine that is equal to this
      *                VirtualMachine.
      */
@@ -715,7 +713,7 @@ public abstract class VirtualMachine {
     }
 
     /**
-     * Returns the string representation of the <code>VirtualMachine</code>.
+     * Returns the string representation of the {@code VirtualMachine}.
      */
     public String toString() {
         return provider.toString() + ": " + id;

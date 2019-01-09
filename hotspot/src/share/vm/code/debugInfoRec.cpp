@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,10 +33,14 @@
 // We keep track of these chunks in order to detect
 // repetition and enable sharing.
 class DIR_Chunk {
-  friend class DebugInformationRecorder;
+private:
   int  _offset; // location in the stream of this scope
   int  _length; // number of bytes in the stream
   int  _hash;   // hash of stream bytes (for quicker reuse)
+  DebugInformationRecorder* _DIR;
+
+public:
+  int offset() { return _offset; }
 
   void* operator new(size_t ignore, DebugInformationRecorder* dir) throw() {
     assert(ignore == sizeof(DIR_Chunk), "");
@@ -51,6 +55,7 @@ class DIR_Chunk {
   DIR_Chunk(int offset, int length, DebugInformationRecorder* dir) {
     _offset = offset;
     _length = length;
+    _DIR = dir;
     unsigned int hash = 0;
     address p = dir->stream()->buffer() + _offset;
     for (int i = 0; i < length; i++) {
@@ -76,6 +81,23 @@ class DIR_Chunk {
       }
     }
     return NULL;
+  }
+
+  static int compare(DIR_Chunk* const & a, DIR_Chunk* const & b) {
+    if (b->_hash > a->_hash) {
+      return 1;
+    }
+    if (b->_hash < a->_hash) {
+      return -1;
+    }
+    if (b->_length > a->_length) {
+      return 1;
+    }
+    if (b->_length < a->_length) {
+      return -1;
+    }
+    address buf = a->_DIR->stream()->buffer();
+    return memcmp(buf + b->_offset, buf + a->_offset, a->_length);
   }
 };
 
@@ -113,7 +135,6 @@ DebugInformationRecorder::DebugInformationRecorder(OopRecorder* oop_recorder)
   _oop_recorder = oop_recorder;
 
   _all_chunks    = new GrowableArray<DIR_Chunk*>(300);
-  _shared_chunks = new GrowableArray<DIR_Chunk*>(30);
   _next_chunk = _next_chunk_limit = NULL;
 
   add_new_pc_offset(PcDesc::lower_offset_limit);  // sentinel record
@@ -235,11 +256,6 @@ struct dir_stats_struct {
 
 
 int DebugInformationRecorder::find_sharable_decode_offset(int stream_offset) {
-  // Only pull this trick if non-safepoint recording
-  // is enabled, for now.
-  if (!recording_non_safepoints())
-    return serialized_null;
-
   NOT_PRODUCT(++dir_stats.chunks_queried);
   int stream_length = stream()->position() - stream_offset;
   assert(stream_offset != serialized_null, "should not be null");
@@ -247,42 +263,28 @@ int DebugInformationRecorder::find_sharable_decode_offset(int stream_offset) {
 
   DIR_Chunk* ns = new(this) DIR_Chunk(stream_offset, stream_length, this);
 
-  // Look in previously shared scopes first:
-  DIR_Chunk* ms = ns->find_match(_shared_chunks, 0, this);
-  if (ms != NULL) {
-    NOT_PRODUCT(++dir_stats.chunks_reshared);
-    assert(ns+1 == _next_chunk, "");
-    _next_chunk = ns;
-    return ms->_offset;
-  }
-
-  // Look in recently encountered scopes next:
-  const int MAX_RECENT = 50;
-  int start_index = _all_chunks->length() - MAX_RECENT;
-  if (start_index < 0)  start_index = 0;
-  ms = ns->find_match(_all_chunks, start_index, this);
-  if (ms != NULL) {
+  DIR_Chunk* match = _all_chunks->insert_sorted<DIR_Chunk::compare>(ns);
+  if (match != ns) {
+    // Found an existing chunk
     NOT_PRODUCT(++dir_stats.chunks_shared);
-    // Searching in _all_chunks is limited to a window,
-    // but searching in _shared_chunks is unlimited.
-    _shared_chunks->append(ms);
     assert(ns+1 == _next_chunk, "");
     _next_chunk = ns;
-    return ms->_offset;
+    return match->offset();
+  } else {
+    // Inserted this chunk, so nothing to do
+    return serialized_null;
   }
-
-  // No match.  Add this guy to the list, in hopes of future shares.
-  _all_chunks->append(ns);
-  return serialized_null;
 }
 
 
 // must call add_safepoint before: it sets PcDesc and this routine uses
 // the last PcDesc set
 void DebugInformationRecorder::describe_scope(int         pc_offset,
+                                              const methodHandle& methodH,
                                               ciMethod*   method,
                                               int         bci,
                                               bool        reexecute,
+                                              bool        rethrow_exception,
                                               bool        is_method_handle_invoke,
                                               bool        return_oop,
                                               DebugToken* locals,
@@ -298,6 +300,7 @@ void DebugInformationRecorder::describe_scope(int         pc_offset,
 
   // Record flags into pcDesc.
   last_pd->set_should_reexecute(reexecute);
+  last_pd->set_rethrow_exception(rethrow_exception);
   last_pd->set_is_method_handle_invoke(is_method_handle_invoke);
   last_pd->set_return_oop(return_oop);
 
@@ -305,13 +308,20 @@ void DebugInformationRecorder::describe_scope(int         pc_offset,
   stream()->write_int(sender_stream_offset);
 
   // serialize scope
-  Metadata* method_enc = (method == NULL)? NULL: method->constant_encoding();
-  stream()->write_int(oop_recorder()->find_index(method_enc));
+  Metadata* method_enc;
+  if (method != NULL) {
+    method_enc = method->constant_encoding();
+  } else if (methodH.not_null()) {
+    method_enc = methodH();
+  } else {
+    method_enc = NULL;
+  }
+  int method_enc_index = oop_recorder()->find_index(method_enc);
+  stream()->write_int(method_enc_index);
   stream()->write_bci(bci);
   assert(method == NULL ||
          (method->is_native() && bci == 0) ||
          (!method->is_native() && 0 <= bci && bci < method->code_size()) ||
-         (method->is_compiled_lambda_form() && bci == -99) ||  // this might happen in C1
          bci == -1, "illegal bci");
 
   // serialize the locals/expressions/monitors
@@ -338,7 +348,7 @@ void DebugInformationRecorder::dump_object_pool(GrowableArray<ScopeValue*>* obje
   PcDesc* last_pd = &_pcs[_pcs_length-1];
   if (objects != NULL) {
     for (int i = objects->length() - 1; i >= 0; i--) {
-      ((ObjectValue*) objects->at(i))->set_visited(false);
+      objects->at(i)->as_ObjectValue()->set_visited(false);
     }
   }
   int offset = serialize_scope_values(objects);

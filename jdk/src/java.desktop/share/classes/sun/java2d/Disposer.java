@@ -26,7 +26,6 @@
 package sun.java2d;
 
 import sun.awt.util.ThreadGroupUtils;
-import sun.misc.ManagedLocalsThread;
 
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
@@ -85,7 +84,7 @@ public class Disposer implements Runnable {
         AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
             String name = "Java2D Disposer";
             ThreadGroup rootTG = ThreadGroupUtils.getRootThreadGroup();
-            Thread t = new ManagedLocalsThread(rootTG, disposerInstance, name);
+            Thread t = new Thread(rootTG, disposerInstance, name, 0, false);
             t.setContextClassLoader(null);
             t.setDaemon(true);
             t.setPriority(Thread.MAX_PRIORITY);
@@ -205,8 +204,8 @@ public class Disposer implements Runnable {
         int freed = 0;
         int deferred = 0;
         try {
-            while ((obj = queue.poll()) != null
-                   && freed < 10000 && deferred < 100) {
+            while ( freed < 10000 && deferred < 100 &&
+                    (obj = queue.poll()) != null ) {
                 freed++;
                 ((Reference)obj).clear();
                 DisposerRecord rec = records.remove(obj);

@@ -34,6 +34,10 @@
  */
 
 package java.util.concurrent.atomic;
+
+import static java.lang.Double.doubleToRawLongBits;
+import static java.lang.Double.longBitsToDouble;
+
 import java.io.Serializable;
 import java.util.function.DoubleBinaryOperator;
 
@@ -90,7 +94,7 @@ public class DoubleAccumulator extends Striped64 implements Serializable {
     public DoubleAccumulator(DoubleBinaryOperator accumulatorFunction,
                              double identity) {
         this.function = accumulatorFunction;
-        base = this.identity = Double.doubleToRawLongBits(identity);
+        base = this.identity = doubleToRawLongBits(identity);
     }
 
     /**
@@ -100,18 +104,19 @@ public class DoubleAccumulator extends Striped64 implements Serializable {
      */
     public void accumulate(double x) {
         Cell[] as; long b, v, r; int m; Cell a;
-        if ((as = cells) != null ||
-            (r = Double.doubleToRawLongBits
-             (function.applyAsDouble
-              (Double.longBitsToDouble(b = base), x))) != b  && !casBase(b, r)) {
+        if ((as = cells) != null
+            || ((r = doubleToRawLongBits
+                (function.applyAsDouble(longBitsToDouble(b = base), x))) != b
+                && !casBase(b, r))) {
             boolean uncontended = true;
-            if (as == null || (m = as.length - 1) < 0 ||
-                (a = as[getProbe() & m]) == null ||
-                !(uncontended =
-                  (r = Double.doubleToRawLongBits
-                   (function.applyAsDouble
-                    (Double.longBitsToDouble(v = a.value), x))) == v ||
-                  a.cas(v, r)))
+            if (as == null
+                || (m = as.length - 1) < 0
+                || (a = as[getProbe() & m]) == null
+                || !(uncontended =
+                     ((r = doubleToRawLongBits
+                       (function.applyAsDouble
+                        (longBitsToDouble(v = a.value), x))) == v)
+                     || a.cas(v, r)))
                 doubleAccumulate(x, function, uncontended);
         }
     }
@@ -126,14 +131,13 @@ public class DoubleAccumulator extends Striped64 implements Serializable {
      * @return the current value
      */
     public double get() {
-        Cell[] as = cells; Cell a;
-        double result = Double.longBitsToDouble(base);
+        Cell[] as = cells;
+        double result = longBitsToDouble(base);
         if (as != null) {
-            for (int i = 0; i < as.length; ++i) {
-                if ((a = as[i]) != null)
+            for (Cell a : as)
+                if (a != null)
                     result = function.applyAsDouble
-                        (result, Double.longBitsToDouble(a.value));
-            }
+                        (result, longBitsToDouble(a.value));
         }
         return result;
     }
@@ -147,13 +151,12 @@ public class DoubleAccumulator extends Striped64 implements Serializable {
      * updating.
      */
     public void reset() {
-        Cell[] as = cells; Cell a;
+        Cell[] as = cells;
         base = identity;
         if (as != null) {
-            for (int i = 0; i < as.length; ++i) {
-                if ((a = as[i]) != null)
-                    a.value = identity;
-            }
+            for (Cell a : as)
+                if (a != null)
+                    a.reset(identity);
         }
     }
 
@@ -168,14 +171,14 @@ public class DoubleAccumulator extends Striped64 implements Serializable {
      * @return the value before reset
      */
     public double getThenReset() {
-        Cell[] as = cells; Cell a;
-        double result = Double.longBitsToDouble(base);
+        Cell[] as = cells;
+        double result = longBitsToDouble(base);
         base = identity;
         if (as != null) {
-            for (int i = 0; i < as.length; ++i) {
-                if ((a = as[i]) != null) {
-                    double v = Double.longBitsToDouble(a.value);
-                    a.value = identity;
+            for (Cell a : as) {
+                if (a != null) {
+                    double v = longBitsToDouble(a.value);
+                    a.reset(identity);
                     result = function.applyAsDouble(result, v);
                 }
             }
@@ -237,21 +240,27 @@ public class DoubleAccumulator extends Striped64 implements Serializable {
          * @serial
          */
         private final double value;
+
         /**
          * The function used for updates.
          * @serial
          */
         private final DoubleBinaryOperator function;
+
         /**
-         * The identity value
+         * The identity value, represented as a long, as converted by
+         * {@link Double#doubleToRawLongBits}.  The original identity
+         * can be recovered using {@link Double#longBitsToDouble}.
          * @serial
          */
         private final long identity;
 
-        SerializationProxy(DoubleAccumulator a) {
-            function = a.function;
-            identity = a.identity;
-            value = a.get();
+        SerializationProxy(double value,
+                           DoubleBinaryOperator function,
+                           long identity) {
+            this.value = value;
+            this.function = function;
+            this.identity = identity;
         }
 
         /**
@@ -259,12 +268,12 @@ public class DoubleAccumulator extends Striped64 implements Serializable {
          * held by this proxy.
          *
          * @return a {@code DoubleAccumulator} object with initial state
-         * held by this proxy.
+         * held by this proxy
          */
         private Object readResolve() {
-            double d = Double.longBitsToDouble(identity);
+            double d = longBitsToDouble(identity);
             DoubleAccumulator a = new DoubleAccumulator(function, d);
-            a.base = Double.doubleToRawLongBits(value);
+            a.base = doubleToRawLongBits(value);
             return a;
         }
     }
@@ -279,7 +288,7 @@ public class DoubleAccumulator extends Striped64 implements Serializable {
      * representing the state of this instance
      */
     private Object writeReplace() {
-        return new SerializationProxy(this);
+        return new SerializationProxy(get(), function, identity);
     }
 
     /**

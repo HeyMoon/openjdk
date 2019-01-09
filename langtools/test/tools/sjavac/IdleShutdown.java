@@ -1,12 +1,10 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -27,21 +25,17 @@
  * @test
  * @bug 8044131
  * @summary Tests the hooks used for detecting idleness of the sjavac server.
- * @modules jdk.compiler/com.sun.tools.sjavac.server
+ * @modules jdk.compiler/com.sun.tools.javac.main
+ *          jdk.compiler/com.sun.tools.sjavac.server
  * @build Wrapper
  * @run main Wrapper IdleShutdown
  */
-import java.io.File;
-import java.net.URI;
-import java.util.Collections;
-import java.util.List;
-import java.util.Set;
+
 import java.util.concurrent.atomic.AtomicLong;
 
-import com.sun.tools.sjavac.server.CompilationResult;
+import com.sun.tools.javac.main.Main.Result;
 import com.sun.tools.sjavac.server.IdleResetSjavac;
 import com.sun.tools.sjavac.server.Sjavac;
-import com.sun.tools.sjavac.server.SysInfo;
 import com.sun.tools.sjavac.server.Terminable;
 
 
@@ -70,35 +64,14 @@ public class IdleShutdown {
         if (timeoutTimestamp.get() != -1)
             throw new AssertionError("Premature timeout detected.");
 
-        // Call various methods and wait less than TIMEOUT_MS in between
+        // Use Sjavac object and wait less than TIMEOUT_MS in between calls
         Thread.sleep(TIMEOUT_MS - 1000);
-        log("Getting sys info");
-        service.getSysInfo();
-
-        Thread.sleep(TIMEOUT_MS - 1000);
-        log("Getting sys info");
-        service.getSysInfo();
-
-        if (timeoutTimestamp.get() != -1)
-            throw new AssertionError("Premature timeout detected.");
+        log("Compiling");
+        service.compile(new String[0]);
 
         Thread.sleep(TIMEOUT_MS - 1000);
         log("Compiling");
-        service.compile("",
-                        "",
-                        new String[0],
-                        Collections.<File>emptyList(),
-                        Collections.<URI>emptySet(),
-                        Collections.<URI>emptySet());
-
-        Thread.sleep(TIMEOUT_MS - 1000);
-        log("Compiling");
-        service.compile("",
-                        "",
-                        new String[0],
-                        Collections.<File>emptyList(),
-                        Collections.<URI>emptySet(),
-                        Collections.<URI>emptySet());
+        service.compile(new String[0]);
 
         if (timeoutTimestamp.get() != -1)
             throw new AssertionError("Premature timeout detected.");
@@ -129,29 +102,16 @@ public class IdleShutdown {
 
     private static class NoopJavacService implements Sjavac {
         @Override
-        public SysInfo getSysInfo() {
+        public void shutdown() {
+        }
+        @Override
+        public Result compile(String[] args) {
             // Attempt to trigger idle timeout during a call by sleeping
             try {
                 Thread.sleep(TIMEOUT_MS + 1000);
             } catch (InterruptedException e) {
             }
-            return null;
-        }
-        @Override
-        public void shutdown() {
-        }
-        @Override
-        public CompilationResult compile(String protocolId,
-                                         String invocationId,
-                                         String[] args,
-                                         List<File> explicitSources,
-                                         Set<URI> sourcesToCompile,
-                                         Set<URI> visibleSources) {
-            return null;
-        }
-        @Override
-        public String serverSettings() {
-            return "";
+            return Result.OK;
         }
     }
 }

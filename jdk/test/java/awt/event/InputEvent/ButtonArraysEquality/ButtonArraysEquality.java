@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,9 +23,11 @@
 
 /*
   @test %I% %E%
+  @key headful
   @bug 6315717
   @summary verifies that InputEvents button masks arrays are the same
   @author Andrei Dmitriev : area=awt.event
+  @modules java.desktop/java.awt.event:open
   @run main ButtonArraysEquality
  */
 
@@ -72,7 +74,7 @@ public class ButtonArraysEquality {
 
         //check lengths: array shouldn't contain less elements then the number of buttons on a mouse
         if (buttonDownMasks.length < buttonDownMasksAPI.length){
-            throw new RuntimeException("Test failed. The lengths array is less then the number of buttons");
+            throw new RuntimeException("Test failed. The lengths array is less than the number of buttons");
         }
 
         // verify values for first three buttons

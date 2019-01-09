@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,11 +23,13 @@
  */
 
 #include "precompiled.hpp"
+#include "classfile/javaClasses.inline.hpp"
 #include "classfile/symbolTable.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/codeCache.hpp"
 #include "jvmtifiles/jvmtiEnv.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/instanceMirrorKlass.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "oops/objArrayOop.inline.hpp"
@@ -49,6 +51,7 @@
 #include "services/serviceUtil.hpp"
 #include "utilities/macros.hpp"
 #if INCLUDE_ALL_GCS
+#include "gc/g1/g1SATBCardTableModRefBS.hpp"
 #include "gc/parallel/parallelScavengeHeap.hpp"
 #endif // INCLUDE_ALL_GCS
 
@@ -144,11 +147,7 @@ class JvmtiTagHashmap : public CHeapObj<mtInternal> {
     _size_index = size_index;
     _size = initial_size;
     _entry_count = 0;
-    if (TraceJVMTIObjectTagging) {
-      _trace_threshold = initial_trace_threshold;
-    } else {
-      _trace_threshold = -1;
-    }
+    _trace_threshold = initial_trace_threshold;
     _load_factor = load_factor;
     _resize_threshold = (int)(_load_factor * _size);
     _resizing_enabled = true;
@@ -327,8 +326,7 @@ class JvmtiTagHashmap : public CHeapObj<mtInternal> {
     }
 
     _entry_count++;
-    if (trace_threshold() > 0 && entry_count() >= trace_threshold()) {
-      assert(TraceJVMTIObjectTagging, "should only get here when tracing");
+    if (log_is_enabled(Debug, jvmti, objecttagging) && entry_count() >= trace_threshold()) {
       print_memory_usage();
       compute_next_trace_threshold();
     }
@@ -407,6 +405,7 @@ void JvmtiTagHashmap::print_memory_usage() {
 
 // compute threshold for the next trace message
 void JvmtiTagHashmap::compute_next_trace_threshold() {
+  _trace_threshold = entry_count();
   if (trace_threshold() < medium_trace_threshold) {
     _trace_threshold += small_trace_threshold;
   } else {
@@ -588,7 +587,7 @@ class CallbackWrapper : public StackObj {
     _obj_tag = (_entry == NULL) ? 0 : _entry->tag();
 
     // get the class and the class's tag value
-    assert(SystemDictionary::Class_klass()->oop_is_instanceMirror(), "Is not?");
+    assert(SystemDictionary::Class_klass()->is_mirror_instance_klass(), "Is not?");
 
     _klass_tag = tag_for(tag_map, _o->klass()->java_mirror());
   }
@@ -1057,21 +1056,36 @@ static jint invoke_string_value_callback(jvmtiStringPrimitiveValueCallback cb,
   // get the string value and length
   // (string value may be offset from the base)
   int s_len = java_lang_String::length(str);
-  int s_offset = java_lang_String::offset(str);
+  bool is_latin1 = java_lang_String::is_latin1(str);
   jchar* value;
   if (s_len > 0) {
-    value = s_value->char_at_addr(s_offset);
+    if (!is_latin1) {
+      value = s_value->char_at_addr(0);
+    } else {
+      // Inflate latin1 encoded string to UTF16
+      jchar* buf = NEW_C_HEAP_ARRAY(jchar, s_len, mtInternal);
+      for (int i = 0; i < s_len; i++) {
+        buf[i] = ((jchar) s_value->byte_at(i)) & 0xff;
+      }
+      value = &buf[0];
+    }
   } else {
+    // Don't use char_at_addr(0) if length is 0
     value = (jchar*) s_value->base(T_CHAR);
   }
 
   // invoke the callback
-  return (*cb)(wrapper->klass_tag(),
-               wrapper->obj_size(),
-               wrapper->obj_tag_p(),
-               value,
-               (jint)s_len,
-               user_data);
+  jint res = (*cb)(wrapper->klass_tag(),
+                   wrapper->obj_size(),
+                   wrapper->obj_tag_p(),
+                   value,
+                   (jint)s_len,
+                   user_data);
+
+  if (is_latin1 && s_len > 0) {
+    FREE_C_HEAP_ARRAY(jchar, value);
+  }
+  return res;
 }
 
 // helper function to invoke string primitive value callback
@@ -1118,7 +1132,7 @@ static jint invoke_primitive_field_callback_for_static_fields
   Klass* klass = java_lang_Class::as_Klass(obj);
 
   // ignore classes for object and type arrays
-  if (!klass->oop_is_instance()) {
+  if (!klass->is_instance_klass()) {
     return 0;
   }
 
@@ -1521,6 +1535,14 @@ class TagObjectCollector : public JvmtiTagHashmapEntryClosure {
       if (_tags[i] == entry->tag()) {
         oop o = entry->object();
         assert(o != NULL && Universe::heap()->is_in_reserved(o), "sanity check");
+#if INCLUDE_ALL_GCS
+        if (UseG1GC) {
+          // The reference in this tag map could be the only (implicitly weak)
+          // reference to that object. If we hand it out, we need to keep it live wrt
+          // SATB marking similar to other j.l.ref.Reference referents.
+          G1SATBCardTableModRefBS::enqueue(o);
+        }
+#endif
         jobject ref = JNIHandles::make_local(JavaThread::current(), o);
         _object_results->append(ref);
         _tag_results->append((uint64_t)entry->tag());
@@ -2569,7 +2591,7 @@ class SimpleRootsClosure : public OopClosure {
       // SystemDictionary::always_strong_oops_do reports the application
       // class loader as a root. We want this root to be reported as
       // a root kind of "OTHER" rather than "SYSTEM_CLASS".
-      if (!o->is_instanceMirror()) {
+      if (!o->is_instance() || !InstanceKlass::cast(o->klass())->is_mirror_instance_klass()) {
         kind = JVMTI_HEAP_REFERENCE_OTHER;
       }
     }
@@ -2821,10 +2843,10 @@ inline bool VM_HeapWalkOperation::iterate_over_class(oop java_class) {
   int i;
   Klass* klass = java_lang_Class::as_Klass(java_class);
 
-  if (klass->oop_is_instance()) {
+  if (klass->is_instance_klass()) {
     InstanceKlass* ik = InstanceKlass::cast(klass);
 
-    // ignore the class if it's has been initialized yet
+    // Ignore the class if it hasn't been initialized yet
     if (!ik->is_linked()) {
       return true;
     }
@@ -3106,6 +3128,11 @@ inline bool VM_HeapWalkOperation::collect_stack_roots(JavaThread* java_thread,
             }
           }
 
+          // Follow oops from compiled nmethod
+          if (jvf->cb() != NULL && jvf->cb()->is_nmethod()) {
+            blk->set_context(thread_tag, tid, depth, method);
+            jvf->cb()->as_nmethod()->oops_do(blk);
+          }
         } else {
           blk->set_context(thread_tag, tid, depth, method);
           if (is_top_frame) {
@@ -3396,12 +3423,6 @@ void JvmtiTagMap::do_weak_oops(BoolObjectClosure* is_alive, OopClosure* f) {
     delayed_add = next;
   }
 
-  // stats
-  if (TraceJVMTIObjectTagging) {
-    int post_total = hashmap->_entry_count;
-    int pre_total = post_total + freed;
-
-    tty->print_cr("(%d->%d, %d freed, %d total moves)",
-        pre_total, post_total, freed, moved);
-  }
+  log_debug(jvmti, objecttagging)("(%d->%d, %d freed, %d total moves)",
+                                  hashmap->_entry_count + freed, hashmap->_entry_count, freed, moved);
 }

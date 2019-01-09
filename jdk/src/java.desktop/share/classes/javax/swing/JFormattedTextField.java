@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,8 @@ package javax.swing;
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.im.InputContext;
+import java.beans.BeanProperty;
+import java.beans.JavaBean;
 import java.io.*;
 import java.text.*;
 import java.util.*;
@@ -52,8 +54,15 @@ import javax.swing.text.*;
  * <code>JFormattedTextField</code> allows
  * configuring what action should be taken when focus is lost. The possible
  * configurations are:
- * <table summary="Possible JFormattedTextField configurations and their descriptions">
- * <tr><th><p style="text-align:left">Value</p></th><th><p style="text-align:left">Description</p></th></tr>
+ *
+ * <table class="striped">
+ * <caption>Possible JFormattedTextField configurations and their descriptions
+ * </caption>
+ * <thead>
+ * <tr><th>Value</th>
+ * <th>Description</th></tr>
+ * </thead>
+ * <tbody>
  * <tr><td>JFormattedTextField.REVERT
  *            <td>Revert the display to match that of <code>getValue</code>,
  *                possibly losing the current edit.
@@ -69,6 +78,7 @@ import javax.swing.text.*;
  *        <tr><td>JFormattedTextField.PERSIST
  *            <td>Do nothing, don't obtain a new
  *                <code>AbstractFormatter</code>, and don't update the value.
+ * </tbody>
  * </table>
  * The default is <code>JFormattedTextField.COMMIT_OR_REVERT</code>,
  * refer to {@link #setFocusLostBehavior} for more information on this.
@@ -176,6 +186,7 @@ import javax.swing.text.*;
  *
  * @since 1.4
  */
+@JavaBean
 @SuppressWarnings("serial") // Same-version serialization only
 public class JFormattedTextField extends JTextField {
     private static final String uiClassID = "FormattedTextFieldUI";
@@ -357,13 +368,13 @@ public class JFormattedTextField extends JTextField {
      * @param behavior Identifies behavior when focus is lost
      * @throws IllegalArgumentException if behavior is not one of the known
      *         values
-     * @beaninfo
-     *  enum: COMMIT         JFormattedTextField.COMMIT
-     *        COMMIT_OR_REVERT JFormattedTextField.COMMIT_OR_REVERT
-     *        REVERT         JFormattedTextField.REVERT
-     *        PERSIST        JFormattedTextField.PERSIST
-     *  description: Behavior when component loses focus
      */
+    @BeanProperty(bound = false, enumerationValues = {
+            "JFormattedTextField.COMMIT",
+            "JFormattedTextField.COMMIT_OR_REVERT",
+            "JFormattedTextField.REVERT",
+            "JFormattedTextField.PERSIST"}, description
+            = "Behavior when component loses focus")
     public void setFocusLostBehavior(int behavior) {
         if (behavior != COMMIT && behavior != COMMIT_OR_REVERT &&
             behavior != PERSIST && behavior != REVERT) {
@@ -407,12 +418,9 @@ public class JFormattedTextField extends JTextField {
      *
      * @param tf <code>AbstractFormatterFactory</code> used to lookup
      *          instances of <code>AbstractFormatter</code>
-     * @beaninfo
-     *       bound: true
-     *   attribute: visualUpdate true
-     * description: AbstractFormatterFactory, responsible for returning an
-     *              AbstractFormatter that can format the current value.
      */
+    @BeanProperty(visualUpdate = true, description
+            = "AbstractFormatterFactory, responsible for returning an AbstractFormatter that can format the current value.")
     public void setFormatterFactory(AbstractFormatterFactory tf) {
         AbstractFormatterFactory oldFactory = factory;
 
@@ -448,10 +456,6 @@ public class JFormattedTextField extends JTextField {
      *
      * @see #setFormatterFactory
      * @param format AbstractFormatter to use for formatting
-     * @beaninfo
-     *       bound: true
-     *   attribute: visualUpdate true
-     * description: TextFormatter, responsible for formatting the current value
      */
     protected void setFormatter(AbstractFormatter format) {
         AbstractFormatter oldFormat = this.format;
@@ -474,6 +478,8 @@ public class JFormattedTextField extends JTextField {
      *
      * @return AbstractFormatter used for formatting
      */
+    @BeanProperty(visualUpdate = true, description
+            = "TextFormatter, responsible for formatting the current value")
     public AbstractFormatter getFormatter() {
         return format;
     }
@@ -490,11 +496,9 @@ public class JFormattedTextField extends JTextField {
      * This is a JavaBeans bound property.
      *
      * @param value Current value to display
-     * @beaninfo
-     *       bound: true
-     *   attribute: visualUpdate true
-     * description: The value to be formatted.
      */
+    @BeanProperty(visualUpdate = true, description
+            = "The value to be formatted.")
     public void setValue(Object value) {
         if (value != null && getFormatterFactory() == null) {
             setFormatterFactory(getDefaultFormatterFactory(value));
@@ -544,11 +548,9 @@ public class JFormattedTextField extends JTextField {
      *
      * @param isValid boolean indicating if the currently edited value is
      *        valid.
-     * @beaninfo
-     *       bound: true
-     *   attribute: visualUpdate true
-     * description: True indicates the edited value is valid
      */
+    @BeanProperty(visualUpdate = true, description
+            = "True indicates the edited value is valid")
     private void setEditValid(boolean isValid) {
         if (isValid != editValid) {
             editValid = isValid;
@@ -564,6 +566,7 @@ public class JFormattedTextField extends JTextField {
      *
      * @return true if the current value being edited is valid.
      */
+    @BeanProperty(bound = false)
     public boolean isEditValid() {
         return editValid;
     }
@@ -673,6 +676,7 @@ public class JFormattedTextField extends JTextField {
      *
      * @return the command list
      */
+    @BeanProperty(bound = false)
     public Action[] getActions() {
         return TextAction.augmentList(super.getActions(), defaultActions);
     }
@@ -683,6 +687,7 @@ public class JFormattedTextField extends JTextField {
      * @return the string "FormattedTextFieldUI"
      * @see JComponent#getUIClassID
      */
+    @BeanProperty(bound = false)
     public String getUIClassID() {
         return uiClassID;
     }
@@ -695,11 +700,9 @@ public class JFormattedTextField extends JTextField {
      *
      * @param doc  the document to display/edit
      * @see #getDocument
-     * @beaninfo
-     *  description: the text document model
-     *        bound: true
-     *       expert: true
      */
+    @BeanProperty(expert = true, description
+            = "the text document model")
     public void setDocument(Document doc) {
         if (documentListener != null && getDocument() != null) {
             getDocument().removeDocumentListener(documentListener);
@@ -860,7 +863,7 @@ public class JFormattedTextField extends JTextField {
      * doesn't have focus.
      * @since 1.4
      */
-    public static abstract class AbstractFormatterFactory {
+    public abstract static class AbstractFormatterFactory {
         /**
          * Returns an <code>AbstractFormatter</code> that can handle formatting
          * of the passed in <code>JFormattedTextField</code>.
@@ -903,7 +906,7 @@ public class JFormattedTextField extends JTextField {
      * at the appropriate times.
      * @since 1.4
      */
-    public static abstract class AbstractFormatter implements Serializable {
+    public abstract static class AbstractFormatter implements Serializable {
         private JFormattedTextField ftf;
 
         /**

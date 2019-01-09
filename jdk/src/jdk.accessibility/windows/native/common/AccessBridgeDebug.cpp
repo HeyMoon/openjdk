@@ -45,6 +45,8 @@ char *printError(char *msg) {
 
     if (msg != NULL) {
         strncpy((char *)retbuf, msg, sizeof(retbuf));
+        // if msg text is >= 256 ensure buffer is null terminated
+        retbuf[255] = '\0';
     }
     if (!FormatMessage(
                        FORMAT_MESSAGE_ALLOCATE_BUFFER |

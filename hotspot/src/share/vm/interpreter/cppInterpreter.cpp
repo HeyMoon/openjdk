@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,12 +24,19 @@
 
 #include "precompiled.hpp"
 #include "interpreter/bytecodeInterpreter.hpp"
+#include "interpreter/cppInterpreterGenerator.hpp"
 #include "interpreter/interpreter.hpp"
-#include "interpreter/interpreterGenerator.hpp"
 #include "interpreter/interpreterRuntime.hpp"
+#include "memory/resourceArea.hpp"
+#include "runtime/timerTrace.hpp"
 
 #ifdef CC_INTERP
-# define __ _masm->
+
+#ifdef ZERO
+# include "entry_zero.hpp"
+#else
+#error "Only Zero CppInterpreter is supported"
+#endif
 
 void CppInterpreter::initialize() {
   if (_code != NULL) return;
@@ -37,15 +44,14 @@ void CppInterpreter::initialize() {
 
   // generate interpreter
   { ResourceMark rm;
-    TraceTime timer("Interpreter generation", TraceStartupTime);
+    TraceTime timer("Interpreter generation", TRACETIME_LOG(Info, startuptime));
     int code_size = InterpreterCodeSize;
     NOT_PRODUCT(code_size *= 4;)  // debug uses extra interpreter code space
     _code = new StubQueue(new InterpreterCodeletInterface, code_size, NULL,
-                          "Interpreter");
-    InterpreterGenerator g(_code);
+                           "Interpreter");
+    CppInterpreterGenerator g(_code);
     if (PrintInterpreter) print();
   }
-
 
   // Allow c++ interpreter to do one initialization now that switches are set, etc.
   BytecodeInterpreter start_msg(BytecodeInterpreter::initialize);
@@ -56,89 +62,22 @@ void CppInterpreter::initialize() {
 }
 
 
-address    CppInterpreter::_tosca_to_stack         [AbstractInterpreter::number_of_result_handlers];
-address    CppInterpreter::_stack_to_stack         [AbstractInterpreter::number_of_result_handlers];
-address    CppInterpreter::_stack_to_native_abi    [AbstractInterpreter::number_of_result_handlers];
-
-CppInterpreterGenerator::CppInterpreterGenerator(StubQueue* _code): AbstractInterpreterGenerator(_code) {
+void CppInterpreter::invoke_method(Method* method, address entry_point, TRAPS) {
+  ((ZeroEntry *) entry_point)->invoke(method, THREAD);
 }
 
-static const BasicType types[Interpreter::number_of_result_handlers] = {
-  T_BOOLEAN,
-  T_CHAR   ,
-  T_BYTE   ,
-  T_SHORT  ,
-  T_INT    ,
-  T_LONG   ,
-  T_VOID   ,
-  T_FLOAT  ,
-  T_DOUBLE ,
-  T_OBJECT
-};
-
-void CppInterpreterGenerator::generate_all() {
-  AbstractInterpreterGenerator::generate_all();
-
-  { CodeletMark cm(_masm, "result handlers for native calls");
-    // The various result converter stublets.
-    int is_generated[Interpreter::number_of_result_handlers];
-    memset(is_generated, 0, sizeof(is_generated));
-    int _tosca_to_stack_is_generated[Interpreter::number_of_result_handlers];
-    int _stack_to_stack_is_generated[Interpreter::number_of_result_handlers];
-    int _stack_to_native_abi_is_generated[Interpreter::number_of_result_handlers];
-
-    memset(_tosca_to_stack_is_generated, 0, sizeof(_tosca_to_stack_is_generated));
-    memset(_stack_to_stack_is_generated, 0, sizeof(_stack_to_stack_is_generated));
-    memset(_stack_to_native_abi_is_generated, 0, sizeof(_stack_to_native_abi_is_generated));
-    for (int i = 0; i < Interpreter::number_of_result_handlers; i++) {
-      BasicType type = types[i];
-      if (!is_generated[Interpreter::BasicType_as_index(type)]++) {
-        Interpreter::_native_abi_to_tosca[Interpreter::BasicType_as_index(type)] = generate_result_handler_for(type);
-      }
-      if (!_tosca_to_stack_is_generated[Interpreter::BasicType_as_index(type)]++) {
-        Interpreter::_tosca_to_stack[Interpreter::BasicType_as_index(type)] = generate_tosca_to_stack_converter(type);
-      }
-      if (!_stack_to_stack_is_generated[Interpreter::BasicType_as_index(type)]++) {
-        Interpreter::_stack_to_stack[Interpreter::BasicType_as_index(type)] = generate_stack_to_stack_converter(type);
-      }
-      if (!_stack_to_native_abi_is_generated[Interpreter::BasicType_as_index(type)]++) {
-        Interpreter::_stack_to_native_abi[Interpreter::BasicType_as_index(type)] = generate_stack_to_native_abi_converter(type);
-      }
-    }
-  }
+void CppInterpreter::invoke_osr(Method* method,
+                                address   entry_point,
+                                address   osr_buf,
+                                TRAPS) {
+  ((ZeroEntry *) entry_point)->invoke_osr(method, osr_buf, THREAD);
+}
 
 
-#define method_entry(kind) Interpreter::_entry_table[Interpreter::kind] = ((InterpreterGenerator*)this)->generate_method_entry(Interpreter::kind)
 
-  { CodeletMark cm(_masm, "(kind = frame_manager)");
-    // all non-native method kinds
-    method_entry(zerolocals);
-    method_entry(zerolocals_synchronized);
-    method_entry(empty);
-    method_entry(accessor);
-    method_entry(abstract);
-    method_entry(java_lang_math_sin   );
-    method_entry(java_lang_math_cos   );
-    method_entry(java_lang_math_tan   );
-    method_entry(java_lang_math_abs   );
-    method_entry(java_lang_math_sqrt  );
-    method_entry(java_lang_math_log   );
-    method_entry(java_lang_math_log10 );
-    method_entry(java_lang_math_pow );
-    method_entry(java_lang_math_exp );
-    method_entry(java_lang_ref_reference_get);
-
-    initialize_method_handle_entries();
-
-    Interpreter::_native_entry_begin = Interpreter::code()->code_end();
-    method_entry(native);
-    method_entry(native_synchronized);
-    Interpreter::_native_entry_end = Interpreter::code()->code_end();
-  }
-
-
-#undef method_entry
-
+InterpreterCodelet* CppInterpreter::codelet_containing(address pc) {
+  // FIXME: I'm pretty sure _code is null and this is never called, which is why it's copied.
+  return (InterpreterCodelet*)_code->stub_containing(pc);
 }
 
 #endif // CC_INTERP

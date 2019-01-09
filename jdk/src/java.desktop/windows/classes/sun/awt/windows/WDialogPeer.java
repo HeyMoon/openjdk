@@ -35,11 +35,7 @@ final class WDialogPeer extends WWindowPeer implements DialogPeer {
 
     // Platform default background for dialogs.  Gets set on target if
     // target has none explicitly specified.
-    final static Color defaultBackground =  SystemColor.control;
-
-    // If target doesn't have its background color set, we set its
-    // background to platform default.
-    boolean needDefaultBackground;
+    static final Color defaultBackground =  SystemColor.control;
 
     WDialogPeer(Dialog target) {
         super(target);
@@ -67,7 +63,7 @@ final class WDialogPeer extends WWindowPeer implements DialogPeer {
         Dialog target = (Dialog)this.target;
         // Need to set target's background to default _before_ a call
         // to super.initialize.
-        if (needDefaultBackground) {
+        if (!target.isBackgroundSet()) {
             target.setBackground(defaultBackground);
         }
 
@@ -131,19 +127,6 @@ final class WDialogPeer extends WWindowPeer implements DialogPeer {
         } else {
             reshapeFrame(x, y, width, height);
         }
-    }
-
-    /* Native create() peeks at target's background and if it's null
-     * calls this method to arrage for default background to be set on
-     * target.  Can't make the check in Java, since getBackground will
-     * return owner's background if target has none set.
-     */
-    private void setDefaultColor() {
-        // Can't call target.setBackground directly, since we are
-        // called on toolkit thread.  Can't schedule a Runnable on the
-        // EventHandlerThread because of the race condition.  So just
-        // set a flag and call target.setBackground in initialize.
-        needDefaultBackground = true;
     }
 
     native void pSetIMMOption(String option);

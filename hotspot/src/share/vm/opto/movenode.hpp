@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,8 +45,8 @@ class CMoveNode : public TypeNode {
     init_req(IfTrue,right);
   }
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual const Type *Value( PhaseTransform *phase ) const;
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual const Type* Value(PhaseGVN* phase) const;
+  virtual Node* Identity(PhaseGVN* phase);
   static CMoveNode *make(Node *c, Node *bol, Node *left, Node *right, const Type *t);
   // Helper function to spot cmove graph shapes
   static Node *is_cmove_id( PhaseTransform *phase, Node *cmp, Node *t, Node *f, BoolNode *b );
@@ -104,7 +104,7 @@ class MoveI2FNode : public Node {
   virtual int Opcode() const;
   virtual const Type *bottom_type() const { return Type::FLOAT; }
   virtual uint ideal_reg() const { return Op_RegF; }
-  virtual const Type* Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
 };
 
 class MoveL2DNode : public Node {
@@ -113,7 +113,7 @@ class MoveL2DNode : public Node {
   virtual int Opcode() const;
   virtual const Type *bottom_type() const { return Type::DOUBLE; }
   virtual uint ideal_reg() const { return Op_RegD; }
-  virtual const Type* Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
 };
 
 class MoveF2INode : public Node {
@@ -122,7 +122,7 @@ class MoveF2INode : public Node {
   virtual int Opcode() const;
   virtual const Type *bottom_type() const { return TypeInt::INT; }
   virtual uint ideal_reg() const { return Op_RegI; }
-  virtual const Type* Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
 };
 
 class MoveD2LNode : public Node {
@@ -131,7 +131,7 @@ class MoveD2LNode : public Node {
   virtual int Opcode() const;
   virtual const Type *bottom_type() const { return TypeLong::LONG; }
   virtual uint ideal_reg() const { return Op_RegL; }
-  virtual const Type* Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
 };
 
 //------------------------------BinaryNode-------------------------------------
@@ -145,6 +145,10 @@ class BinaryNode : public Node {
   BinaryNode( Node *n1, Node *n2 ) : Node(0,n1,n2) { }
   virtual int Opcode() const;
   virtual uint ideal_reg() const { return 0; }
+
+#ifndef PRODUCT
+  virtual void related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const;
+#endif
 };
 
 

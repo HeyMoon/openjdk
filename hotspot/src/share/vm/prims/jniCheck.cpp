@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -87,9 +87,9 @@ static struct JNINativeInterface_ * unchecked_jni_NativeInterface;
 #define JNI_ENTRY_CHECKED(result_type, header)                           \
 extern "C" {                                                             \
   result_type JNICALL header {                                           \
-    JavaThread* thr = (JavaThread*)ThreadLocalStorage::get_thread_slow();\
+    JavaThread* thr = (JavaThread*) Thread::current_or_null();           \
     if (thr == NULL || !thr->is_Java_thread()) {                         \
-      tty->print_cr("%s", fatal_using_jnienv_in_nonjava);                      \
+      tty->print_cr("%s", fatal_using_jnienv_in_nonjava);                \
       os::abort(true);                                                   \
     }                                                                    \
     JNIEnv* xenv = thr->jni_environment();                               \
@@ -102,7 +102,8 @@ extern "C" {                                                             \
 #define UNCHECKED() (unchecked_jni_NativeInterface)
 
 static const char * warn_wrong_jnienv = "Using JNIEnv in the wrong thread";
-static const char * warn_bad_class_descriptor = "JNI FindClass received a bad class descriptor \"%s\".  A correct class descriptor " \
+static const char * warn_bad_class_descriptor1 = "JNI FindClass received a bad class descriptor \"";
+static const char * warn_bad_class_descriptor2 = "\".  A correct class descriptor " \
   "has no leading \"L\" or trailing \";\".  Incorrect descriptors will not be accepted in future releases.";
 static const char * fatal_using_jnienv_in_nonjava = "FATAL ERROR in native method: Using JNIEnv in non-Java thread";
 static const char * warn_other_function_in_critical = "Warning: Calling other JNI functions in the scope of " \
@@ -237,8 +238,8 @@ functionExit(JavaThread* thr)
   size_t live_handles = handles->get_number_of_live_handles();
   if (live_handles > planned_capacity) {
     IN_VM(
-      tty->print_cr("WARNING: JNI local refs: %zu, exceeds capacity: %zu",
-          live_handles, planned_capacity);
+      tty->print_cr("WARNING: JNI local refs: " SIZE_FORMAT ", exceeds capacity: " SIZE_FORMAT,
+                    live_handles, planned_capacity);
       thr->print_stack();
     )
     // Complain just the once, reset to current + warn threshold
@@ -484,7 +485,8 @@ void jniCheck::validate_class_descriptor(JavaThread* thr, const char* name) {
       name[0] == JVM_SIGNATURE_CLASS &&            // 'L'
       name[len-1] == JVM_SIGNATURE_ENDCLASS ) {    // ';'
     char msg[JVM_MAXPATHLEN];
-    jio_snprintf(msg, JVM_MAXPATHLEN, warn_bad_class_descriptor, name);
+    jio_snprintf(msg, JVM_MAXPATHLEN, "%s%s%s",
+                 warn_bad_class_descriptor1, name, warn_bad_class_descriptor2);
     ReportJNIWarning(thr, msg);
   }
 }
@@ -512,7 +514,7 @@ void jniCheck::validate_throwable_klass(JavaThread* thr, Klass* klass) {
   ASSERT_OOPS_ALLOWED;
   assert(klass != NULL, "klass argument must have a value");
 
-  if (!klass->oop_is_instance() ||
+  if (!klass->is_instance_klass() ||
       !InstanceKlass::cast(klass)->is_subclass_of(SystemDictionary::Throwable_klass())) {
     ReportJNIFatalError(thr, fatal_class_not_a_throwable_class);
   }
@@ -1987,7 +1989,17 @@ JNI_ENTRY_CHECKED(jint,
     return result;
 JNI_END
 
-
+JNI_ENTRY_CHECKED(jobject,
+  checked_jni_GetModule(JNIEnv *env,
+                        jclass clazz))
+    functionEnter(thr);
+    IN_VM(
+      jniCheck::validate_class(thr, clazz, false);
+    )
+    jobject result = UNCHECKED()->GetModule(env,clazz);
+    functionExit(thr);
+    return result;
+JNI_END
 
 /*
  * Structure containing all checked jni functions
@@ -2270,7 +2282,11 @@ struct JNINativeInterface_  checked_jni_NativeInterface = {
 
     // New 1.6 Features
 
-    checked_jni_GetObjectRefType
+    checked_jni_GetObjectRefType,
+
+    // Module Features
+
+    checked_jni_GetModule
 };
 
 

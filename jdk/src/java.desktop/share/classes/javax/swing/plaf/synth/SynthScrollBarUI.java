@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -129,15 +129,12 @@ public class SynthScrollBarUI extends BasicScrollBarUI
                 installKeyboardActions();
             }
         }
-        context.dispose();
 
         context = getContext(c, Region.SCROLL_BAR_TRACK, ENABLED);
         trackStyle = SynthLookAndFeel.updateStyle(context, this);
-        context.dispose();
 
         context = getContext(c, Region.SCROLL_BAR_THUMB, ENABLED);
         thumbStyle = SynthLookAndFeel.updateStyle(context, this);
-        context.dispose();
     }
 
     /**
@@ -165,17 +162,14 @@ public class SynthScrollBarUI extends BasicScrollBarUI
     protected void uninstallDefaults(){
         SynthContext context = getContext(scrollbar, ENABLED);
         style.uninstallDefaults(context);
-        context.dispose();
         style = null;
 
         context = getContext(scrollbar, Region.SCROLL_BAR_TRACK, ENABLED);
         trackStyle.uninstallDefaults(context);
-        context.dispose();
         trackStyle = null;
 
         context = getContext(scrollbar, Region.SCROLL_BAR_THUMB, ENABLED);
         thumbStyle.uninstallDefaults(context);
-        context.dispose();
         thumbStyle = null;
 
         super.uninstallDefaults();
@@ -207,9 +201,12 @@ public class SynthScrollBarUI extends BasicScrollBarUI
     }
 
     private int getComponentState(JComponent c, Region region) {
-        if (region == Region.SCROLL_BAR_THUMB && isThumbRollover() &&
-                                                 c.isEnabled()) {
-            return MOUSE_OVER;
+        if (region == Region.SCROLL_BAR_THUMB && c.isEnabled()) {
+            if (isDragging) {
+                return PRESSED;
+            } else if (isThumbRollover()) {
+                return MOUSE_OVER;
+            }
         }
         return SynthLookAndFeel.getComponentState(c);
     }
@@ -222,7 +219,6 @@ public class SynthScrollBarUI extends BasicScrollBarUI
         SynthContext context = getContext(scrollbar);
         boolean value = style.getBoolean(context,
                       "ScrollBar.allowsAbsolutePositioning", false);
-        context.dispose();
         return value;
     }
 
@@ -247,7 +243,6 @@ public class SynthScrollBarUI extends BasicScrollBarUI
                           g, 0, 0, c.getWidth(), c.getHeight(),
                           scrollbar.getOrientation());
         paint(context, g);
-        context.dispose();
     }
 
     /**
@@ -264,7 +259,6 @@ public class SynthScrollBarUI extends BasicScrollBarUI
         SynthContext context = getContext(c);
 
         paint(context, g);
-        context.dispose();
     }
 
     /**
@@ -278,11 +272,9 @@ public class SynthScrollBarUI extends BasicScrollBarUI
         SynthContext subcontext = getContext(scrollbar,
                                              Region.SCROLL_BAR_TRACK);
         paintTrack(subcontext, g, getTrackBounds());
-        subcontext.dispose();
 
         subcontext = getContext(scrollbar, Region.SCROLL_BAR_THUMB);
         paintThumb(subcontext, g, getThumbBounds());
-        subcontext.dispose();
     }
 
     /**

@@ -30,6 +30,9 @@ import java.awt.Image;
 import java.awt.Toolkit;
 import java.io.*;
 import java.io.FileNotFoundException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.Callable;
 
@@ -62,23 +65,23 @@ public abstract class ShellFolder extends File {
 
     /**
      * This method must be implemented to make sure that no instances
-     * of <code>ShellFolder</code> are ever serialized. If <code>isFileSystem()</code> returns
-     * <code>true</code>, then the object should be representable with an instance of
-     * <code>java.io.File</code> instead. If not, then the object is most likely
+     * of {@code ShellFolder} are ever serialized. If {@code isFileSystem()} returns
+     * {@code true}, then the object should be representable with an instance of
+     * {@code java.io.File} instead. If not, then the object is most likely
      * depending on some internal (native) state and cannot be serialized.
      *
-     * @returns a <code>java.io.File</code> replacement object, or <code>null</code>
-     * if no suitable replacement can be found.
+     * @return a java.io.File replacement object, or null
+     *         if no suitable replacement can be found.
      */
     protected abstract Object writeReplace() throws java.io.ObjectStreamException;
 
     /**
      * Returns the path for this object's parent,
-     * or <code>null</code> if this object does not name a parent
+     * or {@code null} if this object does not name a parent
      * folder.
      *
      * @return  the path as a String for this object's parent,
-     * or <code>null</code> if this object does not name a parent
+     * or {@code null} if this object does not name a parent
      * folder
      *
      * @see java.io.File#getParent()
@@ -97,11 +100,11 @@ public abstract class ShellFolder extends File {
 
     /**
      * Returns a File object representing this object's parent,
-     * or <code>null</code> if this object does not name a parent
+     * or {@code null} if this object does not name a parent
      * folder.
      *
      * @return  a File object representing this object's parent,
-     * or <code>null</code> if this object does not name a parent
+     * or {@code null} if this object does not name a parent
      * folder
      *
      * @see java.io.File#getParentFile()
@@ -223,12 +226,9 @@ public abstract class ShellFolder extends File {
         }
         try {
             shellFolderManager =
-                (ShellFolderManager)managerClass.newInstance();
-        } catch (InstantiationException e) {
+                (ShellFolderManager)managerClass.getDeclaredConstructor().newInstance();
+        } catch (ReflectiveOperationException e) {
             throw new Error("Could not instantiate Shell Folder Manager: "
-            + managerClass.getName());
-        } catch (IllegalAccessException e) {
-            throw new Error ("Could not access Shell Folder Manager: "
             + managerClass.getName());
         }
 
@@ -243,15 +243,16 @@ public abstract class ShellFolder extends File {
         if (file instanceof ShellFolder) {
             return (ShellFolder)file;
         }
-        if (!file.exists()) {
+
+        if (!Files.exists(Paths.get(file.getPath()), LinkOption.NOFOLLOW_LINKS)) {
             throw new FileNotFoundException();
         }
         return shellFolderManager.createShellFolder(file);
     }
 
     /**
-     * @param key a <code>String</code>
-     * @return An Object matching the string <code>key</code>.
+     * @param key a {@code String}
+     * @return An Object matching the string {@code key}.
      * @see ShellFolderManager#get(String)
      */
     public static Object get(String key) {
@@ -259,7 +260,7 @@ public abstract class ShellFolder extends File {
     }
 
     /**
-     * Does <code>dir</code> represent a "computer" such as a node on the network, or
+     * Does {@code dir} represent a "computer" such as a node on the network, or
      * "My Computer" on the desktop.
      */
     public static boolean isComputerNode(File dir) {

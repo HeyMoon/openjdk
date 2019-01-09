@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,6 +35,8 @@ import java.util.GregorianCalendar;
 import java.util.Date;
 import java.util.Locale;
 import java.util.Objects;
+import jdk.internal.misc.JavaNetHttpCookieAccess;
+import jdk.internal.misc.SharedSecrets;
 
 /**
  * An HttpCookie object represents an HTTP cookie, which carries state
@@ -84,11 +86,11 @@ public final class HttpCookie implements Cloneable {
 
     // Since the positive and zero max-age have their meanings,
     // this value serves as a hint as 'not specify max-age'
-    private final static long MAX_AGE_UNSPECIFIED = -1;
+    private static final long MAX_AGE_UNSPECIFIED = -1;
 
     // date formats used by Netscape's cookie draft
     // as well as formats seen on various sites
-    private final static String[] COOKIE_DATE_FORMATS = {
+    private static final String[] COOKIE_DATE_FORMATS = {
         "EEE',' dd-MMM-yyyy HH:mm:ss 'GMT'",
         "EEE',' dd MMM yyyy HH:mm:ss 'GMT'",
         "EEE MMM dd yyyy HH:mm:ss 'GMT'Z",
@@ -98,8 +100,8 @@ public final class HttpCookie implements Cloneable {
     };
 
     // constant strings represent set-cookie header token
-    private final static String SET_COOKIE = "set-cookie:";
-    private final static String SET_COOKIE2 = "set-cookie2:";
+    private static final String SET_COOKIE = "set-cookie:";
+    private static final String SET_COOKIE2 = "set-cookie2:";
 
     // ---------------- Ctors --------------
 
@@ -231,7 +233,7 @@ public final class HttpCookie implements Cloneable {
         // if not specify max-age, this cookie should be
         // discarded when user agent is to be closed, but
         // it is not expired.
-        if (maxAge == MAX_AGE_UNSPECIFIED) return false;
+        if (maxAge < 0) return false;
 
         long deltaSecond = (System.currentTimeMillis() - whenCreated) / 1000;
         if (deltaSecond > maxAge)
@@ -950,7 +952,8 @@ public final class HttpCookie implements Cloneable {
                                    String attrName,
                                    String attrValue) {
                     if (cookie.getMaxAge() == MAX_AGE_UNSPECIFIED) {
-                        cookie.setMaxAge(cookie.expiryDate2DeltaSeconds(attrValue));
+                        long delta = cookie.expiryDate2DeltaSeconds(attrValue);
+                        cookie.setMaxAge(delta > 0 ? delta : 0);
                     }
                 }
             });
@@ -971,8 +974,8 @@ public final class HttpCookie implements Cloneable {
     }
 
     static {
-        sun.misc.SharedSecrets.setJavaNetHttpCookieAccess(
-            new sun.misc.JavaNetHttpCookieAccess() {
+        SharedSecrets.setJavaNetHttpCookieAccess(
+            new JavaNetHttpCookieAccess() {
                 public List<HttpCookie> parse(String header) {
                     return HttpCookie.parse(header, true);
                 }

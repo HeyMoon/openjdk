@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,27 +26,28 @@
  * @bug 8027476 8027455
  * @summary Ensure that the G1TraceStringSymbolTableScrubbing prints the expected message.
  * @key gc
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @requires vm.gc.G1
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  */
 
-import jdk.test.lib.ProcessTools;
-import jdk.test.lib.OutputAnalyzer;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
 
 public class TestStringSymbolTableStats {
   public static void main(String[] args) throws Exception {
 
     ProcessBuilder pb = ProcessTools.createJavaProcessBuilder("-XX:+UseG1GC",
                                                               "-XX:+UnlockExperimentalVMOptions",
-                                                              "-XX:+G1TraceStringSymbolTableScrubbing",
+                                                              "-Xlog:gc+stringtable=trace",
                                                               SystemGCTest.class.getName());
 
     OutputAnalyzer output = new OutputAnalyzer(pb.start());
 
     System.out.println("Output:\n" + output.getOutput());
 
-    output.shouldContain("Cleaned string and symbol table");
+    output.shouldMatch("GC\\(\\d+\\) Cleaned string and symbol table");
     output.shouldHaveExitValue(0);
   }
 

@@ -19,8 +19,8 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
+
 package p;
 
 import java.lang.reflect.InvocationTargetException;
@@ -31,9 +31,9 @@ import java.lang.reflect.Method;
  */
 public class Treflect {
 
-    public static int test(p.I ii) throws Throwable {
+    public static int test(I ii) throws Throwable {
         int accum = 0;
-        Method m = p.I.class.getMethod("m");
+        Method m = I.class.getMethod("m");
         try {
             for (int j = 0; j < 100000; j++) {
                 Object o = m.invoke(ii);
@@ -45,10 +45,10 @@ public class Treflect {
         return accum;
     }
 
-    public static int test(p.I ii, byte b, char c, short s, int i, long l,
+    public static int test(I ii, byte b, char c, short s, int i, long l,
             Object o1, Object o2, Object o3, Object o4, Object o5, Object o6)
             throws Throwable {
-        Method m = p.I.class.getMethod("m", Byte.TYPE, Character.TYPE,
+        Method m = I.class.getMethod("m", Byte.TYPE, Character.TYPE,
                 Short.TYPE, Integer.TYPE, Long.TYPE,
                 Object.class, Object.class, Object.class,
                 Object.class, Object.class, Object.class);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,8 +24,8 @@
  */
 package java.net;
 
-import java.security.AccessController;
-import java.security.PrivilegedAction;
+import java.util.Properties;
+import sun.security.action.GetPropertyAction;
 
 /**
  * This class defines a factory for creating DatagramSocketImpls. It defaults
@@ -45,70 +45,39 @@ import java.security.PrivilegedAction;
 
 class DefaultDatagramSocketImplFactory
 {
-    static Class<?> prefixImplClass = null;
-
-    /* the windows version. */
-    private static float version;
+    private static final Class<?> prefixImplClass;
 
     /* java.net.preferIPv4Stack */
-    private static boolean preferIPv4Stack = false;
-
-    /* If the version supports a dual stack TCP implementation */
-    private static boolean useDualStackImpl = false;
-
-    /* sun.net.useExclusiveBind */
-    private static String exclBindProp;
+    private static final boolean preferIPv4Stack;
 
     /* True if exclusive binding is on for Windows */
-    private static boolean exclusiveBind = true;
-
+    private static final boolean exclusiveBind;
 
     static {
-        // Determine Windows Version.
-        java.security.AccessController.doPrivileged(
-                new PrivilegedAction<Object>() {
-                    public Object run() {
-                        version = 0;
-                        try {
-                            version = Float.parseFloat(System.getProperties()
-                                    .getProperty("os.version"));
-                            preferIPv4Stack = Boolean.parseBoolean(
-                                              System.getProperties()
-                                              .getProperty(
-                                                   "java.net.preferIPv4Stack"));
-                            exclBindProp = System.getProperty(
-                                    "sun.net.useExclusiveBind");
-                        } catch (NumberFormatException e ) {
-                            assert false : e;
-                        }
-                        return null; // nothing to return
-                    }
-                });
+        Class<?> prefixImplClassLocal = null;
 
-        // (version >= 6.0) implies Vista or greater.
-        if (version >= 6.0 && !preferIPv4Stack) {
-                useDualStackImpl = true;
-        }
-        if (exclBindProp != null) {
-            // sun.net.useExclusiveBind is true
-            exclusiveBind = exclBindProp.length() == 0 ? true
-                    : Boolean.parseBoolean(exclBindProp);
-        } else if (version < 6.0) {
-            exclusiveBind = false;
-        }
+        Properties props = GetPropertyAction.privilegedGetProperties();
+        preferIPv4Stack = Boolean.parseBoolean(
+                props.getProperty("java.net.preferIPv4Stack"));
+
+        String exclBindProp = props.getProperty("sun.net.useExclusiveBind", "");
+        exclusiveBind = (exclBindProp.isEmpty())
+                ? true
+                : Boolean.parseBoolean(exclBindProp);
 
         // impl.prefix
         String prefix = null;
         try {
-            prefix = AccessController.doPrivileged(
-                new sun.security.action.GetPropertyAction("impl.prefix", null));
+            prefix = props.getProperty("impl.prefix");
             if (prefix != null)
-                prefixImplClass = Class.forName("java.net."+prefix+"DatagramSocketImpl");
+                prefixImplClassLocal = Class.forName("java.net."+prefix+"DatagramSocketImpl");
         } catch (Exception e) {
             System.err.println("Can't find class: java.net." +
                                 prefix +
                                 "DatagramSocketImpl: check impl.prefix property");
         }
+
+        prefixImplClass = prefixImplClassLocal;
     }
 
     /**
@@ -121,17 +90,17 @@ class DefaultDatagramSocketImplFactory
         throws SocketException {
         if (prefixImplClass != null) {
             try {
-                return (DatagramSocketImpl) prefixImplClass.newInstance();
+                @SuppressWarnings("deprecation")
+                Object result = prefixImplClass.newInstance();
+                return (DatagramSocketImpl) result;
             } catch (Exception e) {
                 throw new SocketException("can't instantiate DatagramSocketImpl");
             }
         } else {
-            if (isMulticast)
-                exclusiveBind = false;
-            if (useDualStackImpl && !isMulticast)
+            if (!preferIPv4Stack && !isMulticast)
                 return new DualStackPlainDatagramSocketImpl(exclusiveBind);
             else
-                return new TwoStacksPlainDatagramSocketImpl(exclusiveBind);
+                return new TwoStacksPlainDatagramSocketImpl(exclusiveBind && !isMulticast);
         }
     }
 }

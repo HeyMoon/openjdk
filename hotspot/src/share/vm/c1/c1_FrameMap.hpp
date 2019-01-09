@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,11 +33,10 @@
 #include "runtime/frame.hpp"
 #include "runtime/synchronizer.hpp"
 #include "utilities/globalDefinitions.hpp"
+#include "utilities/macros.hpp"
 
 class ciMethod;
 class CallingConvention;
-class BasicTypeArray;
-class BasicTypeList;
 
 //--------------------------------------------------------
 //               FrameMap
@@ -82,22 +81,7 @@ class FrameMap : public CompilationResourceObj {
     spill_slot_size_in_bytes = 4
   };
 
-#ifdef TARGET_ARCH_x86
-# include "c1_FrameMap_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "c1_FrameMap_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "c1_FrameMap_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "c1_FrameMap_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "c1_FrameMap_aarch64.hpp"
-#endif
-
+#include CPU_HEADER(c1_FrameMap)
 
   friend class LIR_OprDesc;
 

@@ -23,10 +23,12 @@
 
 /*
  * @test
+ * @key headful
  * @bug 8014863
  * @bug 8024395
  * @summary  Tests the calculation of the line breaks when a text is inserted
  * @author Dmitry Markov
+ * @modules java.desktop/javax.swing.text:open
  * @library ../../../regtesthelpers
  * @build Util
  * @run main bug8014863

@@ -26,7 +26,6 @@
  * @bug 5047639
  * @summary Check that the "java-level" APIs provide a consistent view of
  *          the thread list
- * @modules java.management
  */
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
@@ -34,6 +33,11 @@ import java.util.Map;
 
 public class ThreadLists {
     public static void main(String args[]) {
+
+        // Bug id : JDK-8151797
+        // Use a lambda expression so that call-site cleaner thread is started
+        Runnable printLambda = () -> {System.out.println("Starting Test");};
+        printLambda.run();
 
         // get top-level thread group
         ThreadGroup top = Thread.currentThread().getThreadGroup();

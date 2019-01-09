@@ -40,6 +40,7 @@ import javax.print.attribute.AttributeSet;
 import javax.print.attribute.PrintRequestAttributeSet;
 import javax.print.attribute.standard.Destination;
 import javax.print.attribute.standard.Fidelity;
+import sun.print.DialogOwner;
 
 import sun.print.ServiceDialog;
 import sun.print.SunAlternateMedia;
@@ -134,10 +135,12 @@ public class ServiceUI {
      *
      * @param gc used to select screen. null means primary or default screen.
      * @param x location of dialog including border in screen coordinates
+     * relative to the origin of {@code gc}.
      * @param y location of dialog including border in screen coordinates
+     * relative to the origin of {@code gc}.
      * @param services to be browsable, must be non-null.
-     * @param defaultService - initial PrintService to display.
-     * @param flavor - the flavor to be printed, or null.
+     * @param defaultService initial PrintService to display.
+     * @param flavor the flavor to be printed, or null.
      * @param attributes on input is the initial application supplied
      * preferences. This cannot be null but may be empty.
      * On output the attributes reflect changes made by the user.
@@ -185,44 +188,55 @@ public class ServiceUI {
             defaultIndex = 0;
         }
 
-        // For now we set owner to null. In the future, it may be passed
-        // as an argument.
-        Window owner = null;
+        DialogOwner dlgOwner = (DialogOwner)attributes.get(DialogOwner.class);
+        Window owner = (dlgOwner != null) ? dlgOwner.getOwner() : null;
 
         Rectangle gcBounds = (gc == null) ?  GraphicsEnvironment.
             getLocalGraphicsEnvironment().getDefaultScreenDevice().
             getDefaultConfiguration().getBounds() : gc.getBounds();
 
+        x += gcBounds.x;
+        y += gcBounds.y;
         ServiceDialog dialog;
         if (owner instanceof Frame) {
             dialog = new ServiceDialog(gc,
-                                       x + gcBounds.x,
-                                       y + gcBounds.y,
+                                       x,
+                                       y,
                                        services, defaultIndex,
                                        flavor, attributes,
                                        (Frame)owner);
         } else {
             dialog = new ServiceDialog(gc,
-                                       x + gcBounds.x,
-                                       y + gcBounds.y,
+                                       x,
+                                       y,
                                        services, defaultIndex,
                                        flavor, attributes,
                                        (Dialog)owner);
         }
         Rectangle dlgBounds = dialog.getBounds();
 
-        // get union of all GC bounds
-        GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
-        GraphicsDevice[] gs = ge.getScreenDevices();
-        for (int j=0; j<gs.length; j++) {
-            gcBounds =
-                gcBounds.union(gs[j].getDefaultConfiguration().getBounds());
-        }
-
         // if portion of dialog is not within the gc boundary
         if (!gcBounds.contains(dlgBounds)) {
-            // put in the center relative to parent frame/dialog
-            dialog.setLocationRelativeTo(owner);
+            // check if dialog exceed window bounds at left or bottom
+            // Then position the dialog by moving it by the amount it exceeds
+            // the window bounds
+            // If it results in dialog moving beyond the window bounds at top/left
+            // then position it at window top/left
+            if (dlgBounds.x + dlgBounds.width > gcBounds.x + gcBounds.width) {
+                if ((gcBounds.x + gcBounds.width - dlgBounds.width) > gcBounds.x) {
+                    x = (gcBounds.x + gcBounds.width) - dlgBounds.width;
+                } else {
+                    x = gcBounds.x;
+                }
+            }
+            if (dlgBounds.y + dlgBounds.height > gcBounds.y + gcBounds.height) {
+                if ((gcBounds.y + gcBounds.height - dlgBounds.height) > gcBounds.y) {
+                    y = (gcBounds.y + gcBounds.height) - dlgBounds.height;
+                } else {
+                    y = gcBounds.y;
+                }
+            }
+            dialog.setBounds(x, y, dlgBounds.width, dlgBounds.height);
         }
         dialog.show();
 

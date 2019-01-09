@@ -1,24 +1,21 @@
 /*
- * reserved comment block
- * DO NOT REMOVE OR ALTER!
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright 2001-2004 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- */
-/*
- * $Id: ErrorMessages_sv.java /st_wptg_1.8.0.0.0jdk/2 2013/09/16 06:50:58 gmolloy Exp $
  */
 
 package com.sun.org.apache.xalan.internal.xsltc.compiler.util;
@@ -173,6 +170,13 @@ public class ErrorMessages_sv extends ListResourceBundle {
         "Ogiltig URI ''{0}''."},
 
         /*
+         * Note to translators:  This message is displayed when the URI
+         * mentioned in the substitution text is not well-formed syntactically.
+         */
+        {ErrorMsg.CATALOG_EXCEPTION,
+        "JAXP08090001: CatalogResolver \u00E4r aktiverat med katalogen \"{0}\", men ett CatalogException returneras."},
+
+        /*
          * Note to translators:  The file or URI named in the substitution text
          * exists but could not be opened.
          */
@@ -267,6 +271,13 @@ public class ErrorMessages_sv extends ListResourceBundle {
          */
         {ErrorMsg.CIRCULAR_INCLUDE_ERR,
         "Cirkul\u00E4r import/include. Formatmallen ''{0}'' har redan laddats."},
+
+        /*
+         * Note to translators:  "xsl:import" and "xsl:include" are keywords that
+         * should not be translated.
+         */
+        {ErrorMsg.IMPORT_PRECEDE_OTHERS_ERR,
+        "Underordnade till xsl:import-elementet m\u00E5ste komma f\u00F6re alla andra underordnade till element f\u00F6r ett xsl:stylesheet-element, inklusive alla underordnade till xsl:include-elementet."},
 
         /*
          * Note to translators:  A result-tree fragment is a portion of a
@@ -372,7 +383,7 @@ public class ErrorMessages_sv extends ListResourceBundle {
          * element of a type that it was not permitted to contain.
          */
         {ErrorMsg.ILLEGAL_CHILD_ERR,
-        "Ogiltigt underordnat element."},
+        "Otill\u00E5tet underordnat element."},
 
         /*
          * Note to translators:  The stylesheet tried to create an element with
@@ -599,6 +610,9 @@ public class ErrorMessages_sv extends ListResourceBundle {
          */
         {ErrorMsg.JAXP_INVALID_ATTR_ERR,
         "TransformerFactory k\u00E4nner inte igen attributet ''{0}''."},
+
+        {ErrorMsg.JAXP_INVALID_ATTR_VALUE_ERR,
+        "Fel v\u00E4rde har angetts f\u00F6r attributet ''{0}''."},
 
         /*
          * Note to translators:  "setResult()" and "startDocument()" are Java

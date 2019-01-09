@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,10 +23,10 @@
 
 /*
  * @test UnloadTest
- * @library /runtime/testlibrary /testlibrary /../../test/lib
+ * @modules java.base/jdk.internal.misc
+ * @library /runtime/testlibrary /test/lib
  * @library classes
- * @build ClassUnloadCommon test.Empty
- * @build UnloadTest
+ * @build sun.hotspot.WhiteBox test.Empty
  * @run main ClassFileInstaller sun.hotspot.WhiteBox
  *                              sun.hotspot.WhiteBox$WhiteBoxPermission
  * @run main/othervm -Xbootclasspath/a:. -Xmn8m -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI UnloadTest

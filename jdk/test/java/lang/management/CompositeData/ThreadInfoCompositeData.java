@@ -29,7 +29,6 @@
  *          the input CompositeData is invalid.
  * @author  Mandy Chung
  *
- * @modules java.management
  * @compile OpenTypeConverter.java
  * @build ThreadInfoCompositeData
  * @run main ThreadInfoCompositeData
@@ -39,6 +38,7 @@ import javax.management.openmbean.*;
 import java.lang.management.LockInfo;
 import java.lang.management.MonitorInfo;
 import java.lang.management.ThreadInfo;
+import java.util.Objects;
 
 public class ThreadInfoCompositeData {
     private static StackTraceElement[] ste = new StackTraceElement[1];
@@ -172,6 +172,14 @@ public class ThreadInfoCompositeData {
         if (!s1.getClassName().equals(s2.getClassName())) {
             throw new RuntimeException("Class name = " +
                 s2.getClassName() + " expected = " + s1.getClassName());
+        }
+        if (!Objects.equals(s1.getModuleName(), s2.getModuleName())) {
+            throw new RuntimeException("Module name = " +
+                s2.getModuleName() + " expected = " + s1.getModuleName());
+        }
+        if (!Objects.equals(s1.getModuleVersion(), s2.getModuleVersion())) {
+            throw new RuntimeException("Module version = " +
+                s2.getModuleVersion() + " expected = " + s1.getModuleVersion());
         }
         if (!s1.getMethodName().equals(s2.getMethodName())) {
             throw new RuntimeException("Method name = " +
@@ -328,6 +336,9 @@ public class ThreadInfoCompositeData {
     };
 
     private static final String[] steItemNames = {
+        "classLoaderName",
+        "moduleName",
+        "moduleVersion",
         "className",
         "methodName",
         "fileName",
@@ -351,6 +362,9 @@ public class ThreadInfoCompositeData {
             validItemTypes[STACK_TRACE] = new ArrayType(1, steCType);
 
             final Object[] steValue = {
+                ste[0].getClassLoaderName(),
+                ste[0].getModuleName(),
+                ste[0].getModuleVersion(),
                 ste[0].getClassName(),
                 ste[0].getMethodName(),
                 ste[0].getFileName(),

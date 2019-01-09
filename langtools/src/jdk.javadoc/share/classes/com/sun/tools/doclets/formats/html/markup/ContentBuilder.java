@@ -35,8 +35,9 @@ import com.sun.tools.doclets.internal.toolkit.Content;
 /**
  * A sequence of Content nodes.
  */
+@Deprecated
 public class ContentBuilder extends Content {
-    protected List<Content> contents = Collections.<Content>emptyList();
+    protected List<Content> contents = Collections.emptyList();
 
     @Override
     public void addContent(Content content) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,8 @@ package javax.net.ssl;
 
 import java.io.IOException;
 import java.net.*;
+import java.util.List;
+import java.util.function.BiFunction;
 
 /**
  * This class extends <code>Socket</code>s and provides secure
@@ -265,6 +267,13 @@ public abstract class SSLSocket extends Socket
      * be enabled by default, since this list may include cipher suites which
      * do not meet quality of service requirements for those defaults.  Such
      * cipher suites might be useful in specialized applications.
+     * <P>
+     * The returned array includes cipher suites from the list of standard
+     * cipher suite names in the <a href=
+     * "{@docRoot}/../specs/security/standard-names.html#jsse-cipher-suite-names">
+     * JSSE Cipher Suite Names</a> section of the Java Cryptography
+     * Architecture Standard Algorithm Name Documentation, and may also
+     * include other cipher suites that the provider supports.
      *
      * @return an array of cipher suite names
      * @see #getEnabledCipherSuites()
@@ -279,10 +288,18 @@ public abstract class SSLSocket extends Socket
      * created, all enabled cipher suites support a minimum quality of
      * service.  Thus, in some environments this value might be empty.
      * <P>
-     * Even if a suite has been enabled, it might never be used.  (For
-     * example, the peer does not support it, the requisite certificates
-     * (and private keys) for the suite are not available, or an
-     * anonymous suite is enabled but authentication is required.
+     * Note that even if a suite is enabled, it may never be used. This
+     * can occur if the peer does not support it, or its use is restricted,
+     * or the requisite certificates (and private keys) for the suite are
+     * not available, or an anonymous suite is enabled but authentication
+     * is required.
+     * <P>
+     * The returned array includes cipher suites from the list of standard
+     * cipher suite names in the <a href=
+     * "{@docRoot}/../specs/security/standard-names.html#jsse-cipher-suite-names">
+     * JSSE Cipher Suite Names</a> section of the Java Cryptography
+     * Architecture Standard Algorithm Name Documentation, and may also
+     * include other cipher suites that the provider supports.
      *
      * @return an array of cipher suite names
      * @see #getSupportedCipherSuites()
@@ -298,6 +315,14 @@ public abstract class SSLSocket extends Socket
      * been listed by getSupportedCipherSuites(), or the method will
      * fail.  Following a successful call to this method, only suites
      * listed in the <code>suites</code> parameter are enabled for use.
+     * <P>
+     * Note that the standard list of cipher suite names may be found in the
+     * <a href=
+     * "{@docRoot}/../specs/security/standard-names.html#jsse-cipher-suite-names">
+     * JSSE Cipher Suite Names</a> section of the Java Cryptography
+     * Architecture Standard Algorithm Name Documentation.  Providers
+     * may support cipher suite names not found in this list or might not
+     * use the recommended name for a certain cipher suite.
      * <P>
      * See {@link #getEnabledCipherSuites()} for more information
      * on why a specific ciphersuite may never be used on a connection.
@@ -324,6 +349,12 @@ public abstract class SSLSocket extends Socket
     /**
      * Returns the names of the protocol versions which are currently
      * enabled for use on this connection.
+     * <P>
+     * Note that even if a protocol is enabled, it may never be used.
+     * This can occur if the peer does not support the protocol, or its
+     * use is restricted, or there are no enabled cipher suites supported
+     * by the protocol.
+     *
      * @see #setEnabledProtocols(String [])
      * @return an array of protocols
      */
@@ -662,4 +693,142 @@ public abstract class SSLSocket extends Socket
         }
     }
 
+    /**
+     * Returns the most recent application protocol value negotiated for this
+     * connection.
+     * <p>
+     * If supported by the underlying SSL/TLS/DTLS implementation,
+     * application name negotiation mechanisms such as <a
+     * href="http://www.ietf.org/rfc/rfc7301.txt"> RFC 7301 </a>, the
+     * Application-Layer Protocol Negotiation (ALPN), can negotiate
+     * application-level values between peers.
+     * <p>
+     * @implSpec
+     * The implementation in this class throws
+     * {@code UnsupportedOperationException} and performs no other action.
+     *
+     * @return null if it has not yet been determined if application
+     *         protocols might be used for this connection, an empty
+     *         {@code String} if application protocols values will not
+     *         be used, or a non-empty application protocol {@code String}
+     *         if a value was successfully negotiated.
+     * @throws UnsupportedOperationException if the underlying provider
+     *         does not implement the operation.
+     * @since 9
+     */
+    public String getApplicationProtocol() {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Returns the application protocol value negotiated on a SSL/TLS
+     * handshake currently in progress.
+     * <p>
+     * Like {@link #getHandshakeSession()},
+     * a connection may be in the middle of a handshake. The
+     * application protocol may or may not yet be available.
+     * <p>
+     * @implSpec
+     * The implementation in this class throws
+     * {@code UnsupportedOperationException} and performs no other action.
+     *
+     * @return null if it has not yet been determined if application
+     *         protocols might be used for this handshake, an empty
+     *         {@code String} if application protocols values will not
+     *         be used, or a non-empty application protocol {@code String}
+     *         if a value was successfully negotiated.
+     * @throws UnsupportedOperationException if the underlying provider
+     *         does not implement the operation.
+     * @since 9
+     */
+    public String getHandshakeApplicationProtocol() {
+        throw new UnsupportedOperationException();
+    }
+
+
+    /**
+     * Registers a callback function that selects an application protocol
+     * value for a SSL/TLS/DTLS handshake.
+     * The function overrides any values supplied using
+     * {@link SSLParameters#setApplicationProtocols
+     * SSLParameters.setApplicationProtocols} and it supports the following
+     * type parameters:
+     * <blockquote>
+     * <dl>
+     * <dt> {@code SSLSocket}
+     * <dd> The function's first argument allows the current {@code SSLSocket}
+     *      to be inspected, including the handshake session and configuration
+     *      settings.
+     * <dt> {@code List<String>}
+     * <dd> The function's second argument lists the application protocol names
+     *      advertised by the TLS peer.
+     * <dt> {@code String}
+     * <dd> The function's result is an application protocol name, or null to
+     *      indicate that none of the advertised names are acceptable.
+     *      If the return value is an empty {@code String} then application
+     *      protocol indications will not be used.
+     *      If the return value is null (no value chosen) or is a value that
+     *      was not advertised by the peer, the underlying protocol will
+     *      determine what action to take. (For example, ALPN will send a
+     *      "no_application_protocol" alert and terminate the connection.)
+     * </dl>
+     * </blockquote>
+     *
+     * For example, the following call registers a callback function that
+     * examines the TLS handshake parameters and selects an application protocol
+     * name:
+     * <pre>{@code
+     *     serverSocket.setHandshakeApplicationProtocolSelector(
+     *         (serverSocket, clientProtocols) -> {
+     *             SSLSession session = serverSocket.getHandshakeSession();
+     *             return chooseApplicationProtocol(
+     *                 serverSocket,
+     *                 clientProtocols,
+     *                 session.getProtocol(),
+     *                 session.getCipherSuite());
+     *         });
+     * }</pre>
+     *
+     * @apiNote
+     * This method should be called by TLS server applications before the TLS
+     * handshake begins. Also, this {@code SSLSocket} should be configured with
+     * parameters that are compatible with the application protocol selected by
+     * the callback function. For example, enabling a poor choice of cipher
+     * suites could result in no suitable application protocol.
+     * See {@link SSLParameters}.
+     *
+     * @implSpec
+     * The implementation in this class throws
+     * {@code UnsupportedOperationException} and performs no other action.
+     *
+     * @param selector the callback function, or null to de-register.
+     * @throws UnsupportedOperationException if the underlying provider
+     *         does not implement the operation.
+     * @since 9
+     */
+    public void setHandshakeApplicationProtocolSelector(
+            BiFunction<SSLSocket, List<String>, String> selector) {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Retrieves the callback function that selects an application protocol
+     * value during a SSL/TLS/DTLS handshake.
+     * See {@link #setHandshakeApplicationProtocolSelector
+     * setHandshakeApplicationProtocolSelector}
+     * for the function's type parameters.
+     *
+     * @implSpec
+     * The implementation in this class throws
+     * {@code UnsupportedOperationException} and performs no other action.
+     *
+     * @return the callback function, or null if none has been set.
+     * @throws UnsupportedOperationException if the underlying provider
+     *         does not implement the operation.
+     * @since 9
+     */
+    public BiFunction<SSLSocket, List<String>, String>
+            getHandshakeApplicationProtocolSelector() {
+        throw new UnsupportedOperationException();
+    }
 }

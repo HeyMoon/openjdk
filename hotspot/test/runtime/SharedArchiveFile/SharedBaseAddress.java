@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,13 +25,14 @@
  * @test SharedBaseAddress
  * @summary Test variety of values for SharedBaseAddress, making sure
  *          VM handles normal values as well as edge values w/o a crash.
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  * @run main SharedBaseAddress
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 
 public class SharedBaseAddress {
 
@@ -43,10 +44,6 @@ public class SharedBaseAddress {
     };
 
     public static void main(String[] args) throws Exception {
-        // Known issue on Solaris-Sparc
-        // @ignore JDK-8044600
-        if (Platform.isSolaris() && Platform.isSparc())
-            return;
 
         for (String testEntry : testTable) {
             String filename = "SharedBaseAddress" + testEntry + ".jsa";

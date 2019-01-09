@@ -19,7 +19,6 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
 /**
@@ -27,14 +26,17 @@
  * @bug 8026124
  * @summary Javascript file provoked assertion failure in linkResolver.cpp
  * @modules jdk.scripting.nashorn/jdk.nashorn.tools
- * @run main/othervm CreatesInterfaceDotEqualsCallInfo
+ *
+ * @run main/othervm compiler.jsr292.CreatesInterfaceDotEqualsCallInfo
  */
 
+package compiler.jsr292;
+
 public class CreatesInterfaceDotEqualsCallInfo {
-  public static void main(String[] args) throws java.io.IOException {
-    String[] jsargs = { System.getProperty("test.src", ".") +
-                        "/createsInterfaceDotEqualsCallInfo.js" };
-    jdk.nashorn.tools.Shell.main(System.in, System.out, System.err, jsargs);
-    System.out.println("PASS, did not crash running Javascript");
-  }
+    public static void main(String[] args) throws java.io.IOException {
+        String[] jsargs = {System.getProperty("test.src", ".") +
+                "/createsInterfaceDotEqualsCallInfo.js"};
+        jdk.nashorn.tools.Shell.main(System.in, System.out, System.err, jsargs);
+        System.out.println("PASS, did not crash running Javascript");
+    }
 }

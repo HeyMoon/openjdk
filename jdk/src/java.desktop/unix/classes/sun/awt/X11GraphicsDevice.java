@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,7 +43,7 @@ import sun.java2d.xr.XRGraphicsConfig;
 import sun.java2d.loops.SurfaceType;
 
 import sun.awt.util.ThreadGroupUtils;
-import sun.misc.ManagedLocalsThread;
+import sun.java2d.SunGraphicsEnvironment;
 
 /**
  * This is an implementation of a GraphicsDevice object for a single
@@ -63,9 +63,11 @@ public final class X11GraphicsDevice extends GraphicsDevice
     private SunDisplayChanger topLevels = new SunDisplayChanger();
     private DisplayMode origDisplayMode;
     private boolean shutdownHookRegistered;
+    private int scale;
 
     public X11GraphicsDevice(int screennum) {
         this.screen = screennum;
+        this.scale = initScaleFactor();
     }
 
     /*
@@ -279,6 +281,7 @@ public final class X11GraphicsDevice extends GraphicsDevice
                                                  int width, int height,
                                                  int displayMode);
     private static native void resetNativeData(int screen);
+    private static native double getNativeScaleFactor(int screen);
 
     /**
      * Returns true only if:
@@ -316,6 +319,7 @@ public final class X11GraphicsDevice extends GraphicsDevice
     @Override
     public boolean isDisplayChangeSupported() {
         return (isFullScreenSupported()
+                && (getFullScreenWindow() != null)
                 && !((X11GraphicsEnvironment) GraphicsEnvironment
                         .getLocalGraphicsEnvironment()).runningXinerama());
     }
@@ -437,8 +441,8 @@ public final class X11GraphicsDevice extends GraphicsDevice
                     }
                 };
                 String name = "Display-Change-Shutdown-Thread-" + screen;
-                Thread t = new ManagedLocalsThread(
-                        ThreadGroupUtils.getRootThreadGroup(), r, name);
+                Thread t = new Thread(
+                      ThreadGroupUtils.getRootThreadGroup(), r, name, 0, false);
                 t.setContextClassLoader(null);
                 Runtime.getRuntime().addShutdownHook(t);
                 return null;
@@ -484,6 +488,7 @@ public final class X11GraphicsDevice extends GraphicsDevice
      * X11GraphicsEnvironment when the display mode has been changed.
      */
     public synchronized void displayChanged() {
+        scale = initScaleFactor();
         // On X11 the visuals do not change, and therefore we don't need
         // to reset the defaultConfig, config, doubleBufferVisuals,
         // neither do we need to reset the native data.
@@ -506,6 +511,31 @@ public final class X11GraphicsDevice extends GraphicsDevice
      */
     public void addDisplayChangedListener(DisplayChangedListener client) {
         topLevels.add(client);
+    }
+
+    public int getScaleFactor() {
+        return scale;
+    }
+
+    public int getNativeScale() {
+        isXrandrExtensionSupported();
+        return (int)Math.round(getNativeScaleFactor(screen));
+    }
+
+    private int initScaleFactor() {
+
+        if (SunGraphicsEnvironment.isUIScaleEnabled()) {
+
+            double debugScale = SunGraphicsEnvironment.getDebugScale();
+
+            if (debugScale >= 1) {
+                return (int) debugScale;
+            }
+            int nativeScale = getNativeScale();
+            return nativeScale >= 1 ? nativeScale : 1;
+        }
+
+        return 1;
     }
 
     /**

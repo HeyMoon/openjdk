@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,7 +23,7 @@
 
 /**
  * @test
- * @bug 6545058 6611182 8016209
+ * @bug 6545058 6611182 8016209 8139986 8162746
  * @summary validate and test -version, -fullversion, and internal, as well as
  *          sanity checks if a tool can be launched.
  * @compile VersionCheck.java
@@ -36,6 +36,8 @@ import java.util.Map;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 
 public class VersionCheck extends TestHelper {
 
@@ -47,13 +49,17 @@ public class VersionCheck extends TestHelper {
         "java-rmi.cgi",
         "java",
         "javacpl",
+        "jaccessinspector",
+        "jaccessinspector-32",
+        "jaccesswalker",
+        "jaccesswalker-32",
+        "jaotc",
         "javaw",
         "javaws",
         "jcontrol",
         "jmc",
         "jmc.ini",
-        "jp2launcher",
-        "jvisualvm",
+        "jweblauncher",
         "packager",
         "ssvagent",
         "unpack200",
@@ -64,6 +70,11 @@ public class VersionCheck extends TestHelper {
     static final String[] BLACKLIST_VERSION = {
         "appletviewer",
         "controlpanel",
+        "jaccessinspector",
+        "jaccessinspector-32",
+        "jaccesswalker",
+        "jaccesswalker-32",
+        "jaotc",
         "jar",
         "jarsigner",
         "java-rmi",
@@ -74,21 +85,22 @@ public class VersionCheck extends TestHelper {
         "jcmd",
         "jconsole",
         "jcontrol",
+        "jdeprscan",
         "jdeps",
         "jimage",
         "jinfo",
+        "jlink",
         "jmap",
+        "jmod",
         "jmc",
         "jmc.ini",
         "jps",
         "jrunscript",
         "jjs",
-        "jp2launcher",
-        "jsadebugd",
         "jstack",
         "jstat",
         "jstatd",
-        "jvisualvm",
+        "jweblauncher",
         "keytool",
         "kinit",
         "klist",
@@ -115,12 +127,20 @@ public class VersionCheck extends TestHelper {
     static String refVersion;
     static String refFullVersion;
 
+    static String getAllVersionLines(String... argv) {
+        return getVersion0(true, argv);
+    }
+
     static String getVersion(String... argv) {
+        return getVersion0(false, argv);
+    }
+
+    static String getVersion0(boolean allLines, String... argv) {
         TestHelper.TestResult tr = doExec(argv);
         StringBuilder out = new StringBuilder();
         // remove the HotSpot line
         for (String x : tr.testOutput) {
-            if (!x.matches(".*Client.*VM.*|.*Server.*VM.*")) {
+            if (allLines || !x.matches(".*Client.*VM.*|.*Server.*VM.*")) {
                 out = out.append(x + "\n");
             }
         }
@@ -128,32 +148,44 @@ public class VersionCheck extends TestHelper {
     }
 
     /*
-     * this tests if the tool can take a version string and returns
-     * a 0 exit code, it is not possible to validate the contents
-     * of the -version output as they are inconsistent.
+     * Checks if the tools accept "-version" option (exit code is zero).
+     * The output of the tools run with "-version" is not verified.
      */
-    static boolean testToolVersion() {
-        TestResult tr = null;
-        TestHelper.testExitValue = 0;
+    static String testToolVersion() {
+        System.out.println("=== testToolVersion === ");
+        Set<String> failed = new HashSet<>();
         for (File f : new File(JAVA_BIN).listFiles(new ToolFilter(BLACKLIST_VERSION))) {
             String x = f.getAbsolutePath();
-            System.out.println("Testing (-version): " + x);
-            tr = doExec(x, "-version");
-            tr.checkPositive();
+            TestResult tr = doExec(x, "-version");
+            System.out.println("Testing " + f.getName());
+            System.out.println("#> " + x + " -version");
+            tr.testOutput.forEach(System.out::println);
+            System.out.println("#> echo $?");
+            System.out.println(tr.exitValue);
+            if (!tr.isOK()) {
+                System.out.println("failed");
+                failed.add(f.getName());
+            }
         }
-        return TestHelper.testExitValue == 0;
+        if (failed.isEmpty()) {
+            System.out.println("testToolVersion passed");
+            return "";
+        } else {
+            System.out.println("testToolVersion failed");
+            return "testToolVersion: " + failed + "; ";
+        }
+
     }
 
-    static boolean compareJVersionStrings() {
-        int failcount = 0;
+    static String testJVersionStrings() {
+        System.out.println("=== testJVersionStrings === ");
+        Set<String> failed = new HashSet<>();
         for (File f : new File(JAVA_BIN).listFiles(new ToolFilter(BLACKLIST_JOPTION))) {
+            System.out.println("Testing " + f.getName());
             String x = f.getAbsolutePath();
-            System.out.println("Testing (-J-version): " + x);
-            String testStr;
-
-            testStr = getVersion(x, "-J-version");
+            String testStr = getVersion(x, "-J-version");
             if (refVersion.compareTo(testStr) != 0) {
-                failcount++;
+                failed.add(f.getName());
                 System.out.println("Error: " + x +
                                    " fails -J-version comparison");
                 System.out.println("Expected:");
@@ -164,7 +196,7 @@ public class VersionCheck extends TestHelper {
 
             testStr = getVersion(x, "-J-fullversion");
             if (refFullVersion.compareTo(testStr) != 0) {
-                failcount++;
+                failed.add(f.getName());
                 System.out.println("Error: " + x +
                                    " fails -J-fullversion comparison");
                 System.out.println("Expected:");
@@ -173,44 +205,66 @@ public class VersionCheck extends TestHelper {
                 System.out.print(testStr);
             }
         }
-        System.out.println("Version Test: " + failcount);
-        return failcount == 0;
+        if (failed.isEmpty()) {
+            System.out.println("testJVersionStrings passed");
+            return "";
+        } else {
+            System.out.println("testJVersionStrings failed");
+            return "testJVersionStrings: " + failed + "; ";
+        }
     }
 
-    static boolean compareInternalStrings() {
-        int failcount = 0;
-        String bStr = refVersion.substring(refVersion.lastIndexOf("build") +
+    static String testInternalStrings() {
+        System.out.println("=== testInternalStrings === ");
+        String bStr = refVersion.substring(refVersion.indexOf("build") +
                                            "build".length() + 1,
                                            refVersion.lastIndexOf(")"));
 
-        String[] vStr = bStr.split("\\.|-|_");
-        String jdkMajor = vStr[0];
-        String jdkMinor = vStr[1];
-        String jdkMicro = vStr[2];
-        String jdkBuild = vStr[vStr.length - 1];
-
-        String expectedDotVersion = "dotversion:" + jdkMajor + "." + jdkMinor;
         String expectedFullVersion = "fullversion:" + bStr;
 
         Map<String, String> envMap = new HashMap<>();
         envMap.put(TestHelper.JLDEBUG_KEY, "true");
         TestHelper.TestResult tr = doExec(envMap, javaCmd, "-version");
         List<String> alist = new ArrayList<>();
-        alist.addAll(tr.testOutput);
-        for (String x : tr.testOutput) {
-            alist.add(x.trim());
+        tr.testOutput.stream().map(String::trim).forEach(alist::add);
+
+        if (alist.contains(expectedFullVersion)) {
+            System.out.println("testInternalStrings passed");
+            return "";
+        } else {
+            System.out.println("Error: could not find " + expectedFullVersion);
+            tr.testOutput.forEach(System.out::println);
+            System.out.println("testInternalStrings failed");
+            return "testInternalStrings; ";
         }
-        if (!alist.contains(expectedDotVersion)) {
-            System.out.println("Error: could not find " + expectedDotVersion);
-            failcount++;
+    }
+
+    static String testDebugVersion() {
+        System.out.println("=== testInternalStrings === ");
+        String jdkType = System.getProperty("jdk.debug", "release");
+        String versionLines = getAllVersionLines(javaCmd, "-version");
+        if ("release".equals(jdkType)) {
+            jdkType = "";
+        } else {
+            jdkType = jdkType + " ";
         }
 
-        if (!alist.contains(expectedFullVersion)) {
-            System.out.println("Error: could not find " + expectedFullVersion);
-            failcount++;
+        String tofind = "(" + jdkType + "build";
+
+        int idx = versionLines.indexOf(tofind);
+        if (idx < 0) {
+            System.out.println("versionLines " + versionLines);
+            System.out.println("Did not find first instance of " + tofind);
+            return "testDebugVersion; ";
         }
-        System.out.println("Internal Strings Test: " + failcount);
-        return failcount == 0;
+        idx =  versionLines.indexOf(tofind, idx + 1);
+        if (idx < 0) {
+            System.out.println("versionLines " + versionLines);
+            System.out.println("Did not find second instance of " + tofind);
+            return "testDebugVersion; ";
+        }
+        System.out.println("testDebugVersion passed");
+        return "";
     }
 
     // Initialize
@@ -221,17 +275,20 @@ public class VersionCheck extends TestHelper {
 
     public static void main(String[] args) {
         init();
-        if (compareJVersionStrings() &&
-                compareInternalStrings() &&
-                testToolVersion()) {
+        String errorMessage = "";
+        errorMessage += testJVersionStrings();
+        errorMessage += testInternalStrings();
+        errorMessage += testToolVersion();
+        errorMessage += testDebugVersion();
+        if (errorMessage.isEmpty()) {
             System.out.println("All Version string comparisons: PASS");
         } else {
-            throw new AssertionError("Some tests failed");
+            throw new AssertionError("VersionCheck failed: " + errorMessage);
         }
     }
 
     static class ToolFilter implements FileFilter {
-        final Iterable<String> exclude ;
+        final Iterable<String> exclude;
         protected ToolFilter(String... exclude) {
             List<String> tlist = new ArrayList<>();
             this.exclude = tlist;

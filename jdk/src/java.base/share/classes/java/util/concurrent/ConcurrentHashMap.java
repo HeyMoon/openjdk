@@ -42,7 +42,6 @@ import java.lang.reflect.Type;
 import java.util.AbstractMap;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Hashtable;
@@ -51,14 +50,11 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.Spliterator;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
-import java.util.function.BinaryOperator;
 import java.util.function.Consumer;
 import java.util.function.DoubleBinaryOperator;
 import java.util.function.Function;
@@ -72,6 +68,7 @@ import java.util.function.ToIntFunction;
 import java.util.function.ToLongBiFunction;
 import java.util.function.ToLongFunction;
 import java.util.stream.Stream;
+import jdk.internal.misc.Unsafe;
 
 /**
  * A hash table supporting full concurrency of retrievals and
@@ -154,43 +151,43 @@ import java.util.stream.Stream;
  * being concurrently updated by other threads; for example, when
  * computing a snapshot summary of the values in a shared registry.
  * There are three kinds of operation, each with four forms, accepting
- * functions with Keys, Values, Entries, and (Key, Value) arguments
- * and/or return values. Because the elements of a ConcurrentHashMap
- * are not ordered in any particular way, and may be processed in
- * different orders in different parallel executions, the correctness
- * of supplied functions should not depend on any ordering, or on any
- * other objects or values that may transiently change while
- * computation is in progress; and except for forEach actions, should
- * ideally be side-effect-free. Bulk operations on {@link java.util.Map.Entry}
- * objects do not support method {@code setValue}.
+ * functions with keys, values, entries, and (key, value) pairs as
+ * arguments and/or return values. Because the elements of a
+ * ConcurrentHashMap are not ordered in any particular way, and may be
+ * processed in different orders in different parallel executions, the
+ * correctness of supplied functions should not depend on any
+ * ordering, or on any other objects or values that may transiently
+ * change while computation is in progress; and except for forEach
+ * actions, should ideally be side-effect-free. Bulk operations on
+ * {@link java.util.Map.Entry} objects do not support method {@code
+ * setValue}.
  *
  * <ul>
- * <li> forEach: Perform a given action on each element.
+ * <li>forEach: Performs a given action on each element.
  * A variant form applies a given transformation on each element
- * before performing the action.</li>
+ * before performing the action.
  *
- * <li> search: Return the first available non-null result of
+ * <li>search: Returns the first available non-null result of
  * applying a given function on each element; skipping further
- * search when a result is found.</li>
+ * search when a result is found.
  *
- * <li> reduce: Accumulate each element.  The supplied reduction
+ * <li>reduce: Accumulates each element.  The supplied reduction
  * function cannot rely on ordering (more formally, it should be
  * both associative and commutative).  There are five variants:
  *
  * <ul>
  *
- * <li> Plain reductions. (There is not a form of this method for
+ * <li>Plain reductions. (There is not a form of this method for
  * (key, value) function arguments since there is no corresponding
- * return type.)</li>
+ * return type.)
  *
- * <li> Mapped reductions that accumulate the results of a given
- * function applied to each element.</li>
+ * <li>Mapped reductions that accumulate the results of a given
+ * function applied to each element.
  *
- * <li> Reductions to scalar doubles, longs, and ints, using a
- * given basis value.</li>
+ * <li>Reductions to scalar doubles, longs, and ints, using a
+ * given basis value.
  *
  * </ul>
- * </li>
  * </ul>
  *
  * <p>These bulk operations accept a {@code parallelismThreshold}
@@ -257,7 +254,7 @@ import java.util.stream.Stream;
  * <p>All arguments to all task methods must be non-null.
  *
  * <p>This class is a member of the
- * <a href="{@docRoot}/../technotes/guides/collections/index.html">
+ * <a href="{@docRoot}/java/util/package-summary.html#CollectionsFramework">
  * Java Collections Framework</a>.
  *
  * @since 1.5
@@ -301,7 +298,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      * Table accesses require volatile/atomic reads, writes, and
      * CASes.  Because there is no other way to arrange this without
      * adding further indirections, we use intrinsics
-     * (sun.misc.Unsafe) operations.
+     * (jdk.internal.misc.Unsafe) operations.
      *
      * We use the top (sign) bit of Node hash fields for control
      * purposes -- it is available anyway because of addressing
@@ -576,7 +573,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      * The number of bits used for generation stamp in sizeCtl.
      * Must be at least 6 for 32bit arrays.
      */
-    private static int RESIZE_STAMP_BITS = 16;
+    private static final int RESIZE_STAMP_BITS = 16;
 
     /**
      * The maximum number of threads that can help resize.
@@ -600,11 +597,20 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     /** Number of CPUS, to place bounds on some sizings */
     static final int NCPU = Runtime.getRuntime().availableProcessors();
 
-    /** For serialization compatibility. */
+    /**
+     * Serialized pseudo-fields, provided only for jdk7 compatibility.
+     * @serialField segments Segment[]
+     *   The segments, each of which is a specialized hash table.
+     * @serialField segmentMask int
+     *   Mask value for indexing into segments. The upper bits of a
+     *   key's hash code are used to choose the segment.
+     * @serialField segmentShift int
+     *   Shift value for indexing within segments.
+     */
     private static final ObjectStreamField[] serialPersistentFields = {
         new ObjectStreamField("segments", Segment[].class),
         new ObjectStreamField("segmentMask", Integer.TYPE),
-        new ObjectStreamField("segmentShift", Integer.TYPE)
+        new ObjectStreamField("segmentShift", Integer.TYPE),
     };
 
     /* ---------------- Nodes -------------- */
@@ -623,17 +629,23 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         volatile V val;
         volatile Node<K,V> next;
 
-        Node(int hash, K key, V val, Node<K,V> next) {
+        Node(int hash, K key, V val) {
             this.hash = hash;
             this.key = key;
             this.val = val;
+        }
+
+        Node(int hash, K key, V val, Node<K,V> next) {
+            this(hash, key, val);
             this.next = next;
         }
 
-        public final K getKey()       { return key; }
-        public final V getValue()     { return val; }
-        public final int hashCode()   { return key.hashCode() ^ val.hashCode(); }
-        public final String toString(){ return key + "=" + val; }
+        public final K getKey()     { return key; }
+        public final V getValue()   { return val; }
+        public final int hashCode() { return key.hashCode() ^ val.hashCode(); }
+        public final String toString() {
+            return Helpers.mapEntryToString(key, val);
+        }
         public final V setValue(V value) {
             throw new UnsupportedOperationException();
         }
@@ -736,7 +748,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     /* ---------------- Table element access -------------- */
 
     /*
-     * Volatile access methods are used for table elements as well as
+     * Atomic access methods are used for table elements as well as
      * elements of in-progress next table while resizing.  All uses of
      * the tab arguments must be null checked by callers.  All callers
      * also paranoically precheck that tab's length is not zero (or an
@@ -746,23 +758,21 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      * errors by users, these checks must operate on local variables,
      * which accounts for some odd-looking inline assignments below.
      * Note that calls to setTabAt always occur within locked regions,
-     * and so in principle require only release ordering, not
-     * full volatile semantics, but are currently coded as volatile
-     * writes to be conservative.
+     * and so require only release ordering.
      */
 
     @SuppressWarnings("unchecked")
     static final <K,V> Node<K,V> tabAt(Node<K,V>[] tab, int i) {
-        return (Node<K,V>)U.getObjectVolatile(tab, ((long)i << ASHIFT) + ABASE);
+        return (Node<K,V>)U.getObjectAcquire(tab, ((long)i << ASHIFT) + ABASE);
     }
 
     static final <K,V> boolean casTabAt(Node<K,V>[] tab, int i,
                                         Node<K,V> c, Node<K,V> v) {
-        return U.compareAndSwapObject(tab, ((long)i << ASHIFT) + ABASE, c, v);
+        return U.compareAndSetObject(tab, ((long)i << ASHIFT) + ABASE, c, v);
     }
 
     static final <K,V> void setTabAt(Node<K,V>[] tab, int i, Node<K,V> v) {
-        U.putObjectVolatile(tab, ((long)i << ASHIFT) + ABASE, v);
+        U.putObjectRelease(tab, ((long)i << ASHIFT) + ABASE, v);
     }
 
     /* ---------------- Fields -------------- */
@@ -1013,16 +1023,19 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         int hash = spread(key.hashCode());
         int binCount = 0;
         for (Node<K,V>[] tab = table;;) {
-            Node<K,V> f; int n, i, fh;
+            Node<K,V> f; int n, i, fh; K fk; V fv;
             if (tab == null || (n = tab.length) == 0)
                 tab = initTable();
             else if ((f = tabAt(tab, i = (n - 1) & hash)) == null) {
-                if (casTabAt(tab, i, null,
-                             new Node<K,V>(hash, key, value, null)))
+                if (casTabAt(tab, i, null, new Node<K,V>(hash, key, value)))
                     break;                   // no lock when adding to empty bin
             }
             else if ((fh = f.hash) == MOVED)
                 tab = helpTransfer(tab, f);
+            else if (onlyIfAbsent && fh == hash &&  // check first node
+                     ((fk = f.key) == key || fk != null && key.equals(fk)) &&
+                     (fv = f.val) != null)
+                return fv;
             else {
                 V oldVal = null;
                 synchronized (f) {
@@ -1041,8 +1054,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                 }
                                 Node<K,V> pred = e;
                                 if ((e = e.next) == null) {
-                                    pred.next = new Node<K,V>(hash, key,
-                                                              value, null);
+                                    pred.next = new Node<K,V>(hash, key, value);
                                     break;
                                 }
                             }
@@ -1057,6 +1069,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                     p.val = value;
                             }
                         }
+                        else if (f instanceof ReservationNode)
+                            throw new IllegalStateException("Recursive update");
                     }
                 }
                 if (binCount != 0) {
@@ -1159,6 +1173,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                 }
                             }
                         }
+                        else if (f instanceof ReservationNode)
+                            throw new IllegalStateException("Recursive update");
                     }
                 }
                 if (validated) {
@@ -1229,7 +1245,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      */
     public KeySetView<K,V> keySet() {
         KeySetView<K,V> ks;
-        return (ks = keySet) != null ? ks : (keySet = new KeySetView<K,V>(this, null));
+        if ((ks = keySet) != null) return ks;
+        return keySet = new KeySetView<K,V>(this, null);
     }
 
     /**
@@ -1252,7 +1269,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      */
     public Collection<V> values() {
         ValuesView<K,V> vs;
-        return (vs = values) != null ? vs : (values = new ValuesView<K,V>(this));
+        if ((vs = values) != null) return vs;
+        return values = new ValuesView<K,V>(this);
     }
 
     /**
@@ -1274,7 +1292,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      */
     public Set<Map.Entry<K,V>> entrySet() {
         EntrySetView<K,V> es;
-        return (es = entrySet) != null ? es : (entrySet = new EntrySetView<K,V>(this));
+        if ((es = entrySet) != null) return es;
+        return entrySet = new EntrySetView<K,V>(this);
     }
 
     /**
@@ -1366,7 +1385,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
 
     /**
      * Stripped-down version of helper class used in previous version,
-     * declared for the sake of serialization compatibility
+     * declared for the sake of serialization compatibility.
      */
     static class Segment<K,V> extends ReentrantLock implements Serializable {
         private static final long serialVersionUID = 2249069246763182397L;
@@ -1380,8 +1399,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      * @param s the stream
      * @throws java.io.IOException if an I/O error occurs
      * @serialData
-     * the key (Object) and value (Object)
-     * for each key-value mapping, followed by a null pair.
+     * the serialized fields, followed by the key (Object) and value
+     * (Object) for each key-value mapping, followed by a null pair.
      * The key-value mappings are emitted in no particular order.
      */
     private void writeObject(java.io.ObjectOutputStream s)
@@ -1401,9 +1420,10 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             new Segment<?,?>[DEFAULT_CONCURRENCY_LEVEL];
         for (int i = 0; i < segments.length; ++i)
             segments[i] = new Segment<K,V>(LOAD_FACTOR);
-        s.putFields().put("segments", segments);
-        s.putFields().put("segmentShift", segmentShift);
-        s.putFields().put("segmentMask", segmentMask);
+        java.io.ObjectOutputStream.PutField streamFields = s.putFields();
+        streamFields.put("segments", segments);
+        streamFields.put("segmentShift", segmentShift);
+        streamFields.put("segmentMask", segmentMask);
         s.writeFields();
 
         Node<K,V>[] t;
@@ -1416,7 +1436,6 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         }
         s.writeObject(null);
         s.writeObject(null);
-        segments = null; // throw away
     }
 
     /**
@@ -1620,9 +1639,9 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     }
 
     /**
-     * Helper method for EntrySet.removeIf
+     * Helper method for EntrySetView.removeIf.
      */
-    boolean removeEntryIf(Predicate<? super Entry<K, V>> function) {
+    boolean removeEntryIf(Predicate<? super Entry<K,V>> function) {
         if (function == null) throw new NullPointerException();
         Node<K,V>[] t;
         boolean removed = false;
@@ -1640,9 +1659,9 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     }
 
     /**
-     * Helper method for Values.removeIf
+     * Helper method for ValuesView.removeIf.
      */
-    boolean removeValueIf(Predicate<? super  V> function) {
+    boolean removeValueIf(Predicate<? super V> function) {
         if (function == null) throw new NullPointerException();
         Node<K,V>[] t;
         boolean removed = false;
@@ -1687,7 +1706,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         V val = null;
         int binCount = 0;
         for (Node<K,V>[] tab = table;;) {
-            Node<K,V> f; int n, i, fh;
+            Node<K,V> f; int n, i, fh; K fk; V fv;
             if (tab == null || (n = tab.length) == 0)
                 tab = initTable();
             else if ((f = tabAt(tab, i = (n - 1) & h)) == null) {
@@ -1698,7 +1717,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                         Node<K,V> node = null;
                         try {
                             if ((val = mappingFunction.apply(key)) != null)
-                                node = new Node<K,V>(h, key, val, null);
+                                node = new Node<K,V>(h, key, val);
                         } finally {
                             setTabAt(tab, i, node);
                         }
@@ -1709,6 +1728,10 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             }
             else if ((fh = f.hash) == MOVED)
                 tab = helpTransfer(tab, f);
+            else if (fh == h &&                  // check first node
+                     ((fk = f.key) == key || fk != null && key.equals(fk)) &&
+                     (fv = f.val) != null)
+                return fv;
             else {
                 boolean added = false;
                 synchronized (f) {
@@ -1716,7 +1739,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                         if (fh >= 0) {
                             binCount = 1;
                             for (Node<K,V> e = f;; ++binCount) {
-                                K ek; V ev;
+                                K ek;
                                 if (e.hash == h &&
                                     ((ek = e.key) == key ||
                                      (ek != null && key.equals(ek)))) {
@@ -1726,8 +1749,10 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                 Node<K,V> pred = e;
                                 if ((e = e.next) == null) {
                                     if ((val = mappingFunction.apply(key)) != null) {
+                                        if (pred.next != null)
+                                            throw new IllegalStateException("Recursive update");
                                         added = true;
-                                        pred.next = new Node<K,V>(h, key, val, null);
+                                        pred.next = new Node<K,V>(h, key, val);
                                     }
                                     break;
                                 }
@@ -1745,6 +1770,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                 t.putTreeVal(h, key, val);
                             }
                         }
+                        else if (f instanceof ReservationNode)
+                            throw new IllegalStateException("Recursive update");
                     }
                 }
                 if (binCount != 0) {
@@ -1840,6 +1867,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                 }
                             }
                         }
+                        else if (f instanceof ReservationNode)
+                            throw new IllegalStateException("Recursive update");
                     }
                 }
                 if (binCount != 0)
@@ -1892,7 +1921,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                         try {
                             if ((val = remappingFunction.apply(key, null)) != null) {
                                 delta = 1;
-                                node = new Node<K,V>(h, key, val, null);
+                                node = new Node<K,V>(h, key, val);
                             }
                         } finally {
                             setTabAt(tab, i, node);
@@ -1931,9 +1960,10 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                 if ((e = e.next) == null) {
                                     val = remappingFunction.apply(key, null);
                                     if (val != null) {
+                                        if (pred.next != null)
+                                            throw new IllegalStateException("Recursive update");
                                         delta = 1;
-                                        pred.next =
-                                            new Node<K,V>(h, key, val, null);
+                                        pred.next = new Node<K,V>(h, key, val);
                                     }
                                     break;
                                 }
@@ -1963,6 +1993,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                     setTabAt(tab, i, untreeify(t.first));
                             }
                         }
+                        else if (f instanceof ReservationNode)
+                            throw new IllegalStateException("Recursive update");
                     }
                 }
                 if (binCount != 0) {
@@ -2009,7 +2041,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             if (tab == null || (n = tab.length) == 0)
                 tab = initTable();
             else if ((f = tabAt(tab, i = (n - 1) & h)) == null) {
-                if (casTabAt(tab, i, null, new Node<K,V>(h, key, value, null))) {
+                if (casTabAt(tab, i, null, new Node<K,V>(h, key, value))) {
                     delta = 1;
                     val = value;
                     break;
@@ -2044,8 +2076,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                 if ((e = e.next) == null) {
                                     delta = 1;
                                     val = value;
-                                    pred.next =
-                                        new Node<K,V>(h, key, val, null);
+                                    pred.next = new Node<K,V>(h, key, val);
                                     break;
                                 }
                             }
@@ -2072,6 +2103,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                     setTabAt(tab, i, untreeify(t.first));
                             }
                         }
+                        else if (f instanceof ReservationNode)
+                            throw new IllegalStateException("Recursive update");
                     }
                 }
                 if (binCount != 0) {
@@ -2089,12 +2122,13 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     // Hashtable legacy methods
 
     /**
-     * Legacy method testing if some key maps into the specified value
-     * in this table.  This method is identical in functionality to
+     * Tests if some key maps into the specified value in this table.
+     *
+     * <p>Note that this method is identical in functionality to
      * {@link #containsValue(Object)}, and exists solely to ensure
      * full compatibility with class {@link java.util.Hashtable},
      * which supported this method prior to introduction of the
-     * Java Collections framework.
+     * Java Collections Framework.
      *
      * @param  value a value to search for
      * @return {@code true} if and only if some key maps to the
@@ -2203,7 +2237,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     static final class ForwardingNode<K,V> extends Node<K,V> {
         final Node<K,V>[] nextTable;
         ForwardingNode(Node<K,V>[] tab) {
-            super(MOVED, null, null, null);
+            super(MOVED, null, null);
             this.nextTable = tab;
         }
 
@@ -2235,11 +2269,11 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     }
 
     /**
-     * A place-holder node used in computeIfAbsent and compute
+     * A place-holder node used in computeIfAbsent and compute.
      */
     static final class ReservationNode<K,V> extends Node<K,V> {
         ReservationNode() {
-            super(RESERVED, null, null, null);
+            super(RESERVED, null, null);
         }
 
         Node<K,V> find(int h, Object k) {
@@ -2265,7 +2299,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         while ((tab = table) == null || tab.length == 0) {
             if ((sc = sizeCtl) < 0)
                 Thread.yield(); // lost initialization race; just spin
-            else if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {
+            else if (U.compareAndSetInt(this, SIZECTL, sc, -1)) {
                 try {
                     if ((tab = table) == null || tab.length == 0) {
                         int n = (sc > 0) ? sc : DEFAULT_CAPACITY;
@@ -2296,13 +2330,13 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     private final void addCount(long x, int check) {
         CounterCell[] as; long b, s;
         if ((as = counterCells) != null ||
-            !U.compareAndSwapLong(this, BASECOUNT, b = baseCount, s = b + x)) {
+            !U.compareAndSetLong(this, BASECOUNT, b = baseCount, s = b + x)) {
             CounterCell a; long v; int m;
             boolean uncontended = true;
             if (as == null || (m = as.length - 1) < 0 ||
                 (a = as[ThreadLocalRandom.getProbe() & m]) == null ||
                 !(uncontended =
-                  U.compareAndSwapLong(a, CELLVALUE, v = a.value, v + x))) {
+                  U.compareAndSetLong(a, CELLVALUE, v = a.value, v + x))) {
                 fullAddCount(x, uncontended);
                 return;
             }
@@ -2320,10 +2354,10 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                         sc == rs + MAX_RESIZERS || (nt = nextTable) == null ||
                         transferIndex <= 0)
                         break;
-                    if (U.compareAndSwapInt(this, SIZECTL, sc, sc + 1))
+                    if (U.compareAndSetInt(this, SIZECTL, sc, sc + 1))
                         transfer(tab, nt);
                 }
-                else if (U.compareAndSwapInt(this, SIZECTL, sc,
+                else if (U.compareAndSetInt(this, SIZECTL, sc,
                                              (rs << RESIZE_STAMP_SHIFT) + 2))
                     transfer(tab, null);
                 s = sumCount();
@@ -2344,7 +2378,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                 if ((sc >>> RESIZE_STAMP_SHIFT) != rs || sc == rs + 1 ||
                     sc == rs + MAX_RESIZERS || transferIndex <= 0)
                     break;
-                if (U.compareAndSwapInt(this, SIZECTL, sc, sc + 1)) {
+                if (U.compareAndSetInt(this, SIZECTL, sc, sc + 1)) {
                     transfer(tab, nextTab);
                     break;
                 }
@@ -2367,7 +2401,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             Node<K,V>[] tab = table; int n;
             if (tab == null || (n = tab.length) == 0) {
                 n = (sc > c) ? sc : c;
-                if (U.compareAndSwapInt(this, SIZECTL, sc, -1)) {
+                if (U.compareAndSetInt(this, SIZECTL, sc, -1)) {
                     try {
                         if (table == tab) {
                             @SuppressWarnings("unchecked")
@@ -2384,17 +2418,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                 break;
             else if (tab == table) {
                 int rs = resizeStamp(n);
-                if (sc < 0) {
-                    Node<K,V>[] nt;
-                    if ((sc >>> RESIZE_STAMP_SHIFT) != rs || sc == rs + 1 ||
-                        sc == rs + MAX_RESIZERS || (nt = nextTable) == null ||
-                        transferIndex <= 0)
-                        break;
-                    if (U.compareAndSwapInt(this, SIZECTL, sc, sc + 1))
-                        transfer(tab, nt);
-                }
-                else if (U.compareAndSwapInt(this, SIZECTL, sc,
-                                             (rs << RESIZE_STAMP_SHIFT) + 2))
+                if (U.compareAndSetInt(this, SIZECTL, sc,
+                                        (rs << RESIZE_STAMP_SHIFT) + 2))
                     transfer(tab, null);
             }
         }
@@ -2434,7 +2459,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                     i = -1;
                     advance = false;
                 }
-                else if (U.compareAndSwapInt
+                else if (U.compareAndSetInt
                          (this, TRANSFERINDEX, nextIndex,
                           nextBound = (nextIndex > stride ?
                                        nextIndex - stride : 0))) {
@@ -2451,7 +2476,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                     sizeCtl = (n << 1) - (n >>> 1);
                     return;
                 }
-                if (U.compareAndSwapInt(this, SIZECTL, sc = sizeCtl, sc - 1)) {
+                if (U.compareAndSetInt(this, SIZECTL, sc = sizeCtl, sc - 1)) {
                     if ((sc - 2) != resizeStamp(n) << RESIZE_STAMP_SHIFT)
                         return;
                     finishing = advance = true;
@@ -2543,7 +2568,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      * A padded cell for distributing counts.  Adapted from LongAdder
      * and Striped64.  See their internal docs for explanation.
      */
-    @sun.misc.Contended static final class CounterCell {
+    @jdk.internal.vm.annotation.Contended static final class CounterCell {
         volatile long value;
         CounterCell(long x) { value = x; }
     }
@@ -2576,7 +2601,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                     if (cellsBusy == 0) {            // Try to attach new Cell
                         CounterCell r = new CounterCell(x); // Optimistic create
                         if (cellsBusy == 0 &&
-                            U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                            U.compareAndSetInt(this, CELLSBUSY, 0, 1)) {
                             boolean created = false;
                             try {               // Recheck under lock
                                 CounterCell[] rs; int m, j;
@@ -2598,14 +2623,14 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                 }
                 else if (!wasUncontended)       // CAS already known to fail
                     wasUncontended = true;      // Continue after rehash
-                else if (U.compareAndSwapLong(a, CELLVALUE, v = a.value, v + x))
+                else if (U.compareAndSetLong(a, CELLVALUE, v = a.value, v + x))
                     break;
                 else if (counterCells != as || n >= NCPU)
                     collide = false;            // At max size or stale
                 else if (!collide)
                     collide = true;
                 else if (cellsBusy == 0 &&
-                         U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                         U.compareAndSetInt(this, CELLSBUSY, 0, 1)) {
                     try {
                         if (counterCells == as) {// Expand table unless stale
                             CounterCell[] rs = new CounterCell[n << 1];
@@ -2622,7 +2647,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                 h = ThreadLocalRandom.advanceProbe(h);
             }
             else if (cellsBusy == 0 && counterCells == as &&
-                     U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                     U.compareAndSetInt(this, CELLSBUSY, 0, 1)) {
                 boolean init = false;
                 try {                           // Initialize table
                     if (counterCells == as) {
@@ -2637,7 +2662,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                 if (init)
                     break;
             }
-            else if (U.compareAndSwapLong(this, BASECOUNT, v = baseCount, v + x))
+            else if (U.compareAndSetLong(this, BASECOUNT, v = baseCount, v + x))
                 break;                          // Fall back on using base
         }
     }
@@ -2649,7 +2674,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      * too small, in which case resizes instead.
      */
     private final void treeifyBin(Node<K,V>[] tab, int index) {
-        Node<K,V> b; int n, sc;
+        Node<K,V> b; int n;
         if (tab != null) {
             if ((n = tab.length) < MIN_TREEIFY_CAPACITY)
                 tryPresize(n << 1);
@@ -2675,12 +2700,12 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     }
 
     /**
-     * Returns a list on non-TreeNodes replacing those in given list.
+     * Returns a list of non-TreeNodes replacing those in given list.
      */
     static <K,V> Node<K,V> untreeify(Node<K,V> b) {
         Node<K,V> hd = null, tl = null;
         for (Node<K,V> q = b; q != null; q = q.next) {
-            Node<K,V> p = new Node<K,V>(q.hash, q.key, q.val, null);
+            Node<K,V> p = new Node<K,V>(q.hash, q.key, q.val);
             if (tl == null)
                 hd = p;
             else
@@ -2693,7 +2718,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     /* ---------------- TreeNodes -------------- */
 
     /**
-     * Nodes for use in TreeBins
+     * Nodes for use in TreeBins.
      */
     static final class TreeNode<K,V> extends Node<K,V> {
         TreeNode<K,V> parent;  // red-black tree links
@@ -2719,7 +2744,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         final TreeNode<K,V> findTreeNode(int h, Object k, Class<?> kc) {
             if (k != null) {
                 TreeNode<K,V> p = this;
-                do  {
+                do {
                     int ph, dir; K pk; TreeNode<K,V> q;
                     TreeNode<K,V> pl = p.left, pr = p.right;
                     if ((ph = p.hash) > h)
@@ -2786,7 +2811,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
          * Creates bin with initial set of nodes headed by b.
          */
         TreeBin(TreeNode<K,V> b) {
-            super(TREEBIN, null, null, null);
+            super(TREEBIN, null, null);
             this.first = b;
             TreeNode<K,V> r = null;
             for (TreeNode<K,V> x = b, next; x != null; x = next) {
@@ -2812,7 +2837,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                   (kc = comparableClassFor(k)) == null) ||
                                  (dir = compareComparables(kc, k, pk)) == 0)
                             dir = tieBreakOrder(k, pk);
-                            TreeNode<K,V> xp = p;
+                        TreeNode<K,V> xp = p;
                         if ((p = (dir <= 0) ? p.left : p.right) == null) {
                             x.parent = xp;
                             if (dir <= 0)
@@ -2833,7 +2858,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
          * Acquires write lock for tree restructuring.
          */
         private final void lockRoot() {
-            if (!U.compareAndSwapInt(this, LOCKSTATE, 0, WRITER))
+            if (!U.compareAndSetInt(this, LOCKSTATE, 0, WRITER))
                 contendedLock(); // offload to separate method
         }
 
@@ -2851,14 +2876,14 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             boolean waiting = false;
             for (int s;;) {
                 if (((s = lockState) & ~WAITER) == 0) {
-                    if (U.compareAndSwapInt(this, LOCKSTATE, s, WRITER)) {
+                    if (U.compareAndSetInt(this, LOCKSTATE, s, WRITER)) {
                         if (waiting)
                             waiter = null;
                         return;
                     }
                 }
                 else if ((s & WAITER) == 0) {
-                    if (U.compareAndSwapInt(this, LOCKSTATE, s, s | WAITER)) {
+                    if (U.compareAndSetInt(this, LOCKSTATE, s, s | WAITER)) {
                         waiting = true;
                         waiter = Thread.currentThread();
                     }
@@ -2883,7 +2908,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                             return e;
                         e = e.next;
                     }
-                    else if (U.compareAndSwapInt(this, LOCKSTATE, s,
+                    else if (U.compareAndSetInt(this, LOCKSTATE, s,
                                                  s + READER)) {
                         TreeNode<K,V> r, p;
                         try {
@@ -3165,7 +3190,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
 
         static <K,V> TreeNode<K,V> balanceDeletion(TreeNode<K,V> root,
                                                    TreeNode<K,V> x) {
-            for (TreeNode<K,V> xp, xpl, xpr;;)  {
+            for (TreeNode<K,V> xp, xpl, xpr;;) {
                 if (x == null || x == root)
                     return root;
                 else if ((xp = x.parent) == null) {
@@ -3256,7 +3281,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         }
 
         /**
-         * Recursive invariant check
+         * Checks invariants recursively for the tree of Nodes rooted at t.
          */
         static <K,V> boolean checkInvariants(TreeNode<K,V> t) {
             TreeNode<K,V> tp = t.parent, tl = t.left, tr = t.right,
@@ -3280,15 +3305,13 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             return true;
         }
 
-        private static final sun.misc.Unsafe U;
+        private static final Unsafe U = Unsafe.getUnsafe();
         private static final long LOCKSTATE;
         static {
             try {
-                U = sun.misc.Unsafe.getUnsafe();
-                Class<?> k = TreeBin.class;
                 LOCKSTATE = U.objectFieldOffset
-                    (k.getDeclaredField("lockState"));
-            } catch (Exception e) {
+                    (TreeBin.class.getDeclaredField("lockState"));
+            } catch (ReflectiveOperationException e) {
                 throw new Error(e);
             }
         }
@@ -3503,7 +3526,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     }
 
     /**
-     * Exported Entry for EntryIterator
+     * Exported Entry for EntryIterator.
      */
     static final class MapEntry<K,V> implements Map.Entry<K,V> {
         final K key; // non-null
@@ -3517,7 +3540,9 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         public K getKey()        { return key; }
         public V getValue()      { return val; }
         public int hashCode()    { return key.hashCode() ^ val.hashCode(); }
-        public String toString() { return key + "=" + val; }
+        public String toString() {
+            return Helpers.mapEntryToString(key, val);
+        }
 
         public boolean equals(Object o) {
             Object k, v; Map.Entry<?,?> e;
@@ -3554,7 +3579,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             this.est = est;
         }
 
-        public Spliterator<K> trySplit() {
+        public KeySpliterator<K,V> trySplit() {
             int i, f, h;
             return (h = ((i = baseIndex) + (f = baseLimit)) >>> 1) <= i ? null :
                 new KeySpliterator<K,V>(tab, baseSize, baseLimit = h,
@@ -3593,7 +3618,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             this.est = est;
         }
 
-        public Spliterator<V> trySplit() {
+        public ValueSpliterator<K,V> trySplit() {
             int i, f, h;
             return (h = ((i = baseIndex) + (f = baseLimit)) >>> 1) <= i ? null :
                 new ValueSpliterator<K,V>(tab, baseSize, baseLimit = h,
@@ -3633,7 +3658,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             this.est = est;
         }
 
-        public Spliterator<Map.Entry<K,V>> trySplit() {
+        public EntrySpliterator<K,V> trySplit() {
             int i, f, h;
             return (h = ((i = baseIndex) + (f = baseLimit)) >>> 1) <= i ? null :
                 new EntrySpliterator<K,V>(tab, baseSize, baseLimit = h,
@@ -4445,19 +4470,19 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         public abstract boolean contains(Object o);
         public abstract boolean remove(Object o);
 
-        private static final String oomeMsg = "Required array size too large";
+        private static final String OOME_MSG = "Required array size too large";
 
         public final Object[] toArray() {
             long sz = map.mappingCount();
             if (sz > MAX_ARRAY_SIZE)
-                throw new OutOfMemoryError(oomeMsg);
+                throw new OutOfMemoryError(OOME_MSG);
             int n = (int)sz;
             Object[] r = new Object[n];
             int i = 0;
             for (E e : this) {
                 if (i == n) {
                     if (n >= MAX_ARRAY_SIZE)
-                        throw new OutOfMemoryError(oomeMsg);
+                        throw new OutOfMemoryError(OOME_MSG);
                     if (n >= MAX_ARRAY_SIZE - (MAX_ARRAY_SIZE >>> 1) - 1)
                         n = MAX_ARRAY_SIZE;
                     else
@@ -4473,7 +4498,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         public final <T> T[] toArray(T[] a) {
             long sz = map.mappingCount();
             if (sz > MAX_ARRAY_SIZE)
-                throw new OutOfMemoryError(oomeMsg);
+                throw new OutOfMemoryError(OOME_MSG);
             int m = (int)sz;
             T[] r = (a.length >= m) ? a :
                 (T[])java.lang.reflect.Array
@@ -4483,7 +4508,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             for (E e : this) {
                 if (i == n) {
                     if (n >= MAX_ARRAY_SIZE)
-                        throw new OutOfMemoryError(oomeMsg);
+                        throw new OutOfMemoryError(OOME_MSG);
                     if (n >= MAX_ARRAY_SIZE - (MAX_ARRAY_SIZE >>> 1) - 1)
                         n = MAX_ARRAY_SIZE;
                     else
@@ -4536,14 +4561,24 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             return true;
         }
 
-        public final boolean removeAll(Collection<?> c) {
+        public boolean removeAll(Collection<?> c) {
             if (c == null) throw new NullPointerException();
             boolean modified = false;
-            for (Iterator<E> it = iterator(); it.hasNext();) {
-                if (c.contains(it.next())) {
-                    it.remove();
-                    modified = true;
+            // Use (c instanceof Set) as a hint that lookup in c is as
+            // efficient as this view
+            Node<K,V>[] t;
+            if ((t = map.table) == null) {
+                return false;
+            } else if (c instanceof Set<?> && c.size() > t.length) {
+                for (Iterator<?> it = iterator(); it.hasNext(); ) {
+                    if (c.contains(it.next())) {
+                        it.remove();
+                        modified = true;
+                    }
                 }
+            } else {
+                for (Object e : c)
+                    modified |= remove(e);
             }
             return modified;
         }
@@ -4730,6 +4765,18 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             throw new UnsupportedOperationException();
         }
 
+        @Override public boolean removeAll(Collection<?> c) {
+            if (c == null) throw new NullPointerException();
+            boolean modified = false;
+            for (Iterator<V> it = iterator(); it.hasNext();) {
+                if (c.contains(it.next())) {
+                    it.remove();
+                    modified = true;
+                }
+            }
+            return modified;
+        }
+
         public boolean removeIf(Predicate<? super V> filter) {
             return map.removeValueIf(filter);
         }
@@ -4803,7 +4850,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             return added;
         }
 
-        public boolean removeIf(Predicate<? super Entry<K, V>> filter) {
+        public boolean removeIf(Predicate<? super Entry<K,V>> filter) {
             return map.removeEntryIf(filter);
         }
 
@@ -4878,7 +4925,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
         }
 
         /**
-         * Same as Traverser version
+         * Same as Traverser version.
          */
         final Node<K,V> advance() {
             Node<K,V> e;
@@ -6323,38 +6370,40 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     }
 
     // Unsafe mechanics
-    private static final sun.misc.Unsafe U;
+    private static final Unsafe U = Unsafe.getUnsafe();
     private static final long SIZECTL;
     private static final long TRANSFERINDEX;
     private static final long BASECOUNT;
     private static final long CELLSBUSY;
     private static final long CELLVALUE;
-    private static final long ABASE;
+    private static final int ABASE;
     private static final int ASHIFT;
 
     static {
         try {
-            U = sun.misc.Unsafe.getUnsafe();
-            Class<?> k = ConcurrentHashMap.class;
             SIZECTL = U.objectFieldOffset
-                (k.getDeclaredField("sizeCtl"));
+                (ConcurrentHashMap.class.getDeclaredField("sizeCtl"));
             TRANSFERINDEX = U.objectFieldOffset
-                (k.getDeclaredField("transferIndex"));
+                (ConcurrentHashMap.class.getDeclaredField("transferIndex"));
             BASECOUNT = U.objectFieldOffset
-                (k.getDeclaredField("baseCount"));
+                (ConcurrentHashMap.class.getDeclaredField("baseCount"));
             CELLSBUSY = U.objectFieldOffset
-                (k.getDeclaredField("cellsBusy"));
-            Class<?> ck = CounterCell.class;
+                (ConcurrentHashMap.class.getDeclaredField("cellsBusy"));
+
             CELLVALUE = U.objectFieldOffset
-                (ck.getDeclaredField("value"));
-            Class<?> ak = Node[].class;
-            ABASE = U.arrayBaseOffset(ak);
-            int scale = U.arrayIndexScale(ak);
+                (CounterCell.class.getDeclaredField("value"));
+
+            ABASE = U.arrayBaseOffset(Node[].class);
+            int scale = U.arrayIndexScale(Node[].class);
             if ((scale & (scale - 1)) != 0)
-                throw new Error("data type scale not a power of two");
+                throw new Error("array index scale not a power of two");
             ASHIFT = 31 - Integer.numberOfLeadingZeros(scale);
-        } catch (Exception e) {
+        } catch (ReflectiveOperationException e) {
             throw new Error(e);
         }
+
+        // Reduce the risk of rare disastrous classloading in first call to
+        // LockSupport.park: https://bugs.openjdk.java.net/browse/JDK-8074773
+        Class<?> ensureLoaded = LockSupport.class;
     }
 }

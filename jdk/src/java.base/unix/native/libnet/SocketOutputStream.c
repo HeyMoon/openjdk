@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2008, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,15 +22,10 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
-#include <stdlib.h>
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/socket.h>
 
-#include "jni_util.h"
-#include "jvm.h"
 #include "net_util.h"
 
 #include "java_net_SocketOutputStream.h"
@@ -103,27 +98,31 @@ Java_java_net_SocketOutputStream_socketWrite0(JNIEnv *env, jobject this,
         int llen = chunkLen;
         (*env)->GetByteArrayRegion(env, data, off, chunkLen, (jbyte *)bufP);
 
-        while(llen > 0) {
-            int n = NET_Send(fd, bufP + loff, llen, 0);
-            if (n > 0) {
-                llen -= n;
-                loff += n;
-                continue;
+        if ((*env)->ExceptionCheck(env)) {
+            break;
+        } else {
+            while(llen > 0) {
+                int n = NET_Send(fd, bufP + loff, llen, 0);
+                if (n > 0) {
+                    llen -= n;
+                    loff += n;
+                    continue;
+                }
+                if (errno == ECONNRESET) {
+                    JNU_ThrowByName(env, "sun/net/ConnectionResetException",
+                        "Connection reset");
+                } else {
+                    JNU_ThrowByNameWithMessageAndLastError
+                        (env, "java/net/SocketException", "Write failed");
+                }
+                if (bufP != BUF) {
+                    free(bufP);
+                }
+                return;
             }
-            if (errno == ECONNRESET) {
-                JNU_ThrowByName(env, "sun/net/ConnectionResetException",
-                    "Connection reset");
-            } else {
-                NET_ThrowByNameWithLastError(env, "java/net/SocketException",
-                    "Write failed");
-            }
-            if (bufP != BUF) {
-                free(bufP);
-            }
-            return;
+            len -= chunkLen;
+            off += chunkLen;
         }
-        len -= chunkLen;
-        off += chunkLen;
     }
 
     if (bufP != BUF) {

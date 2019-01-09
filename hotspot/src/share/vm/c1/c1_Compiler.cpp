@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,7 +32,6 @@
 #include "c1/c1_Runtime1.hpp"
 #include "c1/c1_ValueType.hpp"
 #include "compiler/compileBroker.hpp"
-#include "compiler/compilerOracle.hpp"
 #include "interpreter/linkResolver.hpp"
 #include "memory/allocation.hpp"
 #include "memory/allocation.inline.hpp"
@@ -43,7 +42,7 @@
 #include "runtime/sharedRuntime.hpp"
 
 
-Compiler::Compiler() : AbstractCompiler(c1) {
+Compiler::Compiler() : AbstractCompiler(compiler_c1) {
 }
 
 void Compiler::init_c1_runtime() {
@@ -99,8 +98,145 @@ BufferBlob* Compiler::init_buffer_blob() {
   return buffer_blob;
 }
 
+bool Compiler::is_intrinsic_supported(const methodHandle& method) {
+  vmIntrinsics::ID id = method->intrinsic_id();
+  assert(id != vmIntrinsics::_none, "must be a VM intrinsic");
 
-void Compiler::compile_method(ciEnv* env, ciMethod* method, int entry_bci) {
+  if (method->is_synchronized()) {
+    // C1 does not support intrinsification of synchronized methods.
+    return false;
+  }
+
+  switch (id) {
+  case vmIntrinsics::_compareAndSetLong:
+    if (!VM_Version::supports_cx8()) return false;
+    break;
+  case vmIntrinsics::_getAndAddInt:
+    if (!VM_Version::supports_atomic_getadd4()) return false;
+    break;
+  case vmIntrinsics::_getAndAddLong:
+    if (!VM_Version::supports_atomic_getadd8()) return false;
+    break;
+  case vmIntrinsics::_getAndSetInt:
+    if (!VM_Version::supports_atomic_getset4()) return false;
+    break;
+  case vmIntrinsics::_getAndSetLong:
+    if (!VM_Version::supports_atomic_getset8()) return false;
+    break;
+  case vmIntrinsics::_getAndSetObject:
+#ifdef _LP64
+    if (!UseCompressedOops && !VM_Version::supports_atomic_getset8()) return false;
+    if (UseCompressedOops && !VM_Version::supports_atomic_getset4()) return false;
+#else
+    if (!VM_Version::supports_atomic_getset4()) return false;
+#endif
+    break;
+  case vmIntrinsics::_onSpinWait:
+    if (!VM_Version::supports_on_spin_wait()) return false;
+    break;
+  case vmIntrinsics::_arraycopy:
+  case vmIntrinsics::_currentTimeMillis:
+  case vmIntrinsics::_nanoTime:
+  case vmIntrinsics::_Reference_get:
+    // Use the intrinsic version of Reference.get() so that the value in
+    // the referent field can be registered by the G1 pre-barrier code.
+    // Also to prevent commoning reads from this field across safepoint
+    // since GC can change its value.
+  case vmIntrinsics::_loadFence:
+  case vmIntrinsics::_storeFence:
+  case vmIntrinsics::_fullFence:
+  case vmIntrinsics::_floatToRawIntBits:
+  case vmIntrinsics::_intBitsToFloat:
+  case vmIntrinsics::_doubleToRawLongBits:
+  case vmIntrinsics::_longBitsToDouble:
+  case vmIntrinsics::_getClass:
+  case vmIntrinsics::_isInstance:
+  case vmIntrinsics::_isPrimitive:
+  case vmIntrinsics::_currentThread:
+  case vmIntrinsics::_dabs:
+  case vmIntrinsics::_dsqrt:
+  case vmIntrinsics::_dsin:
+  case vmIntrinsics::_dcos:
+  case vmIntrinsics::_dtan:
+  case vmIntrinsics::_dlog:
+  case vmIntrinsics::_dlog10:
+  case vmIntrinsics::_dexp:
+  case vmIntrinsics::_dpow:
+  case vmIntrinsics::_fmaD:
+  case vmIntrinsics::_fmaF:
+  case vmIntrinsics::_getObject:
+  case vmIntrinsics::_getBoolean:
+  case vmIntrinsics::_getByte:
+  case vmIntrinsics::_getShort:
+  case vmIntrinsics::_getChar:
+  case vmIntrinsics::_getInt:
+  case vmIntrinsics::_getLong:
+  case vmIntrinsics::_getFloat:
+  case vmIntrinsics::_getDouble:
+  case vmIntrinsics::_putObject:
+  case vmIntrinsics::_putBoolean:
+  case vmIntrinsics::_putByte:
+  case vmIntrinsics::_putShort:
+  case vmIntrinsics::_putChar:
+  case vmIntrinsics::_putInt:
+  case vmIntrinsics::_putLong:
+  case vmIntrinsics::_putFloat:
+  case vmIntrinsics::_putDouble:
+  case vmIntrinsics::_getObjectVolatile:
+  case vmIntrinsics::_getBooleanVolatile:
+  case vmIntrinsics::_getByteVolatile:
+  case vmIntrinsics::_getShortVolatile:
+  case vmIntrinsics::_getCharVolatile:
+  case vmIntrinsics::_getIntVolatile:
+  case vmIntrinsics::_getLongVolatile:
+  case vmIntrinsics::_getFloatVolatile:
+  case vmIntrinsics::_getDoubleVolatile:
+  case vmIntrinsics::_putObjectVolatile:
+  case vmIntrinsics::_putBooleanVolatile:
+  case vmIntrinsics::_putByteVolatile:
+  case vmIntrinsics::_putShortVolatile:
+  case vmIntrinsics::_putCharVolatile:
+  case vmIntrinsics::_putIntVolatile:
+  case vmIntrinsics::_putLongVolatile:
+  case vmIntrinsics::_putFloatVolatile:
+  case vmIntrinsics::_putDoubleVolatile:
+  case vmIntrinsics::_getShortUnaligned:
+  case vmIntrinsics::_getCharUnaligned:
+  case vmIntrinsics::_getIntUnaligned:
+  case vmIntrinsics::_getLongUnaligned:
+  case vmIntrinsics::_putShortUnaligned:
+  case vmIntrinsics::_putCharUnaligned:
+  case vmIntrinsics::_putIntUnaligned:
+  case vmIntrinsics::_putLongUnaligned:
+  case vmIntrinsics::_checkIndex:
+  case vmIntrinsics::_updateCRC32:
+  case vmIntrinsics::_updateBytesCRC32:
+  case vmIntrinsics::_updateByteBufferCRC32:
+#ifdef SPARC
+  case vmIntrinsics::_updateBytesCRC32C:
+  case vmIntrinsics::_updateDirectByteBufferCRC32C:
+#endif
+  case vmIntrinsics::_vectorizedMismatch:
+  case vmIntrinsics::_compareAndSetInt:
+  case vmIntrinsics::_compareAndSetObject:
+  case vmIntrinsics::_getCharStringU:
+  case vmIntrinsics::_putCharStringU:
+#ifdef TRACE_HAVE_INTRINSICS
+  case vmIntrinsics::_counterTime:
+  case vmIntrinsics::_getBufferWriter:
+#if defined(_LP64) || !defined(TRACE_ID_CLASS_SHIFT)
+  case vmIntrinsics::_getClassId:
+#endif
+#endif
+    break;
+  default:
+    return false; // Intrinsics not on the previous list are not available.
+  }
+
+  return true;
+}
+
+void Compiler::compile_method(ciEnv* env, ciMethod* method, int entry_bci, DirectiveSet* directive) {
   BufferBlob* buffer_blob = CompilerThread::current()->get_buffer_blob();
   assert(buffer_blob != NULL, "Must exist");
   // invoke compilation
@@ -109,7 +245,7 @@ void Compiler::compile_method(ciEnv* env, ciMethod* method, int entry_bci) {
     // of Compilation to occur before we release the any
     // competing compiler thread
     ResourceMark rm;
-    Compilation c(this, env, method, entry_bci, buffer_blob);
+    Compilation c(this, env, method, entry_bci, buffer_blob, directive);
   }
 }
 

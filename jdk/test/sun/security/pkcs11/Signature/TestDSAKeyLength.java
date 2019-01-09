@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -20,6 +20,7 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 /*
  * @test
  * @bug 7200306 8029158
@@ -27,22 +28,43 @@
  * with unsupported key sizes
  * @library ..
  * @key randomness
+ * @modules jdk.crypto.cryptoki
+ * @run main/othervm TestDSAKeyLength
+ * @run main/othervm TestDSAKeyLength sm
  */
 
-
-import java.security.*;
-import java.security.spec.*;
-import java.security.interfaces.*;
+import java.security.InvalidKeyException;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.Provider;
+import java.security.SecureRandom;
+import java.security.Signature;
 
 public class TestDSAKeyLength extends PKCS11Test {
 
     public static void main(String[] args) throws Exception {
-        main(new TestDSAKeyLength());
+        main(new TestDSAKeyLength(), args);
     }
 
+    @Override
     public void main(Provider provider) throws Exception {
         if (isNSS(provider) && getNSSVersion() >= 3.14) {
             System.out.println("Skip testing NSS " + getNSSVersion());
+            return;
+        }
+
+        /*
+         * Use Solaris SPARC 11.2 or later to avoid an intermittent failure
+         * when running SunPKCS11-Solaris (8044554)
+         */
+        if (provider.getName().equals("SunPKCS11-Solaris") &&
+            props.getProperty("os.name").equals("SunOS") &&
+            props.getProperty("os.arch").equals("sparcv9") &&
+            props.getProperty("os.version").compareTo("5.11") <= 0 &&
+            getDistro().compareTo("11.2") < 0) {
+
+            System.out.println("SunPKCS11-Solaris provider requires " +
+                "Solaris SPARC 11.2 or later, skipping");
             return;
         }
 

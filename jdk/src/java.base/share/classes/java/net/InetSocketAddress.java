@@ -206,7 +206,7 @@ public class InetSocketAddress
      * @param   hostname the Host name
      * @param   port    The port number
      * @throws IllegalArgumentException if the port parameter is outside the range
-     * of valid port values, or if the hostname parameter is <TT>null</TT>.
+     * of valid port values, or if the hostname parameter is {@code null}.
      * @throws SecurityException if a security manager is present and
      *                           permission to resolve the host name is
      *                           denied.
@@ -244,9 +244,9 @@ public class InetSocketAddress
      * @param   port    The port number
      * @throws IllegalArgumentException if the port parameter is outside
      *                  the range of valid port values, or if the hostname
-     *                  parameter is <TT>null</TT>.
+     *                  parameter is {@code null}.
      * @see     #isUnresolved()
-     * @return  a {@code InetSocketAddress} representing the unresolved
+     * @return  an {@code InetSocketAddress} representing the unresolved
      *          socket address
      * @since 1.5
      */
@@ -303,10 +303,10 @@ public class InetSocketAddress
     }
 
     private static final long FIELDS_OFFSET;
-    private static final sun.misc.Unsafe UNSAFE;
+    private static final jdk.internal.misc.Unsafe UNSAFE;
     static {
         try {
-            sun.misc.Unsafe unsafe = sun.misc.Unsafe.getUnsafe();
+            jdk.internal.misc.Unsafe unsafe = jdk.internal.misc.Unsafe.getUnsafe();
             FIELDS_OFFSET = unsafe.objectFieldOffset(
                     InetSocketAddress.class.getDeclaredField("holder"));
             UNSAFE = unsafe;

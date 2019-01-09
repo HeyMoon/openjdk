@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -88,6 +88,10 @@ public enum TypeTag {
     /** The tag of all package "types".
      */
     PACKAGE,
+
+    /** The tag of all module "types".
+     */
+    MODULE,
 
     /** The tag of all (source-level) type variables.
      */
@@ -237,4 +241,21 @@ public enum TypeTag {
         }
     }
 
+    /** Returns true if the given value is within the allowed range for this type. */
+    public boolean checkRange(int value) {
+        switch (this) {
+            case BOOLEAN:
+                return 0 <= value && value <= 1;
+            case BYTE:
+                return Byte.MIN_VALUE <= value && value <= Byte.MAX_VALUE;
+            case CHAR:
+                return Character.MIN_VALUE <= value && value <= Character.MAX_VALUE;
+            case SHORT:
+                return Short.MIN_VALUE <= value && value <= Short.MAX_VALUE;
+            case INT:
+                return true;
+            default:
+                throw new AssertionError();
+        }
+    }
 }

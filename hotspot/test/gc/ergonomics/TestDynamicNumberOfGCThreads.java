@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,11 +27,12 @@
  * @summary Ensure that UseDynamicNumberOfGCThreads runs
  * @requires vm.gc=="null"
  * @key gc
- * @library /testlibrary
+ * @modules java.base/jdk.internal.misc
+ * @library /test/lib
  */
 
-import jdk.test.lib.ProcessTools;
-import jdk.test.lib.OutputAnalyzer;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
 
 public class TestDynamicNumberOfGCThreads {
   public static void main(String[] args) throws Exception {
@@ -50,7 +51,7 @@ public class TestDynamicNumberOfGCThreads {
 
   private static void testDynamicNumberOfGCThreads(String gcFlag) throws Exception {
     // UseDynamicNumberOfGCThreads and TraceDynamicGCThreads enabled
-    String[] baseArgs = {"-XX:+" + gcFlag, "-Xmx10M", "-XX:+PrintGCDetails",  "-XX:+UseDynamicNumberOfGCThreads", "-XX:+TraceDynamicGCThreads", GCTest.class.getName()};
+    String[] baseArgs = {"-XX:+" + gcFlag, "-Xmx10M", "-XX:+UseDynamicNumberOfGCThreads", "-Xlog:gc+task=trace", GCTest.class.getName()};
 
     // Base test with gc and +UseDynamicNumberOfGCThreads:
     ProcessBuilder pb_enabled = ProcessTools.createJavaProcessBuilder(baseArgs);
@@ -62,6 +63,14 @@ public class TestDynamicNumberOfGCThreads {
     System.arraycopy(extraArgs, 0, finalArgs, 0,                extraArgs.length);
     System.arraycopy(baseArgs,  0, finalArgs, extraArgs.length, baseArgs.length);
     pb_enabled = ProcessTools.createJavaProcessBuilder(finalArgs);
+    verifyDynamicNumberOfGCThreads(new OutputAnalyzer(pb_enabled.start()));
+
+    // Turn on parallel reference processing
+    String[] parRefProcArg = {"-XX:+ParallelRefProcEnabled", "-XX:-ShowMessageBoxOnError"};
+    String[] parRefArgs = new String[baseArgs.length + parRefProcArg.length];
+    System.arraycopy(parRefProcArg, 0, parRefArgs, 0,                parRefProcArg.length);
+    System.arraycopy(baseArgs,  0, parRefArgs, parRefProcArg.length, baseArgs.length);
+    pb_enabled = ProcessTools.createJavaProcessBuilder(parRefArgs);
     verifyDynamicNumberOfGCThreads(new OutputAnalyzer(pb_enabled.start()));
   }
 

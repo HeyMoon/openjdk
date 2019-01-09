@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,13 +22,13 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package com.sun.tools.doclets.formats.html;
 
 import java.io.*;
 import java.util.*;
 
 import com.sun.javadoc.*;
-import com.sun.tools.javac.jvm.Profile;
 import com.sun.tools.doclets.internal.toolkit.*;
 import com.sun.tools.doclets.internal.toolkit.builders.*;
 import com.sun.tools.doclets.internal.toolkit.util.*;
@@ -46,6 +46,7 @@ import com.sun.tools.doclets.internal.toolkit.util.*;
  * @author Jamie Ho
  *
  */
+@Deprecated
 public class HtmlDoclet extends AbstractDoclet {
     // An instance will be created by validOptions, and used by start.
     private static HtmlDoclet docletToStart = null;
@@ -124,6 +125,7 @@ public class HtmlDoclet extends AbstractDoclet {
             TreeWriter.generate(configuration, classtree);
         }
         if (configuration.createindex) {
+            configuration.buildSearchTagIndex();
             if (configuration.splitindex) {
                 SplitIndexWriter.generate(configuration, indexbuilder);
             } else {
@@ -156,6 +158,52 @@ public class HtmlDoclet extends AbstractDoclet {
         }
         f = DocFile.createFileForOutput(configuration, DocPaths.JAVASCRIPT);
         f.copyResource(DocPaths.RESOURCES.resolve(DocPaths.JAVASCRIPT), true, true);
+        if (configuration.createindex) {
+            f = DocFile.createFileForOutput(configuration, DocPaths.SEARCH_JS);
+            f.copyResource(DocPaths.RESOURCES.resolve(DocPaths.SEARCH_JS), true, true);
+            f = DocFile.createFileForOutput(configuration, DocPaths.RESOURCES.resolve(DocPaths.GLASS_IMG));
+            f.copyResource(DocPaths.RESOURCES.resolve(DocPaths.GLASS_IMG), true, false);
+            f = DocFile.createFileForOutput(configuration, DocPaths.RESOURCES.resolve(DocPaths.X_IMG));
+            f.copyResource(DocPaths.RESOURCES.resolve(DocPaths.X_IMG), true, false);
+            copyJqueryFiles();
+        }
+    }
+
+    protected void copyJqueryFiles() {
+        List<String> files = Arrays.asList(
+                "jquery-1.10.2.js",
+                "jquery-ui.js",
+                "jquery-ui.css",
+                "jquery-ui.min.js",
+                "jquery-ui.min.css",
+                "jquery-ui.structure.min.css",
+                "jquery-ui.structure.css",
+                "external/jquery/jquery.js",
+                "jszip/dist/jszip.js",
+                "jszip/dist/jszip.min.js",
+                "jszip-utils/dist/jszip-utils.js",
+                "jszip-utils/dist/jszip-utils.min.js",
+                "jszip-utils/dist/jszip-utils-ie.js",
+                "jszip-utils/dist/jszip-utils-ie.min.js",
+                "images/ui-bg_flat_0_aaaaaa_40x100.png",
+                "images/ui-icons_454545_256x240.png",
+                "images/ui-bg_glass_95_fef1ec_1x400.png",
+                "images/ui-bg_glass_75_dadada_1x400.png",
+                "images/ui-bg_highlight-soft_75_cccccc_1x100.png",
+                "images/ui-icons_888888_256x240.png",
+                "images/ui-icons_2e83ff_256x240.png",
+                "images/ui-bg_glass_65_ffffff_1x400.png",
+                "images/ui-icons_cd0a0a_256x240.png",
+                "images/ui-bg_glass_55_fbf9ee_1x400.png",
+                "images/ui-icons_222222_256x240.png",
+                "images/ui-bg_glass_75_e6e6e6_1x400.png",
+                "images/ui-bg_flat_75_ffffff_40x100.png");
+        DocFile f;
+        for (String file : files) {
+            DocPath filePath = DocPaths.JQUERY_FILES.resolve(file);
+            f = DocFile.createFileForOutput(configuration, filePath);
+            f.copyResource(DocPaths.RESOURCES.resolve(filePath), true, false);
+        }
     }
 
     /**
@@ -189,56 +237,14 @@ public class HtmlDoclet extends AbstractDoclet {
                 }
             } catch (IOException e) {
                 throw new DocletAbortException(e);
+            } catch (FatalError fe) {
+                throw fe;
             } catch (DocletAbortException de) {
+                de.printStackTrace();
                 throw de;
             } catch (Exception e) {
                 e.printStackTrace();
                 throw new DocletAbortException(e);
-            }
-        }
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    protected void generateProfileFiles() throws Exception {
-        if (configuration.showProfiles && configuration.profilePackages.size() > 0) {
-            ProfileIndexFrameWriter.generate(configuration);
-            Profile prevProfile = null, nextProfile;
-            String profileName;
-            for (int i = 1; i < configuration.profiles.getProfileCount(); i++) {
-                profileName = Profile.lookup(i).name;
-                // Generate profile package pages only if there are any packages
-                // in a profile to be documented. The profilePackages map will not
-                // contain an entry for the profile if there are no packages to be documented.
-                if (!configuration.shouldDocumentProfile(profileName))
-                    continue;
-                ProfilePackageIndexFrameWriter.generate(configuration, profileName);
-                List<PackageDoc> packages = configuration.profilePackages.get(
-                        profileName);
-                PackageDoc prev = null, next;
-                for (int j = 0; j < packages.size(); j++) {
-                    // if -nodeprecated option is set and the package is marked as
-                    // deprecated, do not generate the profilename-package-summary.html
-                    // and profilename-package-frame.html pages for that package.
-                    PackageDoc pkg = packages.get(j);
-                    if (!(configuration.nodeprecated && utils.isDeprecated(pkg))) {
-                        ProfilePackageFrameWriter.generate(configuration, pkg, i);
-                        next = getNamedPackage(packages, j + 1);
-                        AbstractBuilder profilePackageSummaryBuilder =
-                                configuration.getBuilderFactory().getProfilePackageSummaryBuilder(
-                                pkg, prev, next, Profile.lookup(i));
-                        profilePackageSummaryBuilder.build();
-                        prev = pkg;
-                    }
-                }
-                nextProfile = (i + 1 < configuration.profiles.getProfileCount()) ?
-                        Profile.lookup(i + 1) : null;
-                AbstractBuilder profileSummaryBuilder =
-                        configuration.getBuilderFactory().getProfileSummaryBuilder(
-                        Profile.lookup(i), prevProfile, nextProfile);
-                profileSummaryBuilder.build();
-                prevProfile = Profile.lookup(i);
             }
         }
     }

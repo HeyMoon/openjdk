@@ -26,6 +26,7 @@
 package com.apple.laf;
 
 
+import java.awt.ComponentOrientation;
 import java.beans.*;
 import java.io.File;
 import java.util.*;
@@ -34,7 +35,6 @@ import javax.swing.event.ListDataEvent;
 import javax.swing.filechooser.FileSystemView;
 import javax.swing.table.AbstractTableModel;
 
-import sun.misc.ManagedLocalsThread;
 /**
  * NavServices-like implementation of a file Table
  *
@@ -57,8 +57,8 @@ class AquaFileSystemModel extends AbstractTableModel implements PropertyChangeLi
     // private boolean fSortAscending = true;
     private boolean fSortNames = true;
     private final String[] fColumnNames;
-    public final static String SORT_BY_CHANGED = "sortByChanged";
-    public final static String SORT_ASCENDING_CHANGED = "sortAscendingChanged";
+    public static final String SORT_BY_CHANGED = "sortByChanged";
+    public static final String SORT_ASCENDING_CHANGED = "sortAscendingChanged";
 
     public AquaFileSystemModel(final JFileChooser filechooser, final JTable filelist, final String[] colNames) {
         fileCacheLock = new Object();
@@ -85,6 +85,15 @@ class AquaFileSystemModel extends AbstractTableModel implements PropertyChangeLi
         } else if (prop == JFileChooser.FILE_SELECTION_MODE_CHANGED_PROPERTY) {
             invalidateFileCache();
             validateFileCache();
+        } else if (prop.equals("componentOrientation")) {
+            ComponentOrientation o = (ComponentOrientation) e.getNewValue();
+            JFileChooser cc = (JFileChooser) e.getSource();
+            if (o != e.getOldValue()) {
+                cc.applyComponentOrientation(o);
+            }
+            fFileList.setComponentOrientation(o);
+            fFileList.getParent().getParent().setComponentOrientation(o);
+
         }
         if (prop == SORT_BY_CHANGED) {// $ Ought to just resort
             fSortNames = (((Integer)e.getNewValue()).intValue() == 0);
@@ -383,7 +392,7 @@ class AquaFileSystemModel extends AbstractTableModel implements PropertyChangeLi
             this.currentDirectory = currentDirectory;
             this.fid = fid;
             String name = "Aqua L&F File Loading Thread";
-            this.loadThread = new ManagedLocalsThread(this, name);
+            this.loadThread = new Thread(null, this, name, 0, false);
             this.loadThread.start();
         }
 

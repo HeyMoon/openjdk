@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,13 +28,16 @@
  * @author  Wei Tao
  * @modules jdk.compiler/com.sun.tools.javac.api
  *          jdk.compiler/com.sun.tools.javac.code
+ *          jdk.compiler/com.sun.tools.javac.comp
  *          jdk.compiler/com.sun.tools.javac.main
  *          jdk.compiler/com.sun.tools.javac.util
+ * @build T
  * @run main/othervm T6435291
  */
 
 import com.sun.tools.javac.api.JavacTaskImpl;
 import com.sun.tools.javac.code.ClassFinder.BadClassFile;
+import com.sun.tools.javac.code.Symtab;
 import com.sun.tools.javac.main.JavaCompiler;
 import javax.tools.ToolProvider;
 
@@ -42,9 +45,11 @@ public class T6435291 {
     public static void main(String... args) {
         javax.tools.JavaCompiler tool = ToolProvider.getSystemJavaCompiler();
         JavacTaskImpl task = (JavacTaskImpl)tool.getTask(null, null, null, null, null, null);
+        Symtab syms = Symtab.instance(task.getContext());
+        task.ensureEntered();
         JavaCompiler compiler = JavaCompiler.instance(task.getContext());
         try {
-            compiler.resolveIdent("T").complete();
+            compiler.resolveIdent(syms.unnamedModule, "T").complete();
         } catch (BadClassFile e) {
             System.err.println("Passed: expected completion failure " + e.getClass().getName());
             return;

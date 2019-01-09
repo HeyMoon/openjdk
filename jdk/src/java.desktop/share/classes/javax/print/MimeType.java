@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2003, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -50,7 +50,6 @@ import java.util.Vector;
  * <LI>
  * Since not all Java profiles include the AWT, the Jini Print Service should
  * not depend on an AWT class.
- * <P>
  * <LI>
  * The implementation of class java.awt.datatransfer.MimeType does not
  * guarantee
@@ -76,7 +75,6 @@ import java.util.Vector;
  * <LI> Quoting backslash characters inside parameter values are removed.
  * <LI> The parameters are arranged in ascending order of parameter name.
  * </UL>
- * <P>
  *
  * @author  Alan Kaminsky
  */
@@ -195,9 +193,9 @@ class MimeType implements Serializable, Cloneable {
      * @param  s  MIME media type string.
      *
      * @exception  NullPointerException
-     *     (unchecked exception) Thrown if <CODE>s</CODE> is null.
+     *     (unchecked exception) Thrown if {@code s} is null.
      * @exception  IllegalArgumentException
-     *     (unchecked exception) Thrown if <CODE>s</CODE> does not obey the
+     *     (unchecked exception) Thrown if {@code s} does not obey the
      *     syntax for a MIME media type string.
      */
     public MimeType(String s) {
@@ -271,7 +269,7 @@ class MimeType implements Serializable, Cloneable {
      *
      * @param  obj  Object to test.
      *
-     * @return  True if this MIME type object equals <CODE>obj</CODE>, false
+     * @return  True if this MIME type object equals {@code obj}, false
      *          otherwise.
      */
     public boolean equals (Object obj) {
@@ -525,7 +523,7 @@ class MimeType implements Serializable, Cloneable {
 
     /**
      * Parses the given string into canonical pieces and stores the pieces in
-     * {@link #myPieces <CODE>myPieces</CODE>}.
+     * {@link #myPieces myPieces}.
      * <P>
      * Special rules applied:
      * <UL>
@@ -536,9 +534,9 @@ class MimeType implements Serializable, Cloneable {
      * @param  s  MIME media type string.
      *
      * @exception  NullPointerException
-     *     (unchecked exception) Thrown if <CODE>s</CODE> is null.
+     *     (unchecked exception) Thrown if {@code s} is null.
      * @exception  IllegalArgumentException
-     *     (unchecked exception) Thrown if <CODE>s</CODE> does not obey the
+     *     (unchecked exception) Thrown if {@code s} does not obey the
      *     syntax for a MIME media type string.
      */
     private void parse(String s) {

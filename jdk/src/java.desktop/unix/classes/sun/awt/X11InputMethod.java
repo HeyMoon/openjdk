@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -125,7 +125,7 @@ public abstract class X11InputMethod extends InputMethodAdapter {
     // private data (X11InputMethodData structure defined in
     // awt_InputMethod.c) for native methods
     // this structure needs to be accessed within AWT_LOCK/UNLOCK
-    transient private long pData = 0; // accessed by native
+    private transient long pData = 0; // accessed by native
 
     // Initialize highlight mapping table
     static {
@@ -181,6 +181,7 @@ public abstract class X11InputMethod extends InputMethodAdapter {
         }
     }
 
+    @SuppressWarnings("deprecation")
     protected void finalize() throws Throwable {
         dispose();
         super.finalize();
@@ -293,7 +294,7 @@ public abstract class X11InputMethod extends InputMethodAdapter {
 
     /**
      * Query and then return the current composition state.
-     * @returns the composition state if isCompositionEnabled call
+     * @return the composition state if isCompositionEnabled call
      * is successful. Otherwise, it returns false.
      */
     private boolean getCompositionState() {

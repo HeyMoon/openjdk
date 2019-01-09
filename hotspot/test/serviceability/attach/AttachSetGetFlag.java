@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,14 +25,13 @@
  * @test
  * @bug 8054823
  * @summary Tests the setFlag and printFlag attach command
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.compiler
  *          java.management
  *          jdk.attach/sun.tools.attach
- *          jdk.jvmstat/sun.jvmstat.monitor
- * @build jdk.test.lib.* AttachSetGetFlag
- * @run driver AttachSetGetFlag
+ *          jdk.internal.jvmstat/sun.jvmstat.monitor
+ * @run main AttachSetGetFlag
  */
 
 import java.io.BufferedReader;
@@ -47,7 +46,7 @@ import sun.tools.attach.HotSpotVirtualMachine;
 
 import jdk.test.lib.Asserts;
 import jdk.test.lib.Platform;
-import jdk.test.lib.ProcessTools;
+import jdk.test.lib.process.ProcessTools;
 import com.sun.tools.attach.VirtualMachine;
 
 public class AttachSetGetFlag {
@@ -81,7 +80,7 @@ public class AttachSetGetFlag {
     try {
       waitForReady(target);
 
-      int pid = (int)target.getPid();
+      int pid = (int)target.pid();
 
       HotSpotVirtualMachine vm = (HotSpotVirtualMachine)VirtualMachine.attach(((Integer)pid).toString());
 
@@ -117,7 +116,7 @@ public class AttachSetGetFlag {
     try {
       waitForReady(target);
 
-      int pid = (int)target.getPid();
+      int pid = (int)target.pid();
 
       HotSpotVirtualMachine vm = (HotSpotVirtualMachine)VirtualMachine.attach(((Integer)pid).toString());
 

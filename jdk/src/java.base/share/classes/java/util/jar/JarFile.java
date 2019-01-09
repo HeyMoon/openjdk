@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,32 +34,92 @@ import java.util.stream.StreamSupport;
 import java.util.zip.*;
 import java.security.CodeSigner;
 import java.security.cert.Certificate;
-import java.security.AccessController;
 import java.security.CodeSource;
-import sun.misc.IOUtils;
+import jdk.internal.misc.SharedSecrets;
 import sun.security.action.GetPropertyAction;
 import sun.security.util.ManifestEntryVerifier;
-import sun.misc.SharedSecrets;
 import sun.security.util.SignatureFileVerifier;
 
 /**
- * The <code>JarFile</code> class is used to read the contents of a jar file
- * from any file that can be opened with <code>java.io.RandomAccessFile</code>.
- * It extends the class <code>java.util.zip.ZipFile</code> with support
- * for reading an optional <code>Manifest</code> entry. The
- * <code>Manifest</code> can be used to specify meta-information about the
- * jar file and its entries.
+ * The {@code JarFile} class is used to read the contents of a jar file
+ * from any file that can be opened with {@code java.io.RandomAccessFile}.
+ * It extends the class {@code java.util.zip.ZipFile} with support
+ * for reading an optional {@code Manifest} entry, and support for
+ * processing multi-release jar files.  The {@code Manifest} can be used
+ * to specify meta-information about the jar file and its entries.
  *
- * <p> Unless otherwise noted, passing a <tt>null</tt> argument to a constructor
- * or method in this class will cause a {@link NullPointerException} to be
- * thrown.
+ * <p><a id="multirelease">A multi-release jar file</a> is a jar file that
+ * contains a manifest with a main attribute named "Multi-Release",
+ * a set of "base" entries, some of which are public classes with public
+ * or protected methods that comprise the public interface of the jar file,
+ * and a set of "versioned" entries contained in subdirectories of the
+ * "META-INF/versions" directory.  The versioned entries are partitioned by the
+ * major version of the Java platform.  A versioned entry, with a version
+ * {@code n}, {@code 8 < n}, in the "META-INF/versions/{n}" directory overrides
+ * the base entry as well as any entry with a version number {@code i} where
+ * {@code 8 < i < n}.
  *
- * If the verify flag is on when opening a signed jar file, the content of the
- * file is verified against its signature embedded inside the file. Please note
- * that the verification process does not include validating the signer's
+ * <p>By default, a {@code JarFile} for a multi-release jar file is configured
+ * to process the multi-release jar file as if it were a plain (unversioned) jar
+ * file, and as such an entry name is associated with at most one base entry.
+ * The {@code JarFile} may be configured to process a multi-release jar file by
+ * creating the {@code JarFile} with the
+ * {@link JarFile#JarFile(File, boolean, int, Runtime.Version)} constructor.  The
+ * {@code Runtime.Version} object sets a maximum version used when searching for
+ * versioned entries.  When so configured, an entry name
+ * can correspond with at most one base entry and zero or more versioned
+ * entries. A search is required to associate the entry name with the latest
+ * versioned entry whose version is less than or equal to the maximum version
+ * (see {@link #getEntry(String)}).
+ *
+ * <p>Class loaders that utilize {@code JarFile} to load classes from the
+ * contents of {@code JarFile} entries should construct the {@code JarFile}
+ * by invoking the {@link JarFile#JarFile(File, boolean, int, Runtime.Version)}
+ * constructor with the value {@code Runtime.version()} assigned to the last
+ * argument.  This assures that classes compatible with the major
+ * version of the running JVM are loaded from multi-release jar files.
+ *
+ * <p>If the verify flag is on when opening a signed jar file, the content of
+ * the file is verified against its signature embedded inside the file. Please
+ * note that the verification process does not include validating the signer's
  * certificate. A caller should inspect the return value of
  * {@link JarEntry#getCodeSigners()} to further determine if the signature
  * can be trusted.
+ *
+ * <p> Unless otherwise noted, passing a {@code null} argument to a constructor
+ * or method in this class will cause a {@link NullPointerException} to be
+ * thrown.
+ *
+ * @implNote
+ * <div class="block">
+ * If the API can not be used to configure a {@code JarFile} (e.g. to override
+ * the configuration of a compiled application or library), two {@code System}
+ * properties are available.
+ * <ul>
+ * <li>
+ * {@code jdk.util.jar.version} can be assigned a value that is the
+ * {@code String} representation of a non-negative integer
+ * {@code <= Runtime.version().major()}.  The value is used to set the effective
+ * runtime version to something other than the default value obtained by
+ * evaluating {@code Runtime.version().major()}. The effective runtime version
+ * is the version that the {@link JarFile#JarFile(File, boolean, int, Runtime.Version)}
+ * constructor uses when the value of the last argument is
+ * {@code JarFile.runtimeVersion()}.
+ * </li>
+ * <li>
+ * {@code jdk.util.jar.enableMultiRelease} can be assigned one of the three
+ * {@code String} values <em>true</em>, <em>false</em>, or <em>force</em>.  The
+ * value <em>true</em>, the default value, enables multi-release jar file
+ * processing.  The value <em>false</em> disables multi-release jar processing,
+ * ignoring the "Multi-Release" manifest attribute, and the versioned
+ * directories in a multi-release jar file if they exist.  Furthermore,
+ * the method {@link JarFile#isMultiRelease()} returns <em>false</em>. The value
+ * <em>force</em> causes the {@code JarFile} to be initialized to runtime
+ * versioning after construction.  It effectively does the same as this code:
+ * {@code (new JarFile(File, boolean, int, JarFile.runtimeVersion())}.
+ * </li>
+ * </ul>
+ * </div>
  *
  * @author  David Connelly
  * @see     Manifest
@@ -69,30 +129,101 @@ import sun.security.util.SignatureFileVerifier;
  */
 public
 class JarFile extends ZipFile {
+    private final static Runtime.Version BASE_VERSION;
+    private final static int BASE_VERSION_MAJOR;
+    private final static Runtime.Version RUNTIME_VERSION;
+    private final static boolean MULTI_RELEASE_ENABLED;
+    private final static boolean MULTI_RELEASE_FORCED;
     private SoftReference<Manifest> manRef;
     private JarEntry manEntry;
     private JarVerifier jv;
     private boolean jvInitialized;
     private boolean verify;
+    private final Runtime.Version version;  // current version
+    private final int versionMajor;         // version.major()
+    private boolean isMultiRelease;         // is jar multi-release?
 
-    // indicates if Class-Path attribute present (only valid if hasCheckedSpecialAttributes true)
+    // indicates if Class-Path attribute present
     private boolean hasClassPathAttribute;
     // true if manifest checked for special attributes
     private volatile boolean hasCheckedSpecialAttributes;
 
-    // Set up JavaUtilJarAccess in SharedSecrets
     static {
+        // Set up JavaUtilJarAccess in SharedSecrets
         SharedSecrets.setJavaUtilJarAccess(new JavaUtilJarAccessImpl());
+        // multi-release jar file versions >= 9
+        BASE_VERSION = Runtime.Version.parse(Integer.toString(8));
+        BASE_VERSION_MAJOR = BASE_VERSION.major();
+        String jarVersion = GetPropertyAction.privilegedGetProperty("jdk.util.jar.version");
+        int runtimeVersion = Runtime.version().major();
+        if (jarVersion != null) {
+            int jarVer = Integer.parseInt(jarVersion);
+            runtimeVersion = (jarVer > runtimeVersion)
+                    ? runtimeVersion
+                    : Math.max(jarVer, BASE_VERSION_MAJOR);
+        }
+        RUNTIME_VERSION = Runtime.Version.parse(Integer.toString(runtimeVersion));
+        String enableMultiRelease = GetPropertyAction
+                .privilegedGetProperty("jdk.util.jar.enableMultiRelease", "true");
+        switch (enableMultiRelease) {
+            case "true":
+            default:
+                MULTI_RELEASE_ENABLED = true;
+                MULTI_RELEASE_FORCED = false;
+                break;
+            case "false":
+                MULTI_RELEASE_ENABLED = false;
+                MULTI_RELEASE_FORCED = false;
+                break;
+            case "force":
+                MULTI_RELEASE_ENABLED = true;
+                MULTI_RELEASE_FORCED = true;
+                break;
+        }
     }
+
+    private static final String META_INF = "META-INF/";
+
+    private static final String META_INF_VERSIONS = META_INF + "versions/";
 
     /**
      * The JAR manifest file name.
      */
-    public static final String MANIFEST_NAME = "META-INF/MANIFEST.MF";
+    public static final String MANIFEST_NAME = META_INF + "MANIFEST.MF";
 
     /**
-     * Creates a new <code>JarFile</code> to read from the specified
-     * file <code>name</code>. The <code>JarFile</code> will be verified if
+     * Returns the version that represents the unversioned configuration of a
+     * multi-release jar file.
+     *
+     * @return the version that represents the unversioned configuration
+     *
+     * @since 9
+     */
+    public static Runtime.Version baseVersion() {
+        return BASE_VERSION;
+    }
+
+    /**
+     * Returns the version that represents the effective runtime versioned
+     * configuration of a multi-release jar file.
+     * <p>
+     * By default the major version number of the returned {@code Version} will
+     * be equal to the major version number of {@code Runtime.version()}.
+     * However, if the {@code jdk.util.jar.version} property is set, the
+     * returned {@code Version} is derived from that property and major version
+     * numbers may not be equal.
+     *
+     * @return the version that represents the runtime versioned configuration
+     *
+     * @since 9
+     */
+    public static Runtime.Version runtimeVersion() {
+        return RUNTIME_VERSION;
+    }
+
+    /**
+     * Creates a new {@code JarFile} to read from the specified
+     * file {@code name}. The {@code JarFile} will be verified if
      * it is signed.
      * @param name the name of the jar file to be opened for reading
      * @throws IOException if an I/O error has occurred
@@ -104,8 +235,8 @@ class JarFile extends ZipFile {
     }
 
     /**
-     * Creates a new <code>JarFile</code> to read from the specified
-     * file <code>name</code>.
+     * Creates a new {@code JarFile} to read from the specified
+     * file {@code name}.
      * @param name the name of the jar file to be opened for reading
      * @param verify whether or not to verify the jar file if
      * it is signed.
@@ -118,8 +249,8 @@ class JarFile extends ZipFile {
     }
 
     /**
-     * Creates a new <code>JarFile</code> to read from the specified
-     * <code>File</code> object. The <code>JarFile</code> will be verified if
+     * Creates a new {@code JarFile} to read from the specified
+     * {@code File} object. The {@code JarFile} will be verified if
      * it is signed.
      * @param file the jar file to be opened for reading
      * @throws IOException if an I/O error has occurred
@@ -130,10 +261,9 @@ class JarFile extends ZipFile {
         this(file, true, ZipFile.OPEN_READ);
     }
 
-
     /**
-     * Creates a new <code>JarFile</code> to read from the specified
-     * <code>File</code> object.
+     * Creates a new {@code JarFile} to read from the specified
+     * {@code File} object.
      * @param file the jar file to be opened for reading
      * @param verify whether or not to verify the jar file if
      * it is signed.
@@ -145,11 +275,10 @@ class JarFile extends ZipFile {
         this(file, verify, ZipFile.OPEN_READ);
     }
 
-
     /**
-     * Creates a new <code>JarFile</code> to read from the specified
-     * <code>File</code> object in the specified mode.  The mode argument
-     * must be either <tt>OPEN_READ</tt> or <tt>OPEN_READ | OPEN_DELETE</tt>.
+     * Creates a new {@code JarFile} to read from the specified
+     * {@code File} object in the specified mode.  The mode argument
+     * must be either {@code OPEN_READ} or {@code OPEN_READ | OPEN_DELETE}.
      *
      * @param file the jar file to be opened for reading
      * @param verify whether or not to verify the jar file if
@@ -157,20 +286,95 @@ class JarFile extends ZipFile {
      * @param mode the mode in which the file is to be opened
      * @throws IOException if an I/O error has occurred
      * @throws IllegalArgumentException
-     *         if the <tt>mode</tt> argument is invalid
+     *         if the {@code mode} argument is invalid
      * @throws SecurityException if access to the file is denied
      *         by the SecurityManager
      * @since 1.3
      */
     public JarFile(File file, boolean verify, int mode) throws IOException {
-        super(file, mode);
-        this.verify = verify;
+        this(file, verify, mode, BASE_VERSION);
     }
 
     /**
-     * Returns the jar file manifest, or <code>null</code> if none.
+     * Creates a new {@code JarFile} to read from the specified
+     * {@code File} object in the specified mode.  The mode argument
+     * must be either {@code OPEN_READ} or {@code OPEN_READ | OPEN_DELETE}.
+     * The version argument, after being converted to a canonical form, is
+     * used to configure the {@code JarFile} for processing
+     * multi-release jar files.
+     * <p>
+     * The canonical form derived from the version parameter is
+     * {@code Runtime.Version.parse(Integer.toString(n))} where {@code n} is
+     * {@code Math.max(version.major(), JarFile.baseVersion().major())}.
      *
-     * @return the jar file manifest, or <code>null</code> if none
+     * @param file the jar file to be opened for reading
+     * @param verify whether or not to verify the jar file if
+     * it is signed.
+     * @param mode the mode in which the file is to be opened
+     * @param version specifies the release version for a multi-release jar file
+     * @throws IOException if an I/O error has occurred
+     * @throws IllegalArgumentException
+     *         if the {@code mode} argument is invalid
+     * @throws SecurityException if access to the file is denied
+     *         by the SecurityManager
+     * @throws NullPointerException if {@code version} is {@code null}
+     * @since 9
+     */
+    public JarFile(File file, boolean verify, int mode, Runtime.Version version) throws IOException {
+        super(file, mode);
+        this.verify = verify;
+        Objects.requireNonNull(version);
+        if (MULTI_RELEASE_FORCED || version.major() == RUNTIME_VERSION.major()) {
+            // This deals with the common case where the value from JarFile.runtimeVersion() is passed
+            this.version = RUNTIME_VERSION;
+        } else if (version.major() <= BASE_VERSION_MAJOR) {
+            // This also deals with the common case where the value from JarFile.baseVersion() is passed
+            this.version = BASE_VERSION;
+        } else {
+            // Canonicalize
+            this.version = Runtime.Version.parse(Integer.toString(version.major()));
+        }
+        this.versionMajor = this.version.major();
+    }
+
+    /**
+     * Returns the maximum version used when searching for versioned entries.
+     * <p>
+     * If this {@code JarFile} is not a multi-release jar file or is not
+     * configured to be processed as such, then the version returned will be the
+     * same as that returned from {@link #baseVersion()}.
+     *
+     * @return the maximum version
+     * @since 9
+     */
+    public final Runtime.Version getVersion() {
+        return isMultiRelease() ? this.version : BASE_VERSION;
+    }
+
+    /**
+     * Indicates whether or not this jar file is a multi-release jar file.
+     *
+     * @return true if this JarFile is a multi-release jar file
+     * @since 9
+     */
+    public final boolean isMultiRelease() {
+        if (isMultiRelease) {
+            return true;
+        }
+        if (MULTI_RELEASE_ENABLED) {
+            try {
+                checkForSpecialAttributes();
+            } catch (IOException io) {
+                isMultiRelease = false;
+            }
+        }
+        return isMultiRelease;
+    }
+
+    /**
+     * Returns the jar file manifest, or {@code null} if none.
+     *
+     * @return the jar file manifest, or {@code null} if none
      *
      * @throws IllegalStateException
      *         may be thrown if the jar file has been closed
@@ -204,42 +408,92 @@ class JarFile extends ZipFile {
         return man;
     }
 
-    private native String[] getMetaInfEntryNames();
+    private String[] getMetaInfEntryNames() {
+        return jdk.internal.misc.SharedSecrets.getJavaUtilZipFileAccess()
+                                              .getMetaInfEntryNames((ZipFile)this);
+    }
 
     /**
-     * Returns the <code>JarEntry</code> for the given entry name or
-     * <code>null</code> if not found.
+     * Returns the {@code JarEntry} for the given base entry name or
+     * {@code null} if not found.
+     *
+     * <p>If this {@code JarFile} is a multi-release jar file and is configured
+     * to be processed as such, then a search is performed to find and return
+     * a {@code JarEntry} that is the latest versioned entry associated with the
+     * given entry name.  The returned {@code JarEntry} is the versioned entry
+     * corresponding to the given base entry name prefixed with the string
+     * {@code "META-INF/versions/{n}/"}, for the largest value of {@code n} for
+     * which an entry exists.  If such a versioned entry does not exist, then
+     * the {@code JarEntry} for the base entry is returned, otherwise
+     * {@code null} is returned if no entries are found.  The initial value for
+     * the version {@code n} is the maximum version as returned by the method
+     * {@link JarFile#getVersion()}.
      *
      * @param name the jar file entry name
-     * @return the <code>JarEntry</code> for the given entry name or
-     *         <code>null</code> if not found.
+     * @return the {@code JarEntry} for the given entry name, or
+     *         the versioned entry name, or {@code null} if not found
      *
      * @throws IllegalStateException
      *         may be thrown if the jar file has been closed
      *
      * @see java.util.jar.JarEntry
+     *
+     * @implSpec
+     * <div class="block">
+     * This implementation invokes {@link JarFile#getEntry(String)}.
+     * </div>
      */
     public JarEntry getJarEntry(String name) {
         return (JarEntry)getEntry(name);
     }
 
     /**
-     * Returns the <code>ZipEntry</code> for the given entry name or
-     * <code>null</code> if not found.
+     * Returns the {@code ZipEntry} for the given base entry name or
+     * {@code null} if not found.
+     *
+     * <p>If this {@code JarFile} is a multi-release jar file and is configured
+     * to be processed as such, then a search is performed to find and return
+     * a {@code ZipEntry} that is the latest versioned entry associated with the
+     * given entry name.  The returned {@code ZipEntry} is the versioned entry
+     * corresponding to the given base entry name prefixed with the string
+     * {@code "META-INF/versions/{n}/"}, for the largest value of {@code n} for
+     * which an entry exists.  If such a versioned entry does not exist, then
+     * the {@code ZipEntry} for the base entry is returned, otherwise
+     * {@code null} is returned if no entries are found.  The initial value for
+     * the version {@code n} is the maximum version as returned by the method
+     * {@link JarFile#getVersion()}.
      *
      * @param name the jar file entry name
-     * @return the <code>ZipEntry</code> for the given entry name or
-     *         <code>null</code> if not found
+     * @return the {@code ZipEntry} for the given entry name or
+     *         the versioned entry name or {@code null} if not found
      *
      * @throws IllegalStateException
      *         may be thrown if the jar file has been closed
      *
      * @see java.util.zip.ZipEntry
+     *
+     * @implSpec
+     * <div class="block">
+     * This implementation may return a versioned entry for the requested name
+     * even if there is not a corresponding base entry.  This can occur
+     * if there is a private or package-private versioned entry that matches.
+     * If a subclass overrides this method, assure that the override method
+     * invokes {@code super.getEntry(name)} to obtain all versioned entries.
+     * </div>
      */
     public ZipEntry getEntry(String name) {
         ZipEntry ze = super.getEntry(name);
         if (ze != null) {
             return new JarFileEntry(ze);
+        }
+        // no matching base entry, but maybe there is a versioned entry,
+        // like a new private class
+        if (isMultiRelease()) {
+            ze = new ZipEntry(name);
+            ZipEntry vze = getVersionedEntry(ze);
+            if (ze != vze) {
+                return new JarFileEntry(name, vze);
+            }
         }
         return null;
     }
@@ -255,7 +509,7 @@ class JarFile extends ZipFile {
 
         public JarEntry next() {
             ZipEntry ze = e.nextElement();
-            return new JarFileEntry(ze);
+            return new JarFileEntry(ze.getName(), ze);
         }
 
         public boolean hasMoreElements() {
@@ -298,14 +552,66 @@ class JarFile extends ZipFile {
                         Spliterator.IMMUTABLE | Spliterator.NONNULL), false);
     }
 
+    private ZipEntry searchForVersionedEntry(final int version, String name) {
+        ZipEntry vze = null;
+        String sname = "/" + name;
+        int i = version;
+        while (i > BASE_VERSION_MAJOR) {
+            vze = super.getEntry(META_INF_VERSIONS + i + sname);
+            if (vze != null) break;
+            i--;
+        }
+        return vze;
+    }
+
+    private ZipEntry getVersionedEntry(ZipEntry ze) {
+        ZipEntry vze = null;
+        if (BASE_VERSION_MAJOR < versionMajor) {
+            String name = ze.getName();
+            if (!name.startsWith(META_INF)) {
+                vze = searchForVersionedEntry(versionMajor, name);
+            }
+        }
+        return vze == null ? ze : vze;
+    }
+
+    /**
+     * Returns the real name of a {@code JarEntry}.  If this {@code JarFile} is
+     * a multi-release jar file and is configured to be processed as such, the
+     * name returned by this method is the path name of the versioned entry
+     * that the {@code JarEntry} represents, rather than the path name of the
+     * base entry that {@link JarEntry#getName()} returns.  If the
+     * {@code JarEntry} does not represent a versioned entry, or the
+     * jar file is not a multi-release jar file or {@code JarFile} is not
+     * configured for processing a multi-release jar file, this method returns
+     * the same name that {@link JarEntry#getName()} returns.
+     *
+     * @param entry the JarEntry
+     * @return the real name of the JarEntry
+     * @since 9
+     */
+    String getRealName(JarEntry entry) {
+        if (entry instanceof JarFileEntry) {
+            return ((JarFileEntry)entry).realName();
+        }
+        return entry.getName();
+    }
+
     private class JarFileEntry extends JarEntry {
+        final private String name;
+
         JarFileEntry(ZipEntry ze) {
-            super(ze);
+            super(isMultiRelease() ? getVersionedEntry(ze) : ze);
+            this.name = ze.getName();
+        }
+        JarFileEntry(String name, ZipEntry vze) {
+            super(vze);
+            this.name = name;
         }
         public Attributes getAttributes() throws IOException {
             Manifest man = JarFile.this.getManifest();
             if (man != null) {
-                return man.getAttributes(getName());
+                return man.getAttributes(super.getName());
             } else {
                 return null;
             }
@@ -317,7 +623,7 @@ class JarFile extends ZipFile {
                 throw new RuntimeException(e);
             }
             if (certs == null && jv != null) {
-                certs = jv.getCerts(JarFile.this, this);
+                certs = jv.getCerts(JarFile.this, realEntry());
             }
             return certs == null ? null : certs.clone();
         }
@@ -328,9 +634,24 @@ class JarFile extends ZipFile {
                 throw new RuntimeException(e);
             }
             if (signers == null && jv != null) {
-                signers = jv.getCodeSigners(JarFile.this, this);
+                signers = jv.getCodeSigners(JarFile.this, realEntry());
             }
             return signers == null ? null : signers.clone();
+        }
+        JarFileEntry realEntry() {
+            if (isMultiRelease() && versionMajor != BASE_VERSION_MAJOR) {
+                String entryName = super.getName();
+                return entryName.equals(this.name) ? this : new JarFileEntry(entryName, this);
+            }
+            return this;
+        }
+        String realName() {
+            return super.getName();
+        }
+
+        @Override
+        public String getName() {
+            return name;
         }
     }
 
@@ -438,7 +759,21 @@ class JarFile extends ZipFile {
      */
     private byte[] getBytes(ZipEntry ze) throws IOException {
         try (InputStream is = super.getInputStream(ze)) {
-            return IOUtils.readFully(is, (int)ze.getSize(), true);
+            int len = (int)ze.getSize();
+            int bytesRead;
+            byte[] b;
+            // trust specified entry sizes when reasonably small
+            if (len != -1 && len <= 65535) {
+                b = new byte[len];
+                bytesRead = is.readNBytes(b, 0, len);
+            } else {
+                b = is.readAllBytes();
+                bytesRead = b.length;
+            }
+            if (len != -1 && len != bytesRead) {
+                throw new EOFException("Expected:" + len + ", read:" + bytesRead);
+            }
+            return b;
         }
     }
 
@@ -475,39 +810,86 @@ class JarFile extends ZipFile {
         // wrap a verifier stream around the real stream
         return new JarVerifier.VerifierStream(
             getManifestFromReference(),
-            ze instanceof JarFileEntry ?
-            (JarEntry) ze : getJarEntry(ze.getName()),
+            verifiableEntry(ze),
             super.getInputStream(ze),
             jv);
     }
 
+    private JarEntry verifiableEntry(ZipEntry ze) {
+        if (ze instanceof JarFileEntry) {
+            // assure the name and entry match for verification
+            return ((JarFileEntry)ze).realEntry();
+        }
+        ze = getJarEntry(ze.getName());
+        if (ze instanceof JarFileEntry) {
+            return ((JarFileEntry)ze).realEntry();
+        }
+        return (JarEntry)ze;
+    }
+
     // Statics for hand-coded Boyer-Moore search
-    private static final char[] CLASSPATH_CHARS = {'c','l','a','s','s','-','p','a','t','h'};
-    // The bad character shift for "class-path"
-    private static final int[] CLASSPATH_LASTOCC;
-    // The good suffix shift for "class-path"
-    private static final int[] CLASSPATH_OPTOSFT;
+    private static final byte[] CLASSPATH_CHARS =
+            {'C','L','A','S','S','-','P','A','T','H', ':', ' '};
+
+    // The bad character shift for "class-path: "
+    private static final byte[] CLASSPATH_LASTOCC;
+
+    // The good suffix shift for "class-path: "
+    private static final byte[] CLASSPATH_OPTOSFT;
+
+    private static final byte[] MULTIRELEASE_CHARS =
+            {'M','U','L','T','I','-','R','E','L','E', 'A', 'S', 'E', ':',
+                    ' ', 'T', 'R', 'U', 'E'};
+
+    // The bad character shift for "multi-release: true"
+    private static final byte[] MULTIRELEASE_LASTOCC;
+
+    // The good suffix shift for "multi-release: true"
+    private static final byte[] MULTIRELEASE_OPTOSFT;
 
     static {
-        CLASSPATH_LASTOCC = new int[128];
-        CLASSPATH_OPTOSFT = new int[10];
-        CLASSPATH_LASTOCC[(int)'c'] = 1;
-        CLASSPATH_LASTOCC[(int)'l'] = 2;
-        CLASSPATH_LASTOCC[(int)'s'] = 5;
-        CLASSPATH_LASTOCC[(int)'-'] = 6;
-        CLASSPATH_LASTOCC[(int)'p'] = 7;
-        CLASSPATH_LASTOCC[(int)'a'] = 8;
-        CLASSPATH_LASTOCC[(int)'t'] = 9;
-        CLASSPATH_LASTOCC[(int)'h'] = 10;
-        for (int i=0; i<9; i++)
-            CLASSPATH_OPTOSFT[i] = 10;
-        CLASSPATH_OPTOSFT[9]=1;
+        CLASSPATH_LASTOCC = new byte[64];
+        CLASSPATH_OPTOSFT = new byte[12];
+        CLASSPATH_LASTOCC[(int)'C' - 32] = 1;
+        CLASSPATH_LASTOCC[(int)'L' - 32] = 2;
+        CLASSPATH_LASTOCC[(int)'S' - 32] = 5;
+        CLASSPATH_LASTOCC[(int)'-' - 32] = 6;
+        CLASSPATH_LASTOCC[(int)'P' - 32] = 7;
+        CLASSPATH_LASTOCC[(int)'A' - 32] = 8;
+        CLASSPATH_LASTOCC[(int)'T' - 32] = 9;
+        CLASSPATH_LASTOCC[(int)'H' - 32] = 10;
+        CLASSPATH_LASTOCC[(int)':' - 32] = 11;
+        CLASSPATH_LASTOCC[(int)' ' - 32] = 12;
+        for (int i = 0; i < 11; i++) {
+            CLASSPATH_OPTOSFT[i] = 12;
+        }
+        CLASSPATH_OPTOSFT[11] = 1;
+
+        MULTIRELEASE_LASTOCC = new byte[64];
+        MULTIRELEASE_OPTOSFT = new byte[19];
+        MULTIRELEASE_LASTOCC[(int)'M' - 32] = 1;
+        MULTIRELEASE_LASTOCC[(int)'I' - 32] = 5;
+        MULTIRELEASE_LASTOCC[(int)'-' - 32] = 6;
+        MULTIRELEASE_LASTOCC[(int)'L' - 32] = 9;
+        MULTIRELEASE_LASTOCC[(int)'A' - 32] = 11;
+        MULTIRELEASE_LASTOCC[(int)'S' - 32] = 12;
+        MULTIRELEASE_LASTOCC[(int)':' - 32] = 14;
+        MULTIRELEASE_LASTOCC[(int)' ' - 32] = 15;
+        MULTIRELEASE_LASTOCC[(int)'T' - 32] = 16;
+        MULTIRELEASE_LASTOCC[(int)'R' - 32] = 17;
+        MULTIRELEASE_LASTOCC[(int)'U' - 32] = 18;
+        MULTIRELEASE_LASTOCC[(int)'E' - 32] = 19;
+        for (int i = 0; i < 17; i++) {
+            MULTIRELEASE_OPTOSFT[i] = 19;
+        }
+        MULTIRELEASE_OPTOSFT[17] = 6;
+        MULTIRELEASE_OPTOSFT[18] = 1;
     }
 
     private JarEntry getManEntry() {
         if (manEntry == null) {
             // First look up manifest entry using standard name
-            manEntry = getJarEntry(MANIFEST_NAME);
+            ZipEntry manEntry = super.getEntry(MANIFEST_NAME);
             if (manEntry == null) {
                 // If not found, then iterate through all the "META-INF/"
                 // entries to find a match.
@@ -515,12 +897,15 @@ class JarFile extends ZipFile {
                 if (names != null) {
                     for (String name : names) {
                         if (MANIFEST_NAME.equals(name.toUpperCase(Locale.ENGLISH))) {
-                            manEntry = getJarEntry(name);
+                            manEntry = super.getEntry(name);
                             break;
                         }
                     }
                 }
             }
+            this.manEntry = (manEntry == null)
+                    ? null
+                    : new JarFileEntry(manEntry.getName(), manEntry);
         }
         return manEntry;
     }
@@ -536,41 +921,88 @@ class JarFile extends ZipFile {
 
     /**
      * Returns true if the pattern {@code src} is found in {@code b}.
-     * The {@code lastOcc} and {@code optoSft} arrays are the precomputed
-     * bad character and good suffix shifts.
+     * The {@code lastOcc} array is the precomputed bad character shifts.
+     * Since there are no repeated substring in our search strings,
+     * the good suffix shifts can be replaced with a comparison.
      */
-    private boolean match(char[] src, byte[] b, int[] lastOcc, int[] optoSft) {
+    private int match(byte[] src, byte[] b, byte[] lastOcc, byte[] optoSft) {
         int len = src.length;
         int last = b.length - len;
         int i = 0;
         next:
-        while (i<=last) {
-            for (int j=(len-1); j>=0; j--) {
-                char c = (char) b[i+j];
-                c = (((c-'A')|('Z'-c)) >= 0) ? (char)(c + 32) : c;
-                if (c != src[j]) {
-                    i += Math.max(j + 1 - lastOcc[c&0x7F], optoSft[j]);
+        while (i <= last) {
+            for (int j = (len - 1); j >= 0; j--) {
+                byte c = b[i + j];
+                if (c >= ' ' && c <= 'z') {
+                    if (c >= 'a') c -= 32; // Canonicalize
+
+                    if (c != src[j]) {
+                        // no match
+                        int badShift = lastOcc[c - 32];
+                        i += Math.max(j + 1 - badShift, optoSft[j]);
+                        continue next;
+                    }
+                } else {
+                    // no match, character not valid for name
+                    i += len;
                     continue next;
-                 }
+                }
             }
-            return true;
+            return i;
         }
-        return false;
+        return -1;
     }
 
     /**
      * On first invocation, check if the JAR file has the Class-Path
-     * attribute. A no-op on subsequent calls.
+     * and the Multi-Release attribute. A no-op on subsequent calls.
      */
     private void checkForSpecialAttributes() throws IOException {
-        if (hasCheckedSpecialAttributes) return;
-        JarEntry manEntry = getManEntry();
-        if (manEntry != null) {
-            byte[] b = getBytes(manEntry);
-            if (match(CLASSPATH_CHARS, b, CLASSPATH_LASTOCC, CLASSPATH_OPTOSFT))
-                hasClassPathAttribute = true;
+        if (hasCheckedSpecialAttributes) {
+            return;
         }
-        hasCheckedSpecialAttributes = true;
+        synchronized (this) {
+            if (hasCheckedSpecialAttributes) {
+                return;
+            }
+            JarEntry manEntry = getManEntry();
+            if (manEntry != null) {
+                byte[] b = getBytes(manEntry);
+                hasClassPathAttribute = match(CLASSPATH_CHARS, b,
+                        CLASSPATH_LASTOCC, CLASSPATH_OPTOSFT) != -1;
+                // is this a multi-release jar file
+                if (MULTI_RELEASE_ENABLED) {
+                    int i = match(MULTIRELEASE_CHARS, b, MULTIRELEASE_LASTOCC,
+                            MULTIRELEASE_OPTOSFT);
+                    if (i != -1) {
+                        i += MULTIRELEASE_CHARS.length;
+                        if (i < b.length) {
+                            byte c = b[i++];
+                            // Check that the value is followed by a newline
+                            // and does not have a continuation
+                            if (c == '\n' &&
+                                    (i == b.length || b[i] != ' ')) {
+                                isMultiRelease = true;
+                            } else if (c == '\r') {
+                                if (i == b.length) {
+                                    isMultiRelease = true;
+                                } else {
+                                    c = b[i++];
+                                    if (c == '\n') {
+                                        if (i == b.length || b[i] != ' ') {
+                                            isMultiRelease = true;
+                                        }
+                                    } else if (c != ' ') {
+                                        isMultiRelease = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            hasCheckedSpecialAttributes = true;
+        }
     }
 
     private synchronized void ensureInitialization() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,10 +25,12 @@
  * @test
  * @bug 8076318
  * @summary split verifier needs to add TraceClassResolution
- * @library /testlibrary
+ * @modules java.base/jdk.internal.misc
+ * @library /test/lib
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 
 // Test that the verifier outputs the classes it loads if -XX:+TraceClassResolution is specified"
 public class TraceClassRes {
@@ -38,7 +40,7 @@ public class TraceClassRes {
         "-XX:+TraceClassResolution", "-verify", "-Xshare:off", "-version");
 
     OutputAnalyzer output = new OutputAnalyzer(pb.start());
-    output.shouldContain("RESOLVE java.lang.ClassLoader java.lang.Throwable ClassLoader.java (verification)");
+    output.shouldContain("[class,resolve] java.lang.ClassLoader java.lang.Throwable ClassLoader.java (verification)");
     output.shouldHaveExitValue(0);
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,6 +38,7 @@ class IdealLoopTree;
 class LoopNode;
 class Node;
 class PhaseIdealLoop;
+class CountedLoopReserveKit;
 class VectorSet;
 class Invariance;
 struct small_cache;
@@ -64,9 +65,17 @@ protected:
          PartialPeelLoop=32,
          PartialPeelFailed=64,
          HasReductions=128,
-         PassedSlpAnalysis=256 };
+         WasSlpAnalyzed=256,
+         PassedSlpAnalysis=512,
+         DoUnrollOnly=1024,
+         VectorizedLoop=2048,
+         HasAtomicPostLoop=4096,
+         HasRangeChecks=8192,
+         IsMultiversioned=16384};
   char _unswitch_count;
   enum { _unswitch_max=3 };
+  char _postloop_flags;
+  enum { LoopNotRCEChecked = 0, LoopRCEChecked = 1, RCEPostLoop = 2 };
 
 public:
   // Names for edge indices
@@ -75,21 +84,37 @@ public:
   int is_inner_loop() const { return _loop_flags & InnerLoop; }
   void set_inner_loop() { _loop_flags |= InnerLoop; }
 
+  int range_checks_present() const { return _loop_flags & HasRangeChecks; }
+  int is_multiversioned() const { return _loop_flags & IsMultiversioned; }
+  int is_vectorized_loop() const { return _loop_flags & VectorizedLoop; }
   int is_partial_peel_loop() const { return _loop_flags & PartialPeelLoop; }
   void set_partial_peel_loop() { _loop_flags |= PartialPeelLoop; }
   int partial_peel_has_failed() const { return _loop_flags & PartialPeelFailed; }
+
   void mark_partial_peel_failed() { _loop_flags |= PartialPeelFailed; }
   void mark_has_reductions() { _loop_flags |= HasReductions; }
+  void mark_was_slp() { _loop_flags |= WasSlpAnalyzed; }
   void mark_passed_slp() { _loop_flags |= PassedSlpAnalysis; }
+  void mark_do_unroll_only() { _loop_flags |= DoUnrollOnly; }
+  void mark_loop_vectorized() { _loop_flags |= VectorizedLoop; }
+  void mark_has_atomic_post_loop() { _loop_flags |= HasAtomicPostLoop; }
+  void mark_has_range_checks() { _loop_flags |=  HasRangeChecks; }
+  void mark_is_multiversioned() { _loop_flags |= IsMultiversioned; }
 
   int unswitch_max() { return _unswitch_max; }
   int unswitch_count() { return _unswitch_count; }
+
+  int has_been_range_checked() const { return _postloop_flags & LoopRCEChecked; }
+  void set_has_been_range_checked() { _postloop_flags |= LoopRCEChecked; }
+  int is_rce_post_loop() const { return _postloop_flags & RCEPostLoop; }
+  void set_is_rce_post_loop() { _postloop_flags |= RCEPostLoop; }
+
   void set_unswitch_count(int val) {
     assert (val <= unswitch_max(), "too many unswitches");
     _unswitch_count = val;
   }
 
-  LoopNode( Node *entry, Node *backedge ) : RegionNode(3), _loop_flags(0), _unswitch_count(0) {
+  LoopNode(Node *entry, Node *backedge) : RegionNode(3), _loop_flags(0), _unswitch_count(0), _postloop_flags(0) {
     init_class_id(Class_Loop);
     init_req(EntryControl, entry);
     init_req(LoopBackControl, backedge);
@@ -212,8 +237,11 @@ public:
   int is_main_loop     () const { return (_loop_flags&PreMainPostFlagsMask) == Main;   }
   int is_post_loop     () const { return (_loop_flags&PreMainPostFlagsMask) == Post;   }
   int is_reduction_loop() const { return (_loop_flags&HasReductions) == HasReductions; }
+  int was_slp_analyzed () const { return (_loop_flags&WasSlpAnalyzed) == WasSlpAnalyzed; }
   int has_passed_slp   () const { return (_loop_flags&PassedSlpAnalysis) == PassedSlpAnalysis; }
+  int do_unroll_only      () const { return (_loop_flags&DoUnrollOnly) == DoUnrollOnly; }
   int is_main_no_pre_loop() const { return _loop_flags & MainHasNoPreLoop; }
+  int has_atomic_post_loop  () const { return (_loop_flags & HasAtomicPostLoop) == HasAtomicPostLoop; }
   void set_main_no_pre_loop() { _loop_flags |= MainHasNoPreLoop; }
 
   int main_idx() const { return _main_idx; }
@@ -234,6 +262,9 @@ public:
   }
   void set_nonexact_trip_count() {
     _loop_flags &= ~HasExactTripCount;
+  }
+  void set_notpassed_slp() {
+    _loop_flags &= ~PassedSlpAnalysis;
   }
 
   void set_profile_trip_cnt(float ptc) { _profile_trip_cnt = ptc; }
@@ -269,19 +300,29 @@ public:
   Node *incr() const                { Node *tmp = cmp_node(); return (tmp && tmp->req()==3) ? tmp->in(1) : NULL; }
   Node *limit() const               { Node *tmp = cmp_node(); return (tmp && tmp->req()==3) ? tmp->in(2) : NULL; }
   Node *stride() const              { Node *tmp = incr    (); return (tmp && tmp->req()==3) ? tmp->in(2) : NULL; }
-  Node *phi() const                 { Node *tmp = incr    (); return (tmp && tmp->req()==3) ? tmp->in(1) : NULL; }
   Node *init_trip() const           { Node *tmp = phi     (); return (tmp && tmp->req()==3) ? tmp->in(1) : NULL; }
   int stride_con() const;
   bool stride_is_con() const        { Node *tmp = stride  (); return (tmp != NULL && tmp->is_Con()); }
   BoolTest::mask test_trip() const  { return in(TestValue)->as_Bool()->_test._test; }
+  PhiNode *phi() const {
+    Node *tmp = incr();
+    if (tmp && tmp->req() == 3) {
+      Node* phi = tmp->in(1);
+      if (phi->is_Phi()) {
+        return phi->as_Phi();
+      }
+    }
+    return NULL;
+  }
   CountedLoopNode *loopnode() const {
     // The CountedLoopNode that goes with this CountedLoopEndNode may
     // have been optimized out by the IGVN so be cautious with the
     // pattern matching on the graph
-    if (phi() == NULL) {
+    PhiNode* iv_phi = phi();
+    if (iv_phi == NULL) {
       return NULL;
     }
-    Node *ln = phi()->in(0);
+    Node *ln = iv_phi->in(0);
     if (ln->is_CountedLoop() && ln->as_CountedLoop()->loopexit() == this) {
       return (CountedLoopNode*)ln;
     }
@@ -328,9 +369,9 @@ class LoopLimitNode : public Node {
   virtual int Opcode() const;
   virtual const Type *bottom_type() const { return TypeInt::INT; }
   virtual uint ideal_reg() const { return Op_RegI; }
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual Node* Identity(PhaseGVN* phase);
 };
 
 // -----------------------------IdealLoopTree----------------------------------
@@ -375,7 +416,7 @@ public:
   { }
 
   // Is 'l' a member of 'this'?
-  int is_member( const IdealLoopTree *l ) const; // Test for nested membership
+  bool is_member(const IdealLoopTree *l) const; // Test for nested membership
 
   // Set loop nesting depth.  Accumulate has_call bits.
   int set_nest( uint depth );
@@ -418,14 +459,14 @@ public:
   // encountered.
   void allpaths_check_safepts(VectorSet &visited, Node_List &stack);
 
+  // Remove safepoints from loop. Optionally keeping one.
+  void remove_safepoints(PhaseIdealLoop* phase, bool keep_one);
+
   // Convert to counted loops where possible
   void counted_loop( PhaseIdealLoop *phase );
 
   // Check for Node being a loop-breaking test
   Node *is_loop_exit(Node *iff) const;
-
-  // Returns true if ctrl is executed on every complete iteration
-  bool dominates_backedge(Node* ctrl);
 
   // Remove simplistic dead code from loop body
   void DCE_loop_body();
@@ -479,8 +520,8 @@ public:
   // Return TRUE if "iff" is a range check.
   bool is_range_check_if(IfNode *iff, PhaseIdealLoop *phase, Invariance& invar) const;
 
-  // Compute loop exact trip count if possible
-  void compute_exact_trip_count( PhaseIdealLoop *phase );
+  // Compute loop trip count if possible
+  void compute_trip_count(PhaseIdealLoop* phase);
 
   // Compute loop trip count from profile data
   void compute_profile_trip_cnt( PhaseIdealLoop *phase );
@@ -519,6 +560,8 @@ public:
 class PhaseIdealLoop : public PhaseTransform {
   friend class IdealLoopTree;
   friend class SuperWord;
+  friend class CountedLoopReserveKit;
+
   // Pre-computed def-use info
   PhaseIterGVN &_igvn;
 
@@ -625,6 +668,9 @@ class PhaseIdealLoop : public PhaseTransform {
   bool cast_incr_before_loop(Node* incr, Node* ctrl, Node* loop);
 
 public:
+
+  static bool is_canonical_loop_entry(CountedLoopNode* cl);
+
   bool has_node( Node* n ) const {
     guarantee(n != NULL, "No Node.");
     return _nodes[n->_idx] != NULL;
@@ -677,13 +723,18 @@ public:
   }
 
 private:
-  Node *get_ctrl_no_update( Node *i ) const {
+  Node *get_ctrl_no_update_helper(Node *i) const {
+    assert(has_ctrl(i), "should be control, not loop");
+    return (Node*)(((intptr_t)_nodes[i->_idx]) & ~1);
+  }
+
+  Node *get_ctrl_no_update(Node *i) const {
     assert( has_ctrl(i), "" );
-    Node *n = (Node*)(((intptr_t)_nodes[i->_idx]) & ~1);
+    Node *n = get_ctrl_no_update_helper(i);
     if (!n->in(0)) {
       // Skip dead CFG nodes
       do {
-        n = (Node*)(((intptr_t)_nodes[n->_idx]) & ~1);
+        n = get_ctrl_no_update_helper(n);
       } while (!n->in(0));
       n = find_non_split_ctrl(n);
     }
@@ -705,22 +756,15 @@ private:
   // from old_node to new_node to support the lazy update.  Reference
   // replaces loop reference, since that is not needed for dead node.
 public:
-  void lazy_update( Node *old_node, Node *new_node ) {
-    assert( old_node != new_node, "no cycles please" );
-    //old_node->set_req( 1, new_node /*NO DU INFO*/ );
-    // Nodes always have DU info now, so re-use the side array slot
-    // for this node to provide the forwarding pointer.
-    _nodes.map( old_node->_idx, (Node*)((intptr_t)new_node + 1) );
+  void lazy_update(Node *old_node, Node *new_node) {
+    assert(old_node != new_node, "no cycles please");
+    // Re-use the side array slot for this node to provide the
+    // forwarding pointer.
+    _nodes.map(old_node->_idx, (Node*)((intptr_t)new_node + 1));
   }
-  void lazy_replace( Node *old_node, Node *new_node ) {
-    _igvn.replace_node( old_node, new_node );
-    lazy_update( old_node, new_node );
-  }
-  void lazy_replace_proj( Node *old_node, Node *new_node ) {
-    assert( old_node->req() == 1, "use this for Projs" );
-    _igvn.hash_delete(old_node); // Must hash-delete before hacking edges
-    old_node->add_req( NULL );
-    lazy_replace( old_node, new_node );
+  void lazy_replace(Node *old_node, Node *new_node) {
+    _igvn.replace_node(old_node, new_node);
+    lazy_update(old_node, new_node);
   }
 
 private:
@@ -879,6 +923,17 @@ public:
   // Add pre and post loops around the given loop.  These loops are used
   // during RCE, unrolling and aligning loops.
   void insert_pre_post_loops( IdealLoopTree *loop, Node_List &old_new, bool peel_only );
+
+  // Add post loop after the given loop.
+  Node *insert_post_loop(IdealLoopTree *loop, Node_List &old_new,
+                         CountedLoopNode *main_head, CountedLoopEndNode *main_end,
+                         Node *incr, Node *limit, CountedLoopNode *&post_head);
+
+  // Add an RCE'd post loop which we will multi-version adapt for run time test path usage
+  void insert_scalar_rced_post_loop( IdealLoopTree *loop, Node_List &old_new );
+
+  // Add a vector post loop between a vector main loop and the current post loop
+  void insert_vector_post_loop(IdealLoopTree *loop, Node_List &old_new);
   // If Node n lives in the back_ctrl block, we clone a private version of n
   // in preheader_ctrl block and return that, otherwise return n.
   Node *clone_up_backedge_goo( Node *back_ctrl, Node *preheader_ctrl, Node *n, VectorSet &visited, Node_Stack &clones );
@@ -903,7 +958,8 @@ public:
 
   // Create a new if above the uncommon_trap_if_pattern for the predicate to be promoted
   ProjNode* create_new_if_for_predicate(ProjNode* cont_proj, Node* new_entry,
-                                        Deoptimization::DeoptReason reason);
+                                        Deoptimization::DeoptReason reason,
+                                        int opcode);
   void register_control(Node* n, IdealLoopTree *loop, Node* pred);
 
   // Clone loop predicates to cloned loops (peeled, unswitched)
@@ -927,8 +983,8 @@ public:
   // Construct a range check for a predicate if
   BoolNode* rc_predicate(IdealLoopTree *loop, Node* ctrl,
                          int scale, Node* offset,
-                         Node* init, Node* limit, Node* stride,
-                         Node* range, bool upper);
+                         Node* init, Node* limit, jint stride,
+                         Node* range, bool upper, bool &overflow);
 
   // Implementation of the loop predication to promote checks outside the loop
   bool loop_predication_impl(IdealLoopTree *loop);
@@ -948,13 +1004,34 @@ public:
   }
 
   // Eliminate range-checks and other trip-counter vs loop-invariant tests.
-  void do_range_check( IdealLoopTree *loop, Node_List &old_new );
+  int do_range_check( IdealLoopTree *loop, Node_List &old_new );
+
+  // Check to see if do_range_check(...) cleaned the main loop of range-checks
+  void has_range_checks(IdealLoopTree *loop);
+
+  // Process post loops which have range checks and try to build a multi-version
+  // guard to safely determine if we can execute the post loop which was RCE'd.
+  bool multi_version_post_loops(IdealLoopTree *rce_loop, IdealLoopTree *legacy_loop);
+
+  // Cause the rce'd post loop to optimized away, this happens if we cannot complete multiverioning
+  void poison_rce_post_loop(IdealLoopTree *rce_loop);
 
   // Create a slow version of the loop by cloning the loop
   // and inserting an if to select fast-slow versions.
   ProjNode* create_slow_version_of_loop(IdealLoopTree *loop,
-                                        Node_List &old_new);
+                                        Node_List &old_new,
+                                        int opcode);
 
+  // Clone a loop and return the clone head (clone_loop_head).
+  // Added nodes include int(1), int(0) - disconnected, If, IfTrue, IfFalse,
+  // This routine was created for usage in CountedLoopReserveKit.
+  //
+  //    int(1) -> If -> IfTrue -> original_loop_head
+  //              |
+  //              V
+  //           IfFalse -> clone_loop_head (returned by function pointer)
+  //
+  LoopNode* create_reserve_version_of_loop(IdealLoopTree *loop, CountedLoopReserveKit* lk);
   // Clone loop with an invariant test (that does not exit) and
   // insert a clone of the test that selects which version to
   // execute.
@@ -1077,6 +1154,10 @@ private:
   bool split_up( Node *n, Node *blk1, Node *blk2 );
   void sink_use( Node *use, Node *post_loop );
   Node *place_near_use( Node *useblock ) const;
+  Node* try_move_store_before_loop(Node* n, Node *n_ctrl);
+  void try_move_store_after_loop(Node* n);
+  bool identical_backtoback_ifs(Node *n);
+  bool can_split_if(Node *n_ctrl);
 
   bool _created_loop_node;
 public:
@@ -1104,6 +1185,68 @@ public:
   static int _loop_work;        // Sum of PhaseIdealLoop x _unique
 #endif
 };
+
+// This kit may be used for making of a reserved copy of a loop before this loop
+//  goes under non-reversible changes.
+//
+// Function create_reserve() creates a reserved copy (clone) of the loop.
+// The reserved copy is created by calling
+// PhaseIdealLoop::create_reserve_version_of_loop - see there how
+// the original and reserved loops are connected in the outer graph.
+// If create_reserve succeeded, it returns 'true' and _has_reserved is set to 'true'.
+//
+// By default the reserved copy (clone) of the loop is created as dead code - it is
+// dominated in the outer loop by this node chain:
+//   intcon(1)->If->IfFalse->reserved_copy.
+// The original loop is dominated by the the same node chain but IfTrue projection:
+//   intcon(0)->If->IfTrue->original_loop.
+//
+// In this implementation of CountedLoopReserveKit the ctor includes create_reserve()
+// and the dtor, checks _use_new value.
+// If _use_new == false, it "switches" control to reserved copy of the loop
+// by simple replacing of node intcon(1) with node intcon(0).
+//
+// Here is a proposed example of usage (see also SuperWord::output in superword.cpp).
+//
+// void CountedLoopReserveKit_example()
+// {
+//    CountedLoopReserveKit lrk((phase, lpt, DoReserveCopy = true); // create local object
+//    if (DoReserveCopy && !lrk.has_reserved()) {
+//      return; //failed to create reserved loop copy
+//    }
+//    ...
+//    //something is wrong, switch to original loop
+///   if(something_is_wrong) return; // ~CountedLoopReserveKit makes the switch
+//    ...
+//    //everything worked ok, return with the newly modified loop
+//    lrk.use_new();
+//    return; // ~CountedLoopReserveKit does nothing once use_new() was called
+//  }
+//
+// Keep in mind, that by default if create_reserve() is not followed by use_new()
+// the dtor will "switch to the original" loop.
+// NOTE. You you modify outside of the original loop this class is no help.
+//
+class CountedLoopReserveKit {
+  private:
+    PhaseIdealLoop* _phase;
+    IdealLoopTree*  _lpt;
+    LoopNode*       _lp;
+    IfNode*         _iff;
+    LoopNode*       _lp_reserved;
+    bool            _has_reserved;
+    bool            _use_new;
+    const bool      _active; //may be set to false in ctor, then the object is dummy
+
+  public:
+    CountedLoopReserveKit(PhaseIdealLoop* phase, IdealLoopTree *loop, bool active);
+    ~CountedLoopReserveKit();
+    void use_new()                {_use_new = true;}
+    void set_iff(IfNode* x)       {_iff = x;}
+    bool has_reserved()     const { return _active && _has_reserved;}
+  private:
+    bool create_reserve();
+};// class CountedLoopReserveKit
 
 inline Node* IdealLoopTree::tail() {
 // Handle lazy update of _tail field

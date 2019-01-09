@@ -46,11 +46,6 @@ public class GenerateBreakIteratorData {
     private static String unicodeData = "UnicodeData.txt";
 
     /**
-     * Rules file
-     */
-    private static String rules = "sun.text.resources.BreakIteratorRules";
-
-    /**
      * Locale data
      */
     private static String language = "";
@@ -67,25 +62,37 @@ public class GenerateBreakIteratorData {
         CharacterCategory.makeCategoryMap(unicodeData);
 
         /* Generate files */
-        generateFiles();
+        try {
+            generateFiles();
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    private static String localizedBundleName(String pkg, String clazz) {
+        if (language.length() > 0) {
+            return pkg + ".ext." + clazz + '_' + language;
+        } else {
+            return pkg + '.' + clazz;
+        }
     }
 
     /**
      * Generate data files whose names are included in
      * sun.text.resources.BreakIteratorInfo+<localeName>
      */
-    private static void generateFiles() {
+    private static void generateFiles() throws Exception {
         String[] classNames;
         ResourceBundle rules, info;
 
-        info =  ResourceBundle.getBundle("sun.text.resources.BreakIteratorInfo",
-                                         new Locale(language, country, valiant),
-                                         BreakIteratorRBControl.INSTANCE);
+        info = (ResourceBundle) Class.forName(
+            localizedBundleName("sun.text.resources", "BreakIteratorInfo")).newInstance();
+
         classNames = info.getStringArray("BreakIteratorClasses");
 
-        rules = ResourceBundle.getBundle("sun.text.resources.BreakIteratorRules",
-                                         new Locale(language, country, valiant),
-                                         BreakIteratorRBControl.INSTANCE);
+        rules = (ResourceBundle) Class.forName(
+            localizedBundleName("sun.text.resources", "BreakIteratorRules")).newInstance();
 
         if (info.containsKey("CharacterData")) {
             generateDataFile(info.getString("CharacterData"),

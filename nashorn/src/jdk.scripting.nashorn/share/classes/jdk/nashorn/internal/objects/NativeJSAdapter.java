@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,9 +36,9 @@ import java.lang.invoke.MethodType;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import jdk.internal.dynalink.CallSiteDescriptor;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.LinkRequest;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.LinkRequest;
 import jdk.nashorn.internal.lookup.Lookup;
 import jdk.nashorn.internal.objects.annotations.Constructor;
 import jdk.nashorn.internal.objects.annotations.ScriptClass;
@@ -49,21 +49,22 @@ import jdk.nashorn.internal.runtime.ScriptFunction;
 import jdk.nashorn.internal.runtime.ScriptObject;
 import jdk.nashorn.internal.runtime.ScriptRuntime;
 import jdk.nashorn.internal.runtime.arrays.ArrayLikeIterator;
+import jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor;
 import jdk.nashorn.internal.scripts.JO;
 
 /**
- * This class is the implementation of the Nashorn-specific global object named {@code JSAdapter}. It can be
- * thought of as the {@link java.lang.reflect.Proxy} equivalent for JavaScript. NativeJSAdapter calls specially named
+ * This class is the implementation of the Nashorn-specific global object named {@code JSAdapter}. It can be thought of
+ * as the {@link java.lang.reflect.Proxy} equivalent for JavaScript. A {@code NativeJSAdapter} calls specially named
  * JavaScript methods on an adaptee object when property access/update/call/new/delete is attempted on it. Example:
  *<pre>
  *    var y = {
- *                __get__    : function (name) { ... }
- *                __has__    : function (name) { ... }
- *                __put__    : function (name, value) {...}
- *                __call__   : function (name, arg1, arg2) {...}
- *                __new__    : function (arg1, arg2) {...}
- *                __delete__ : function (name) { ... }
- *                __getIds__ : function () { ... }
+ *                __get__     : function (name) { ... }
+ *                __has__     : function (name) { ... }
+ *                __put__     : function (name, value) {...}
+ *                __call__    : function (name, arg1, arg2) {...}
+ *                __new__     : function (arg1, arg2) {...}
+ *                __delete__  : function (name) { ... }
+ *                __getKeys__ : function () { ... }
  *            };
  *
  *    var x = new JSAdapter(y);
@@ -74,17 +75,21 @@ import jdk.nashorn.internal.scripts.JO;
  *    i in x;                     // calls y.__has__
  *    x.p = 10;                   // calls y.__put__
  *    delete x.p;                 // calls y.__delete__
- *    for (i in x) { print(i); }  // calls y.__getIds__
+ *    for (i in x) { print(i); }  // calls y.__getKeys__
  * </pre>
  * <p>
- * JavaScript caller of adapter object is isolated from the fact that the property access/mutation/deletion are really
- * calls to JavaScript methods on adaptee.
+ * The {@code __getKeys__} and {@code __getIds__} properties are mapped to the same operation. Concrete
+ * {@code JSAdapter} implementations are expected to use only one of these. As {@code __getIds__} exists for
+ * compatibility reasons only, use of {@code __getKeys__} is recommended.
  * </p>
  * <p>
- * JSAdapter constructor can optionally receive an "overrides" object. Properties of overrides object is copied to
- * JSAdapter instance. When user accessed property is one of these, then adaptee's methods like {@code __get__},
- * {@code __put__} etc. are not called for those. This can be used to make certain "preferred" properties that can be
- * accessed in the usual/faster way avoiding proxy mechanism. Example:
+ * The JavaScript caller of an adapter object is oblivious of the property access/mutation/deletion's being adapted.
+ * </p>
+ * <p>
+ * The {@code JSAdapter} constructor can optionally receive an "overrides" object. The properties of overrides object
+ * are copied to the {@code JSAdapter} instance. In case user-accessed properties are among these, the adaptee's methods
+ * like {@code __get__}, {@code __put__} etc. are not called for them. This can be used to make certain "preferred"
+ * properties that can be accessed in the usual/faster way avoiding the proxy mechanism. Example:
  * </p>
  * <pre>
  *     var x = new JSAdapter({ foo: 444, bar: 6546 }) {
@@ -95,13 +100,13 @@ import jdk.nashorn.internal.scripts.JO;
  *     x.bar = 'hello'; // "bar" directly set without __put__ call
  *     x.prop           // calls __get__("prop") as 'prop' is not overridden
  * </pre>
- * It is possible to pass a specific prototype for JSAdapter instance by passing three arguments to JSAdapter
- * constructor. So exact signature of JSAdapter constructor is as follows:
+ * It is possible to pass a specific prototype for the {@code JSAdapter} instance by passing three arguments to the
+ * {@code JSAdapter} constructor. The exact signature of the {@code JSAdapter} constructor is as follows:
  * <pre>
  *     JSAdapter([proto], [overrides], adaptee);
  * </pre>
- * Both proto and overrides are optional - but adaptee is not. When proto is not passed {@code JSAdapter.prototype} is
- * used.
+ * Both the {@code proto} and {@code overrides} arguments are optional - but {@code adaptee} is not. When {@code proto}
+ * is not passed, {@code JSAdapter.prototype} is used.
  */
 @ScriptClass("JSAdapter")
 public final class NativeJSAdapter extends ScriptObject {
@@ -113,7 +118,7 @@ public final class NativeJSAdapter extends ScriptObject {
     public static final String __call__      = "__call__";
     /** object new operation */
     public static final String __new__       = "__new__";
-    /** object getIds operation */
+    /** object getIds operation (provided for compatibility reasons; use of getKeys is preferred) */
     public static final String __getIds__    = "__getIds__";
     /** object getKeys operation */
     public static final String __getKeys__   = "__getKeys__";
@@ -142,7 +147,7 @@ public final class NativeJSAdapter extends ScriptObject {
     private final ScriptObject adaptee;
     private final boolean overrides;
 
-    private static final MethodHandle IS_JSADAPTOR = findOwnMH("isJSAdaptor", boolean.class, Object.class, Object.class, MethodHandle.class, Object.class, ScriptFunction.class);
+    private static final MethodHandle IS_JSADAPTER = findOwnMH("isJSAdapter", boolean.class, Object.class, Object.class, MethodHandle.class, Object.class, ScriptFunction.class);
 
     // initialized by nasgen
     private static PropertyMap $nasgenmap$;
@@ -179,33 +184,8 @@ public final class NativeJSAdapter extends ScriptObject {
     }
 
     @Override
-    public int getInt(final long key, final int programPoint) {
-        return (overrides && super.hasOwnProperty(key)) ? super.getInt(key, programPoint) : callAdapteeInt(programPoint, __get__, key);
-    }
-
-    @Override
     public int getInt(final int key, final int programPoint) {
         return (overrides && super.hasOwnProperty(key)) ? super.getInt(key, programPoint) : callAdapteeInt(programPoint, __get__, key);
-    }
-
-    @Override
-    public long getLong(final Object key, final int programPoint) {
-        return (overrides && super.hasOwnProperty(key)) ? super.getLong(key, programPoint) : callAdapteeLong(programPoint, __get__, key);
-    }
-
-    @Override
-    public long getLong(final double key, final int programPoint) {
-        return (overrides && super.hasOwnProperty(key)) ? super.getLong(key, programPoint) : callAdapteeLong(programPoint, __get__, key);
-    }
-
-    @Override
-    public long getLong(final long key, final int programPoint) {
-        return (overrides && super.hasOwnProperty(key)) ? super.getLong(key, programPoint) : callAdapteeLong(programPoint, __get__, key);
-    }
-
-    @Override
-    public long getLong(final int key, final int programPoint) {
-        return (overrides && super.hasOwnProperty(key)) ? super.getLong(key, programPoint) : callAdapteeLong(programPoint, __get__, key);
     }
 
     @Override
@@ -215,11 +195,6 @@ public final class NativeJSAdapter extends ScriptObject {
 
     @Override
     public double getDouble(final double key, final int programPoint) {
-        return (overrides && super.hasOwnProperty(key)) ? super.getDouble(key, programPoint) : callAdapteeDouble(programPoint, __get__, key);
-    }
-
-    @Override
-    public double getDouble(final long key, final int programPoint) {
         return (overrides && super.hasOwnProperty(key)) ? super.getDouble(key, programPoint) : callAdapteeDouble(programPoint, __get__, key);
     }
 
@@ -239,26 +214,12 @@ public final class NativeJSAdapter extends ScriptObject {
     }
 
     @Override
-    public Object get(final long key) {
-        return (overrides && super.hasOwnProperty(key)) ? super.get(key) : callAdaptee(__get__, key);
-    }
-
-    @Override
     public Object get(final int key) {
         return (overrides && super.hasOwnProperty(key)) ? super.get(key) : callAdaptee(__get__, key);
     }
 
     @Override
     public void set(final Object key, final int value, final int flags) {
-        if (overrides && super.hasOwnProperty(key)) {
-            super.set(key, value, flags);
-        } else {
-            callAdaptee(__put__, key, value, flags);
-        }
-    }
-
-    @Override
-    public void set(final Object key, final long value, final int flags) {
         if (overrides && super.hasOwnProperty(key)) {
             super.set(key, value, flags);
         } else {
@@ -294,15 +255,6 @@ public final class NativeJSAdapter extends ScriptObject {
     }
 
     @Override
-    public void set(final double key, final long value, final int flags) {
-        if (overrides && super.hasOwnProperty(key)) {
-            super.set(key, value, flags);
-        } else {
-            callAdaptee(__put__, key, value, flags);
-        }
-    }
-
-    @Override
     public void set(final double key, final double value, final int flags) {
         if (overrides && super.hasOwnProperty(key)) {
             super.set(key, value, flags);
@@ -321,52 +273,7 @@ public final class NativeJSAdapter extends ScriptObject {
     }
 
     @Override
-    public void set(final long key, final int value, final int flags) {
-        if (overrides && super.hasOwnProperty(key)) {
-            super.set(key, value, flags);
-        } else {
-            callAdaptee(__put__, key, value, flags);
-        }
-    }
-
-    @Override
-    public void set(final long key, final long value, final int flags) {
-        if (overrides && super.hasOwnProperty(key)) {
-            super.set(key, value, flags);
-        } else {
-            callAdaptee(__put__, key, value, flags);
-        }
-    }
-
-    @Override
-    public void set(final long key, final double value, final int flags) {
-        if (overrides && super.hasOwnProperty(key)) {
-            super.set(key, value, flags);
-        } else {
-            callAdaptee(__put__, key, value, flags);
-        }
-    }
-
-    @Override
-    public void set(final long key, final Object value, final int flags) {
-        if (overrides && super.hasOwnProperty(key)) {
-            super.set(key, value, flags);
-        } else {
-            callAdaptee(__put__, key, value, flags);
-        }
-    }
-
-    @Override
     public void set(final int key, final int value, final int flags) {
-        if (overrides && super.hasOwnProperty(key)) {
-            super.set(key, value, flags);
-        } else {
-            callAdaptee(__put__, key, value, flags);
-        }
-    }
-
-    @Override
-    public void set(final int key, final long value, final int flags) {
         if (overrides && super.hasOwnProperty(key)) {
             super.set(key, value, flags);
         } else {
@@ -411,15 +318,6 @@ public final class NativeJSAdapter extends ScriptObject {
     }
 
     @Override
-    public boolean has(final long key) {
-        if (overrides && super.hasOwnProperty(key)) {
-            return true;
-        }
-
-        return JSType.toBoolean(callAdaptee(Boolean.FALSE, __has__, key));
-    }
-
-    @Override
     public boolean has(final double key) {
         if (overrides && super.hasOwnProperty(key)) {
             return true;
@@ -430,15 +328,6 @@ public final class NativeJSAdapter extends ScriptObject {
 
     @Override
     public boolean delete(final int key, final boolean strict) {
-        if (overrides && super.hasOwnProperty(key)) {
-            return super.delete(key, strict);
-        }
-
-        return JSType.toBoolean(callAdaptee(Boolean.TRUE, __delete__, key, strict));
-    }
-
-    @Override
-    public boolean delete(final long key, final boolean strict) {
         if (overrides && super.hasOwnProperty(key)) {
             return super.delete(key, strict);
         }
@@ -475,7 +364,7 @@ public final class NativeJSAdapter extends ScriptObject {
 
         Object obj;
         if (func instanceof ScriptFunction) {
-            obj = ScriptRuntime.apply((ScriptFunction)func, adaptee);
+            obj = ScriptRuntime.apply((ScriptFunction)func, this);
         } else {
             obj = new NativeArray(0);
         }
@@ -583,27 +472,11 @@ public final class NativeJSAdapter extends ScriptObject {
     }
 
     @Override
-    protected GuardedInvocation findCallMethodMethod(final CallSiteDescriptor desc, final LinkRequest request) {
-        if (overrides && super.hasOwnProperty(desc.getNameToken(2))) {
-            try {
-                final GuardedInvocation inv = super.findCallMethodMethod(desc, request);
-                if (inv != null) {
-                    return inv;
-                }
-            } catch (final Exception e) {
-                //ignored
-            }
-        }
-
-        return findHook(desc, __call__);
-    }
-
-    @Override
-    protected GuardedInvocation findGetMethod(final CallSiteDescriptor desc, final LinkRequest request, final String operation) {
-        final String name = desc.getNameToken(CallSiteDescriptor.NAME_OPERAND);
+    protected GuardedInvocation findGetMethod(final CallSiteDescriptor desc, final LinkRequest request) {
+        final String name = NashornCallSiteDescriptor.getOperand(desc);
         if (overrides && super.hasOwnProperty(name)) {
             try {
-                final GuardedInvocation inv = super.findGetMethod(desc, request, operation);
+                final GuardedInvocation inv = super.findGetMethod(desc, request);
                 if (inv != null) {
                     return inv;
                 }
@@ -612,35 +485,29 @@ public final class NativeJSAdapter extends ScriptObject {
             }
         }
 
-        switch(operation) {
-        case "getProp":
-        case "getElem":
+        if (!NashornCallSiteDescriptor.isMethodFirstOperation(desc)) {
             return findHook(desc, __get__);
-        case "getMethod":
+        } else {
             final FindProperty find = adaptee.findProperty(__call__, true);
             if (find != null) {
                 final Object value = find.getObjectValue();
                 if (value instanceof ScriptFunction) {
-                    final ScriptFunctionImpl func = (ScriptFunctionImpl)value;
+                    final ScriptFunction func = (ScriptFunction)value;
                     // TODO: It's a shame we need to produce a function bound to this and name, when we'd only need it bound
                     // to name. Probably not a big deal, but if we can ever make it leaner, it'd be nice.
                     return new GuardedInvocation(MH.dropArguments(MH.constant(Object.class,
-                            func.makeBoundFunction(this, new Object[] { name })), 0, Object.class),
-                            testJSAdaptor(adaptee, null, null, null),
-                            adaptee.getProtoSwitchPoint(__call__, find.getOwner()));
+                            func.createBound(this, new Object[] { name })), 0, Object.class),
+                            testJSAdapter(adaptee, null, null, null),
+                            adaptee.getProtoSwitchPoints(__call__, find.getOwner()), null);
                 }
             }
-            throw typeError("no.such.function", desc.getNameToken(2), ScriptRuntime.safeToString(this));
-        default:
-            break;
+            throw typeError("no.such.function", name, ScriptRuntime.safeToString(this));
         }
-
-        throw new AssertionError("should not reach here");
     }
 
     @Override
     protected GuardedInvocation findSetMethod(final CallSiteDescriptor desc, final LinkRequest request) {
-        if (overrides && super.hasOwnProperty(desc.getNameToken(CallSiteDescriptor.NAME_OPERAND))) {
+        if (overrides && super.hasOwnProperty(NashornCallSiteDescriptor.getOperand(desc))) {
             try {
                 final GuardedInvocation inv = super.findSetMethod(desc, request);
                 if (inv != null) {
@@ -663,10 +530,6 @@ public final class NativeJSAdapter extends ScriptObject {
         return JSType.toNumberMaybeOptimistic(callAdaptee(name, args), programPoint);
     }
 
-    private long callAdapteeLong(final int programPoint, final String name, final Object... args) {
-        return JSType.toLongMaybeOptimistic(callAdaptee(name, args), programPoint);
-    }
-
     private int callAdapteeInt(final int programPoint, final String name, final Object... args) {
         return JSType.toInt32MaybeOptimistic(callAdaptee(name, args), programPoint);
     }
@@ -674,7 +537,7 @@ public final class NativeJSAdapter extends ScriptObject {
     private Object callAdaptee(final Object retValue, final String name, final Object... args) {
         final Object func = adaptee.get(name);
         if (func instanceof ScriptFunction) {
-            return ScriptRuntime.apply((ScriptFunction)func, adaptee, args);
+            return ScriptRuntime.apply((ScriptFunction)func, this, args);
         }
         return retValue;
     }
@@ -687,7 +550,7 @@ public final class NativeJSAdapter extends ScriptObject {
         final FindProperty findData = adaptee.findProperty(hook, true);
         final MethodType type = desc.getMethodType();
         if (findData != null) {
-            final String name = desc.getNameTokenCount() > 2 ? desc.getNameToken(2) : null;
+            final String name = NashornCallSiteDescriptor.getOperand(desc);
             final Object value = findData.getObjectValue();
             if (value instanceof ScriptFunction) {
                 final ScriptFunction func = (ScriptFunction)value;
@@ -697,29 +560,29 @@ public final class NativeJSAdapter extends ScriptObject {
                 if (methodHandle != null) {
                     return new GuardedInvocation(
                             methodHandle,
-                            testJSAdaptor(adaptee, findData.getGetter(Object.class, INVALID_PROGRAM_POINT, null), findData.getOwner(), func),
-                            adaptee.getProtoSwitchPoint(hook, findData.getOwner()));
+                            testJSAdapter(adaptee, findData.getGetter(Object.class, INVALID_PROGRAM_POINT, null), findData.getOwner(), func),
+                            adaptee.getProtoSwitchPoints(hook, findData.getOwner()), null);
                 }
              }
         }
 
         switch (hook) {
         case __call__:
-            throw typeError("no.such.function", desc.getNameToken(2), ScriptRuntime.safeToString(this));
+            throw typeError("no.such.function", NashornCallSiteDescriptor.getOperand(desc), ScriptRuntime.safeToString(this));
         default:
             final MethodHandle methodHandle = hook.equals(__put__) ?
             MH.asType(Lookup.EMPTY_SETTER, type) :
             Lookup.emptyGetter(type.returnType());
-            return new GuardedInvocation(methodHandle, testJSAdaptor(adaptee, null, null, null), adaptee.getProtoSwitchPoint(hook, null));
+            return new GuardedInvocation(methodHandle, testJSAdapter(adaptee, null, null, null), adaptee.getProtoSwitchPoints(hook, null), null);
         }
     }
 
-    private static MethodHandle testJSAdaptor(final Object adaptee, final MethodHandle getter, final Object where, final ScriptFunction func) {
-        return MH.insertArguments(IS_JSADAPTOR, 1, adaptee, getter, where, func);
+    private static MethodHandle testJSAdapter(final Object adaptee, final MethodHandle getter, final Object where, final ScriptFunction func) {
+        return MH.insertArguments(IS_JSADAPTER, 1, adaptee, getter, where, func);
     }
 
     @SuppressWarnings("unused")
-    private static boolean isJSAdaptor(final Object self, final Object adaptee, final MethodHandle getter, final Object where, final ScriptFunction func) {
+    private static boolean isJSAdapter(final Object self, final Object adaptee, final MethodHandle getter, final Object where, final ScriptFunction func) {
         final boolean res = self instanceof NativeJSAdapter && ((NativeJSAdapter)self).getAdaptee() == adaptee;
         if (res && getter != null) {
             try {

@@ -36,7 +36,7 @@
  * @bug 6785442
  * @summary Checks race between poll and remove(Object), while
  * occasionally moonlighting as a microbenchmark.
- * @run main RemovePollRace 12345
+ * @run main RemovePollRace 1234
  */
 
 import java.util.concurrent.ArrayBlockingQueue;
@@ -56,13 +56,13 @@ import java.util.Queue;
 import java.util.Map;
 
 public class RemovePollRace {
-    // Suitable for benchmarking.  Overriden by args[0] for testing.
+    // Suitable for benchmarking.  Overridden by args[0] for testing.
     int count = 1024 * 1024;
 
-    final Map<String,String> results = new ConcurrentHashMap<String,String>();
+    final Map<String,String> results = new ConcurrentHashMap<>();
 
     Collection<Queue<Boolean>> concurrentQueues() {
-        List<Queue<Boolean>> queues = new ArrayList<Queue<Boolean>>();
+        List<Queue<Boolean>> queues = new ArrayList<>();
         queues.add(new ConcurrentLinkedDeque<Boolean>());
         queues.add(new ConcurrentLinkedQueue<Boolean>());
         queues.add(new ArrayBlockingQueue<Boolean>(count, false));
@@ -81,7 +81,7 @@ public class RemovePollRace {
     }
 
     void prettyPrintResults() {
-        List<String> classNames = new ArrayList<String>(results.keySet());
+        List<String> classNames = new ArrayList<>(results.keySet());
         Collections.sort(classNames);
         int maxClassNameLength = 0;
         int maxNanosLength = 0;
@@ -100,6 +100,7 @@ public class RemovePollRace {
     void test(String[] args) throws Throwable {
         if (args.length > 0)
             count = Integer.valueOf(args[0]);
+
         // Warmup
         for (Queue<Boolean> queue : concurrentQueues())
             test(queue);
@@ -120,12 +121,16 @@ public class RemovePollRace {
         final int SPINS = 5;
         final AtomicLong removes = new AtomicLong(0);
         final AtomicLong polls = new AtomicLong(0);
-        final int adderCount =
-            Math.max(1, Runtime.getRuntime().availableProcessors() / 4);
-        final int removerCount =
-            Math.max(1, Runtime.getRuntime().availableProcessors() / 4);
+
+        // We need at least 3 threads, but we don't want to use too
+        // many on massively multi-core systems.
+        final int cpus = Runtime.getRuntime().availableProcessors();
+        final int threadsToUse = Math.max(3, Math.min(cpus, 16));
+        final int adderCount = threadsToUse / 3;
+        final int removerCount = adderCount;
         final int pollerCount = removerCount;
         final int threadCount = adderCount + removerCount + pollerCount;
+
         final CountDownLatch startingGate = new CountDownLatch(1);
         final CountDownLatch addersDone = new CountDownLatch(adderCount);
         final Runnable remover = new Runnable() {
@@ -168,9 +173,9 @@ public class RemovePollRace {
                 addersDone.countDown();
             }};
 
-        final List<Thread> adders   = new ArrayList<Thread>();
-        final List<Thread> removers = new ArrayList<Thread>();
-        final List<Thread> pollers  = new ArrayList<Thread>();
+        final List<Thread> adders   = new ArrayList<>();
+        final List<Thread> removers = new ArrayList<>();
+        final List<Thread> pollers  = new ArrayList<>();
         for (int i = 0; i < adderCount; i++)
             adders.add(checkedThread(adder));
         for (int i = 0; i < removerCount; i++)
@@ -178,7 +183,7 @@ public class RemovePollRace {
         for (int i = 0; i < pollerCount; i++)
             pollers.add(checkedThread(poller));
 
-        final List<Thread> allThreads = new ArrayList<Thread>();
+        final List<Thread> allThreads = new ArrayList<>();
         allThreads.addAll(removers);
         allThreads.addAll(pollers);
         allThreads.addAll(adders);

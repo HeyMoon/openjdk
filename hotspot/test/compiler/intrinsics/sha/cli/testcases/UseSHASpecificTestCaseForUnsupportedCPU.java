@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,14 +21,17 @@
  * questions.
  */
 
+package compiler.intrinsics.sha.cli.testcases;
+
+import compiler.intrinsics.sha.cli.SHAOptionsBase;
+import compiler.testlibrary.sha.predicate.IntrinsicPredicates;
 import jdk.test.lib.Asserts;
-import jdk.test.lib.ExitCode;
+import jdk.test.lib.process.ExitCode;
 import jdk.test.lib.Platform;
 import jdk.test.lib.cli.CommandLineOptionTest;
 import jdk.test.lib.cli.predicate.AndPredicate;
-import jdk.test.lib.cli.predicate.OrPredicate;
 import jdk.test.lib.cli.predicate.NotPredicate;
-import sha.predicate.IntrinsicPredicates;
+import jdk.test.lib.cli.predicate.OrPredicate;
 
 /**
  * UseSHA specific test case targeted to SPARC and AArch64 CPUs which don't
@@ -68,6 +71,7 @@ public class UseSHASpecificTestCaseForUnsupportedCPU
                     "%s option should be disabled on unsupported CPU"
                         + " even if all UseSHA*Intrinsics options were enabled.",
                     SHAOptionsBase.USE_SHA_OPTION),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(
                         SHAOptionsBase.USE_SHA1_INTRINSICS_OPTION, true),
                 CommandLineOptionTest.prepareBooleanFlag(
@@ -84,6 +88,7 @@ public class UseSHASpecificTestCaseForUnsupportedCPU
                         + " and %s was enabled as well",
                     SHAOptionsBase.USE_SHA_OPTION,
                     SHAOptionsBase.USE_SHA_OPTION),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(
                         SHAOptionsBase.USE_SHA_OPTION, true),
                 CommandLineOptionTest.prepareBooleanFlag(

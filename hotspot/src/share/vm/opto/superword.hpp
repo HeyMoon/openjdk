@@ -29,6 +29,7 @@
 #include "opto/phaseX.hpp"
 #include "opto/vectornode.hpp"
 #include "utilities/growableArray.hpp"
+#include "libadt/dict.hpp"
 
 //
 //                  S U P E R W O R D   T R A N S F O R M
@@ -200,9 +201,54 @@ class SWNodeInfo VALUE_OBJ_CLASS_SPEC {
   static const SWNodeInfo initial;
 };
 
+class SuperWord;
+class CMoveKit {
+ friend class SuperWord;
+ private:
+  SuperWord* _sw;
+  Dict* _dict;
+  CMoveKit(Arena* a, SuperWord* sw) : _sw(sw)  {_dict = new Dict(cmpkey, hashkey, a);}
+  void*     _2p(Node* key)        const  { return (void*)(intptr_t)key; } // 2 conversion functions to make gcc happy
+  Dict*     dict()                const  { return _dict; }
+  void map(Node* key, Node_List* val)    { assert(_dict->operator[](_2p(key)) == NULL, "key existed"); _dict->Insert(_2p(key), (void*)val); }
+  void unmap(Node* key)                  { _dict->Delete(_2p(key)); }
+  Node_List* pack(Node* key)      const  { return (Node_List*)_dict->operator[](_2p(key)); }
+  Node* is_Bool_candidate(Node* nd) const; // if it is the right candidate return corresponding CMove* ,
+  Node* is_CmpD_candidate(Node* nd) const; // otherwise return NULL
+  Node_List* make_cmovevd_pack(Node_List* cmovd_pk);
+  bool test_cmpd_pack(Node_List* cmpd_pk, Node_List* cmovd_pk);
+};//class CMoveKit
+
+// JVMCI: OrderedPair is moved up to deal with compilation issues on Windows
+//------------------------------OrderedPair---------------------------
+// Ordered pair of Node*.
+class OrderedPair VALUE_OBJ_CLASS_SPEC {
+ protected:
+  Node* _p1;
+  Node* _p2;
+ public:
+  OrderedPair() : _p1(NULL), _p2(NULL) {}
+  OrderedPair(Node* p1, Node* p2) {
+    if (p1->_idx < p2->_idx) {
+      _p1 = p1; _p2 = p2;
+    } else {
+      _p1 = p2; _p2 = p1;
+    }
+  }
+
+  bool operator==(const OrderedPair &rhs) {
+    return _p1 == rhs._p1 && _p2 == rhs._p2;
+  }
+  void print() { tty->print("  (%d, %d)", _p1->_idx, _p2->_idx); }
+
+  static const OrderedPair initial;
+};
+
 // -----------------------------SuperWord---------------------------------
 // Transforms scalar operations into packed (superword) operations.
 class SuperWord : public ResourceObj {
+ friend class SWPointer;
+ friend class CMoveKit;
  private:
   PhaseIdealLoop* _phase;
   Arena*          _arena;
@@ -215,14 +261,15 @@ class SuperWord : public ResourceObj {
   GrowableArray<int> _bb_idx;            // Map from Node _idx to index within block
 
   GrowableArray<Node*> _block;           // Nodes in current block
+  GrowableArray<Node*> _post_block;      // Nodes in post loop block
   GrowableArray<Node*> _data_entry;      // Nodes with all inputs from outside
   GrowableArray<Node*> _mem_slice_head;  // Memory slice head nodes
   GrowableArray<Node*> _mem_slice_tail;  // Memory slice tail nodes
   GrowableArray<Node*> _iteration_first; // nodes in the generation that has deps from phi
   GrowableArray<Node*> _iteration_last;  // nodes in the generation that has deps to   phi
   GrowableArray<SWNodeInfo> _node_info;  // Info needed per node
-  CloneMap&                 _clone_map;  // map of nodes created in cloning
-
+  CloneMap&            _clone_map;       // map of nodes created in cloning
+  CMoveKit             _cmovev_kit;      // support for vectorization of CMov
   MemNode* _align_to_ref;                // Memory reference that pre-loop will align to
 
   GrowableArray<OrderedPair> _disjoint_ptrs; // runtime disambiguated pointer pairs
@@ -241,14 +288,26 @@ class SuperWord : public ResourceObj {
 
   void transform_loop(IdealLoopTree* lpt, bool do_optimization);
 
-  void unrolling_analysis(CountedLoopNode *cl, int &local_loop_unroll_factor);
+  void unrolling_analysis(int &local_loop_unroll_factor);
 
   // Accessors for SWPointer
   PhaseIdealLoop* phase()          { return _phase; }
   IdealLoopTree* lpt()             { return _lpt; }
   PhiNode* iv()                    { return _iv; }
+
   bool early_return()              { return _early_return; }
 
+#ifndef PRODUCT
+  bool     is_debug()              { return _vector_loop_debug > 0; }
+  bool     is_trace_alignment()    { return (_vector_loop_debug & 2) > 0; }
+  bool     is_trace_mem_slice()    { return (_vector_loop_debug & 4) > 0; }
+  bool     is_trace_loop()         { return (_vector_loop_debug & 8) > 0; }
+  bool     is_trace_adjacent()     { return (_vector_loop_debug & 16) > 0; }
+  bool     is_trace_cmov()         { return (_vector_loop_debug & 32) > 0; }
+  bool     is_trace_loop_reverse() { return (_vector_loop_debug & 64) > 0; }
+#endif
+  bool     do_vector_loop()        { return _do_vector_loop; }
+  bool     do_reserve_copy()       { return _do_reserve_copy; }
  private:
   IdealLoopTree* _lpt;             // Current loop tree node
   LoopNode*      _lp;              // Current LoopNode
@@ -257,12 +316,15 @@ class SuperWord : public ResourceObj {
   bool           _race_possible;   // In cases where SDMU is true
   bool           _early_return;    // True if we do not initialize
   bool           _do_vector_loop;  // whether to do vectorization/simd style
-  bool           _vector_loop_debug; // provide more printing in debug mode
+  bool           _do_reserve_copy; // do reserve copy of the graph(loop) before final modification in output
   int            _num_work_vecs;   // Number of non memory vector operations
   int            _num_reductions;  // Number of reduction expressions applied
   int            _ii_first;        // generation with direct deps from mem phi
   int            _ii_last;         // generation with direct deps to   mem phi
   GrowableArray<int> _ii_order;
+#ifndef PRODUCT
+  uintx          _vector_loop_debug; // provide more printing in debug mode
+#endif
 
   // Accessors
   Arena* arena()                   { return _arena; }
@@ -322,8 +384,16 @@ class SuperWord : public ResourceObj {
   bool same_velt_type(Node* n1, Node* n2);
 
   // my_pack
-  Node_List* my_pack(Node* n)                { return !in_bb(n) ? NULL : _node_info.adr_at(bb_idx(n))->_my_pack; }
-  void set_my_pack(Node* n, Node_List* p)    { int i = bb_idx(n); grow_node_info(i); _node_info.adr_at(i)->_my_pack = p; }
+  Node_List* my_pack(Node* n)                 { return !in_bb(n) ? NULL : _node_info.adr_at(bb_idx(n))->_my_pack; }
+  void set_my_pack(Node* n, Node_List* p)     { int i = bb_idx(n); grow_node_info(i); _node_info.adr_at(i)->_my_pack = p; }
+  // is pack good for converting into one vector node replacing 12 nodes of Cmp, Bool, CMov
+  bool is_cmov_pack(Node_List* p);
+  bool is_cmov_pack_internal_node(Node_List* p, Node* nd) { return is_cmov_pack(p) && !nd->is_CMove(); }
+  // For pack p, are all idx operands the same?
+  bool same_inputs(Node_List* p, int idx);
+  // CloneMap utilities
+  bool same_origin_idx(Node* a, Node* b) const;
+  bool same_generation(Node* a, Node* b) const;
 
   // methods
 
@@ -331,6 +401,11 @@ class SuperWord : public ResourceObj {
   void SLP_extract();
   // Find the adjacent memory references and create pack pairs for them.
   void find_adjacent_refs();
+  // Tracing support
+  #ifndef PRODUCT
+  void find_adjacent_refs_trace_1(Node* best_align_to_mem_ref, int best_iv_adjustment);
+  void print_loop(bool whole);
+  #endif
   // Find a memory reference to align the loop induction variable to.
   MemNode* find_align_to_ref(Node_List &memops);
   // Calculate loop's iv adjustment for this memory ops.
@@ -340,13 +415,13 @@ class SuperWord : public ResourceObj {
   // rebuild the graph so all loads in different iterations of cloned loop become dependant on phi node (in _do_vector_loop only)
   bool hoist_loads_in_graph();
   // Test whether MemNode::Memory dependency to the same load but in the first iteration of this loop is coming from memory phi
-  // Return false if failed.
+  // Return false if failed
   Node* find_phi_for_mem_dep(LoadNode* ld);
   // Return same node but from the first generation. Return 0, if not found
   Node* first_node(Node* nd);
   // Return same node as this but from the last generation. Return 0, if not found
   Node* last_node(Node* n);
-  // Mark nodes belonging to first and last generation,
+  // Mark nodes belonging to first and last generation
   // returns first generation index or -1 if vectorization/simd is impossible
   int mark_generations();
   // swapping inputs of commutative instruction (Add or Mul)
@@ -392,6 +467,8 @@ class SuperWord : public ResourceObj {
   void construct_my_pack_map();
   // Remove packs that are not implemented or not profitable.
   void filter_packs();
+  // Merge CMoveD into new vector-nodes
+  void merge_packs_to_cmovd();
   // Adjust the memory graph for the packed operations
   void schedule();
   // Remove "current" from its current position in the memory graph and insert
@@ -483,10 +560,7 @@ class SWPointer VALUE_OBJ_CLASS_SPEC {
   IdealLoopTree*  lpt()   { return _slp->lpt(); }
   PhiNode*        iv()    { return _slp->iv();  } // Induction var
 
-  bool invariant(Node* n) {
-    Node *n_c = phase()->get_ctrl(n);
-    return !lpt()->is_member(phase()->get_loop(n_c));
-  }
+  bool invariant(Node* n);
 
   // Match: k*iv + offset
   bool scaled_iv_plus_offset(Node* n);
@@ -545,31 +619,76 @@ class SWPointer VALUE_OBJ_CLASS_SPEC {
   static bool comparable(int cmp) { return cmp < NotComparable; }
 
   void print();
-};
 
+#ifndef PRODUCT
+  class Tracer {
+    friend class SuperWord;
+    friend class SWPointer;
+    SuperWord*   _slp;
+    static int   _depth;
+    int _depth_save;
+    void print_depth();
+    int  depth() const    { return _depth; }
+    void set_depth(int d) { _depth = d; }
+    void inc_depth()      { _depth++;}
+    void dec_depth()      { if (_depth > 0) _depth--;}
+    void store_depth()    {_depth_save = _depth;}
+    void restore_depth()  {_depth = _depth_save;}
 
-//------------------------------OrderedPair---------------------------
-// Ordered pair of Node*.
-class OrderedPair VALUE_OBJ_CLASS_SPEC {
- protected:
-  Node* _p1;
-  Node* _p2;
- public:
-  OrderedPair() : _p1(NULL), _p2(NULL) {}
-  OrderedPair(Node* p1, Node* p2) {
-    if (p1->_idx < p2->_idx) {
-      _p1 = p1; _p2 = p2;
-    } else {
-      _p1 = p2; _p2 = p1;
-    }
-  }
+    class Depth {
+      friend class Tracer;
+      friend class SWPointer;
+      friend class SuperWord;
+      Depth()  { ++_depth; }
+      Depth(int x)  { _depth = 0; }
+      ~Depth() { if (_depth > 0) --_depth;}
+    };
+    Tracer (SuperWord* slp) : _slp(slp) {}
 
-  bool operator==(const OrderedPair &rhs) {
-    return _p1 == rhs._p1 && _p2 == rhs._p2;
-  }
-  void print() { tty->print("  (%d, %d)", _p1->_idx, _p2->_idx); }
+    // tracing functions
+    void ctor_1(Node* mem);
+    void ctor_2(Node* adr);
+    void ctor_3(Node* adr, int i);
+    void ctor_4(Node* adr, int i);
+    void ctor_5(Node* adr, Node* base,  int i);
+    void ctor_6(Node* mem);
 
-  static const OrderedPair initial;
+    void invariant_1(Node *n, Node *n_c);
+
+    void scaled_iv_plus_offset_1(Node* n);
+    void scaled_iv_plus_offset_2(Node* n);
+    void scaled_iv_plus_offset_3(Node* n);
+    void scaled_iv_plus_offset_4(Node* n);
+    void scaled_iv_plus_offset_5(Node* n);
+    void scaled_iv_plus_offset_6(Node* n);
+    void scaled_iv_plus_offset_7(Node* n);
+    void scaled_iv_plus_offset_8(Node* n);
+
+    void scaled_iv_1(Node* n);
+    void scaled_iv_2(Node* n, int scale);
+    void scaled_iv_3(Node* n, int scale);
+    void scaled_iv_4(Node* n, int scale);
+    void scaled_iv_5(Node* n, int scale);
+    void scaled_iv_6(Node* n, int scale);
+    void scaled_iv_7(Node* n);
+    void scaled_iv_8(Node* n, SWPointer* tmp);
+    void scaled_iv_9(Node* n, int _scale, int _offset, int mult);
+    void scaled_iv_10(Node* n);
+
+    void offset_plus_k_1(Node* n);
+    void offset_plus_k_2(Node* n, int _offset);
+    void offset_plus_k_3(Node* n, int _offset);
+    void offset_plus_k_4(Node* n);
+    void offset_plus_k_5(Node* n, Node* _invar);
+    void offset_plus_k_6(Node* n, Node* _invar, bool _negate_invar, int _offset);
+    void offset_plus_k_7(Node* n, Node* _invar, bool _negate_invar, int _offset);
+    void offset_plus_k_8(Node* n, Node* _invar, bool _negate_invar, int _offset);
+    void offset_plus_k_9(Node* n, Node* _invar, bool _negate_invar, int _offset);
+    void offset_plus_k_10(Node* n, Node* _invar, bool _negate_invar, int _offset);
+    void offset_plus_k_11(Node* n);
+
+  } _tracer;//TRacer;
+#endif
 };
 
 #endif // SHARE_VM_OPTO_SUPERWORD_HPP

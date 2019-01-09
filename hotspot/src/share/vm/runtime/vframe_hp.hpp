@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,6 +36,7 @@ class compiledVFrame: public javaVFrame {
   StackValueCollection*        locals()             const;
   StackValueCollection*        expressions()        const;
   GrowableArray<MonitorInfo*>* monitors()           const;
+  int                          vframe_id()          const { return _vframe_id; }
 
   void set_locals(StackValueCollection* values) const;
 
@@ -52,13 +53,13 @@ class compiledVFrame: public javaVFrame {
 
  public:
   // Constructors
-  compiledVFrame(const frame* fr, const RegisterMap* reg_map, JavaThread* thread, nmethod* nm);
+  compiledVFrame(const frame* fr, const RegisterMap* reg_map, JavaThread* thread, CompiledMethod* nm);
 
   // Update a local in a compiled frame. Update happens when deopt occurs
   void update_local(BasicType type, int index, jvalue value);
 
   // Returns the active nmethod
-  nmethod*  code() const;
+  CompiledMethod*  code() const;
 
   // Returns the scopeDesc
   ScopeDesc* scope() const { return _scope; }
@@ -68,14 +69,14 @@ class compiledVFrame: public javaVFrame {
 
  protected:
   ScopeDesc* _scope;
-
+  int _vframe_id;
 
   //StackValue resolve(ScopeValue* sv) const;
   BasicLock* resolve_monitor_lock(Location location) const;
   StackValue *create_stack_value(ScopeValue *sv) const;
 
  private:
-  compiledVFrame(const frame* fr, const RegisterMap* reg_map, JavaThread* thread, ScopeDesc* scope);
+  compiledVFrame(const frame* fr, const RegisterMap* reg_map, JavaThread* thread, ScopeDesc* scope, int vframe_id);
 
 #ifndef PRODUCT
  public:
@@ -95,6 +96,7 @@ private:
   Method* _method;
   int       _bci;
   intptr_t* _id;
+  int _vframe_id;
   GrowableArray<jvmtiDeferredLocalVariable*>* _locals;
 
  public:
@@ -102,6 +104,7 @@ private:
   Method*                           method()         const  { return _method; }
   int                               bci()            const  { return _bci; }
   intptr_t*                         id()             const  { return _id; }
+  int                               vframe_id()      const  { return _vframe_id; }
   GrowableArray<jvmtiDeferredLocalVariable*>* locals()         const  { return _locals; }
   void                              set_local_at(int idx, BasicType typ, jvalue val);
 
@@ -111,7 +114,7 @@ private:
   void                              oops_do(OopClosure* f);
 
   // constructor
-  jvmtiDeferredLocalVariableSet(Method* method, int bci, intptr_t* id);
+  jvmtiDeferredLocalVariableSet(Method* method, int bci, intptr_t* id, int vframe_id);
 
   // destructor
   ~jvmtiDeferredLocalVariableSet();

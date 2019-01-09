@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@ import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.Transparency;
 import java.awt.color.ColorSpace;
+import java.awt.color.ICC_ColorSpace;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
 import java.awt.image.ComponentColorModel;
@@ -47,94 +48,45 @@ import java.awt.image.SampleModel;
 import java.awt.image.SinglePixelPackedSampleModel;
 import java.awt.image.WritableRaster;
 import java.util.Arrays;
-
-//import javax.imageio.ImageTypeSpecifier;
-
+import java.util.Iterator;
 import javax.imageio.IIOException;
 import javax.imageio.IIOImage;
+import javax.imageio.ImageReadParam;
 import javax.imageio.ImageTypeSpecifier;
 import javax.imageio.ImageWriter;
 import javax.imageio.spi.ImageWriterSpi;
 
 public class ImageUtil {
-    /* XXX testing only
-    public static void main(String[] args) {
-        ImageTypeSpecifier bilevel =
-            ImageTypeSpecifier.createIndexed(new byte[] {(byte)0, (byte)255},
-                                             new byte[] {(byte)0, (byte)255},
-                                             new byte[] {(byte)0, (byte)255},
-                                             null, 1,
-                                             DataBuffer.TYPE_BYTE);
-        ImageTypeSpecifier gray =
-            ImageTypeSpecifier.createGrayscale(8, DataBuffer.TYPE_BYTE, false);
-        ImageTypeSpecifier grayAlpha =
-            ImageTypeSpecifier.createGrayscale(8, DataBuffer.TYPE_BYTE, false,
-                                               false);
-        ImageTypeSpecifier rgb =
-            ImageTypeSpecifier.createInterleaved(ColorSpace.getInstance(ColorSpace.CS_sRGB),
-                                                 new int[] {0, 1, 2},
-                                                 DataBuffer.TYPE_BYTE,
-                                                 false,
-                                                 false);
-        ImageTypeSpecifier rgba =
-            ImageTypeSpecifier.createInterleaved(ColorSpace.getInstance(ColorSpace.CS_sRGB),
-                                                 new int[] {0, 1, 2, 3},
-                                                 DataBuffer.TYPE_BYTE,
-                                                 true,
-                                                 false);
-        ImageTypeSpecifier packed =
-            ImageTypeSpecifier.createPacked(ColorSpace.getInstance(ColorSpace.CS_sRGB),
-                                            0xff000000,
-                                            0x00ff0000,
-                                            0x0000ff00,
-                                            0x000000ff,
-                                            DataBuffer.TYPE_BYTE,
-                                            false);
-
-        SampleModel bandedSM =
-            new java.awt.image.BandedSampleModel(DataBuffer.TYPE_BYTE,
-                                                 1, 1, 15);
-
-        System.out.println(createColorModel(bilevel.getSampleModel()));
-        System.out.println(createColorModel(gray.getSampleModel()));
-        System.out.println(createColorModel(grayAlpha.getSampleModel()));
-        System.out.println(createColorModel(rgb.getSampleModel()));
-        System.out.println(createColorModel(rgba.getSampleModel()));
-        System.out.println(createColorModel(packed.getSampleModel()));
-        System.out.println(createColorModel(bandedSM));
-    }
-    */
-
     /**
-     * Creates a <code>ColorModel</code> that may be used with the
-     * specified <code>SampleModel</code>.  If a suitable
-     * <code>ColorModel</code> cannot be found, this method returns
-     * <code>null</code>.
+     * Creates a {@code ColorModel} that may be used with the
+     * specified {@code SampleModel}.  If a suitable
+     * {@code ColorModel} cannot be found, this method returns
+     * {@code null}.
      *
-     * <p> Suitable <code>ColorModel</code>s are guaranteed to exist
-     * for all instances of <code>ComponentSampleModel</code>.
-     * For 1- and 3- banded <code>SampleModel</code>s, the returned
-     * <code>ColorModel</code> will be opaque.  For 2- and 4-banded
-     * <code>SampleModel</code>s, the output will use alpha transparency
+     * <p> Suitable {@code ColorModel}s are guaranteed to exist
+     * for all instances of {@code ComponentSampleModel}.
+     * For 1- and 3- banded {@code SampleModel}s, the returned
+     * {@code ColorModel} will be opaque.  For 2- and 4-banded
+     * {@code SampleModel}s, the output will use alpha transparency
      * which is not premultiplied.  1- and 2-banded data will use a
-     * grayscale <code>ColorSpace</code>, and 3- and 4-banded data a sRGB
-     * <code>ColorSpace</code>. Data with 5 or more bands will have a
-     * <code>BogusColorSpace</code>.</p>
+     * grayscale {@code ColorSpace}, and 3- and 4-banded data a sRGB
+     * {@code ColorSpace}. Data with 5 or more bands will have a
+     * {@code BogusColorSpace}.</p>
      *
-     * <p>An instance of <code>DirectColorModel</code> will be created for
-     * instances of <code>SinglePixelPackedSampleModel</code> with no more
+     * <p>An instance of {@code DirectColorModel} will be created for
+     * instances of {@code SinglePixelPackedSampleModel} with no more
      * than 4 bands.</p>
      *
-     * <p>An instance of <code>IndexColorModel</code> will be created for
-     * instances of <code>MultiPixelPackedSampleModel</code>. The colormap
-     * will be a grayscale ramp with <code>1&nbsp;<<&nbsp;numberOfBits</code>
+     * <p>An instance of {@code IndexColorModel} will be created for
+     * instances of {@code MultiPixelPackedSampleModel}. The colormap
+     * will be a grayscale ramp with <code>1&nbsp;&lt;&lt;&nbsp;numberOfBits</code>
      * entries ranging from zero to at most 255.</p>
      *
-     * @return An instance of <code>ColorModel</code> that is suitable for
-     *         the supplied <code>SampleModel</code>, or <code>null</code>.
+     * @return An instance of {@code ColorModel} that is suitable for
+     *         the supplied {@code SampleModel}, or {@code null}.
      *
-     * @throws IllegalArgumentException  If <code>sampleModel</code> is
-     *         <code>null</code>.
+     * @throws IllegalArgumentException  If {@code sampleModel} is
+     *         {@code null}.
      */
     public static final ColorModel createColorModel(SampleModel sampleModel) {
         // Check the parameter.
@@ -242,19 +194,19 @@ public class ImageUtil {
     }
 
     /**
-     * For the case of binary data (<code>isBinary()</code> returns
-     * <code>true</code>), return the binary data as a packed byte array.
+     * For the case of binary data ({@code isBinary()} returns
+     * {@code true}), return the binary data as a packed byte array.
      * The data will be packed as eight bits per byte with no bit offset,
      * i.e., the first bit in each image line will be the left-most of the
      * first byte of the line.  The line stride in bytes will be
-     * <code>(int)((getWidth()+7)/8)</code>.  The length of the returned
-     * array will be the line stride multiplied by <code>getHeight()</code>
+     * {@code (int)((getWidth()+7)/8)}.  The length of the returned
+     * array will be the line stride multiplied by {@code getHeight()}
      *
      * @return the binary data as a packed array of bytes with zero offset
-     * of <code>null</code> if the data are not binary.
-     * @throws IllegalArgumentException if <code>isBinary()</code> returns
-     * <code>false</code> with the <code>SampleModel</code> of the
-     * supplied <code>Raster</code> as argument.
+     * of {@code null} if the data are not binary.
+     * @throws IllegalArgumentException if {@code isBinary()} returns
+     * {@code false} with the {@code SampleModel} of the
+     * supplied {@code Raster} as argument.
      */
     public static byte[] getPackedBinaryData(Raster raster,
                                              Rectangle rect) {
@@ -435,11 +387,11 @@ public class ImageUtil {
 
     /**
      * Returns the binary data unpacked into an array of bytes.
-     * The line stride will be the width of the <code>Raster</code>.
+     * The line stride will be the width of the {@code Raster}.
      *
-     * @throws IllegalArgumentException if <code>isBinary()</code> returns
-     * <code>false</code> with the <code>SampleModel</code> of the
-     * supplied <code>Raster</code> as argument.
+     * @throws IllegalArgumentException if {@code isBinary()} returns
+     * {@code false} with the {@code SampleModel} of the
+     * supplied {@code Raster} as argument.
      */
     public static byte[] getUnpackedBinaryData(Raster raster,
                                                Rectangle rect) {
@@ -515,13 +467,13 @@ public class ImageUtil {
     }
 
     /**
-     * Sets the supplied <code>Raster</code>'s data from an array
+     * Sets the supplied {@code Raster}'s data from an array
      * of packed binary data of the form returned by
-     * <code>getPackedBinaryData()</code>.
+     * {@code getPackedBinaryData()}.
      *
-     * @throws IllegalArgumentException if <code>isBinary()</code> returns
-     * <code>false</code> with the <code>SampleModel</code> of the
-     * supplied <code>Raster</code> as argument.
+     * @throws IllegalArgumentException if {@code isBinary()} returns
+     * {@code false} with the {@code SampleModel} of the
+     * supplied {@code Raster} as argument.
      */
     public static void setPackedBinaryData(byte[] binaryDataArray,
                                            WritableRaster raster,
@@ -761,16 +713,16 @@ public class ImageUtil {
     }
 
     /**
-     * Copies data into the packed array of the <code>Raster</code>
+     * Copies data into the packed array of the {@code Raster}
      * from an array of unpacked data of the form returned by
-     * <code>getUnpackedBinaryData()</code>.
+     * {@code getUnpackedBinaryData()}.
      *
      * <p> If the data are binary, then the target bit will be set if
      * and only if the corresponding byte is non-zero.
      *
-     * @throws IllegalArgumentException if <code>isBinary()</code> returns
-     * <code>false</code> with the <code>SampleModel</code> of the
-     * supplied <code>Raster</code> as argument.
+     * @throws IllegalArgumentException if {@code isBinary()} returns
+     * {@code false} with the {@code SampleModel} of the
+     * supplied {@code Raster} as argument.
      */
     public static void setUnpackedBinaryData(byte[] bdata,
                                              WritableRaster raster,
@@ -1031,7 +983,7 @@ public class ImageUtil {
      * @param g The green channel color indices.
      * @param b The blue channel color indices.
      * @return If all the indices have 256 entries, and are identical mappings,
-     *         return <code>true</code>; otherwise, return <code>false</code>.
+     *         return {@code true}; otherwise, return {@code false}.
      */
     public static boolean isIndicesForGrayscale(byte[] r, byte[] g, byte[] b) {
         if (r.length != g.length || r.length != b.length)
@@ -1052,7 +1004,7 @@ public class ImageUtil {
         return true;
     }
 
-    /** Converts the provided object to <code>String</code> */
+    /** Converts the provided object to {@code String} */
     public static String convertObjectToString(Object obj) {
         if (obj == null)
             return "";
@@ -1083,10 +1035,10 @@ public class ImageUtil {
 
     }
 
-    /** Checks that the provided <code>ImageWriter</code> can encode
-     * the provided <code>ImageTypeSpecifier</code> or not.  If not, an
-     * <code>IIOException</code> will be thrown.
-     * @param writer The provided <code>ImageWriter</code>.
+    /** Checks that the provided {@code ImageWriter} can encode
+     * the provided {@code ImageTypeSpecifier} or not.  If not, an
+     * {@code IIOException} will be thrown.
+     * @param writer The provided {@code ImageWriter}.
      * @param type The image to be tested.
      * @throws IIOException If the writer cannot encoded the provided image.
      */
@@ -1101,12 +1053,12 @@ public class ImageUtil {
         }
     }
 
-    /** Checks that the provided <code>ImageWriter</code> can encode
-     * the provided <code>ColorModel</code> and <code>SampleModel</code>.
-     * If not, an <code>IIOException</code> will be thrown.
-     * @param writer The provided <code>ImageWriter</code>.
-     * @param colorModel The provided <code>ColorModel</code>.
-     * @param sampleModel The provided <code>SampleModel</code>.
+    /** Checks that the provided {@code ImageWriter} can encode
+     * the provided {@code ColorModel} and {@code SampleModel}.
+     * If not, an {@code IIOException} will be thrown.
+     * @param writer The provided {@code ImageWriter}.
+     * @param colorModel The provided {@code ColorModel}.
+     * @param sampleModel The provided {@code SampleModel}.
      * @throws IIOException If the writer cannot encoded the provided image.
      */
     public static final void canEncodeImage(ImageWriter writer,
@@ -1161,5 +1113,79 @@ public class ImageUtil {
         // a MultiPixelPackedSampleModel, 1 bit per pixel, and 1 bit
         // pixel stride.
         return ImageUtil.isBinary(sm);
+    }
+
+    /**
+     * Gets the destination image type.
+     */
+    public static final ImageTypeSpecifier
+        getDestinationType(ImageReadParam param,
+                           Iterator<ImageTypeSpecifier> imageTypes) throws IIOException {
+
+        if (imageTypes == null || !imageTypes.hasNext()) {
+            throw new IllegalArgumentException("imageTypes null or empty!");
+        }
+
+        ImageTypeSpecifier imageType = null;
+
+        // If param is non-null, use it
+        if (param != null) {
+            imageType = param.getDestinationType();
+        }
+
+        // No info from param, use fallback image type
+        if (imageType == null) {
+            Object o = imageTypes.next();
+            if (!(o instanceof ImageTypeSpecifier)) {
+                throw new IllegalArgumentException
+                    ("Non-ImageTypeSpecifier retrieved from imageTypes!");
+            }
+            imageType = (ImageTypeSpecifier)o;
+        } else {
+            boolean foundIt = false;
+            while (imageTypes.hasNext()) {
+                ImageTypeSpecifier type =
+                    imageTypes.next();
+                if (type.equals(imageType)) {
+                    foundIt = true;
+                    break;
+                }
+            }
+
+            if (!foundIt) {
+                throw new IIOException
+                    ("Destination type from ImageReadParam does not match!");
+            }
+        }
+
+        return imageType;
+    }
+
+    /**
+     * Returns <code>true</code> if the given <code>ColorSpace</code> object is
+     * an instance of <code>ICC_ColorSpace</code> but is not one of the standard
+     * <code>ColorSpace</code>s returned by <code>ColorSpace.getInstance()</code>.
+     *
+     * @param cs The <code>ColorSpace</code> to test.
+     */
+    public static boolean isNonStandardICCColorSpace(ColorSpace cs) {
+        boolean retval = false;
+
+        try {
+            // Check the standard ColorSpaces in decreasing order of
+            // likelihood except check CS_PYCC last as in some JREs
+            // PYCC.pf used not to be installed.
+            retval =
+                (cs instanceof ICC_ColorSpace) &&
+                !(cs.isCS_sRGB() ||
+                  cs.equals(ColorSpace.getInstance(ColorSpace.CS_LINEAR_RGB)) ||
+                  cs.equals(ColorSpace.getInstance(ColorSpace.CS_GRAY)) ||
+                  cs.equals(ColorSpace.getInstance(ColorSpace.CS_CIEXYZ)) ||
+                  cs.equals(ColorSpace.getInstance(ColorSpace.CS_PYCC)));
+        } catch(IllegalArgumentException e) {
+            // PYCC.pf not installed: ignore it - 'retval' is still 'false'.
+        }
+
+        return retval;
     }
 }

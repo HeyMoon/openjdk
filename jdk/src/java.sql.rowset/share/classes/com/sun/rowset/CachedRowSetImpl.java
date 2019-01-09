@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,6 +31,9 @@ import java.io.*;
 import java.math.*;
 import java.util.*;
 import java.text.*;
+import java.security.AccessController;
+import java.security.PrivilegedActionException;
+import java.security.PrivilegedExceptionAction;
 
 import javax.sql.rowset.*;
 import javax.sql.rowset.spi.*;
@@ -357,8 +360,16 @@ public class CachedRowSetImpl extends BaseRowSet implements RowSet, RowSetIntern
         }
 
         // set the Reader, this maybe overridden latter
-        provider =
-        SyncFactory.getInstance(DEFAULT_SYNC_PROVIDER);
+        try {
+            provider = AccessController.doPrivileged(new PrivilegedExceptionAction<>() {
+                @Override
+                public SyncProvider run() throws SyncFactoryException {
+                    return SyncFactory.getInstance(DEFAULT_SYNC_PROVIDER);
+                }
+            }, null, new RuntimePermission("accessClassInPackage.com.sun.rowset.providers"));
+        } catch (PrivilegedActionException pae) {
+            throw (SyncFactoryException) pae.getException();
+        }
 
         if (!(provider instanceof RIOptimisticProvider)) {
             throw new SQLException(resBundle.handleGetObject("cachedrowsetimpl.invalidp").toString());
@@ -1963,7 +1974,7 @@ public class CachedRowSetImpl extends BaseRowSet implements RowSet, RowSetIntern
             return (float)0;
         }
         try {
-            return ((new Float(value.toString())).floatValue());
+            return Float.parseFloat(value.toString());
         } catch (NumberFormatException ex) {
             throw new SQLException(MessageFormat.format(resBundle.handleGetObject("cachedrowsetimpl.floatfail").toString(),
                   new Object[] {value.toString().trim(), columnIndex}));
@@ -2007,7 +2018,7 @@ public class CachedRowSetImpl extends BaseRowSet implements RowSet, RowSetIntern
             return (double)0;
         }
         try {
-            return ((new Double(value.toString().trim())).doubleValue());
+            return Double.parseDouble(value.toString().trim());
         } catch (NumberFormatException ex) {
             throw new SQLException(MessageFormat.format(resBundle.handleGetObject("cachedrowsetimpl.doublefail").toString(),
                   new Object[] {value.toString().trim(), columnIndex}));
@@ -2961,7 +2972,10 @@ public class CachedRowSetImpl extends BaseRowSet implements RowSet, RowSetIntern
                 // create new instance of the class
                 SQLData obj = null;
                 try {
-                    obj = (SQLData) ReflectUtil.newInstance(c);
+                    ReflectUtil.checkPackageAccess(c);
+                    @SuppressWarnings("deprecation")
+                    Object tmp = c.newInstance();
+                    obj = (SQLData) tmp;
                 } catch(Exception ex) {
                     throw new SQLException("Unable to Instantiate: ", ex);
                 }
@@ -4016,9 +4030,9 @@ public class CachedRowSetImpl extends BaseRowSet implements RowSet, RowSetIntern
                     return new BigDecimal(srcObj.toString().trim());
                 case java.sql.Types.REAL:
                 case java.sql.Types.FLOAT:
-                    return new Float(srcObj.toString().trim());
+                    return Float.valueOf(srcObj.toString().trim());
                 case java.sql.Types.DOUBLE:
-                    return new Double(srcObj.toString().trim());
+                    return Double.valueOf(srcObj.toString().trim());
                 case java.sql.Types.CHAR:
                 case java.sql.Types.VARCHAR:
                 case java.sql.Types.LONGVARCHAR:
@@ -5708,7 +5722,10 @@ public class CachedRowSetImpl extends BaseRowSet implements RowSet, RowSetIntern
                 // create new instance of the class
                 SQLData obj = null;
                 try {
-                    obj = (SQLData) ReflectUtil.newInstance(c);
+                    ReflectUtil.checkPackageAccess(c);
+                    @SuppressWarnings("deprecation")
+                    Object tmp = c.newInstance();
+                    obj = (SQLData) tmp;
                 } catch(Exception ex) {
                     throw new SQLException("Unable to Instantiate: ", ex);
                 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,13 +24,14 @@
 /*
  * @test TestOnOutOfMemoryError
  * @summary Test using -XX:OnOutOfMemoryError=<cmd>
- * @library /testlibrary
- * @build TestOnOutOfMemoryError
+ * @modules java.base/jdk.internal.misc
+ * @library /test/lib
  * @run main TestOnOutOfMemoryError
  * @bug 8078470
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 
 public class TestOnOutOfMemoryError {
 

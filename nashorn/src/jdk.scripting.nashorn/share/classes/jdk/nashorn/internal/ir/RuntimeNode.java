@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -56,6 +56,8 @@ public class RuntimeNode extends Expression {
         REFERENCE_ERROR,
         /** Delete operator */
         DELETE(TokenType.DELETE, Type.BOOLEAN, 1),
+        /** Delete operator for slow scopes */
+        SLOW_DELETE(TokenType.DELETE, Type.BOOLEAN, 1, false),
         /** Delete operator that always fails -- see Lower */
         FAIL_DELETE(TokenType.DELETE, Type.BOOLEAN, 1, false),
         /** === operator with at least one object */
@@ -81,7 +83,9 @@ public class RuntimeNode extends Expression {
         /** is undefined */
         IS_UNDEFINED(TokenType.EQ_STRICT, Type.BOOLEAN, 2),
         /** is not undefined */
-        IS_NOT_UNDEFINED(TokenType.NE_STRICT, Type.BOOLEAN, 2);
+        IS_NOT_UNDEFINED(TokenType.NE_STRICT, Type.BOOLEAN, 2),
+        /** Get template object from raw and cooked string arrays. */
+        GET_TEMPLATE_OBJECT(TokenType.TEMPLATE, Type.SCRIPT_OBJECT, 2);
 
         /** token type */
         private final TokenType tokenType;
@@ -274,7 +278,7 @@ public class RuntimeNode extends Expression {
          *
          * @param request a request
          *
-         * @return the inverted rquest, or null if not applicable
+         * @return the inverted request, or null if not applicable
          */
         public static Request invert(final Request request) {
             switch (request) {

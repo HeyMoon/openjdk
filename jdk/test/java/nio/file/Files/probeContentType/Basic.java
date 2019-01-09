@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,21 +22,24 @@
  */
 
 /* @test
- * @bug 4313887 8129632
+ * @bug 4313887 8129632 8129633 8162624 8146215 8162745
  * @summary Unit test for probeContentType method
  * @library ../..
  * @build Basic SimpleFileTypeDetector
  * @run main/othervm Basic
  */
 
-import java.nio.file.*;
 import java.io.*;
+import java.nio.file.*;
+import java.util.stream.Stream;
 
 /**
  * Uses Files.probeContentType to probe html file, custom file type, and minimal
  * set of file extension to content type mappings.
  */
 public class Basic {
+    private static final boolean IS_UNIX =
+        ! System.getProperty("os.name").startsWith("Windows");
 
     static Path createHtmlFile() throws IOException {
         Path file = Files.createTempFile("foo", ".html");
@@ -51,10 +54,52 @@ public class Basic {
         return Files.createTempFile("red", ".grape");
     }
 
-    static void checkContentTypes(String[] extensions, String[] expectedTypes)
+    private static void checkMimeTypesFile(Path mimeTypes) {
+        if (!Files.exists(mimeTypes)) {
+            System.out.println(mimeTypes + " does not exist");
+        } else if (!Files.isReadable(mimeTypes)) {
+            System.out.println(mimeTypes + " is not readable");
+        } else {
+            System.out.println(mimeTypes + " contents:");
+            try (Stream<String> lines = Files.lines(mimeTypes)) {
+                lines.forEach(System.out::println);
+                System.out.println("");
+            } catch (IOException ioe) {
+                System.err.printf("Problem reading %s: %s%n",
+                                  mimeTypes, ioe.getMessage());
+            }
+        }
+    }
+
+    private static int checkContentTypes(String expected, String actual) {
+        assert expected != null;
+        assert actual != null;
+
+        if (!expected.equals(actual)) {
+            if (IS_UNIX) {
+                Path userMimeTypes =
+                    Paths.get(System.getProperty("user.home"), ".mime.types");
+                checkMimeTypesFile(userMimeTypes);
+
+                Path etcMimeTypes = Paths.get("/etc/mime.types");
+                checkMimeTypesFile(etcMimeTypes);
+            }
+
+            System.err.println("Expected \"" + expected
+                               + "\" but obtained \""
+                               + actual + "\"");
+
+            return 1;
+        }
+
+        return 0;
+    }
+
+    static int checkContentTypes(String[] extensions, String[] expectedTypes)
         throws IOException {
         if (extensions.length != expectedTypes.length) {
-            throw new IllegalArgumentException("Parameter array lengths differ");
+            System.err.println("Parameter array lengths differ");
+            return 1;
         }
 
         int failures = 0;
@@ -67,24 +112,21 @@ public class Basic {
                     System.err.println("Content type of " + extension
                             + " cannot be determined");
                     failures++;
-                } else {
-                    if (!type.equals(expectedTypes[i])) {
-                        System.err.println("Content type: " + type
-                                + "; expected: " + expectedTypes[i]);
-                        failures++;
-                    }
+                } else if (!type.equals(expectedTypes[i])) {
+                    System.err.printf("Content type: %s; expected: %s%n",
+                        type, expectedTypes);
+                    failures++;
                 }
             } finally {
                 Files.delete(file);
             }
         }
 
-        if (failures > 0) {
-            throw new RuntimeException("Test failed!");
-        }
+        return failures;
     }
 
     public static void main(String[] args) throws IOException {
+        int failures = 0;
 
         // exercise default file type detector
         Path file = createHtmlFile();
@@ -93,8 +135,7 @@ public class Basic {
             if (type == null) {
                 System.err.println("Content type cannot be determined - test skipped");
             } else {
-                if (!type.equals("text/html"))
-                    throw new RuntimeException("Unexpected type: " + type);
+                failures += checkContentTypes("text/html", type);
             }
         } finally {
             Files.delete(file);
@@ -104,25 +145,37 @@ public class Basic {
         file = createGrapeFile();
         try {
             String type = Files.probeContentType(file);
-            if (type == null)
-                throw new RuntimeException("Custom file type detector not installed?");
-            if (!type.equals("grape/unknown"))
-                throw new RuntimeException("Unexpected type: " + type);
+            if (type == null) {
+                System.err.println("Custom file type detector not installed?");
+                failures++;
+            } else {
+                failures += checkContentTypes("grape/unknown", type);
+            }
         } finally {
             Files.delete(file);
         }
 
-        // Verify that common file extensions are mapped to the correct content
-        // types on Mac OS X only which has consistent Uniform Type Identifiers.
-        if (System.getProperty("os.name").contains("OS X")) {
-            String[] extensions = new String[]{
-                "jpg", "mp3", "mp4", "pdf", "png"
-            };
-            String[] expectedTypes = new String[]{
-                "image/jpeg", "audio/mpeg", "video/mp4", "application/pdf",
-                "image/png"
-            };
-            checkContentTypes(extensions, expectedTypes);
+        // Verify that certain media extensions are mapped to the correct type.
+        String[] extensions = new String[]{
+            "jpg",
+            "mp3",
+            "mp4",
+            "pdf",
+            "png",
+            "webm"
+        };
+        String[] expectedTypes = new String[] {
+            "image/jpeg",
+            "audio/mpeg",
+            "video/mp4",
+            "application/pdf",
+            "image/png",
+            "video/webm"
+        };
+        failures += checkContentTypes(extensions, expectedTypes);
+
+        if (failures > 0) {
+            throw new RuntimeException("Test failed!");
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -190,12 +190,18 @@ public abstract class SSLServerSocket extends ServerSocket {
      * default guarantees a minimum quality of service in all enabled
      * cipher suites.
      * <P>
-     * There are several reasons why an enabled cipher suite might
-     * not actually be used.  For example:  the server socket might
-     * not have appropriate private keys available to it or the cipher
-     * suite might be anonymous, precluding the use of client authentication,
-     * while the server socket has been told to require that sort of
-     * authentication.
+     * Note that even if a suite is enabled, it may never be used. This
+     * can occur if the peer does not support it, or its use is restricted,
+     * or the requisite certificates (and private keys) for the suite are
+     * not available, or an anonymous suite is enabled but authentication
+     * is required.
+     * <P>
+     * The returned array includes cipher suites from the list of standard
+     * cipher suite names in the <a href=
+     * "{@docRoot}/../specs/security/standard-names.html#jsse-cipher-suite-names">
+     * JSSE Cipher Suite Names</a> section of the Java Cryptography
+     * Architecture Standard Algorithm Name Documentation, and may also
+     * include other cipher suites that the provider supports.
      *
      * @return an array of cipher suites enabled
      * @see #getSupportedCipherSuites()
@@ -215,6 +221,14 @@ public abstract class SSLServerSocket extends ServerSocket {
      * Suites that require authentication information which is not available
      * in this ServerSocket's authentication context will not be used
      * in any case, even if they are enabled.
+     * <P>
+     * Note that the standard list of cipher suite names may be found in the
+     * <a href=
+     * "{@docRoot}/../specs/security/standard-names.html#jsse-cipher-suite-names">
+     * JSSE Cipher Suite Names</a> section of the Java Cryptography
+     * Architecture Standard Algorithm Name Documentation.  Providers
+     * may support cipher suite names not found in this list or might not
+     * use the recommended name for a certain cipher suite.
      * <P>
      * <code>SSLSocket</code>s returned from <code>accept()</code>
      * inherit this setting.
@@ -237,6 +251,13 @@ public abstract class SSLServerSocket extends ServerSocket {
      * be enabled by default, since this list may include cipher suites which
      * do not meet quality of service requirements for those defaults.  Such
      * cipher suites are useful in specialized applications.
+     * <P>
+     * The returned array includes cipher suites from the list of standard
+     * cipher suite names in the <a href=
+     * "{@docRoot}/../specs/security/standard-names.html#jsse-cipher-suite-names">
+     * JSSE Cipher Suite Names</a> section of the Java Cryptography
+     * Architecture Standard Algorithm Name Documentation, and may also
+     * include other cipher suites that the provider supports.
      *
      * @return an array of cipher suite names
      * @see #getEnabledCipherSuites()
@@ -258,6 +279,11 @@ public abstract class SSLServerSocket extends ServerSocket {
     /**
      * Returns the names of the protocols which are currently
      * enabled for use by the newly accepted connections.
+     * <P>
+     * Note that even if a protocol is enabled, it may never be used.
+     * This can occur if the peer does not support the protocol, or its
+     * use is restricted, or there are no enabled cipher suites supported
+     * by the protocol.
      *
      * @return an array of protocol names
      * @see #getSupportedProtocols()

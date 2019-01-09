@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -82,9 +82,9 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
     }
 
     /**
-     * Returns true if the <code>LookAndFeel</code> returned
-     * <code>RootPaneUI</code> instances support providing Window decorations
-     * in a <code>JRootPane</code>.
+     * Returns true if the {@code LookAndFeel} returned
+     * {@code RootPaneUI} instances support providing Window decorations
+     * in a {@code JRootPane}.
      * <p>
      * The default implementation returns false, subclasses that support
      * Window decorations should override this and return true.
@@ -174,20 +174,20 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
     }
 
     /**
-     * Returns an <code>ActionMap</code>.
+     * Returns an {@code ActionMap}.
      * <P>
-     * This <code>ActionMap</code> contains <code>Actions</code> that
+     * This {@code ActionMap} contains {@code Actions} that
      * embody the ability to render an auditory cue. These auditory
      * cues map onto user and system activities that may be useful
      * for an end user to know about (such as a dialog box appearing).
      * <P>
-     * At the appropriate time in a <code>JComponent</code> UI's lifecycle,
+     * At the appropriate time in a {@code JComponent} UI's lifecycle,
      * the ComponentUI is responsible for getting the appropriate
-     * <code>Action</code> out of the <code>ActionMap</code> and passing
-     * it on to <code>playSound</code>.
+     * {@code Action} out of the {@code ActionMap} and passing
+     * it on to {@code playSound}.
      * <P>
-     * The <code>Actions</code> in this <code>ActionMap</code> are
-     * created by the <code>createAudioAction</code> method.
+     * The {@code Actions} in this {@code ActionMap} are
+     * created by the {@code createAudioAction} method.
      *
      * @return      an ActionMap containing Actions
      *              responsible for rendering auditory cues
@@ -248,7 +248,8 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
      */
     private void initResourceBundle(final UIDefaults table) {
         table.setDefaultLocale(Locale.getDefault());
-        table.addResourceBundle(PKG_PREFIX + "resources.aqua");
+        SwingAccessor.getUIDefaultsAccessor().addInternalBundle(table,
+                PKG_PREFIX + "resources.aqua");
         try {
             final ResourceBundle aquaProperties = ResourceBundle.getBundle(PKG_PREFIX + "resources.aqua");
             final Enumeration<String> propertyKeys = aquaProperties.getKeys();
@@ -416,7 +417,7 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
             "Button.select", selected,
             "Button.border",(LazyValue) t -> AquaButtonBorder.getDynamicButtonBorder(),
             "Button.font", controlFont,
-            "Button.textIconGap", new Integer(4),
+            "Button.textIconGap", Integer.valueOf(4),
             "Button.textShiftOffset", zero, // radar 3308129 - aqua doesn't move images when pressed.
             "Button.focusInputMap", controlFocusInputMap,
             "Button.margin", new InsetsUIResource(0, 2, 0, 2),
@@ -635,8 +636,8 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
             //"Menu.checkIcon", emptyCheckIcon, // A non-drawing GlyphIcon to make the spacing consistent
             "Menu.arrowIcon",(LazyValue) t -> AquaImageFactory.getMenuArrowIcon(),
             "Menu.consumesTabs", Boolean.TRUE,
-            "Menu.menuPopupOffsetY", new Integer(1),
-            "Menu.submenuPopupOffsetY", new Integer(-4),
+            "Menu.menuPopupOffsetY", Integer.valueOf(1),
+            "Menu.submenuPopupOffsetY", Integer.valueOf(-4),
 
             "MenuBar.font", menuFont,
             "MenuBar.background", menuBackgroundColor, // not a menu item, not selected
@@ -694,7 +695,7 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
             "OptionPane.informationSound", null, // Info and Plain
             "OptionPane.questionSound", null,
             "OptionPane.warningSound", null,
-            "OptionPane.buttonClickThreshhold", new Integer(500),
+            "OptionPane.buttonClickThreshhold", Integer.valueOf(500),
             "OptionPane.yesButtonMnemonic", "",
             "OptionPane.noButtonMnemonic", "",
             "OptionPane.okButtonMnemonic", "",
@@ -717,7 +718,7 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
             "PasswordField.caretBlinkRate", textCaretBlinkRate,
             "PasswordField.border", textFieldBorder,
             "PasswordField.margin", zeroInsets,
-            "PasswordField.echoChar", new Character((char)0x25CF),
+            "PasswordField.echoChar", Character.valueOf((char)0x25CF),
             "PasswordField.capsLockIconColor", textPasswordFieldCapsLockIconColor,
 
             "PopupMenu.font", menuFont,
@@ -736,7 +737,7 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
             "ProgressBar.selectionForeground", black,
             "ProgressBar.selectionBackground", white,
             "ProgressBar.border", new BorderUIResource(BorderFactory.createEmptyBorder()),
-            "ProgressBar.repaintInterval", new Integer(20),
+            "ProgressBar.repaintInterval", Integer.valueOf(20),
 
             "RadioButton.background", controlBackgroundColor,
             "RadioButton.foreground", black,
@@ -772,7 +773,7 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
             "ScrollBar.border", null,
             "ScrollBar.focusInputMap", aquaKeyBindings.getScrollBarInputMap(),
             "ScrollBar.focusInputMap.RightToLeft", aquaKeyBindings.getScrollBarRightToLeftInputMap(),
-            "ScrollBar.width", new Integer(16),
+            "ScrollBar.width", Integer.valueOf(16),
             "ScrollBar.background", white,
             "ScrollBar.foreground", black,
 
@@ -816,7 +817,7 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
             //"SplitPane.shadow", table.get("controlShadow"),
             "SplitPane.background", panelBackgroundColor,
             "SplitPane.border", scollListBorder,
-            "SplitPane.dividerSize", new Integer(9), //$
+            "SplitPane.dividerSize", Integer.valueOf(9), //$
             "SplitPaneDivider.border", null, // AquaSplitPaneDividerUI draws it
             "SplitPaneDivider.horizontalGradientVariant",(LazyValue) t -> AquaSplitPaneDividerUI.getHorizontalSplitDividerGradientVariant(),
 
@@ -833,7 +834,7 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
             //"TabbedPane.darkShadow", table.get("controlDkShadow"),
             //"TabbedPane.focus", table.get("controlText"),
             "TabbedPane.opaque", useOpaqueComponents,
-            "TabbedPane.textIconGap", new Integer(4),
+            "TabbedPane.textIconGap", Integer.valueOf(4),
             "TabbedPane.tabInsets", new InsetsUIResource(0, 10, 3, 10), // Label within tab (top, left, bottom, right)
             //"TabbedPane.rightTabInsets", new InsetsUIResource(0, 10, 3, 10), // Label within tab (top, left, bottom, right)
             "TabbedPane.leftTabInsets", new InsetsUIResource(0, 10, 3, 10), // Label within tab
@@ -973,9 +974,9 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
             "Tree.selectionBorderColor", selectionBackground, // match the background so it looks like we don't draw anything
             "Tree.editorBorderSelectionColor", null, // The EditTextFrame provides its own border
             // "Tree.editorBorder", textFieldBorder, // If you still have Sun bug 4376328 in DefaultTreeCellEditor, it has to have the same insets as TextField.border
-            "Tree.leftChildIndent", new Integer(7),//$
-            "Tree.rightChildIndent", new Integer(13),//$
-            "Tree.rowHeight", new Integer(19),// iconHeight + 3, to match finder - a zero would have the renderer decide, except that leaves the icons touching
+            "Tree.leftChildIndent", Integer.valueOf(7),//$
+            "Tree.rightChildIndent", Integer.valueOf(13),//$
+            "Tree.rowHeight", Integer.valueOf(19),// iconHeight + 3, to match finder - a zero would have the renderer decide, except that leaves the icons touching
             "Tree.scrollsOnExpand", Boolean.FALSE,
             "Tree.openIcon",(LazyValue) t -> AquaImageFactory.getTreeOpenFolderIcon(), // Open folder icon
             "Tree.closedIcon",(LazyValue) t -> AquaImageFactory.getTreeFolderIcon(), // Closed folder icon
@@ -991,9 +992,7 @@ public class AquaLookAndFeel extends BasicLookAndFeel {
             "Tree.ancestorInputMap", new UIDefaults.LazyInputMap(new Object[]{"ESCAPE", "cancel"}),};
 
         table.putDefaults(defaults);
-
-        Object aaTextInfo = SwingUtilities2.AATextInfo.getAATextInfo(true);
-        table.put(SwingUtilities2.AA_TEXT_PROPERTY_KEY, aaTextInfo);
+        SwingUtilities2.putAATextInfo(true, table);
     }
 
     protected void initSystemColorDefaults(final UIDefaults table) {

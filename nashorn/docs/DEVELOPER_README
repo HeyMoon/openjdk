@@ -35,12 +35,14 @@ that can be overwritten.
 
 SYSTEM PROPERTY: -Dnashorn.unstable.relink.threshold=x
 
-This property controls how many call site misses are allowed before a 
-callsite is relinked with "apply" semantics to never change again. 
-In the case of megamorphic callsites, this is necessary, or the 
-program would spend all its time swapping out callsite targets. Dynalink 
-has a default value (currently 8 relinks) for this property if it 
-is not explicitly set.
+NOTE: This property is deprecated in favor of the 
+"--unstable-relink-threshold" command line option. It controls how many
+call site misses are allowed before a callsite is relinked with "apply"
+semantics to never change again. In the case of megamorphic callsites, 
+this is necessary, or the program would spend all its time swapping out 
+callsite targets. When neither the system property nor the command line
+option are specified, defaults to 8, or 16 with optimistic types turned
+on.
 
 
 SYSTEM PROPERTY: -Dnashorn.compiler.splitter.threshold=x
@@ -299,6 +301,16 @@ SYSTEM PROPERTY: -Dnashorn.runtime.event.queue.size=<value>
 Nashorn provides a fixed sized runtime event queue for debugging purposes.
 See -Dnashorn.debug for methods to access the event queue.
 The default value is 1024.
+
+SYSTEM PROPERTY: -Dnashorn.anonymous.classes.threshold=<value>
+
+Nashorn can use anonymous classes for loading compiled scripts, depending
+on the --anonymous-classes=[auto|true|false] option. Anonymous classes load
+faster, but the loaded classes get less optimization applied to them and
+therefore usually run slower. In the default "auto" setting, scripts are
+loaded as anonymous classes if the script size does not exceed 512 bytes.
+The above system property allows to set this threshold to a user defined
+value.
 
 ===============
 2. The loggers.
@@ -606,6 +618,10 @@ A short summary follows:
 	-tcs, --trace-callsites (Enable callsite trace mode. Options are: miss [trace callsite misses] 
 	                         enterexit [trace callsite enter/exit], objects [print object properties].)
 		param: [=[option,]*]   
+
+	-urt, --unstable-relink-threshold (Number of times a dynamic call site has to be relinked before it 
+	                                  is considered unstable, when the runtime will try to link it as 
+	                                  if it is megamorphic.)
 
 	--verify-code (Verify byte code before running.)
 		param: [true|false]   default: false

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,13 +30,15 @@ import javax.swing.plaf.ComponentUI;
 import javax.swing.border.*;
 import javax.swing.event.SwingPropertyChangeSupport;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.lang.reflect.*;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Enumeration;
 import java.util.Hashtable;
 import java.util.ResourceBundle;
-import java.util.ResourceBundle.Control;
 import java.util.Locale;
 import java.util.Vector;
 import java.util.MissingResourceException;
@@ -51,8 +53,8 @@ import java.security.PrivilegedAction;
 
 import sun.reflect.misc.MethodUtil;
 import sun.reflect.misc.ReflectUtil;
+import sun.swing.SwingAccessor;
 import sun.swing.SwingUtilities2;
-import sun.util.CoreResourceBundleControl;
 
 /**
  * A table of defaults for Swing components.  Applications can set/get
@@ -90,6 +92,10 @@ public class UIDefaults extends Hashtable<Object,Object>
      */
     private Map<Locale, Map<String, Object>> resourceCache;
 
+    static {
+        SwingAccessor.setUIDefaultsAccessor(UIDefaults::addInternalBundle);
+    }
+
     /**
      * Creates an empty defaults table.
      */
@@ -119,7 +125,7 @@ public class UIDefaults extends Hashtable<Object,Object>
         Object[] uiDefaults = {
              "Font", new Font("Dialog", Font.BOLD, 12),
             "Color", Color.red,
-             "five", new Integer(5)
+             "five", Integer.valueOf(5)
         }
         UIDefaults myDefaults = new UIDefaults(uiDefaults);
      * </pre>
@@ -302,12 +308,12 @@ public class UIDefaults extends Hashtable<Object,Object>
             for (int i=resourceBundles.size()-1; i >= 0; i--) {
                 String bundleName = resourceBundles.get(i);
                 try {
-                    Control c = CoreResourceBundleControl.getRBControlInstance(bundleName);
                     ResourceBundle b;
-                    if (c != null) {
-                        b = ResourceBundle.getBundle(bundleName, l, c);
+                    if (isDesktopResourceBundle(bundleName)) {
+                        // load resource bundle from java.desktop module
+                        b = ResourceBundle.getBundle(bundleName, l, UIDefaults.class.getModule());
                     } else {
-                        b = ResourceBundle.getBundle(bundleName, l);
+                        b = ResourceBundle.getBundle(bundleName, l, ClassLoader.getSystemClassLoader());
                     }
                     Enumeration<String> keys = b.getKeys();
 
@@ -327,6 +333,30 @@ public class UIDefaults extends Hashtable<Object,Object>
             resourceCache.put(l, values);
         }
         return values;
+    }
+
+    /*
+     * Test if the specified baseName of the ROOT locale is in java.desktop module.
+     * JDK always defines the resource bundle of the ROOT locale.
+     */
+    private static boolean isDesktopResourceBundle(String baseName) {
+        Module thisModule = UIDefaults.class.getModule();
+        return AccessController.doPrivileged(new PrivilegedAction<Boolean>() {
+            @Override
+            public Boolean run() {
+                Class<?> c = Class.forName(thisModule, baseName);
+                if (c != null) {
+                    return true;
+                } else {
+                    String resourceName = baseName.replace('.', '/') + ".properties";
+                    try (InputStream in = thisModule.getResourceAsStream(resourceName)) {
+                        return in != null;
+                    } catch (IOException e) {
+                        throw new UncheckedIOException(e);
+                    }
+                }
+            }
+        });
     }
 
     /**
@@ -767,7 +797,13 @@ public class UIDefaults extends Hashtable<Object,Object>
                     m = uiClass.getMethod("createUI", new Class<?>[]{JComponent.class});
                     put(uiClass, m);
                 }
-                uiObject = MethodUtil.invoke(m, null, new Object[]{target});
+
+                if (uiClass.getModule() == ComponentUI.class.getModule()) {
+                    // uiClass is a system LAF if it's in java.desktop module
+                    uiObject = m.invoke(null, new Object[]{target});
+                } else {
+                    uiObject = MethodUtil.invoke(m, null, new Object[]{target});
+                }
             }
             catch (NoSuchMethodException e) {
                 getUIError("static createUI() method not found in " + uiClass);
@@ -850,28 +886,48 @@ public class UIDefaults extends Hashtable<Object,Object>
 
     /**
      * Adds a resource bundle to the list of resource bundles that are
-     * searched for localized values.  Resource bundles are searched in the
-     * reverse order they were added.  In other words, the most recently added
-     * bundle is searched first.
+     * searched for localized values. Resource bundles are searched in
+     * the reverse order they were added, using the
+     * {@linkplain ClassLoader#getSystemClassLoader application class loader}.
+     * In other words, the most recently added bundle is searched first.
      *
      * @param bundleName  the base name of the resource bundle to be added
      * @see java.util.ResourceBundle
      * @see #removeResourceBundle
+     * @see ResourceBundle#getBundle(String, Locale, ClassLoader)
      * @since 1.4
      */
-    public synchronized void addResourceBundle( String bundleName ) {
-        if( bundleName == null ) {
+    public synchronized void addResourceBundle(final String bundleName) {
+        if (bundleName == null) {
             return;
         }
-        if( resourceBundles == null ) {
+        if (isDesktopResourceBundle(bundleName)) {
+            // Only the java.desktop itself can register resource bundles from
+            // java.desktop module
+            return;
+        }
+        addInternalBundle(bundleName);
+    }
+
+    /**
+     * This methods should be used to register internal resource bundles from
+     * the java.desktop module.
+     *
+     * @param bundleName  the base name of the resource bundle to be added
+     * @since 9
+     */
+    private synchronized void addInternalBundle(final String bundleName) {
+        if (bundleName == null) {
+            return;
+        }
+        if (resourceBundles == null) {
             resourceBundles = new Vector<String>(5);
         }
         if (!resourceBundles.contains(bundleName)) {
-            resourceBundles.add( bundleName );
+            resourceBundles.add(bundleName);
             resourceCache.clear();
         }
     }
-
 
     /**
      * Removes a resource bundle from the list of resource bundles that are

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,10 +25,12 @@
 
 package sun.reflect.annotation;
 
+import java.io.ObjectInputStream;
 import java.lang.annotation.*;
 import java.lang.reflect.*;
 import java.io.Serializable;
 import java.util.*;
+import java.util.stream.*;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 
@@ -60,7 +62,7 @@ class AnnotationInvocationHandler implements InvocationHandler, Serializable {
         // Handle Object and Annotation methods
         if (member.equals("equals") && paramTypes.length == 1 &&
             paramTypes[0] == Object.class)
-            return equalsImpl(args[0]);
+            return equalsImpl(proxy, args[0]);
         if (paramTypes.length != 0)
             throw new AssertionError("Too many parameters for an annotation method");
 
@@ -157,38 +159,175 @@ class AnnotationInvocationHandler implements InvocationHandler, Serializable {
     }
 
     /**
-     * Translates a member value (in "dynamic proxy return form") into a string
+     * Translates a member value (in "dynamic proxy return form") into a string.
      */
     private static String memberValueToString(Object value) {
         Class<?> type = value.getClass();
-        if (!type.isArray())    // primitive, string, class, enum const,
-                                // or annotation
-            return value.toString();
+        if (!type.isArray()) {
+            // primitive value, string, class, enum const, or annotation
+            if (type == Class.class)
+                return toSourceString((Class<?>) value);
+            else if (type == String.class)
+                return  toSourceString((String) value);
+            if (type == Character.class)
+                return toSourceString((char) value);
+            else if (type == Double.class)
+                return  toSourceString((double) value);
+            else if (type == Float.class)
+                return  toSourceString((float) value);
+            else if (type == Long.class)
+                return  toSourceString((long) value);
+            else
+                return value.toString();
+        } else {
+            Stream<String> stringStream;
+            if (type == byte[].class)
+                stringStream = convert((byte[]) value);
+            else if (type == char[].class)
+                stringStream = convert((char[]) value);
+            else if (type == double[].class)
+                stringStream = DoubleStream.of((double[]) value)
+                    .mapToObj(AnnotationInvocationHandler::toSourceString);
+            else if (type == float[].class)
+                stringStream = convert((float[]) value);
+            else if (type == int[].class)
+                stringStream = IntStream.of((int[]) value).mapToObj(String::valueOf);
+            else if (type == long[].class) {
+                stringStream = LongStream.of((long[]) value)
+                    .mapToObj(AnnotationInvocationHandler::toSourceString);
+            } else if (type == short[].class)
+                stringStream = convert((short[]) value);
+            else if (type == boolean[].class)
+                stringStream = convert((boolean[]) value);
+            else if (type == Class[].class)
+                stringStream =
+                    Arrays.stream((Class<?>[]) value).
+                    map(AnnotationInvocationHandler::toSourceString);
+            else if (type == String[].class)
+                stringStream =
+                    Arrays.stream((String[])value).
+                    map(AnnotationInvocationHandler::toSourceString);
+            else
+                stringStream = Arrays.stream((Object[])value).map(Objects::toString);
 
-        if (type == byte[].class)
-            return Arrays.toString((byte[]) value);
-        if (type == char[].class)
-            return Arrays.toString((char[]) value);
-        if (type == double[].class)
-            return Arrays.toString((double[]) value);
-        if (type == float[].class)
-            return Arrays.toString((float[]) value);
-        if (type == int[].class)
-            return Arrays.toString((int[]) value);
-        if (type == long[].class)
-            return Arrays.toString((long[]) value);
-        if (type == short[].class)
-            return Arrays.toString((short[]) value);
-        if (type == boolean[].class)
-            return Arrays.toString((boolean[]) value);
-        return Arrays.toString((Object[]) value);
+            return stringStreamToString(stringStream);
+        }
+    }
+
+    /**
+     * Translates a Class value to a form suitable for use in the
+     * string representation of an annotation.
+     */
+    private static String toSourceString(Class<?> clazz) {
+        Class<?> finalComponent = clazz;
+        StringBuilder arrayBackets = new StringBuilder();
+
+        while(finalComponent.isArray()) {
+            finalComponent = finalComponent.getComponentType();
+            arrayBackets.append("[]");
+        }
+
+        return finalComponent.getName() + arrayBackets.toString() + ".class" ;
+    }
+
+    private static String toSourceString(float f) {
+        if (Float.isFinite(f))
+            return Float.toString(f) + "f" ;
+        else {
+            if (Float.isInfinite(f)) {
+                return (f < 0.0f) ? "-1.0f/0.0f": "1.0f/0.0f";
+            } else
+                return "0.0f/0.0f";
+        }
+    }
+
+    private static String toSourceString(double d) {
+        if (Double.isFinite(d))
+            return Double.toString(d);
+        else {
+            if (Double.isInfinite(d)) {
+                return (d < 0.0f) ? "-1.0/0.0": "1.0/0.0";
+            } else
+                return "0.0/0.0";
+        }
+    }
+
+    private static String toSourceString(char c) {
+        StringBuilder sb = new StringBuilder(4);
+        sb.append('\'');
+        if (c == '\'')
+            sb.append("\\'");
+        else
+            sb.append(c);
+        return sb.append('\'')
+                .toString();
+    }
+
+    private static String toSourceString(long ell) {
+        String str = String.valueOf(ell);
+        return (ell < Integer.MIN_VALUE || ell > Integer.MAX_VALUE)
+                ? (str + 'L') : str;
+    }
+
+    /**
+     * Return a string suitable for use in the string representation
+     * of an annotation.
+     */
+    private static String toSourceString(String s) {
+        StringBuilder sb = new StringBuilder();
+        sb.append('"');
+        // Escape embedded quote characters, if present, but don't do
+        // anything more heroic.
+        sb.append(s.replace("\"", "\\\""));
+        sb.append('"');
+        return sb.toString();
+    }
+
+    private static Stream<String> convert(byte[] values) {
+        List<String> list = new ArrayList<>(values.length);
+        for (byte b : values)
+            list.add(Byte.toString(b));
+        return list.stream();
+    }
+
+    private static Stream<String> convert(char[] values) {
+        List<String> list = new ArrayList<>(values.length);
+        for (char c : values)
+            list.add(toSourceString(c));
+        return list.stream();
+    }
+
+    private static Stream<String> convert(float[] values) {
+        List<String> list = new ArrayList<>(values.length);
+        for (float f : values) {
+            list.add(toSourceString(f));
+        }
+        return list.stream();
+    }
+
+    private static Stream<String> convert(short[] values) {
+        List<String> list = new ArrayList<>(values.length);
+        for (short s : values)
+            list.add(Short.toString(s));
+        return list.stream();
+    }
+
+    private static Stream<String> convert(boolean[] values) {
+        List<String> list = new ArrayList<>(values.length);
+        for (boolean b : values)
+            list.add(Boolean.toString(b));
+        return list.stream();
+    }
+
+    private static String stringStreamToString(Stream<String> stream) {
+        return stream.collect(Collectors.joining(", ", "{", "}"));
     }
 
     /**
      * Implementation of dynamicProxy.equals(Object o)
      */
-    private Boolean equalsImpl(Object o) {
-        if (o == this)
+    private Boolean equalsImpl(Object proxy, Object o) {
+        if (o == proxy)
             return true;
 
         if (!type.isInstance(o))
@@ -299,7 +438,7 @@ class AnnotationInvocationHandler implements InvocationHandler, Serializable {
                 }});
     }
 
-    private transient volatile Method[] memberMethods = null;
+    private transient volatile Method[] memberMethods;
 
     /**
      * Validates that a method is structurally appropriate for an
@@ -431,35 +570,72 @@ class AnnotationInvocationHandler implements InvocationHandler, Serializable {
 
     private void readObject(java.io.ObjectInputStream s)
         throws java.io.IOException, ClassNotFoundException {
-        s.defaultReadObject();
+        ObjectInputStream.GetField fields = s.readFields();
+
+        @SuppressWarnings("unchecked")
+        Class<? extends Annotation> t = (Class<? extends Annotation>)fields.get("type", null);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> streamVals = (Map<String, Object>)fields.get("memberValues", null);
 
         // Check to make sure that types have not evolved incompatibly
 
         AnnotationType annotationType = null;
         try {
-            annotationType = AnnotationType.getInstance(type);
+            annotationType = AnnotationType.getInstance(t);
         } catch(IllegalArgumentException e) {
             // Class is no longer an annotation type; time to punch out
             throw new java.io.InvalidObjectException("Non-annotation type in annotation serial stream");
         }
 
         Map<String, Class<?>> memberTypes = annotationType.memberTypes();
+        // consistent with runtime Map type
+        Map<String, Object> mv = new LinkedHashMap<>();
 
         // If there are annotation members without values, that
         // situation is handled by the invoke method.
-        for (Map.Entry<String, Object> memberValue : memberValues.entrySet()) {
+        for (Map.Entry<String, Object> memberValue : streamVals.entrySet()) {
             String name = memberValue.getKey();
+            Object value = null;
             Class<?> memberType = memberTypes.get(name);
             if (memberType != null) {  // i.e. member still exists
-                Object value = memberValue.getValue();
+                value = memberValue.getValue();
                 if (!(memberType.isInstance(value) ||
                       value instanceof ExceptionProxy)) {
-                    memberValue.setValue(
-                        new AnnotationTypeMismatchExceptionProxy(
+                    value = new AnnotationTypeMismatchExceptionProxy(
                             value.getClass() + "[" + value + "]").setMember(
-                                annotationType.members().get(name)));
+                                annotationType.members().get(name));
                 }
             }
+            mv.put(name, value);
+        }
+
+        UnsafeAccessor.setType(this, t);
+        UnsafeAccessor.setMemberValues(this, mv);
+    }
+
+    private static class UnsafeAccessor {
+        private static final jdk.internal.misc.Unsafe unsafe;
+        private static final long typeOffset;
+        private static final long memberValuesOffset;
+        static {
+            try {
+                unsafe = jdk.internal.misc.Unsafe.getUnsafe();
+                typeOffset = unsafe.objectFieldOffset
+                        (AnnotationInvocationHandler.class.getDeclaredField("type"));
+                memberValuesOffset = unsafe.objectFieldOffset
+                        (AnnotationInvocationHandler.class.getDeclaredField("memberValues"));
+            } catch (Exception ex) {
+                throw new ExceptionInInitializerError(ex);
+            }
+        }
+        static void setType(AnnotationInvocationHandler o,
+                            Class<? extends Annotation> type) {
+            unsafe.putObject(o, typeOffset, type);
+        }
+
+        static void setMemberValues(AnnotationInvocationHandler o,
+                                    Map<String, Object> memberValues) {
+            unsafe.putObject(o, memberValuesOffset, memberValues);
         }
     }
 }

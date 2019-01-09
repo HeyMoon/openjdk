@@ -42,7 +42,6 @@ import sun.awt.FontConfiguration;
 import sun.awt.HeadlessToolkit;
 import sun.awt.util.ThreadGroupUtils;
 import sun.lwawt.macosx.*;
-import sun.misc.ManagedLocalsThread;
 
 public final class CFontManager extends SunFontManager {
     private static Hashtable<String, Font2D> genericFonts = new Hashtable<String, Font2D>();
@@ -142,100 +141,24 @@ public final class CFontManager extends SunFontManager {
         }
     }
 
-    @Override
-    public Font2D createFont2D(File fontFile, int fontFormat, boolean isCopy, CreatedFontTracker tracker) throws FontFormatException {
+    protected void registerFontsInDir(final String dirName, boolean useJavaRasterizer,
+                                      int fontRank, boolean defer, boolean resolveSymLinks) {
 
-    String fontFilePath = fontFile.getPath();
-    Font2D font2D = null;
-    final File fFile = fontFile;
-    final CreatedFontTracker _tracker = tracker;
-    try {
-        switch (fontFormat) {
-            case Font.TRUETYPE_FONT:
-                        font2D = new TrueTypeFont(fontFilePath, null, 0, true);
-                break;
-            case Font.TYPE1_FONT:
-                        font2D = new Type1Font(fontFilePath, null, isCopy);
-                break;
-            default:
-                throw new FontFormatException("Unrecognised Font Format");
-        }
-    } catch (FontFormatException e) {
-        if (isCopy) {
-            java.security.AccessController.doPrivileged(
-                    new java.security.PrivilegedAction<Object>() {
-                        public Object run() {
-                            if (_tracker != null) {
-                                _tracker.subBytes((int)fFile.length());
-                            }
-                            fFile.delete();
-                            return null;
-                        }
-                    });
-        }
-        throw(e);
-    }
-    if (isCopy) {
-        FileFont.setFileToRemove(font2D, fontFile, tracker);
-        synchronized (FontManager.class) {
+        String[] files = AccessController.doPrivileged((PrivilegedAction<String[]>) () -> {
+            return new File(dirName).list(getTrueTypeFilter());
+        });
 
-            if (tmpFontFiles == null) {
-                tmpFontFiles = new Vector<File>();
-            }
-            tmpFontFiles.add(fontFile);
-
-            if (fileCloser == null) {
-                final Runnable fileCloserRunnable = new Runnable() {
-                    public void run() {
-                        java.security.AccessController.doPrivileged(
-                                new java.security.PrivilegedAction<Object>() {
-                                    public Object run() {
-
-                                        for (int i=0;i<CHANNELPOOLSIZE;i++) {
-                                            if (fontFileCache[i] != null) {
-                                                try {
-                                                    fontFileCache[i].close();
-                                                } catch (Exception e) {}
-                                            }
-                                        }
-                                        if (tmpFontFiles != null) {
-                                            File[] files = new File[tmpFontFiles.size()];
-                                            files = tmpFontFiles.toArray(files);
-                                            for (int f=0; f<files.length;f++) {
-                                                try {
-                                                    files[f].delete();
-                                                } catch (Exception e) {}
-                                            }
-                                        }
-                                        return null;
-                                    }
-                                });
-                    }
-                };
-                AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
-                            /* The thread must be a member of a thread group
-                             * which will not get GCed before VM exit.
-                             * Make its parent the top-level thread group.
-                             */
-                            ThreadGroup rootTG = ThreadGroupUtils.getRootThreadGroup();
-                            fileCloser = new ManagedLocalsThread(rootTG, fileCloserRunnable);
-                            fileCloser.setContextClassLoader(null);
-                            Runtime.getRuntime().addShutdownHook(fileCloser);
-                            return null;
-                        }
-                );
-                }
+        if (files == null) {
+           return;
+        } else {
+            for (String f : files) {
+                loadNativeDirFonts(dirName+File.separator+f);
             }
         }
-        return font2D;
-    }
-
-    protected void registerFontsInDir(String dirName, boolean useJavaRasterizer, int fontRank, boolean defer, boolean resolveSymLinks) {
-        loadNativeDirFonts(dirName);
         super.registerFontsInDir(dirName, useJavaRasterizer, fontRank, defer, resolveSymLinks);
     }
 
-    private native void loadNativeDirFonts(String dirName);
+    private native void loadNativeDirFonts(String fontPath);
     private native void loadNativeFonts();
 
     void registerFont(String fontName, String fontFamilyName) {

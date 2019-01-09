@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,7 +40,8 @@ import javax.print.attribute.PrintJobAttribute;
  * for purposes of finishing.
  * <P>
  * Standard Finishings values are:
- * <TABLE BORDER=0 CELLPADDING=0 CELLSPACING=0 WIDTH=100% SUMMARY="layout">
+ * <table class="borderless" style="width:100%;margin: 0px auto">
+ * <caption>Standard Finishings values</caption>
  * <TR>
  * <TD STYLE="WIDTH:10%">
  * &nbsp;
@@ -76,7 +77,8 @@ import javax.print.attribute.PrintJobAttribute;
  * <P>
  * The following Finishings values are more specific; they indicate a
  * corner or an edge as if the document were a portrait document:
- * <TABLE BORDER=0 CELLPADDING=0 CELLSPACING=0 WIDTH=100% SUMMARY="layout">
+ * <table class="borderless" style="width:100%;margin: 0px auto">
+ * <caption>Specific Finishings values</caption>
  * <TR>
  * <TD STYLE="WIDTH:10%">
  * &nbsp;
@@ -212,8 +214,8 @@ import javax.print.attribute.PrintJobAttribute;
  * <B>IPP Compatibility:</B> Class Finishings encapsulates some of the
  * IPP enum values that can be included in an IPP "finishings" attribute, which
  * is a set of enums. The category name returned by
- * <CODE>getName()</CODE> is the IPP attribute name.  The enumeration's
- * integer value is the IPP enum value.  The <code>toString()</code> method
+ * {@code getName()} is the IPP attribute name.  The enumeration's
+ * integer value is the IPP enum value.  The {@code toString()} method
  * returns the IPP string representation of the attribute value.
  * In IPP Finishings is a multi-value attribute, this API currently allows
  * only one binding to be specified.
@@ -466,7 +468,7 @@ public class Finishings extends EnumSyntax
      * instance.
      * <P>
      * For class Finishings and any vendor-defined subclasses, the
-     * category name is <CODE>"finishings"</CODE>.
+     * category name is {@code "finishings"}.
      *
      * @return  Attribute category name.
      */

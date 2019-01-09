@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,8 @@
  */
 package javax.swing;
 
+import java.beans.JavaBean;
+import java.beans.BeanProperty;
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.beans.Transient;
@@ -71,14 +73,12 @@ import javax.accessibility.*;
  *
  * @param <E> the type of the elements of this combo box
  *
- * @beaninfo
- *   attribute: isContainer false
- * description: A combination of a text field and a drop-down list.
- *
  * @author Arnaud Weber
  * @author Mark Davidson
  * @since 1.2
  */
+@JavaBean(defaultProperty = "UI", description = "A combination of a text field and a drop-down list.")
+@SwingContainer(false)
 @SuppressWarnings("serial") // Same-version serialization only
 public class JComboBox<E> extends JComponent
 implements ItemSelectable,ListDataListener,ActionListener, Accessible {
@@ -168,6 +168,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
     // Flag to ensure the we don't get multiple ActionEvents on item selection.
     private boolean selectingItem = false;
 
+    // Flag to indicate UI update is in progress
+    private transient boolean updateInProgress;
+
     /**
      * Creates a <code>JComboBox</code> that takes its items from an
      * existing <code>ComboBoxModel</code>.  Since the
@@ -255,13 +258,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      *
      * @param ui  the <code>ComboBoxUI</code> L&amp;F object
      * @see UIDefaults#getUI
-     *
-     * @beaninfo
-     *        bound: true
-     *       hidden: true
-     *    attribute: visualUpdate true
-     *  description: The UI object that implements the Component's LookAndFeel.
      */
+    @BeanProperty(hidden = true, visualUpdate = true, description
+            = "The UI object that implements the Component's LookAndFeel.")
     public void setUI(ComboBoxUI ui) {
         super.setUI(ui);
     }
@@ -272,11 +271,18 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      * @see JComponent#updateUI
      */
     public void updateUI() {
-        setUI((ComboBoxUI)UIManager.getUI(this));
+        if (!updateInProgress) {
+            updateInProgress = true;
+            try {
+                setUI((ComboBoxUI)UIManager.getUI(this));
 
-        ListCellRenderer<? super E> renderer = getRenderer();
-        if (renderer instanceof Component) {
-            SwingUtilities.updateComponentTreeUI((Component)renderer);
+                ListCellRenderer<? super E> renderer = getRenderer();
+                if (renderer instanceof Component) {
+                    SwingUtilities.updateComponentTreeUI((Component)renderer);
+                }
+            } finally {
+                updateInProgress = false;
+            }
         }
     }
 
@@ -288,6 +294,7 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      * @see JComponent#getUIClassID
      * @see UIDefaults#getUI
      */
+    @BeanProperty(bound = false)
     public String getUIClassID() {
         return uiClassID;
     }
@@ -308,11 +315,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      *
      * @param aModel the <code>ComboBoxModel</code> that provides the
      *  displayed list of items
-     *
-     * @beaninfo
-     *        bound: true
-     *  description: Model that the combo box uses to get data to display.
      */
+    @BeanProperty(description
+            = "Model that the combo box uses to get data to display.")
     public void setModel(ComboBoxModel<E> aModel) {
         ComboBoxModel<E> oldModel = dataModel;
         if (oldModel != null) {
@@ -363,12 +368,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      * This method fires a property changed event.
      *
      * @param aFlag if <code>true</code>, lightweight popups are desired
-     *
-     * @beaninfo
-     *        bound: true
-     *       expert: true
-     *  description: Set to <code>false</code> to require heavyweight popups.
      */
+    @BeanProperty(expert = true, description
+            = "Set to <code>false</code> to require heavyweight popups.")
     public void setLightWeightPopupEnabled(boolean aFlag) {
         boolean oldFlag = lightWeightPopupEnabled;
         lightWeightPopupEnabled = aFlag;
@@ -398,12 +400,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      *
      * @param aFlag a boolean value, where true indicates that the
      *                  field is editable
-     *
-     * @beaninfo
-     *        bound: true
-     *    preferred: true
-     *  description: If true, the user can type a new value in the combo box.
      */
+    @BeanProperty(preferred = true, description
+            = "If true, the user can type a new value in the combo box.")
     public void setEditable(boolean aFlag) {
         boolean oldFlag = isEditable;
         isEditable = aFlag;
@@ -427,11 +426,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      *
      * @param count an integer specifying the maximum number of items to
      *              display in the list before using a scrollbar
-     * @beaninfo
-     *        bound: true
-     *    preferred: true
-     *  description: The maximum number of rows the popup should have
      */
+    @BeanProperty(preferred = true, description
+            = "The maximum number of rows the popup should have")
     public void setMaximumRowCount(int count) {
         int oldCount = maximumRowCount;
         maximumRowCount = count;
@@ -465,11 +462,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      * @param aRenderer  the <code>ListCellRenderer</code> that
      *                  displays the selected item
      * @see #setEditor
-     * @beaninfo
-     *      bound: true
-     *     expert: true
-     *  description: The renderer that paints the item selected in the list.
      */
+    @BeanProperty(expert = true, description
+            = "The renderer that paints the item selected in the list.")
     public void setRenderer(ListCellRenderer<? super E> aRenderer) {
         ListCellRenderer<? super E> oldRenderer = renderer;
         renderer = aRenderer;
@@ -497,11 +492,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      * @param anEditor  the <code>ComboBoxEditor</code> that
      *                  displays the selected item
      * @see #setRenderer
-     * @beaninfo
-     *     bound: true
-     *    expert: true
-     *  description: The editor that combo box uses to edit the current value
      */
+    @BeanProperty(expert = true, description
+            = "The editor that combo box uses to edit the current value")
     public void setEditor(ComboBoxEditor anEditor) {
         ComboBoxEditor oldEditor = editor;
 
@@ -553,10 +546,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      *
      * @param anObject  the list object to select; use <code>null</code> to
                         clear the selection
-     * @beaninfo
-     *    preferred:   true
-     *    description: Sets the selected item in the JComboBox.
      */
+    @BeanProperty(bound = false, preferred = true, description
+            = "Sets the selected item in the JComboBox.")
     public void setSelectedItem(Object anObject) {
         Object oldSelection = selectedItemReminder;
         Object objectToSelect = anObject;
@@ -618,10 +610,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      *                  where 0 specifies the first item in the list and -1 indicates no selection
      * @exception IllegalArgumentException if <code>anIndex</code> &lt; -1 or
      *                  <code>anIndex</code> is greater than or equal to size
-     * @beaninfo
-     *   preferred: true
-     *  description: The item at index is selected.
      */
+    @BeanProperty(bound = false, preferred = true, description
+            = "The item at index is selected.")
     public void setSelectedIndex(int anIndex) {
         int size = dataModel.getSize();
 
@@ -689,11 +680,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      * @param prototypeDisplayValue the prototype display value
      * @see #getPrototypeDisplayValue
      * @since 1.4
-     * @beaninfo
-     *       bound: true
-     *   attribute: visualUpdate true
-     * description: The display prototype value, used to compute display width and height.
      */
+    @BeanProperty(visualUpdate = true, description
+            = "The display prototype value, used to compute display width and height.")
     public void setPrototypeDisplayValue(E prototypeDisplayValue) {
         Object oldValue = this.prototypeDisplayValue;
         this.prototypeDisplayValue = prototypeDisplayValue;
@@ -869,6 +858,7 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      *         array if no listeners have been added
      * @since 1.4
      */
+    @BeanProperty(bound = false)
     public ItemListener[] getItemListeners() {
         return listenerList.getListeners(ItemListener.class);
     }
@@ -907,6 +897,7 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      *         array if no listeners have been added
      * @since 1.4
      */
+    @BeanProperty(bound = false)
     public ActionListener[] getActionListeners() {
         return listenerList.getListeners(ActionListener.class);
     }
@@ -946,6 +937,7 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      *         array if no listeners have been added
      * @since 1.4
      */
+    @BeanProperty(bound = false)
     public PopupMenuListener[] getPopupMenuListeners() {
         return listenerList.getListeners(PopupMenuListener.class);
     }
@@ -1074,11 +1066,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      * @see #configurePropertiesFromAction
      * @see #createActionPropertyChangeListener
      * @see #actionPropertyChanged
-     * @beaninfo
-     *        bound: true
-     *    attribute: visualUpdate true
-     *  description: the Action instance connected with this ActionEvent source
      */
+    @BeanProperty(visualUpdate = true, description
+            = "the Action instance connected with this ActionEvent source")
     public void setAction(Action a) {
         Action oldValue = getAction();
         if (action==null || !action.equals(a)) {
@@ -1245,6 +1235,7 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      *
      * @see EventListenerList
      */
+    @SuppressWarnings("deprecation")
     protected void fireActionEvent() {
         if (!firingActionEvent) {
             // Set flag to ensure that an infinite loop is not created
@@ -1260,19 +1251,22 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
             } else if (currentEvent instanceof ActionEvent) {
                 modifiers = ((ActionEvent)currentEvent).getModifiers();
             }
-            // Process the listeners last to first, notifying
-            // those that are interested in this event
-            for ( int i = listeners.length-2; i>=0; i-=2 ) {
-                if ( listeners[i]==ActionListener.class ) {
-                    // Lazily create the event:
-                    if ( e == null )
-                        e = new ActionEvent(this,ActionEvent.ACTION_PERFORMED,
-                                            getActionCommand(),
-                                            mostRecentEventTime, modifiers);
-                    ((ActionListener)listeners[i+1]).actionPerformed(e);
+            try {
+                // Process the listeners last to first, notifying
+                // those that are interested in this event
+                for ( int i = listeners.length-2; i>=0; i-=2 ) {
+                    if ( listeners[i]==ActionListener.class ) {
+                        // Lazily create the event:
+                        if ( e == null )
+                            e = new ActionEvent(this,ActionEvent.ACTION_PERFORMED,
+                                                getActionCommand(),
+                                                mostRecentEventTime, modifiers);
+                        ((ActionListener)listeners[i+1]).actionPerformed(e);
+                    }
                 }
+            } finally {
+                firingActionEvent = false;
             }
-            firingActionEvent = false;
         }
     }
 
@@ -1305,6 +1299,7 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      * @return an array of <code>Objects</code> containing one
      *          element -- the selected item
      */
+    @BeanProperty(bound = false)
     public Object[] getSelectedObjects() {
         Object selectedObject = getSelectedItem();
         if ( selectedObject == null )
@@ -1394,11 +1389,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      *
      * @param b a boolean value, where true enables the component and
      *          false disables it
-     * @beaninfo
-     *        bound: true
-     *    preferred: true
-     *  description: Whether the combo box is enabled.
      */
+    @BeanProperty(preferred = true, description
+            = "The enabled state of the component.")
     public void setEnabled(boolean b) {
         super.setEnabled(b);
         firePropertyChange( "enabled", !isEnabled(), isEnabled() );
@@ -1458,10 +1451,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      * character becomes the selected item.
      *
      * @param aManager a key selection manager
-     * @beaninfo
-     *       expert: true
-     *  description: The objects that changes the selection when a key is pressed.
      */
+    @BeanProperty(bound = false, expert = true, description
+            = "The objects that changes the selection when a key is pressed.")
     public void setKeySelectionManager(KeySelectionManager aManager) {
         keySelectionManager = aManager;
     }
@@ -1481,6 +1473,7 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      *
      * @return an integer equal to the number of items in the list
      */
+    @BeanProperty(bound = false)
     public int getItemCount() {
         return dataModel.getSize();
     }
@@ -1629,6 +1622,7 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
      * @return an AccessibleJComboBox that serves as the
      *         AccessibleContext of this JComboBox
      */
+    @BeanProperty(bound = false)
     public AccessibleContext getAccessibleContext() {
         if ( accessibleContext == null ) {
             accessibleContext = new AccessibleJComboBox();
@@ -2131,11 +2125,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
              *
              * @see #getAccessibleName
              * @see #addPropertyChangeListener
-             *
-             * @beaninfo
-             *    preferred:   true
-             *    description: Sets the accessible name for the component.
              */
+            @BeanProperty(preferred = true, description
+                    = "Sets the accessible name for the component.")
             public void setAccessibleName(String s) {
                 ac.setAccessibleName(s);
             }
@@ -2165,11 +2157,9 @@ implements ItemSelectable,ListDataListener,ActionListener, Accessible {
              *
              * @see #setAccessibleName
              * @see #addPropertyChangeListener
-             *
-             * @beaninfo
-             *    preferred:   true
-             *    description: Sets the accessible description for the component.
              */
+            @BeanProperty(preferred = true, description
+                    = "Sets the accessible description for the component.")
             public void setAccessibleDescription(String s) {
                 ac.setAccessibleDescription(s);
             }

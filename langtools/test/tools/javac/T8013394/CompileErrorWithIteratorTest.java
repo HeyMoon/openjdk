@@ -1,12 +1,10 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -29,11 +27,13 @@
  * @summary compile of iterator use fails with error "defined in an inaccessible class or interface"
  * @library /tools/lib
  * @modules jdk.compiler/com.sun.tools.javac.api
- *          jdk.compiler/com.sun.tools.javac.file
  *          jdk.compiler/com.sun.tools.javac.main
- * @build ToolBox
+ * @build toolbox.ToolBox toolbox.JavacTask
  * @run main CompileErrorWithIteratorTest
  */
+
+import toolbox.JavacTask;
+import toolbox.ToolBox;
 
 public class CompileErrorWithIteratorTest {
 
@@ -81,7 +81,7 @@ public class CompileErrorWithIteratorTest {
     }
 
     void compile() throws Exception {
-        tb.new JavacTask()
+        new JavacTask(tb)
                 .sources(TestCollectionSrc, TestSrc)
                 .run();
     }

@@ -28,7 +28,8 @@
  * @author Seetharam Avadhanam, Martin Buchholz
  */
 
-import java.util.concurrent.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 interface AwaiterFactory {
@@ -120,7 +121,7 @@ public class Basic {
     //----------------------------------------------------------------
     // One thread interrupted
     //----------------------------------------------------------------
-    public static void threadInterrupted() throws Throwable{
+    public static void threadInterrupted() throws Throwable {
         int count = 0;
         Basic test = new Basic();
         CountDownLatch latch = new CountDownLatch(3);

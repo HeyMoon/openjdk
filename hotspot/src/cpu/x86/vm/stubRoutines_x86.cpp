@@ -27,14 +27,54 @@
 #include "runtime/frame.inline.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "runtime/thread.inline.hpp"
+#include "crc32c.h"
+
+#ifdef _MSC_VER
+#define ALIGNED_(x) __declspec(align(x))
+#else
+#define ALIGNED_(x) __attribute__ ((aligned(x)))
+#endif
 
 // Implementation of the platform-specific part of StubRoutines - for
 // a description of how to extend it, see the stubRoutines.hpp file.
 
 address StubRoutines::x86::_verify_mxcsr_entry = NULL;
 address StubRoutines::x86::_key_shuffle_mask_addr = NULL;
+address StubRoutines::x86::_counter_shuffle_mask_addr = NULL;
 address StubRoutines::x86::_ghash_long_swap_mask_addr = NULL;
 address StubRoutines::x86::_ghash_byte_swap_mask_addr = NULL;
+address StubRoutines::x86::_upper_word_mask_addr = NULL;
+address StubRoutines::x86::_shuffle_byte_flip_mask_addr = NULL;
+address StubRoutines::x86::_k256_adr = NULL;
+#ifdef _LP64
+address StubRoutines::x86::_k256_W_adr = NULL;
+address StubRoutines::x86::_k512_W_addr = NULL;
+address StubRoutines::x86::_pshuffle_byte_flip_mask_addr_sha512 = NULL;
+#endif
+address StubRoutines::x86::_pshuffle_byte_flip_mask_addr = NULL;
+
+//tables common for sin and cos
+address StubRoutines::x86::_ONEHALF_adr = NULL;
+address StubRoutines::x86::_P_2_adr = NULL;
+address StubRoutines::x86::_SC_4_adr = NULL;
+address StubRoutines::x86::_Ctable_adr = NULL;
+address StubRoutines::x86::_SC_2_adr = NULL;
+address StubRoutines::x86::_SC_3_adr = NULL;
+address StubRoutines::x86::_SC_1_adr = NULL;
+address StubRoutines::x86::_PI_INV_TABLE_adr = NULL;
+address StubRoutines::x86::_PI_4_adr = NULL;
+address StubRoutines::x86::_PI32INV_adr = NULL;
+address StubRoutines::x86::_SIGN_MASK_adr = NULL;
+address StubRoutines::x86::_P_1_adr = NULL;
+address StubRoutines::x86::_P_3_adr = NULL;
+address StubRoutines::x86::_NEG_ZERO_adr = NULL;
+
+//tables common for sincos and tancot
+address StubRoutines::x86::_L_2il0floatpacket_0_adr = NULL;
+address StubRoutines::x86::_Pi4Inv_adr = NULL;
+address StubRoutines::x86::_Pi4x3_adr = NULL;
+address StubRoutines::x86::_Pi4x4_adr = NULL;
+address StubRoutines::x86::_ones_adr = NULL;
 
 uint64_t StubRoutines::x86::_crc_by128_masks[] =
 {
@@ -130,3 +170,178 @@ juint StubRoutines::x86::_crc_table[] =
     0x5d681b02UL, 0x2a6f2b94UL, 0xb40bbe37UL, 0xc30c8ea1UL, 0x5a05df1bUL,
     0x2d02ef8dUL
 };
+
+#define D 32
+#define P 0x82F63B78 // Reflection of Castagnoli (0x11EDC6F41)
+
+#define TILL_CYCLE 31
+uint32_t _crc32c_pow_2k_table[TILL_CYCLE]; // because _crc32c_pow_2k_table[TILL_CYCLE == 31] == _crc32c_pow_2k_table[0]
+
+// A. Kadatch and B. Jenkins / Everything we know about CRC but afraid to forget September 3, 2010 8
+// Listing 1: Multiplication of normalized polynomials
+// "a" and "b" occupy D least significant bits.
+uint32_t crc32c_multiply(uint32_t a, uint32_t b) {
+  uint32_t product = 0;
+  uint32_t b_pow_x_table[D + 1]; // b_pow_x_table[k] = (b * x**k) mod P
+  b_pow_x_table[0] = b;
+  for (int k = 0; k < D; ++k) {
+    // If "a" has non-zero coefficient at x**k,/ add ((b * x**k) mod P) to the result.
+    if ((a & (((uint32_t)1) << (D - 1 - k))) != 0) product ^= b_pow_x_table[k];
+
+    // Compute b_pow_x_table[k+1] = (b ** x**(k+1)) mod P.
+    if (b_pow_x_table[k] & 1) {
+      // If degree of (b_pow_x_table[k] * x) is D, then
+      // degree of (b_pow_x_table[k] * x - P) is less than D.
+      b_pow_x_table[k + 1] = (b_pow_x_table[k] >> 1) ^ P;
+    }
+    else {
+      b_pow_x_table[k + 1] = b_pow_x_table[k] >> 1;
+    }
+  }
+  return product;
+}
+#undef D
+#undef P
+
+// A. Kadatch and B. Jenkins / Everything we know about CRC but afraid to forget September 3, 2010 9
+void crc32c_init_pow_2k(void) {
+  // _crc32c_pow_2k_table(0) =
+  // x^(2^k) mod P(x) = x mod P(x) = x
+  // Since we are operating on a reflected values
+  // x = 10b, reflect(x) = 0x40000000
+  _crc32c_pow_2k_table[0] = 0x40000000;
+
+  for (int k = 1; k < TILL_CYCLE; k++) {
+    // _crc32c_pow_2k_table(k+1) = _crc32c_pow_2k_table(k-1)^2 mod P(x)
+    uint32_t tmp = _crc32c_pow_2k_table[k - 1];
+    _crc32c_pow_2k_table[k] = crc32c_multiply(tmp, tmp);
+  }
+}
+
+// x^N mod P(x)
+uint32_t crc32c_f_pow_n(uint32_t n) {
+  //            result = 1 (polynomial)
+  uint32_t one, result = 0x80000000, i = 0;
+
+  while (one = (n & 1), (n == 1 || n - one > 0)) {
+    if (one) {
+      result = crc32c_multiply(result, _crc32c_pow_2k_table[i]);
+    }
+    n >>= 1;
+    i++;
+  }
+
+  return result;
+}
+
+juint *StubRoutines::x86::_crc32c_table;
+
+void StubRoutines::x86::generate_CRC32C_table(bool is_pclmulqdq_table_supported) {
+
+  static juint pow_n[CRC32C_NUM_PRECOMPUTED_CONSTANTS];
+
+  crc32c_init_pow_2k();
+
+  pow_n[0] = crc32c_f_pow_n(CRC32C_HIGH * 8);      // 8N * 8 = 64N
+  pow_n[1] = crc32c_f_pow_n(CRC32C_HIGH * 8 * 2);  // 128N
+
+  pow_n[2] = crc32c_f_pow_n(CRC32C_MIDDLE * 8);
+  pow_n[3] = crc32c_f_pow_n(CRC32C_MIDDLE * 8 * 2);
+
+  pow_n[4] = crc32c_f_pow_n(CRC32C_LOW * 8);
+  pow_n[CRC32C_NUM_PRECOMPUTED_CONSTANTS - 1] =
+            crc32c_f_pow_n(CRC32C_LOW * 8 * 2);
+
+  if (is_pclmulqdq_table_supported) {
+    _crc32c_table = pow_n;
+  } else {
+    static julong pclmulqdq_table[CRC32C_NUM_PRECOMPUTED_CONSTANTS * 256];
+
+    for (int j = 0; j < CRC32C_NUM_PRECOMPUTED_CONSTANTS; j++) {
+      static juint X_CONST = pow_n[j];
+      for (int64_t i = 0; i < 256; i++) { // to force 64 bit wide computations
+      // S. Gueron / Information Processing Letters 112 (2012) 184
+      // Algorithm 3: Generating a carry-less multiplication lookup table.
+      // Input: A 32-bit constant, X_CONST.
+      // Output: A table of 256 entries, each one is a 64-bit quadword,
+      // that can be used for computing "byte" * X_CONST, for a given byte.
+        pclmulqdq_table[j * 256 + i] =
+          ((i & 1) * X_CONST) ^ ((i & 2) * X_CONST) ^ ((i & 4) * X_CONST) ^
+          ((i & 8) * X_CONST) ^ ((i & 16) * X_CONST) ^ ((i & 32) * X_CONST) ^
+          ((i & 64) * X_CONST) ^ ((i & 128) * X_CONST);
+      }
+    }
+    _crc32c_table = (juint*)pclmulqdq_table;
+  }
+}
+
+ALIGNED_(64) juint StubRoutines::x86::_k256[] =
+{
+    0x428a2f98UL, 0x71374491UL, 0xb5c0fbcfUL, 0xe9b5dba5UL,
+    0x3956c25bUL, 0x59f111f1UL, 0x923f82a4UL, 0xab1c5ed5UL,
+    0xd807aa98UL, 0x12835b01UL, 0x243185beUL, 0x550c7dc3UL,
+    0x72be5d74UL, 0x80deb1feUL, 0x9bdc06a7UL, 0xc19bf174UL,
+    0xe49b69c1UL, 0xefbe4786UL, 0x0fc19dc6UL, 0x240ca1ccUL,
+    0x2de92c6fUL, 0x4a7484aaUL, 0x5cb0a9dcUL, 0x76f988daUL,
+    0x983e5152UL, 0xa831c66dUL, 0xb00327c8UL, 0xbf597fc7UL,
+    0xc6e00bf3UL, 0xd5a79147UL, 0x06ca6351UL, 0x14292967UL,
+    0x27b70a85UL, 0x2e1b2138UL, 0x4d2c6dfcUL, 0x53380d13UL,
+    0x650a7354UL, 0x766a0abbUL, 0x81c2c92eUL, 0x92722c85UL,
+    0xa2bfe8a1UL, 0xa81a664bUL, 0xc24b8b70UL, 0xc76c51a3UL,
+    0xd192e819UL, 0xd6990624UL, 0xf40e3585UL, 0x106aa070UL,
+    0x19a4c116UL, 0x1e376c08UL, 0x2748774cUL, 0x34b0bcb5UL,
+    0x391c0cb3UL, 0x4ed8aa4aUL, 0x5b9cca4fUL, 0x682e6ff3UL,
+    0x748f82eeUL, 0x78a5636fUL, 0x84c87814UL, 0x8cc70208UL,
+    0x90befffaUL, 0xa4506cebUL, 0xbef9a3f7UL, 0xc67178f2UL
+};
+
+#ifdef _LP64
+// used in MacroAssembler::sha256_AVX2
+// dynamically built from _k256
+ALIGNED_(64) juint StubRoutines::x86::_k256_W[2*sizeof(StubRoutines::x86::_k256)];
+
+// used in MacroAssembler::sha512_AVX2
+ALIGNED_(64) julong StubRoutines::x86::_k512_W[] =
+{
+    0x428a2f98d728ae22LL, 0x7137449123ef65cdLL,
+    0xb5c0fbcfec4d3b2fLL, 0xe9b5dba58189dbbcLL,
+    0x3956c25bf348b538LL, 0x59f111f1b605d019LL,
+    0x923f82a4af194f9bLL, 0xab1c5ed5da6d8118LL,
+    0xd807aa98a3030242LL, 0x12835b0145706fbeLL,
+    0x243185be4ee4b28cLL, 0x550c7dc3d5ffb4e2LL,
+    0x72be5d74f27b896fLL, 0x80deb1fe3b1696b1LL,
+    0x9bdc06a725c71235LL, 0xc19bf174cf692694LL,
+    0xe49b69c19ef14ad2LL, 0xefbe4786384f25e3LL,
+    0x0fc19dc68b8cd5b5LL, 0x240ca1cc77ac9c65LL,
+    0x2de92c6f592b0275LL, 0x4a7484aa6ea6e483LL,
+    0x5cb0a9dcbd41fbd4LL, 0x76f988da831153b5LL,
+    0x983e5152ee66dfabLL, 0xa831c66d2db43210LL,
+    0xb00327c898fb213fLL, 0xbf597fc7beef0ee4LL,
+    0xc6e00bf33da88fc2LL, 0xd5a79147930aa725LL,
+    0x06ca6351e003826fLL, 0x142929670a0e6e70LL,
+    0x27b70a8546d22ffcLL, 0x2e1b21385c26c926LL,
+    0x4d2c6dfc5ac42aedLL, 0x53380d139d95b3dfLL,
+    0x650a73548baf63deLL, 0x766a0abb3c77b2a8LL,
+    0x81c2c92e47edaee6LL, 0x92722c851482353bLL,
+    0xa2bfe8a14cf10364LL, 0xa81a664bbc423001LL,
+    0xc24b8b70d0f89791LL, 0xc76c51a30654be30LL,
+    0xd192e819d6ef5218LL, 0xd69906245565a910LL,
+    0xf40e35855771202aLL, 0x106aa07032bbd1b8LL,
+    0x19a4c116b8d2d0c8LL, 0x1e376c085141ab53LL,
+    0x2748774cdf8eeb99LL, 0x34b0bcb5e19b48a8LL,
+    0x391c0cb3c5c95a63LL, 0x4ed8aa4ae3418acbLL,
+    0x5b9cca4f7763e373LL, 0x682e6ff3d6b2b8a3LL,
+    0x748f82ee5defb2fcLL, 0x78a5636f43172f60LL,
+    0x84c87814a1f0ab72LL, 0x8cc702081a6439ecLL,
+    0x90befffa23631e28LL, 0xa4506cebde82bde9LL,
+    0xbef9a3f7b2c67915LL, 0xc67178f2e372532bLL,
+    0xca273eceea26619cLL, 0xd186b8c721c0c207LL,
+    0xeada7dd6cde0eb1eLL, 0xf57d4f7fee6ed178LL,
+    0x06f067aa72176fbaLL, 0x0a637dc5a2c898a6LL,
+    0x113f9804bef90daeLL, 0x1b710b35131c471bLL,
+    0x28db77f523047d84LL, 0x32caab7b40c72493LL,
+    0x3c9ebe0a15c9bebcLL, 0x431d67c49c100d4cLL,
+    0x4cc5d4becb3e42b6LL, 0x597f299cfc657e2aLL,
+    0x5fcb6fab3ad6faecLL, 0x6c44198c4a475817LL,
+};
+#endif

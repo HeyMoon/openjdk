@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,20 +21,22 @@
  * questions.
  */
 
-import java.io.PrintWriter;
-import java.io.File;
-
-import jdk.test.lib.*;
-
 /*
  * @test CheckCompileCommandOption
+ * @summary Checks parsing of -XX:CompileCommand=option
  * @bug 8055286 8056964 8059847 8069035
- * @summary "Checks parsing of -XX:CompileCommand=option"
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
- * @run main CheckCompileCommandOption
+ * @run driver compiler.oracle.CheckCompileCommandOption
  */
+
+package compiler.oracle;
+
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
+
+import java.io.File;
 
 public class CheckCompileCommandOption {
 
@@ -66,7 +68,6 @@ public class CheckCompileCommandOption {
             "CompileCommand: option com/oracle/Test.test bool MyBoolOption1 = true",
             "CompileCommand: option com/oracle/Test.test bool MyBoolOption2 = true",
             "CompileCommand: option com/oracle/Test.test bool MyBoolOption3 = true",
-            "CompileCommand: option com/oracle/Test.test bool MyBoolOption4 = true",
             "CompileCommand: option com/oracle/Test.test bool MyBoolOption5 = true",
             "CompileCommand: option com/oracle/Test.test bool MyBoolOption6 = true",
             "CompileCommand: option com/oracle/Test.test bool MyBoolOption7 = true",
@@ -74,7 +75,6 @@ public class CheckCompileCommandOption {
             "CompileCommand: option com/oracle/Test.test(I) bool MyBoolOption9 = true",
             "CompileCommand: option com/oracle/Test.test(I) bool MyBoolOption10 = true",
             "CompileCommand: option com/oracle/Test.test(I) bool MyBoolOption11 = true",
-            "CompileCommand: option com/oracle/Test.test(I) bool MyBoolOption12 = true",
             "CompileCommand: option com/oracle/Test.test(I) bool MyBoolOption13 = true",
             "CompileCommand: option com/oracle/Test.test(I) bool MyBoolOption14 = true",
             "CompileCommand: option com/oracle/Test.test(I) bool MyBoolOption15 = true",
@@ -96,7 +96,6 @@ public class CheckCompileCommandOption {
             "-XX:CompileCommand=option,com/oracle/Test.test,MyBoolOption1",
             "-XX:CompileCommand=option,com/oracle/Test,test,MyBoolOption2",
             "-XX:CompileCommand=option,com.oracle.Test::test,MyBoolOption3",
-            "-XX:CompileCommand=option,com/oracle/Test::test,MyBoolOption4",
             "-XX:CompileCommand=option,com/oracle/Test.test,MyBoolOption5,MyBoolOption6",
             "-XX:CompileCommand=option,com/oracle/Test,test,MyBoolOption7,MyBoolOption8",
             "-version"
@@ -108,7 +107,6 @@ public class CheckCompileCommandOption {
             "CompileCommand: option com/oracle/Test.test bool MyBoolOption1 = true",
             "CompileCommand: option com/oracle/Test.test bool MyBoolOption2 = true",
             "CompileCommand: option com/oracle/Test.test bool MyBoolOption3 = true",
-            "CompileCommand: option com/oracle/Test.test bool MyBoolOption4 = true",
             "CompileCommand: option com/oracle/Test.test bool MyBoolOption5 = true",
             "CompileCommand: option com/oracle/Test.test bool MyBoolOption6 = true",
             "CompileCommand: option com/oracle/Test.test bool MyBoolOption7 = true",
@@ -198,7 +196,7 @@ public class CheckCompileCommandOption {
             out.shouldContain(expected_output);
         }
 
-        out.shouldNotContain("CompileCommand: An error occured during parsing");
+        out.shouldNotContain("CompileCommand: An error occurred during parsing");
         out.shouldHaveExitValue(0);
     }
 
@@ -209,7 +207,7 @@ public class CheckCompileCommandOption {
         pb = ProcessTools.createJavaProcessBuilder(arguments);
         out = new OutputAnalyzer(pb.start());
 
-        out.shouldContain("CompileCommand: An error occured during parsing");
+        out.shouldContain("CompileCommand: An error occurred during parsing");
         out.shouldHaveExitValue(0);
     }
 

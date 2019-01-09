@@ -1,13 +1,13 @@
 /*
- * reserved comment block
- * DO NOT REMOVE OR ALTER!
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright 2001-2004 The Apache Software Foundation.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -16,9 +16,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- */
-/*
- * $Id: ApplyTemplates.java,v 1.2.4.1 2005/09/12 09:59:21 pvedula Exp $
  */
 
 package com.sun.org.apache.xalan.internal.xsltc.compiler;
@@ -41,6 +38,7 @@ import com.sun.org.apache.xalan.internal.xsltc.compiler.util.Type;
 import com.sun.org.apache.xalan.internal.xsltc.compiler.util.TypeCheckError;
 import com.sun.org.apache.xalan.internal.xsltc.compiler.util.Util;
 import com.sun.org.apache.xml.internal.utils.XML11Char;
+import java.util.Iterator;
 
 /**
  * @author Jacek Ambroziak
@@ -121,12 +119,10 @@ final class ApplyTemplates extends Instruction {
         final int current = methodGen.getLocalIndex("current");
 
         // check if sorting nodes is required
-        final Vector sortObjects = new Vector();
-        final Enumeration children = elements();
-        while (children.hasMoreElements()) {
-            final Object child = children.nextElement();
+        final Vector<Sort> sortObjects = new Vector<>();
+        for (final SyntaxTreeNode child : getContents()) {
             if (child instanceof Sort) {
-                sortObjects.addElement(child);
+                sortObjects.addElement((Sort)child);
             }
         }
 
@@ -191,6 +187,13 @@ final class ApplyTemplates extends Instruction {
                                                     _functionName,
                                                     applyTemplatesSig);
         il.append(new INVOKEVIRTUAL(applyTemplates));
+
+        // unmap parameters to release temporary result trees
+        for (final SyntaxTreeNode child : getContents()) {
+            if (child instanceof WithParam) {
+                ((WithParam)child).releaseResultTree(classGen, methodGen);
+            }
+        }
 
         // Pop parameter frame
         if (stylesheet.hasLocalParams() || hasContents()) {

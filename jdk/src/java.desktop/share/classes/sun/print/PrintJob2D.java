@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -71,7 +71,6 @@ import javax.print.attribute.standard.OrientationRequested;
 import javax.print.attribute.standard.MediaSizeName;
 import javax.print.attribute.standard.PageRanges;
 
-import sun.misc.ManagedLocalsThread;
 import sun.print.SunPageSelection;
 import sun.print.SunMinMaxPage;
 
@@ -263,27 +262,27 @@ public class PrintJob2D extends PrintJob implements Printable, Runnable {
 
     // The following Strings are maintained for backward-compatibility with
     // Properties based print control.
-    private final static String DEST_PROP = "awt.print.destination";
-    private final static String PRINTER = "printer";
-    private final static String FILE = "file";
+    private static final String DEST_PROP = "awt.print.destination";
+    private static final String PRINTER = "printer";
+    private static final String FILE = "file";
 
-    private final static String PRINTER_PROP = "awt.print.printer";
+    private static final String PRINTER_PROP = "awt.print.printer";
 
-    private final static String FILENAME_PROP = "awt.print.fileName";
+    private static final String FILENAME_PROP = "awt.print.fileName";
 
-    private final static String NUMCOPIES_PROP = "awt.print.numCopies";
+    private static final String NUMCOPIES_PROP = "awt.print.numCopies";
 
-    private final static String OPTIONS_PROP = "awt.print.options";
+    private static final String OPTIONS_PROP = "awt.print.options";
 
-    private final static String ORIENT_PROP = "awt.print.orientation";
-    private final static String PORTRAIT = "portrait";
-    private final static String LANDSCAPE = "landscape";
+    private static final String ORIENT_PROP = "awt.print.orientation";
+    private static final String PORTRAIT = "portrait";
+    private static final String LANDSCAPE = "landscape";
 
-    private final static String PAPERSIZE_PROP = "awt.print.paperSize";
-    private final static String LETTER = "letter";
-    private final static String LEGAL = "legal";
-    private final static String EXECUTIVE = "executive";
-    private final static String A4 = "a4";
+    private static final String PAPERSIZE_PROP = "awt.print.paperSize";
+    private static final String LETTER = "letter";
+    private static final String LEGAL = "legal";
+    private static final String EXECUTIVE = "executive";
+    private static final String A4 = "a4";
 
     private Properties props;
 
@@ -483,8 +482,30 @@ public class PrintJob2D extends PrintJob implements Printable, Runnable {
                 pageFormat.setOrientation(PageFormat.LANDSCAPE);
             } else {
                 pageFormat.setOrientation(PageFormat.PORTRAIT);
-                }
+            }
 
+            PageRanges pageRangesAttr
+                    = (PageRanges) attributes.get(PageRanges.class);
+            if (pageRangesAttr != null) {
+                // Get the PageRanges from print dialog.
+                int[][] range = pageRangesAttr.getMembers();
+
+                int prevFromPage = this.jobAttributes.getFromPage();
+                int prevToPage = this.jobAttributes.getToPage();
+
+                int currFromPage = range[0][0];
+                int currToPage = range[range.length - 1][1];
+
+                // if from < to update fromPage first followed by toPage
+                // else update toPage first followed by fromPage
+                if (currFromPage < prevToPage) {
+                    this.jobAttributes.setFromPage(currFromPage);
+                    this.jobAttributes.setToPage(currToPage);
+                } else {
+                    this.jobAttributes.setToPage(currToPage);
+                    this.jobAttributes.setFromPage(currFromPage);
+                }
+            }
             printerJob.setPrintable(this, pageFormat);
 
         }
@@ -631,7 +652,7 @@ public class PrintJob2D extends PrintJob implements Printable, Runnable {
 
         String printerName = jobAttributes.getPrinter();
         if (printerName != null && printerName != ""
-            && !printerName.equals(pServ.getName())) {
+            && pServ != null && !printerName.equals(pServ.getName())) {
 
             // Search for the given printerName in the list of PrintServices
             PrintService []services = PrinterJob.lookupPrintServices();
@@ -648,7 +669,7 @@ public class PrintJob2D extends PrintJob implements Printable, Runnable {
         }
 
         DestinationType dest = jobAttributes.getDestination();
-        if (dest == DestinationType.FILE &&
+        if (dest == DestinationType.FILE && pServ != null &&
             pServ.isAttributeCategorySupported(Destination.class)) {
 
             String fileName = jobAttributes.getFileName();
@@ -921,6 +942,7 @@ public class PrintJob2D extends PrintJob implements Printable, Runnable {
      * Ends this print job once it is no longer referenced.
      * @see #end
      */
+    @SuppressWarnings("deprecation")
     public void finalize() {
         end();
     }
@@ -928,23 +950,23 @@ public class PrintJob2D extends PrintJob implements Printable, Runnable {
     /**
      * Prints the page at the specified index into the specified
      * {@link Graphics} context in the specified
-     * format.  A <code>PrinterJob</code> calls the
-     * <code>Printable</code> interface to request that a page be
+     * format.  A {@code PrinterJob} calls the
+     * {@code Printable} interface to request that a page be
      * rendered into the context specified by
-     * <code>graphics</code>.  The format of the page to be drawn is
-     * specified by <code>pageFormat</code>.  The zero based index
-     * of the requested page is specified by <code>pageIndex</code>.
+     * {@code graphics}.  The format of the page to be drawn is
+     * specified by {@code pageFormat}.  The zero based index
+     * of the requested page is specified by {@code pageIndex}.
      * If the requested page does not exist then this method returns
      * NO_SUCH_PAGE; otherwise PAGE_EXISTS is returned.
-     * The <code>Graphics</code> class or subclass implements the
+     * The {@code Graphics} class or subclass implements the
      * {@link java.awt.PrintGraphics} interface to provide additional
-     * information.  If the <code>Printable</code> object
+     * information.  If the {@code Printable} object
      * aborts the print job then it throws a {@link PrinterException}.
      * @param graphics the context into which the page is drawn
      * @param pageFormat the size and orientation of the page being drawn
      * @param pageIndex the zero based index of the page to be drawn
      * @return PAGE_EXISTS if the page is rendered successfully
-     *         or NO_SUCH_PAGE if <code>pageIndex</code> specifies a
+     *         or NO_SUCH_PAGE if {@code pageIndex} specifies a
      *         non-existent page.
      * @exception java.awt.print.PrinterException
      *         thrown when the print job is terminated.
@@ -987,7 +1009,8 @@ public class PrintJob2D extends PrintJob implements Printable, Runnable {
     }
 
     private void startPrinterJobThread() {
-        printerJobThread = new ManagedLocalsThread(this, "printerJobThread");
+        printerJobThread =
+            new Thread(null, this, "printerJobThread", 0, false);
         printerJobThread.start();
     }
 
@@ -995,6 +1018,7 @@ public class PrintJob2D extends PrintJob implements Printable, Runnable {
     public void run() {
 
         try {
+            attributes.remove(PageRanges.class);
             printerJob.print(attributes);
         } catch (PrinterException e) {
             //REMIND: need to store this away and not rethrow it.

@@ -44,6 +44,13 @@ class VectorNode : public TypeNode {
     init_req(2, n2);
   }
 
+  VectorNode(Node* n1, Node* n2, Node* n3, const TypeVect* vt) : TypeNode(vt, 4) {
+    init_class_id(Class_Vector);
+    init_req(1, n1);
+    init_req(2, n2);
+    init_req(3, n3);
+  }
+
   const TypeVect* vect_type() const { return type()->is_vect(); }
   uint length() const { return vect_type()->length(); } // Vector length
   uint length_in_bytes() const { return vect_type()->length_in_bytes(); }
@@ -253,6 +260,14 @@ public:
   virtual int Opcode() const;
 };
 
+//------------------------------CMoveVDNode--------------------------------------
+// Vector multiply double
+class CMoveVDNode : public VectorNode {
+public:
+  CMoveVDNode(Node* in1, Node* in2, Node* in3, const TypeVect* vt) : VectorNode(in1, in2, in3, vt) {}
+  virtual int Opcode() const;
+};
+
 //------------------------------MulReductionVINode--------------------------------------
 // Vector multiply int as a reduction
 class MulReductionVINode : public ReductionNode {
@@ -306,6 +321,46 @@ class DivVFNode : public VectorNode {
 class DivVDNode : public VectorNode {
  public:
   DivVDNode(Node* in1, Node* in2, const TypeVect* vt) : VectorNode(in1,in2,vt) {}
+  virtual int Opcode() const;
+};
+
+//------------------------------AbsVFNode--------------------------------------
+// Vector Abs float
+class AbsVFNode : public VectorNode {
+ public:
+  AbsVFNode(Node* in, const TypeVect* vt) : VectorNode(in,vt) {}
+  virtual int Opcode() const;
+};
+
+//------------------------------AbsVDNode--------------------------------------
+// Vector Abs double
+class AbsVDNode : public VectorNode {
+ public:
+  AbsVDNode(Node* in, const TypeVect* vt) : VectorNode(in,vt) {}
+  virtual int Opcode() const;
+};
+
+//------------------------------NegVFNode--------------------------------------
+// Vector Neg float
+class NegVFNode : public VectorNode {
+ public:
+  NegVFNode(Node* in, const TypeVect* vt) : VectorNode(in,vt) {}
+  virtual int Opcode() const;
+};
+
+//------------------------------NegVDNode--------------------------------------
+// Vector Neg double
+class NegVDNode : public VectorNode {
+ public:
+  NegVDNode(Node* in, const TypeVect* vt) : VectorNode(in,vt) {}
+  virtual int Opcode() const;
+};
+
+//------------------------------SqrtVDNode--------------------------------------
+// Vector Sqrt double
+class SqrtVDNode : public VectorNode {
+ public:
+  SqrtVDNode(Node* in, const TypeVect* vt) : VectorNode(in,vt) {}
   virtual int Opcode() const;
 };
 
@@ -474,6 +529,7 @@ class LoadVectorNode : public LoadNode {
                               Node* adr, const TypePtr* atyp,
                               uint vlen, BasicType bt,
                               ControlDependency control_dependency = LoadNode::DependsOnlyOnTest);
+  uint element_size(void) { return type2aelembytes(vect_type()->element_basic_type()); }
 };
 
 //------------------------------StoreVectorNode--------------------------------
@@ -498,6 +554,8 @@ class StoreVectorNode : public StoreNode {
   static StoreVectorNode* make(int opc, Node* ctl, Node* mem,
                                Node* adr, const TypePtr* atyp, Node* val,
                                uint vlen);
+
+  uint element_size(void) { return type2aelembytes(vect_type()->element_basic_type()); }
 };
 
 
@@ -734,6 +792,17 @@ class ExtractDNode : public ExtractNode {
   virtual int Opcode() const;
   virtual const Type *bottom_type() const { return Type::DOUBLE; }
   virtual uint ideal_reg() const { return Op_RegD; }
+};
+
+//------------------------------SetVectMaskINode-------------------------------
+// Provide a mask for a vector predicate machine
+class SetVectMaskINode : public Node {
+public:
+  SetVectMaskINode(Node *c, Node *in1) : Node(c, in1) {}
+  virtual int Opcode() const;
+  const Type *bottom_type() const { return TypeInt::INT; }
+  virtual uint ideal_reg() const { return Op_RegI; }
+  virtual const Type *Value(PhaseGVN *phase) const { return TypeInt::INT; }
 };
 
 #endif // SHARE_VM_OPTO_VECTORNODE_HPP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,7 +32,8 @@
  * certain types in this package have special relations to dynamic
  * language support in the virtual machine:
  * <ul>
- * <li>The class {@link java.lang.invoke.MethodHandle MethodHandle} contains
+ * <li>The classes {@link java.lang.invoke.MethodHandle MethodHandle}
+ * {@link java.lang.invoke.VarHandle VarHandle} contain
  * <a href="MethodHandle.html#sigpoly">signature polymorphic methods</a>
  * which can be linked regardless of their type descriptor.
  * Normally, method linkage requires exact matching of type descriptors.
@@ -43,13 +44,13 @@
  * </li>
  * </ul>
  *
- * <h1><a name="jvm_mods"></a>Summary of relevant Java Virtual Machine changes</h1>
+ * <h1><a id="jvm_mods"></a>Summary of relevant Java Virtual Machine changes</h1>
  * The following low-level information summarizes relevant parts of the
  * Java Virtual Machine specification.  For full details, please see the
  * current version of that specification.
  *
  * Each occurrence of an {@code invokedynamic} instruction is called a <em>dynamic call site</em>.
- * <h2><a name="indyinsn"></a>{@code invokedynamic} instructions</h2>
+ * <h2><a id="indyinsn"></a>{@code invokedynamic} instructions</h2>
  * A dynamic call site is originally in an unlinked state.  In this state, there is
  * no target method for the call site to invoke.
  * <p>
@@ -76,27 +77,29 @@
  * <p>
  * The bootstrap method is invoked on at least three values:
  * <ul>
- * <li>a {@code MethodHandles.Lookup}, a lookup object on the <em>caller class</em> in which dynamic call site occurs </li>
+ * <li>a {@code MethodHandles.Lookup}, a lookup object on the <em>caller class</em>
+ *     in which dynamic call site occurs </li>
  * <li>a {@code String}, the method name mentioned in the call site </li>
  * <li>a {@code MethodType}, the resolved type descriptor of the call </li>
  * <li>optionally, between 1 and 251 additional static arguments taken from the constant pool </li>
  * </ul>
  * Invocation is as if by
  * {@link java.lang.invoke.MethodHandle#invoke MethodHandle.invoke}.
- * The returned result must be a {@link java.lang.invoke.CallSite CallSite} (or a subclass).
+ * The returned result must be a {@link java.lang.invoke.CallSite CallSite}
+ * (or a subclass), otherwise a
+ * {@link java.lang.BootstrapMethodError BootstrapMethodError} is thrown.
  * The type of the call site's target must be exactly equal to the type
  * derived from the dynamic call site's type descriptor and passed to
- * the bootstrap method.
- * The call site then becomes permanently linked to the dynamic call site.
+ * the bootstrap method, otherwise a {@code BootstrapMethodError} is thrown.
+ * On success the call site then becomes permanently linked to the dynamic call
+ * site.
  * <p>
- * As documented in the JVM specification, all failures arising from
- * the linkage of a dynamic call site are reported
- * by a {@link java.lang.BootstrapMethodError BootstrapMethodError},
- * which is thrown as the abnormal termination of the dynamic call
- * site execution.
- * If this happens, the same error will the thrown for all subsequent
- * attempts to execute the dynamic call site.
- *
+ * If an exception, {@code E} say, occurs when linking the call site then the
+ * linkage fails and terminates abnormally. {@code E} is rethrown if the type of
+ * {@code E} is {@code Error} or a subclass, otherwise a
+ * {@code BootstrapMethodError} that wraps {@code E} is thrown.
+ * If this happens, the same {@code Error} or subclass will the thrown for all
+ * subsequent attempts to execute the dynamic call site.
  * <h2>timing of linkage</h2>
  * A dynamic call site is linked just before its first execution.
  * The bootstrap method call implementing the linkage occurs within
@@ -163,17 +166,27 @@
  * Given these rules, here are examples of legal bootstrap method declarations,
  * given various numbers {@code N} of extra arguments.
  * The first rows (marked {@code *}) will work for any number of extra arguments.
- * <table border=1 cellpadding=5 summary="Static argument types">
- * <tr><th>N</th><th>sample bootstrap method</th></tr>
- * <tr><td>*</td><td><code>CallSite bootstrap(Lookup caller, String name, MethodType type, Object... args)</code></td></tr>
- * <tr><td>*</td><td><code>CallSite bootstrap(Object... args)</code></td></tr>
- * <tr><td>*</td><td><code>CallSite bootstrap(Object caller, Object... nameAndTypeWithArgs)</code></td></tr>
- * <tr><td>0</td><td><code>CallSite bootstrap(Lookup caller, String name, MethodType type)</code></td></tr>
- * <tr><td>0</td><td><code>CallSite bootstrap(Lookup caller, Object... nameAndType)</code></td></tr>
- * <tr><td>1</td><td><code>CallSite bootstrap(Lookup caller, String name, MethodType type, Object arg)</code></td></tr>
- * <tr><td>2</td><td><code>CallSite bootstrap(Lookup caller, String name, MethodType type, Object... args)</code></td></tr>
- * <tr><td>2</td><td><code>CallSite bootstrap(Lookup caller, String name, MethodType type, String... args)</code></td></tr>
- * <tr><td>2</td><td><code>CallSite bootstrap(Lookup caller, String name, MethodType type, String x, int y)</code></td></tr>
+ * <table class="plain">
+ * <caption style="display:none">Static argument types</caption>
+ * <tr><th>N</th><th>Sample bootstrap method</th></tr>
+ * <tr><td>*</td>
+ *     <td><code>CallSite bootstrap(Lookup caller, String name, MethodType type, Object... args)</code></td></tr>
+ * <tr><td>*</td><td>
+ *     <code>CallSite bootstrap(Object... args)</code></td></tr>
+ * <tr><td>*</td><td>
+ *     <code>CallSite bootstrap(Object caller, Object... nameAndTypeWithArgs)</code></td></tr>
+ * <tr><td>0</td><td>
+ *     <code>CallSite bootstrap(Lookup caller, String name, MethodType type)</code></td></tr>
+ * <tr><td>0</td><td>
+ *     <code>CallSite bootstrap(Lookup caller, Object... nameAndType)</code></td></tr>
+ * <tr><td>1</td><td>
+ *     <code>CallSite bootstrap(Lookup caller, String name, MethodType type, Object arg)</code></td></tr>
+ * <tr><td>2</td><td>
+ *     <code>CallSite bootstrap(Lookup caller, String name, MethodType type, Object... args)</code></td></tr>
+ * <tr><td>2</td><td>
+ *     <code>CallSite bootstrap(Lookup caller, String name, MethodType type, String... args)</code></td></tr>
+ * <tr><td>2</td>
+ *     <td><code>CallSite bootstrap(Lookup caller, String name, MethodType type, String x, int y)</code></td></tr>
  * </table>
  * The last example assumes that the extra arguments are of type
  * {@code CONSTANT_String} and {@code CONSTANT_Integer}, respectively.

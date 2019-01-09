@@ -18,10 +18,23 @@ keys=2d dnd i18n intermittent randomness headful
 othervm.dirs=java/awt java/beans javax/accessibility javax/imageio javax/sound javax/print javax/management com/sun/awt sun/awt sun/java2d sun/pisces javax/xml/jaxp/testng/validation java/lang/ProcessHandle
 
 # Tests that cannot run concurrently
-exclusiveAccess.dirs=java/rmi/Naming java/util/prefs sun/management/jmxremote sun/tools/jstatd sun/security/mscapi java/util/stream javax/rmi
+exclusiveAccess.dirs=java/rmi/Naming java/util/prefs sun/management/jmxremote sun/tools/jstatd sun/security/mscapi java/util/stream java/util/BitSet/stream javax/rmi com/sun/corba/cachedSocket
 
 # Group definitions
 groups=TEST.groups [closed/TEST.groups]
 
-# Tests using jtreg 4.1 b11 features
-requiredVersion=4.1 b11
+# Allow querying of various System properties in @requires clauses
+requires.properties=sun.arch.data.model java.runtime.name
+
+# Tests using jtreg 4.2 b07 features
+requiredVersion=4.2 b07
+
+# Path to libraries in the topmost test directory. This is needed so @library
+# does not need ../../ notation to reach them
+external.lib.roots = ../../
+
+# Use new module options
+useNewOptions=true
+
+# Use --patch-module instead of -Xmodule:
+useNewPatchModule=true

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,6 +45,8 @@ protected:
     vcipher,
     vpmsumb,
     tcheck,
+    mfdscr,
+    vsx,
     num_features // last entry to count features
   };
   enum Feature_Flag_Set {
@@ -62,11 +64,11 @@ protected:
     vcipher_m             = (1 << vcipher),
     vpmsumb_m             = (1 << vpmsumb),
     tcheck_m              = (1 << tcheck ),
-    all_features_m        = -1
+    mfdscr_m              = (1 << mfdscr ),
+    vsx_m                 = (1 << vsx    ),
+    all_features_m        = (unsigned long)-1
   };
-  static int  _features;
-  static int  _measured_cache_line_size;
-  static const char* _features_str;
+
   static bool _is_determine_features_test_running;
 
   static void print_features();
@@ -96,14 +98,15 @@ public:
   static bool has_vcipher() { return (_features & vcipher_m) != 0; }
   static bool has_vpmsumb() { return (_features & vpmsumb_m) != 0; }
   static bool has_tcheck()  { return (_features & tcheck_m) != 0; }
-
-  static const char* cpu_features() { return _features_str; }
-
-  static int get_cache_line_size()  { return _measured_cache_line_size; }
+  static bool has_mfdscr()  { return (_features & mfdscr_m) != 0; }
+  static bool has_vsx()     { return (_features & vsx_m) != 0; }
 
   // Assembler testing
   static void allow_all();
   static void revert();
+
+  // POWER 8: DSCR current value.
+  static uint64_t _dscr_val;
 };
 
 #endif // CPU_PPC_VM_VM_VERSION_PPC_HPP

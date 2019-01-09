@@ -31,7 +31,7 @@ import java.util.*;
 
 import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLHandshakeException;
-import sun.misc.HexDumpEncoder;
+import sun.security.util.HexDumpEncoder;
 import static sun.security.ssl.Ciphertext.RecordType;
 
 /**
@@ -54,7 +54,7 @@ final class SSLEngineOutputRecord extends OutputRecord implements SSLRecord {
     }
 
     @Override
-    synchronized public void close() throws IOException {
+    public synchronized void close() throws IOException {
         if (!isClosed) {
             if (alertMemos != null && !alertMemos.isEmpty()) {
                 isCloseWaiting = true;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,7 +29,7 @@
 #include "memory/metaspaceShared.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/os.hpp"
 #include "runtime/task.hpp"
 #include "runtime/threadCritical.hpp"
@@ -66,7 +66,7 @@ void MetaspaceObj::print_address_on(outputStream* st) const {
 }
 
 void* ResourceObj::operator new(size_t size, allocation_type type, MEMFLAGS flags) throw() {
-  address res;
+  address res = NULL;
   switch (type) {
    case C_HEAP:
     res = (address)AllocateHeap(size, flags, CALLER_PC);
@@ -88,8 +88,8 @@ void* ResourceObj::operator new [](size_t size, allocation_type type, MEMFLAGS f
 
 void* ResourceObj::operator new(size_t size, const std::nothrow_t&  nothrow_constant,
     allocation_type type, MEMFLAGS flags) throw() {
-  //should only call this with std::nothrow, use other operator new() otherwise
-  address res;
+  // should only call this with std::nothrow, use other operator new() otherwise
+  address res = NULL;
   switch (type) {
    case C_HEAP:
     res = (address)AllocateHeap(size, flags, CALLER_PC, AllocFailStrategy::RETURN_NULL);
@@ -125,7 +125,7 @@ void ResourceObj::operator delete [](void* p) {
 void ResourceObj::set_allocation_type(address res, allocation_type type) {
     // Set allocation type in the resource object
     uintptr_t allocation = (uintptr_t)res;
-    assert((allocation & allocation_mask) == 0, err_msg("address should be aligned to 4 bytes at least: " INTPTR_FORMAT, p2i(res)));
+    assert((allocation & allocation_mask) == 0, "address should be aligned to 4 bytes at least: " INTPTR_FORMAT, p2i(res));
     assert(type <= allocation_mask, "incorrect allocation type");
     ResourceObj* resobj = (ResourceObj *)res;
     resobj->_allocation_t[0] = ~(allocation + type);
@@ -161,8 +161,8 @@ ResourceObj::ResourceObj() { // default constructor
     } else if (is_type_set()) {
       // Operator new() was called and type was set.
       assert(!allocated_on_stack(),
-             err_msg("not embedded or stack, this(" PTR_FORMAT ") type %d a[0]=(" PTR_FORMAT ") a[1]=(" PTR_FORMAT ")",
-                     p2i(this), get_allocation_type(), _allocation_t[0], _allocation_t[1]));
+             "not embedded or stack, this(" PTR_FORMAT ") type %d a[0]=(" PTR_FORMAT ") a[1]=(" PTR_FORMAT ")",
+             p2i(this), get_allocation_type(), _allocation_t[0], _allocation_t[1]);
     } else {
       // Operator new() was not called.
       // Assume that it is embedded or stack object.
@@ -175,8 +175,8 @@ ResourceObj::ResourceObj(const ResourceObj& r) { // default copy constructor
     // Used in ClassFileParser::parse_constant_pool_entries() for ClassFileStream.
     // Note: garbage may resembles valid value.
     assert(~(_allocation_t[0] | allocation_mask) != (uintptr_t)this || !is_type_set(),
-           err_msg("embedded or stack only, this(" PTR_FORMAT ") type %d a[0]=(" PTR_FORMAT ") a[1]=(" PTR_FORMAT ")",
-                   p2i(this), get_allocation_type(), _allocation_t[0], _allocation_t[1]));
+           "embedded or stack only, this(" PTR_FORMAT ") type %d a[0]=(" PTR_FORMAT ") a[1]=(" PTR_FORMAT ")",
+           p2i(this), get_allocation_type(), _allocation_t[0], _allocation_t[1]);
     set_allocation_type((address)this, STACK_OR_EMBEDDED);
     _allocation_t[1] = 0; // Zap verification value
 }
@@ -184,8 +184,8 @@ ResourceObj::ResourceObj(const ResourceObj& r) { // default copy constructor
 ResourceObj& ResourceObj::operator=(const ResourceObj& r) { // default copy assignment
     // Used in InlineTree::ok_to_inline() for WarmCallInfo.
     assert(allocated_on_stack(),
-           err_msg("copy only into local, this(" PTR_FORMAT ") type %d a[0]=(" PTR_FORMAT ") a[1]=(" PTR_FORMAT ")",
-                   p2i(this), get_allocation_type(), _allocation_t[0], _allocation_t[1]));
+           "copy only into local, this(" PTR_FORMAT ") type %d a[0]=(" PTR_FORMAT ") a[1]=(" PTR_FORMAT ")",
+           p2i(this), get_allocation_type(), _allocation_t[0], _allocation_t[1]);
     // Keep current _allocation_t value;
     return *this;
 }
@@ -242,7 +242,7 @@ class ChunkPool: public CHeapObj<mtInternal> {
    ChunkPool(size_t size) : _size(size) { _first = NULL; _num_chunks = _num_used = 0; }
 
   // Allocate a new chunk from the pool (might expand the pool)
-  _NOINLINE_ void* allocate(size_t bytes, AllocFailType alloc_failmode) {
+  NOINLINE void* allocate(size_t bytes, AllocFailType alloc_failmode) {
     assert(bytes == _size, "bad size");
     void* p = NULL;
     // No VM lock can be taken inside ThreadCritical lock, so os::malloc
@@ -533,7 +533,7 @@ size_t Arena::used() const {
 }
 
 void Arena::signal_out_of_memory(size_t sz, const char* whence) const {
-  vm_exit_out_of_memory(sz, OOM_MALLOC_ERROR, whence);
+  vm_exit_out_of_memory(sz, OOM_MALLOC_ERROR, "%s", whence);
 }
 
 // Grow a new Chunk
@@ -664,64 +664,6 @@ void* Arena::internal_malloc_4(size_t x) {
 // Non-product code
 
 #ifndef PRODUCT
-// The global operator new should never be called since it will usually indicate
-// a memory leak.  Use CHeapObj as the base class of such objects to make it explicit
-// that they're allocated on the C heap.
-// Commented out in product version to avoid conflicts with third-party C++ native code.
-//
-// In C++98/03 the throwing new operators are defined with the following signature:
-//
-// void* operator new(std::size_tsize) throw(std::bad_alloc);
-// void* operator new[](std::size_tsize) throw(std::bad_alloc);
-//
-// while all the other (non-throwing) new and delete operators are defined with an empty
-// throw clause (i.e. "operator delete(void* p) throw()") which means that they do not
-// throw any exceptions (see section 18.4 of the C++ standard).
-//
-// In the new C++11/14 standard, the signature of the throwing new operators was changed
-// by completely omitting the throw clause (which effectively means they could throw any
-// exception) while all the other new/delete operators where changed to have a 'nothrow'
-// clause instead of an empty throw clause.
-//
-// Unfortunately, the support for exception specifications among C++ compilers is still
-// very fragile. While some more strict compilers like AIX xlC or HP aCC reject to
-// override the default throwing new operator with a user operator with an empty throw()
-// clause, the MS Visual C++ compiler warns for every non-empty throw clause like
-// throw(std::bad_alloc) that it will ignore the exception specification. The following
-// operator definitions have been checked to correctly work with all currently supported
-// compilers and they should be upwards compatible with C++11/14. Therefore
-// PLEASE BE CAREFUL if you change the signature of the following operators!
-
-static void * zero = (void *) 0;
-
-void* operator new(size_t size) /* throw(std::bad_alloc) */ {
-  fatal("Should not call global operator new");
-  return zero;
-}
-
-void* operator new [](size_t size) /* throw(std::bad_alloc) */ {
-  fatal("Should not call global operator new[]");
-  return zero;
-}
-
-void* operator new(size_t size, const std::nothrow_t&  nothrow_constant) throw() {
-  fatal("Should not call global operator new");
-  return 0;
-}
-
-void* operator new [](size_t size, std::nothrow_t&  nothrow_constant) throw() {
-  fatal("Should not call global operator new[]");
-  return 0;
-}
-
-void operator delete(void* p) throw() {
-  fatal("Should not call global delete");
-}
-
-void operator delete [](void* p) throw() {
-  fatal("Should not call global delete []");
-}
-
 void AllocatedObj::print() const       { print_on(tty); }
 void AllocatedObj::print_value() const { print_value_on(tty); }
 
@@ -790,7 +732,7 @@ void Arena::free_malloced_objects(Chunk* chunk, char* hwm, char* max, char* hwm2
 
 ReallocMark::ReallocMark() {
 #ifdef ASSERT
-  Thread *thread = ThreadLocalStorage::get_thread_slow();
+  Thread *thread = Thread::current();
   _nesting = thread->resource_area()->nesting();
 #endif
 }

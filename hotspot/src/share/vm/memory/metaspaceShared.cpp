@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,12 +23,15 @@
  */
 
 #include "precompiled.hpp"
+#include "classfile/classListParser.hpp"
+#include "classfile/classLoaderExt.hpp"
 #include "classfile/dictionary.hpp"
 #include "classfile/loaderConstraints.hpp"
 #include "classfile/placeholders.hpp"
 #include "classfile/sharedClassUtil.hpp"
 #include "classfile/symbolTable.hpp"
 #include "classfile/systemDictionary.hpp"
+#include "classfile/systemDictionaryShared.hpp"
 #include "code/codeCache.hpp"
 #include "gc/shared/gcLocker.hpp"
 #include "interpreter/bytecodeStream.hpp"
@@ -36,15 +39,16 @@
 #include "memory/filemap.hpp"
 #include "memory/metaspace.hpp"
 #include "memory/metaspaceShared.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/objArrayOop.hpp"
 #include "oops/oop.inline.hpp"
+#include "runtime/timerTrace.hpp"
 #include "runtime/os.hpp"
 #include "runtime/signature.hpp"
 #include "runtime/vmThread.hpp"
 #include "runtime/vm_operations.hpp"
+#include "utilities/defaultStream.hpp"
 #include "utilities/hashtable.inline.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 int MetaspaceShared::_max_alignment = 0;
 
@@ -56,10 +60,65 @@ bool MetaspaceShared::_link_classes_made_progress;
 bool MetaspaceShared::_check_classes_made_progress;
 bool MetaspaceShared::_has_error_classes;
 bool MetaspaceShared::_archive_loading_failed = false;
+bool MetaspaceShared::_remapped_readwrite = false;
+address MetaspaceShared::_cds_i2i_entry_code_buffers = NULL;
+size_t MetaspaceShared::_cds_i2i_entry_code_buffers_size = 0;
+SharedMiscRegion MetaspaceShared::_mc;
+SharedMiscRegion MetaspaceShared::_md;
+SharedMiscRegion MetaspaceShared::_od;
+
+void SharedMiscRegion::initialize(ReservedSpace rs, size_t committed_byte_size,  SharedSpaceType space_type) {
+  _vs.initialize(rs, committed_byte_size);
+  _alloc_top = _vs.low();
+  _space_type = space_type;
+}
+
+// NOT thread-safe, but this is called during dump time in single-threaded mode.
+char* SharedMiscRegion::alloc(size_t num_bytes) {
+  assert(DumpSharedSpaces, "dump time only");
+  size_t alignment = sizeof(char*);
+  num_bytes = align_size_up(num_bytes, alignment);
+  _alloc_top = (char*)align_ptr_up(_alloc_top, alignment);
+  if (_alloc_top + num_bytes > _vs.high()) {
+    report_out_of_shared_space(_space_type);
+  }
+
+  char* p = _alloc_top;
+  _alloc_top += num_bytes;
+
+  memset(p, 0, num_bytes);
+  return p;
+}
+
+void MetaspaceShared::initialize_shared_rs(ReservedSpace* rs) {
+  assert(DumpSharedSpaces, "dump time only");
+  _shared_rs = rs;
+
+  size_t core_spaces_size = FileMapInfo::core_spaces_size();
+  size_t metadata_size = SharedReadOnlySize + SharedReadWriteSize;
+
+  // Split into the core and optional sections
+  ReservedSpace core_data = _shared_rs->first_part(core_spaces_size);
+  ReservedSpace optional_data = _shared_rs->last_part(core_spaces_size);
+
+  // The RO/RW and the misc sections
+  ReservedSpace shared_ro_rw = core_data.first_part(metadata_size);
+  ReservedSpace misc_section = core_data.last_part(metadata_size);
+
+  // Now split the misc code and misc data sections.
+  ReservedSpace md_rs   = misc_section.first_part(SharedMiscDataSize);
+  ReservedSpace mc_rs   = misc_section.last_part(SharedMiscDataSize);
+
+  _md.initialize(md_rs, SharedMiscDataSize, SharedMiscData);
+  _mc.initialize(mc_rs, SharedMiscCodeSize, SharedMiscCode);
+  _od.initialize(optional_data, metadata_size, SharedOptional);
+}
+
 // Read/write a data stream for restoring/preserving metadata pointers and
 // miscellaneous data from/to the shared archive file.
 
-void MetaspaceShared::serialize(SerializeClosure* soc) {
+void MetaspaceShared::serialize(SerializeClosure* soc, GrowableArray<MemRegion> *string_space,
+                                size_t* space_size) {
   int tag = 0;
   soc->do_tag(--tag);
 
@@ -81,9 +140,29 @@ void MetaspaceShared::serialize(SerializeClosure* soc) {
   vmSymbols::serialize(soc);
   soc->do_tag(--tag);
 
+  // Dump/restore the symbol and string tables
+  SymbolTable::serialize(soc);
+  StringTable::serialize(soc, string_space, space_size);
+  soc->do_tag(--tag);
+
   soc->do_tag(666);
 }
 
+address MetaspaceShared::cds_i2i_entry_code_buffers(size_t total_size) {
+  if (DumpSharedSpaces) {
+    if (_cds_i2i_entry_code_buffers == NULL) {
+      _cds_i2i_entry_code_buffers = (address)misc_data_space_alloc(total_size);
+      _cds_i2i_entry_code_buffers_size = total_size;
+    }
+  } else if (UseSharedSpaces) {
+    assert(_cds_i2i_entry_code_buffers != NULL, "must already been initialized");
+  } else {
+    return NULL;
+  }
+
+  assert(_cds_i2i_entry_code_buffers_size == total_size, "must not change");
+  return _cds_i2i_entry_code_buffers;
+}
 
 // CDS code for dumping shared archive.
 
@@ -92,11 +171,15 @@ void MetaspaceShared::serialize(SerializeClosure* soc) {
 static GrowableArray<Klass*>* _global_klass_objects;
 static void collect_classes(Klass* k) {
   _global_klass_objects->append_if_missing(k);
-  if (k->oop_is_instance()) {
+  if (k->is_instance_klass()) {
     // Add in the array classes too
     InstanceKlass* ik = InstanceKlass::cast(k);
     ik->array_klasses_do(collect_classes);
   }
+}
+
+static void collect_classes2(Klass* k, ClassLoaderData* class_data) {
+  collect_classes(k);
 }
 
 static void remove_unshareable_in_classes() {
@@ -114,7 +197,12 @@ static void rewrite_nofast_bytecode(Method* method) {
     case Bytecodes::_getfield:      *bcs.bcp() = Bytecodes::_nofast_getfield;      break;
     case Bytecodes::_putfield:      *bcs.bcp() = Bytecodes::_nofast_putfield;      break;
     case Bytecodes::_aload_0:       *bcs.bcp() = Bytecodes::_nofast_aload_0;       break;
-    case Bytecodes::_iload:         *bcs.bcp() = Bytecodes::_nofast_iload;         break;
+    case Bytecodes::_iload: {
+      if (!bcs.is_wide()) {
+        *bcs.bcp() = Bytecodes::_nofast_iload;
+      }
+      break;
+    }
     default: break;
     }
   }
@@ -128,7 +216,7 @@ static void rewrite_nofast_bytecode(Method* method) {
 static void rewrite_nofast_bytecodes_and_calculate_fingerprints() {
   for (int i = 0; i < _global_klass_objects->length(); i++) {
     Klass* k = _global_klass_objects->at(i);
-    if (k->oop_is_instance()) {
+    if (k->is_instance_klass()) {
       InstanceKlass* ik = InstanceKlass::cast(k);
       for (int i = 0; i < ik->methods()->length(); i++) {
         Method* m = ik->methods()->at(i);
@@ -201,9 +289,9 @@ static void patch_klass_vtables(void** vtbl_list, void* new_vtable_start) {
   int n = _global_klass_objects->length();
   for (int i = 0; i < n; i++) {
     Klass* obj = _global_klass_objects->at(i);
-    // Note oop_is_instance() is a virtual call.  After patching vtables
+    // Note is_instance_klass() is a virtual call in debug.  After patching vtables
     // all virtual calls on the dummy vtables will restore the original!
-    if (obj->oop_is_instance()) {
+    if (obj->is_instance_klass()) {
       InstanceKlass* ik = InstanceKlass::cast(obj);
       *(void**)ik = find_matching_vtbl_ptr(vtbl_list, new_vtable_start, ik);
       ConstantPool* cp = ik->constants();
@@ -248,6 +336,11 @@ public:
     ++top;
   }
 
+  void do_u4(u4* p) {
+    void* ptr = (void*)(uintx(*p));
+    do_ptr(&ptr);
+  }
+
   void do_tag(int tag) {
     check_space();
     *top = (intptr_t)tag;
@@ -282,6 +375,8 @@ public:
   METASPACE_OBJ_TYPES_DO(f) \
   f(SymbolHashentry) \
   f(SymbolBucket) \
+  f(StringHashentry) \
+  f(StringBucket) \
   f(Other)
 
 #define SHAREDSPACE_OBJ_TYPE_DECLARE(name) name ## Type,
@@ -340,13 +435,22 @@ void DumpAllocClosure::dump_stats(int ro_all, int rw_all, int md_all, int mc_all
   MetaspaceSharedStats *stats = MetaspaceShared::stats();
 
   // symbols
-  _counts[RW][SymbolHashentryType] = stats->symbol.hashentry_count;
-  _bytes [RW][SymbolHashentryType] = stats->symbol.hashentry_bytes;
-  other_bytes -= stats->symbol.hashentry_bytes;
+  _counts[RO][SymbolHashentryType] = stats->symbol.hashentry_count;
+  _bytes [RO][SymbolHashentryType] = stats->symbol.hashentry_bytes;
+  _bytes [RO][TypeArrayU4Type]    -= stats->symbol.hashentry_bytes;
 
-  _counts[RW][SymbolBucketType] = stats->symbol.bucket_count;
-  _bytes [RW][SymbolBucketType] = stats->symbol.bucket_bytes;
-  other_bytes -= stats->symbol.bucket_bytes;
+  _counts[RO][SymbolBucketType] = stats->symbol.bucket_count;
+  _bytes [RO][SymbolBucketType] = stats->symbol.bucket_bytes;
+  _bytes [RO][TypeArrayU4Type] -= stats->symbol.bucket_bytes;
+
+  // strings
+  _counts[RO][StringHashentryType] = stats->string.hashentry_count;
+  _bytes [RO][StringHashentryType] = stats->string.hashentry_bytes;
+  _bytes [RO][TypeArrayU4Type]    -= stats->string.hashentry_bytes;
+
+  _counts[RO][StringBucketType] = stats->string.bucket_count;
+  _bytes [RO][StringBucketType] = stats->string.bucket_bytes;
+  _bytes [RO][TypeArrayU4Type] -= stats->string.bucket_bytes;
 
   // TODO: count things like dictionary, vtable, etc
   _bytes[RW][OtherType] =  other_bytes;
@@ -422,25 +526,13 @@ private:
   GrowableArray<Klass*> *_class_promote_order;
   VirtualSpace _md_vs;
   VirtualSpace _mc_vs;
-  CompactHashtableWriter* _string_cht;
+  VirtualSpace _od_vs;
   GrowableArray<MemRegion> *_string_regions;
 
 public:
   VM_PopulateDumpSharedSpace(ClassLoaderData* loader_data,
                              GrowableArray<Klass*> *class_promote_order) :
     _loader_data(loader_data) {
-
-    // Split up and initialize the misc code and data spaces
-    ReservedSpace* shared_rs = MetaspaceShared::shared_rs();
-    size_t metadata_size = SharedReadOnlySize + SharedReadWriteSize;
-    ReservedSpace shared_ro_rw = shared_rs->first_part(metadata_size);
-    ReservedSpace misc_section = shared_rs->last_part(metadata_size);
-
-    // Now split into misc sections.
-    ReservedSpace md_rs   = misc_section.first_part(SharedMiscDataSize);
-    ReservedSpace mc_rs   = misc_section.last_part(SharedMiscDataSize);
-    _md_vs.initialize(md_rs, SharedMiscDataSize);
-    _mc_vs.initialize(mc_rs, SharedMiscCodeSize);
     _class_promote_order = class_promote_order;
   }
 
@@ -454,7 +546,6 @@ private:
     }
   }
 }; // class VM_PopulateDumpSharedSpace
-
 
 void VM_PopulateDumpSharedSpace::doit() {
   Thread* THREAD = VMThread::vm_thread();
@@ -477,19 +568,23 @@ void VM_PopulateDumpSharedSpace::doit() {
   // that so we don't have to walk the SystemDictionary again.
   _global_klass_objects = new GrowableArray<Klass*>(1000);
   Universe::basic_type_classes_do(collect_classes);
-  SystemDictionary::classes_do(collect_classes);
+
+  // Need to call SystemDictionary::classes_do(void f(Klass*, ClassLoaderData*))
+  // as we may have some classes with NULL ClassLoaderData* in the dictionary. Other
+  // variants of SystemDictionary::classes_do will skip those classes.
+  SystemDictionary::classes_do(collect_classes2);
 
   tty->print_cr("Number of classes %d", _global_klass_objects->length());
   {
     int num_type_array = 0, num_obj_array = 0, num_inst = 0;
     for (int i = 0; i < _global_klass_objects->length(); i++) {
       Klass* k = _global_klass_objects->at(i);
-      if (k->oop_is_instance()) {
+      if (k->is_instance_klass()) {
         num_inst ++;
-      } else if (k->oop_is_objArray()) {
+      } else if (k->is_objArray_klass()) {
         num_obj_array ++;
       } else {
-        assert(k->oop_is_typeArray(), "sanity");
+        assert(k->is_typeArray_klass(), "sanity");
         num_type_array ++;
       }
     }
@@ -509,13 +604,19 @@ void VM_PopulateDumpSharedSpace::doit() {
   remove_unshareable_in_classes();
   tty->print_cr("done. ");
 
-  // Set up the share data and shared code segments.
+  // Set up the misc data, misc code and optional data segments.
+  _md_vs = *MetaspaceShared::misc_data_region()->virtual_space();
+  _mc_vs = *MetaspaceShared::misc_code_region()->virtual_space();
+  _od_vs = *MetaspaceShared::optional_data_region()->virtual_space();
   char* md_low = _md_vs.low();
-  char* md_top = md_low;
+  char* md_top = MetaspaceShared::misc_data_region()->alloc_top();
   char* md_end = _md_vs.high();
   char* mc_low = _mc_vs.low();
-  char* mc_top = mc_low;
+  char* mc_top = MetaspaceShared::misc_code_region()->alloc_top();
   char* mc_end = _mc_vs.high();
+  char* od_low = _od_vs.low();
+  char* od_top = MetaspaceShared::optional_data_region()->alloc_top();
+  char* od_end = _od_vs.high();
 
   // Reserve space for the list of Klass*s whose vtables are used
   // for patching others as needed.
@@ -534,51 +635,34 @@ void VM_PopulateDumpSharedSpace::doit() {
                                      &md_top, md_end,
                                      &mc_top, mc_end);
 
+  guarantee(md_top <= md_end, "Insufficient space for vtables.");
+
   // Reorder the system dictionary.  (Moving the symbols affects
   // how the hash table indices are calculated.)
   // Not doing this either.
 
   SystemDictionary::reorder_dictionary();
-
   NOT_PRODUCT(SystemDictionary::verify();)
+  SystemDictionary::reverse();
+  SystemDictionary::copy_buckets(&md_top, md_end);
 
-  // Copy the the symbol table, string table, and the system dictionary to the shared
-  // space in usable form.  Copy the hashtable
-  // buckets first [read-write], then copy the linked lists of entries
-  // [read-only].
+  SystemDictionary::copy_table(&md_top, md_end);
 
+  // Write the other data to the output array.
+  // SymbolTable, StringTable and extra information for system dictionary
   NOT_PRODUCT(SymbolTable::verify());
-  handle_misc_data_space_failure(SymbolTable::copy_compact_table(&md_top, md_end));
-
+  NOT_PRODUCT(StringTable::verify());
   size_t ss_bytes = 0;
   char* ss_low;
   // The string space has maximum two regions. See FileMapInfo::write_string_regions() for details.
   _string_regions = new GrowableArray<MemRegion>(2);
-  NOT_PRODUCT(StringTable::verify());
-  handle_misc_data_space_failure(StringTable::copy_compact_table(&md_top, md_end, _string_regions,
-                                                                 &ss_bytes));
+
+  WriteClosure wc(md_top, md_end);
+  MetaspaceShared::serialize(&wc, _string_regions, &ss_bytes);
+  md_top = wc.get_top();
   ss_low = _string_regions->is_empty() ? NULL : (char*)_string_regions->first().start();
 
-  SystemDictionary::reverse();
-  SystemDictionary::copy_buckets(&md_top, md_end);
-
-  ClassLoader::verify();
-  ClassLoader::copy_package_info_buckets(&md_top, md_end);
-  ClassLoader::verify();
-
-  SystemDictionary::copy_table(&md_top, md_end);
-  ClassLoader::verify();
-  ClassLoader::copy_package_info_table(&md_top, md_end);
-  ClassLoader::verify();
-
-  // Write the other data to the output array.
-  WriteClosure wc(md_top, md_end);
-  MetaspaceShared::serialize(&wc);
-  md_top = wc.get_top();
-
   // Print shared spaces all the time
-// To make fmt_space be a syntactic constant (for format warnings), use #define.
-#define fmt_space "%s space: %9d [ %4.1f%% of total] out of %9d bytes [%4.1f%% used] at " INTPTR_FORMAT
   Metaspace* ro_space = _loader_data->ro_metaspace();
   Metaspace* rw_space = _loader_data->rw_metaspace();
 
@@ -587,36 +671,42 @@ void VM_PopulateDumpSharedSpace::doit() {
   const size_t rw_alloced = rw_space->capacity_bytes_slow(Metaspace::NonClassType);
   const size_t md_alloced = md_end-md_low;
   const size_t mc_alloced = mc_end-mc_low;
+  const size_t od_alloced = od_end-od_low;
   const size_t total_alloced = ro_alloced + rw_alloced + md_alloced + mc_alloced
-                             + ss_bytes;
+                             + ss_bytes + od_alloced;
 
   // Occupied size of each space.
   const size_t ro_bytes = ro_space->used_bytes_slow(Metaspace::NonClassType);
   const size_t rw_bytes = rw_space->used_bytes_slow(Metaspace::NonClassType);
   const size_t md_bytes = size_t(md_top - md_low);
   const size_t mc_bytes = size_t(mc_top - mc_low);
+  const size_t od_bytes = size_t(od_top - od_low);
 
   // Percent of total size
-  const size_t total_bytes = ro_bytes + rw_bytes + md_bytes + mc_bytes + ss_bytes;
+  const size_t total_bytes = ro_bytes + rw_bytes + md_bytes + mc_bytes + ss_bytes + od_bytes;
   const double ro_t_perc = ro_bytes / double(total_bytes) * 100.0;
   const double rw_t_perc = rw_bytes / double(total_bytes) * 100.0;
   const double md_t_perc = md_bytes / double(total_bytes) * 100.0;
   const double mc_t_perc = mc_bytes / double(total_bytes) * 100.0;
   const double ss_t_perc = ss_bytes / double(total_bytes) * 100.0;
+  const double od_t_perc = od_bytes / double(total_bytes) * 100.0;
 
   // Percent of fullness of each space
   const double ro_u_perc = ro_bytes / double(ro_alloced) * 100.0;
   const double rw_u_perc = rw_bytes / double(rw_alloced) * 100.0;
   const double md_u_perc = md_bytes / double(md_alloced) * 100.0;
   const double mc_u_perc = mc_bytes / double(mc_alloced) * 100.0;
+  const double od_u_perc = od_bytes / double(od_alloced) * 100.0;
   const double total_u_perc = total_bytes / double(total_alloced) * 100.0;
 
-  tty->print_cr(fmt_space, "ro", ro_bytes, ro_t_perc, ro_alloced, ro_u_perc, ro_space->bottom());
-  tty->print_cr(fmt_space, "rw", rw_bytes, rw_t_perc, rw_alloced, rw_u_perc, rw_space->bottom());
-  tty->print_cr(fmt_space, "md", md_bytes, md_t_perc, md_alloced, md_u_perc, md_low);
-  tty->print_cr(fmt_space, "mc", mc_bytes, mc_t_perc, mc_alloced, mc_u_perc, mc_low);
-  tty->print_cr(fmt_space, "st", ss_bytes, ss_t_perc, ss_bytes, 100.0, ss_low);
-  tty->print_cr("total   : %9d [100.0%% of total] out of %9d bytes [%4.1f%% used]",
+#define fmt_space "%s space: " SIZE_FORMAT_W(9) " [ %4.1f%% of total] out of " SIZE_FORMAT_W(9) " bytes [%5.1f%% used] at " INTPTR_FORMAT
+  tty->print_cr(fmt_space, "ro", ro_bytes, ro_t_perc, ro_alloced, ro_u_perc, p2i(ro_space->bottom()));
+  tty->print_cr(fmt_space, "rw", rw_bytes, rw_t_perc, rw_alloced, rw_u_perc, p2i(rw_space->bottom()));
+  tty->print_cr(fmt_space, "md", md_bytes, md_t_perc, md_alloced, md_u_perc, p2i(md_low));
+  tty->print_cr(fmt_space, "mc", mc_bytes, mc_t_perc, mc_alloced, mc_u_perc, p2i(mc_low));
+  tty->print_cr(fmt_space, "st", ss_bytes, ss_t_perc, ss_bytes,   100.0,     p2i(ss_low));
+  tty->print_cr(fmt_space, "od", od_bytes, od_t_perc, od_alloced, od_u_perc, p2i(od_low));
+  tty->print_cr("total   : " SIZE_FORMAT_W(9) " [100.0%% of total] out of " SIZE_FORMAT_W(9) " bytes [%5.1f%% used]",
                  total_bytes, total_alloced, total_u_perc);
 
   // Update the vtable pointers in all of the Klass objects in the
@@ -632,36 +722,38 @@ void VM_PopulateDumpSharedSpace::doit() {
 
   FileMapInfo* mapinfo = new FileMapInfo();
   mapinfo->populate_header(MetaspaceShared::max_alignment());
+  mapinfo->set_misc_data_patching_start((char*)vtbl_list);
+  mapinfo->set_cds_i2i_entry_code_buffers(MetaspaceShared::cds_i2i_entry_code_buffers());
+  mapinfo->set_cds_i2i_entry_code_buffers_size(MetaspaceShared::cds_i2i_entry_code_buffers_size());
 
-  // Pass 1 - update file offsets in header.
-  mapinfo->write_header();
-  mapinfo->write_space(MetaspaceShared::ro, _loader_data->ro_metaspace(), true);
-  mapinfo->write_space(MetaspaceShared::rw, _loader_data->rw_metaspace(), false);
-  mapinfo->write_region(MetaspaceShared::md, _md_vs.low(),
-                        pointer_delta(md_top, _md_vs.low(), sizeof(char)),
-                        SharedMiscDataSize,
-                        false, false);
-  mapinfo->write_region(MetaspaceShared::mc, _mc_vs.low(),
-                        pointer_delta(mc_top, _mc_vs.low(), sizeof(char)),
-                        SharedMiscCodeSize,
-                        true, true);
-  mapinfo->write_string_regions(_string_regions);
-
-  // Pass 2 - write data.
-  mapinfo->open_for_write();
-  mapinfo->set_header_crc(mapinfo->compute_header_crc());
-  mapinfo->write_header();
-  mapinfo->write_space(MetaspaceShared::ro, _loader_data->ro_metaspace(), true);
-  mapinfo->write_space(MetaspaceShared::rw, _loader_data->rw_metaspace(), false);
-  mapinfo->write_region(MetaspaceShared::md, _md_vs.low(),
-                        pointer_delta(md_top, _md_vs.low(), sizeof(char)),
-                        SharedMiscDataSize,
-                        false, false);
-  mapinfo->write_region(MetaspaceShared::mc, _mc_vs.low(),
-                        pointer_delta(mc_top, _mc_vs.low(), sizeof(char)),
-                        SharedMiscCodeSize,
-                        true, true);
-  mapinfo->write_string_regions(_string_regions);
+  for (int pass=1; pass<=2; pass++) {
+    if (pass == 1) {
+      // The first pass doesn't actually write the data to disk. All it
+      // does is to update the fields in the mapinfo->_header.
+    } else {
+      // After the first pass, the contents of mapinfo->_header are finalized,
+      // so we can compute the header's CRC, and write the contents of the header
+      // and the regions into disk.
+      mapinfo->open_for_write();
+      mapinfo->set_header_crc(mapinfo->compute_header_crc());
+    }
+    mapinfo->write_header();
+    mapinfo->write_space(MetaspaceShared::ro, _loader_data->ro_metaspace(), true);
+    mapinfo->write_space(MetaspaceShared::rw, _loader_data->rw_metaspace(), false);
+    mapinfo->write_region(MetaspaceShared::md, _md_vs.low(),
+                          pointer_delta(md_top, _md_vs.low(), sizeof(char)),
+                          SharedMiscDataSize,
+                          false, true);
+    mapinfo->write_region(MetaspaceShared::mc, _mc_vs.low(),
+                          pointer_delta(mc_top, _mc_vs.low(), sizeof(char)),
+                          SharedMiscCodeSize,
+                          true, true);
+    mapinfo->write_string_regions(_string_regions);
+    mapinfo->write_region(MetaspaceShared::od, _od_vs.low(),
+                          pointer_delta(od_top, _od_vs.low(), sizeof(char)),
+                          pointer_delta(od_end, _od_vs.low(), sizeof(char)),
+                          true, false);
+  }
 
   mapinfo->close();
 
@@ -679,10 +771,9 @@ void VM_PopulateDumpSharedSpace::doit() {
 }
 
 
-void MetaspaceShared::link_one_shared_class(Klass* obj, TRAPS) {
-  Klass* k = obj;
-  if (k->oop_is_instance()) {
-    InstanceKlass* ik = (InstanceKlass*) k;
+void MetaspaceShared::link_one_shared_class(Klass* k, TRAPS) {
+  if (k->is_instance_klass()) {
+    InstanceKlass* ik = InstanceKlass::cast(k);
     // Link the class to cause the bytecodes to be rewritten and the
     // cpcache to be created. Class verification is done according
     // to -Xverify setting.
@@ -692,8 +783,18 @@ void MetaspaceShared::link_one_shared_class(Klass* obj, TRAPS) {
 }
 
 void MetaspaceShared::check_one_shared_class(Klass* k) {
-  if (k->oop_is_instance() && InstanceKlass::cast(k)->check_sharing_error_state()) {
+  if (k->is_instance_klass() && InstanceKlass::cast(k)->check_sharing_error_state()) {
     _check_classes_made_progress = true;
+  }
+}
+
+void MetaspaceShared::check_shared_class_loader_type(Klass* k) {
+  if (k->is_instance_klass()) {
+    InstanceKlass* ik = InstanceKlass::cast(k);
+    u2 loader_type = ik->loader_type();
+    ResourceMark rm;
+    guarantee(loader_type != 0,
+              "Class loader type is not set for this class %s", ik->name()->as_C_string());
   }
 }
 
@@ -725,9 +826,14 @@ void MetaspaceShared::link_and_cleanup_shared_classes(TRAPS) {
       exit(1);
     }
   }
+
+  // Copy the verification constraints from C_HEAP-alloced GrowableArrays to RO-alloced
+  // Arrays
+  SystemDictionaryShared::finalize_verification_constraints();
 }
 
 void MetaspaceShared::prepare_for_dumping() {
+  Arguments::check_unsupported_dumping_properties();
   ClassLoader::initialize_shared_path();
   FileMapInfo::allocate_classpath_entry_table();
 }
@@ -735,125 +841,114 @@ void MetaspaceShared::prepare_for_dumping() {
 // Preload classes from a list, populate the shared spaces and dump to a
 // file.
 void MetaspaceShared::preload_and_dump(TRAPS) {
-  TraceTime timer("Dump Shared Spaces", TraceStartupTime);
-  ResourceMark rm;
-
-  tty->print_cr("Allocated shared space: %d bytes at " PTR_FORMAT,
-                MetaspaceShared::shared_rs()->size(),
-                MetaspaceShared::shared_rs()->base());
-
-  // Preload classes to be shared.
-  // Should use some os:: method rather than fopen() here. aB.
-  const char* class_list_path;
-  if (SharedClassListFile == NULL) {
-    // Construct the path to the class list (in jre/lib)
-    // Walk up two directories from the location of the VM and
-    // optionally tack on "lib" (depending on platform)
+  { TraceTime timer("Dump Shared Spaces", TRACETIME_LOG(Info, startuptime));
+    ResourceMark rm;
     char class_list_path_str[JVM_MAXPATHLEN];
-    os::jvm_path(class_list_path_str, sizeof(class_list_path_str));
-    for (int i = 0; i < 3; i++) {
-      char *end = strrchr(class_list_path_str, *os::file_separator());
-      if (end != NULL) *end = '\0';
-    }
-    int class_list_path_len = (int)strlen(class_list_path_str);
-    if (class_list_path_len >= 3) {
-      if (strcmp(class_list_path_str + class_list_path_len - 3, "lib") != 0) {
-        if (class_list_path_len < JVM_MAXPATHLEN - 4) {
-          jio_snprintf(class_list_path_str + class_list_path_len,
-                       sizeof(class_list_path_str) - class_list_path_len,
-                       "%slib", os::file_separator());
-          class_list_path_len += 4;
+
+    tty->print_cr("Allocated shared space: " SIZE_FORMAT " bytes at " PTR_FORMAT,
+                  MetaspaceShared::shared_rs()->size(),
+                  p2i(MetaspaceShared::shared_rs()->base()));
+
+    // Preload classes to be shared.
+    // Should use some os:: method rather than fopen() here. aB.
+    const char* class_list_path;
+    if (SharedClassListFile == NULL) {
+      // Construct the path to the class list (in jre/lib)
+      // Walk up two directories from the location of the VM and
+      // optionally tack on "lib" (depending on platform)
+      os::jvm_path(class_list_path_str, sizeof(class_list_path_str));
+      for (int i = 0; i < 3; i++) {
+        char *end = strrchr(class_list_path_str, *os::file_separator());
+        if (end != NULL) *end = '\0';
+      }
+      int class_list_path_len = (int)strlen(class_list_path_str);
+      if (class_list_path_len >= 3) {
+        if (strcmp(class_list_path_str + class_list_path_len - 3, "lib") != 0) {
+          if (class_list_path_len < JVM_MAXPATHLEN - 4) {
+            jio_snprintf(class_list_path_str + class_list_path_len,
+                         sizeof(class_list_path_str) - class_list_path_len,
+                         "%slib", os::file_separator());
+            class_list_path_len += 4;
+          }
         }
       }
+      if (class_list_path_len < JVM_MAXPATHLEN - 10) {
+        jio_snprintf(class_list_path_str + class_list_path_len,
+                     sizeof(class_list_path_str) - class_list_path_len,
+                     "%sclasslist", os::file_separator());
+      }
+      class_list_path = class_list_path_str;
+    } else {
+      class_list_path = SharedClassListFile;
     }
-    if (class_list_path_len < JVM_MAXPATHLEN - 10) {
-      jio_snprintf(class_list_path_str + class_list_path_len,
-                   sizeof(class_list_path_str) - class_list_path_len,
-                   "%sclasslist", os::file_separator());
-    }
-    class_list_path = class_list_path_str;
-  } else {
-    class_list_path = SharedClassListFile;
-  }
 
-  int class_count = 0;
-  GrowableArray<Klass*>* class_promote_order = new GrowableArray<Klass*>();
+    int class_count = 0;
+    GrowableArray<Klass*>* class_promote_order = new GrowableArray<Klass*>();
 
-  // sun.io.Converters
-  static const char obj_array_sig[] = "[[Ljava/lang/Object;";
-  SymbolTable::new_permanent_symbol(obj_array_sig, THREAD);
+    // sun.io.Converters
+    static const char obj_array_sig[] = "[[Ljava/lang/Object;";
+    SymbolTable::new_permanent_symbol(obj_array_sig, THREAD);
 
-  // java.util.HashMap
-  static const char map_entry_array_sig[] = "[Ljava/util/Map$Entry;";
-  SymbolTable::new_permanent_symbol(map_entry_array_sig, THREAD);
+    // java.util.HashMap
+    static const char map_entry_array_sig[] = "[Ljava/util/Map$Entry;";
+    SymbolTable::new_permanent_symbol(map_entry_array_sig, THREAD);
 
-  tty->print_cr("Loading classes to share ...");
-  _has_error_classes = false;
-  class_count += preload_and_dump(class_list_path, class_promote_order,
-                                  THREAD);
-  if (ExtraSharedClassListFile) {
-    class_count += preload_and_dump(ExtraSharedClassListFile, class_promote_order,
+    // Need to allocate the op here:
+    // op.misc_data_space_alloc() will be called during preload_and_dump().
+    ClassLoaderData* loader_data = ClassLoaderData::the_null_class_loader_data();
+    VM_PopulateDumpSharedSpace op(loader_data, class_promote_order);
+
+    tty->print_cr("Loading classes to share ...");
+    _has_error_classes = false;
+    class_count += preload_and_dump(class_list_path, class_promote_order,
                                     THREAD);
+    if (ExtraSharedClassListFile) {
+      class_count += preload_and_dump(ExtraSharedClassListFile, class_promote_order,
+                                      THREAD);
+    }
+    tty->print_cr("Loading classes to share: done.");
+
+    if (PrintSharedSpaces) {
+      tty->print_cr("Shared spaces: preloaded %d classes", class_count);
+    }
+
+    // Rewrite and link classes
+    tty->print_cr("Rewriting and linking classes ...");
+
+    // Link any classes which got missed. This would happen if we have loaded classes that
+    // were not explicitly specified in the classlist. E.g., if an interface implemented by class K
+    // fails verification, all other interfaces that were not specified in the classlist but
+    // are implemented by K are not verified.
+    link_and_cleanup_shared_classes(CATCH);
+    tty->print_cr("Rewriting and linking classes: done");
+
+    VMThread::execute(&op);
   }
-  tty->print_cr("Loading classes to share: done.");
-
-  if (PrintSharedSpaces) {
-    tty->print_cr("Shared spaces: preloaded %d classes", class_count);
-  }
-
-  // Rewrite and link classes
-  tty->print_cr("Rewriting and linking classes ...");
-
-  // Link any classes which got missed. This would happen if we have loaded classes that
-  // were not explicitly specified in the classlist. E.g., if an interface implemented by class K
-  // fails verification, all other interfaces that were not specified in the classlist but
-  // are implemented by K are not verified.
-  link_and_cleanup_shared_classes(CATCH);
-  tty->print_cr("Rewriting and linking classes: done");
-
-  // Create and dump the shared spaces.   Everything so far is loaded
-  // with the null class loader.
-  ClassLoaderData* loader_data = ClassLoaderData::the_null_class_loader_data();
-  VM_PopulateDumpSharedSpace op(loader_data, class_promote_order);
-  VMThread::execute(&op);
-
   // Since various initialization steps have been undone by this process,
   // it is not reasonable to continue running a java process.
   exit(0);
 }
 
-int MetaspaceShared::preload_and_dump(const char * class_list_path,
+
+int MetaspaceShared::preload_and_dump(const char* class_list_path,
                                       GrowableArray<Klass*>* class_promote_order,
                                       TRAPS) {
-  FILE* file = fopen(class_list_path, "r");
-  char class_name[256];
+  ClassListParser parser(class_list_path);
   int class_count = 0;
 
-  if (file != NULL) {
-    while ((fgets(class_name, sizeof class_name, file)) != NULL) {
-      if (*class_name == '#') { // comment
-        continue;
-      }
-      // Remove trailing newline
-      size_t name_len = strlen(class_name);
-      if (class_name[name_len-1] == '\n') {
-        class_name[name_len-1] = '\0';
-      }
+    while (parser.parse_one_line()) {
+      Klass* klass = ClassLoaderExt::load_one_class(&parser, THREAD);
 
-      // Got a class name - load it.
-      TempNewSymbol class_name_symbol = SymbolTable::new_permanent_symbol(class_name, THREAD);
-      guarantee(!HAS_PENDING_EXCEPTION, "Exception creating a symbol.");
-      Klass* klass = SystemDictionary::resolve_or_null(class_name_symbol,
-                                                         THREAD);
       CLEAR_PENDING_EXCEPTION;
       if (klass != NULL) {
         if (PrintSharedSpaces && Verbose && WizardMode) {
-          tty->print_cr("Shared spaces preloaded: %s", class_name);
+          ResourceMark rm;
+          tty->print_cr("Shared spaces preloaded: %s", klass->external_name());
         }
 
         InstanceKlass* ik = InstanceKlass::cast(klass);
 
-        // Should be class load order as per -XX:+TraceClassLoadingPreorder
+        // Should be class load order as per -Xlog:class+preorder
         class_promote_order->append(ik);
 
         // Link the class to cause the bytecodes to be rewritten and the
@@ -864,17 +959,8 @@ int MetaspaceShared::preload_and_dump(const char * class_list_path,
         guarantee(!HAS_PENDING_EXCEPTION, "exception in link_class");
 
         class_count++;
-      } else {
-        //tty->print_cr("Preload failed: %s", class_name);
       }
     }
-    fclose(file);
-  } else {
-    char errmsg[JVM_MAXPATHLEN];
-    os::lasterror(errmsg, JVM_MAXPATHLEN);
-    tty->print_cr("Loading classlist failed: %s", errmsg);
-    exit(1);
-  }
 
   return class_count;
 }
@@ -884,7 +970,7 @@ bool MetaspaceShared::try_link_class(InstanceKlass* ik, TRAPS) {
   assert(DumpSharedSpaces, "should only be called during dumping");
   if (ik->init_state() < InstanceKlass::linked) {
     bool saved = BytecodeVerificationLocal;
-    if (!SharedClassUtil::is_shared_boot_class(ik)) {
+    if (!(ik->is_shared_boot_class())) {
       // The verification decision is based on BytecodeVerificationRemote
       // for non-system classes. Since we are using the NULL classloader
       // to load non-system classes during dumping, we need to temporarily
@@ -932,6 +1018,11 @@ public:
     *p = (void*)obj;
   }
 
+  void do_u4(u4* p) {
+    intptr_t obj = nextPtr();
+    *p = (u4)(uintx(obj));
+  }
+
   void do_tag(int tag) {
     int old_tag;
     old_tag = (int)(intptr_t)nextPtr();
@@ -959,6 +1050,11 @@ bool MetaspaceShared::is_in_shared_space(const void* p) {
   return UseSharedSpaces && FileMapInfo::current_info()->is_in_shared_space(p);
 }
 
+// Return true if given address is in the misc data region
+bool MetaspaceShared::is_in_shared_region(const void* p, int idx) {
+  return UseSharedSpaces && FileMapInfo::current_info()->is_in_shared_region(p, idx);
+}
+
 bool MetaspaceShared::is_string_region(int idx) {
   return (idx >= MetaspaceShared::first_string &&
           idx < MetaspaceShared::first_string + MetaspaceShared::max_strings);
@@ -972,8 +1068,6 @@ void MetaspaceShared::print_shared_spaces() {
 
 
 // Map shared spaces at requested addresses and return if succeeded.
-// Need to keep the bounds of the ro and rw space for the Metaspace::contains
-// call, or is_in_shared_space.
 bool MetaspaceShared::map_shared_spaces(FileMapInfo* mapinfo) {
   size_t image_alignment = mapinfo->alignment();
 
@@ -991,6 +1085,7 @@ bool MetaspaceShared::map_shared_spaces(FileMapInfo* mapinfo) {
   char* _rw_base = NULL;
   char* _md_base = NULL;
   char* _mc_base = NULL;
+  char* _od_base = NULL;
 
   // Map each shared region
   if ((_ro_base = mapinfo->map_region(ro)) != NULL &&
@@ -1001,6 +1096,8 @@ bool MetaspaceShared::map_shared_spaces(FileMapInfo* mapinfo) {
       mapinfo->verify_region_checksum(md) &&
       (_mc_base = mapinfo->map_region(mc)) != NULL &&
       mapinfo->verify_region_checksum(mc) &&
+      (_od_base = mapinfo->map_region(od)) != NULL &&
+      mapinfo->verify_region_checksum(od) &&
       (image_alignment == (size_t)max_alignment()) &&
       mapinfo->validate_classpath_entry_table()) {
     // Success (no need to do anything)
@@ -1012,6 +1109,7 @@ bool MetaspaceShared::map_shared_spaces(FileMapInfo* mapinfo) {
     if (_rw_base != NULL) mapinfo->unmap_region(rw);
     if (_md_base != NULL) mapinfo->unmap_region(md);
     if (_mc_base != NULL) mapinfo->unmap_region(mc);
+    if (_od_base != NULL) mapinfo->unmap_region(od);
 #ifndef _WINDOWS
     // Release the entire mapped region
     shared_rs.release();
@@ -1032,8 +1130,9 @@ bool MetaspaceShared::map_shared_spaces(FileMapInfo* mapinfo) {
 
 void MetaspaceShared::initialize_shared_spaces() {
   FileMapInfo *mapinfo = FileMapInfo::current_info();
-
-  char* buffer = mapinfo->header()->region_addr(md);
+  _cds_i2i_entry_code_buffers = mapinfo->cds_i2i_entry_code_buffers();
+  _cds_i2i_entry_code_buffers_size = mapinfo->cds_i2i_entry_code_buffers_size();
+  char* buffer = mapinfo->misc_data_patching_start();
 
   // Skip over (reserve space for) a list of addresses of C++ vtables
   // for Klass objects.  They get filled in later.
@@ -1049,21 +1148,6 @@ void MetaspaceShared::initialize_shared_spaces() {
   buffer += sizeof(intptr_t);
   buffer += vtable_size;
 
-  // Create the shared symbol table using the compact table at this spot in the
-  // misc data space. (Todo: move this to read-only space. Currently
-  // this is mapped copy-on-write but will never be written into).
-
-  buffer = (char*)SymbolTable::init_shared_table(buffer);
-  SymbolTable::create_table();
-
-  // Create the shared string table using the compact table
-  buffer = (char*)StringTable::init_shared_table(mapinfo, buffer);
-
-  // Create the shared dictionary using the bucket array at this spot in
-  // the misc data space.  Since the shared dictionary table is never
-  // modified, this region (of mapped pages) will be (effectively, if
-  // not explicitly) read-only.
-
   int sharedDictionaryLen = *(intptr_t*)buffer;
   buffer += sizeof(intptr_t);
   int number_of_entries = *(intptr_t*)buffer;
@@ -1073,39 +1157,22 @@ void MetaspaceShared::initialize_shared_spaces() {
                                           number_of_entries);
   buffer += sharedDictionaryLen;
 
-  // Create the package info table using the bucket array at this spot in
-  // the misc data space.  Since the package info table is never
-  // modified, this region (of mapped pages) will be (effectively, if
-  // not explicitly) read-only.
-
-  int pkgInfoLen = *(intptr_t*)buffer;
-  buffer += sizeof(intptr_t);
-  number_of_entries = *(intptr_t*)buffer;
-  buffer += sizeof(intptr_t);
-  ClassLoader::create_package_info_table((HashtableBucket<mtClass>*)buffer, pkgInfoLen,
-                                         number_of_entries);
-  buffer += pkgInfoLen;
-  ClassLoader::verify();
-
   // The following data in the shared misc data region are the linked
   // list elements (HashtableEntry objects) for the shared dictionary
-  // and package info table.
+  // table.
 
   int len = *(intptr_t*)buffer;     // skip over shared dictionary entries
   buffer += sizeof(intptr_t);
   buffer += len;
 
-  len = *(intptr_t*)buffer;     // skip over package info table entries
-  buffer += sizeof(intptr_t);
-  buffer += len;
-
-  len = *(intptr_t*)buffer;     // skip over package info table char[] arrays.
-  buffer += sizeof(intptr_t);
-  buffer += len;
-
+  // Verify various attributes of the archive, plus initialize the
+  // shared string/symbol tables
   intptr_t* array = (intptr_t*)buffer;
   ReadClosure rc(&array);
-  serialize(&rc);
+  serialize(&rc, NULL, NULL);
+
+  // Initialize the run-time symbol table.
+  SymbolTable::create_table();
 
   // Close the mapinfo file
   mapinfo->close();
@@ -1140,6 +1207,7 @@ bool MetaspaceShared::remap_shared_readonly_as_readwrite() {
     if (!mapinfo->remap_shared_readonly_as_readwrite()) {
       return false;
     }
+    _remapped_readwrite = true;
   }
   return true;
 }

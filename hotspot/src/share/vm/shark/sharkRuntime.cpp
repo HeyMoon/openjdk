@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2008, 2009, 2010 Red Hat, Inc.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -24,13 +24,14 @@
  */
 
 #include "precompiled.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/biasedLocking.hpp"
 #include "runtime/deoptimization.hpp"
 #include "runtime/thread.hpp"
 #include "shark/llvmHeaders.hpp"
 #include "shark/sharkRuntime.hpp"
-#ifdef TARGET_ARCH_zero
+#include "utilities/macros.hpp"
+#ifdef ZERO
 # include "stack_zero.inline.hpp"
 #endif
 
@@ -213,8 +214,9 @@ int SharkRuntime::uncommon_trap(JavaThread* thread, int trap_request) {
   // Initiate the trap
   thread->set_last_Java_frame();
   Deoptimization::UnrollBlock *urb =
-    Deoptimization::uncommon_trap(thread, trap_request);
+    Deoptimization::uncommon_trap(thread, trap_request, Deoptimization::Unpack_uncommon_trap);
   thread->reset_last_Java_frame();
+  assert(urb->unpack_kind() == Deoptimization::Unpack_uncommon_trap, "expected Unpack_uncommon_trap");
 
   // Pop our dummy frame and the frame being deoptimized
   thread->pop_zero_frame();

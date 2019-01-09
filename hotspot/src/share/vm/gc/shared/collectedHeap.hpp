@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -58,18 +58,20 @@ class GCMessage : public FormatBuffer<1024> {
   GCMessage() {}
 };
 
+class CollectedHeap;
+
 class GCHeapLog : public EventLogBase<GCMessage> {
  private:
-  void log_heap(bool before);
+  void log_heap(CollectedHeap* heap, bool before);
 
  public:
   GCHeapLog() : EventLogBase<GCMessage>("GC Heap History") {}
 
-  void log_heap_before() {
-    log_heap(true);
+  void log_heap_before(CollectedHeap* heap) {
+    log_heap(heap, true);
   }
-  void log_heap_after() {
-    log_heap(false);
+  void log_heap_after(CollectedHeap* heap) {
+    log_heap(heap, false);
   }
 };
 
@@ -81,6 +83,7 @@ class GCHeapLog : public EventLogBase<GCMessage> {
 //
 class CollectedHeap : public CHeapObj<mtInternal> {
   friend class VMStructs;
+  friend class JVMCIVMStructs;
   friend class IsGCActiveMark; // Block structured external access to _is_gc_active
 
  private:
@@ -90,7 +93,8 @@ class CollectedHeap : public CHeapObj<mtInternal> {
 
   GCHeapLog* _gc_heap_log;
 
-  // Used in support of ReduceInitialCardMarks; only consulted if COMPILER2 is being used
+  // Used in support of ReduceInitialCardMarks; only consulted if COMPILER2
+  // or INCLUDE_JVMCI is being used
   bool _defer_initial_card_mark;
 
   MemRegion _reserved;
@@ -155,6 +159,8 @@ class CollectedHeap : public CHeapObj<mtInternal> {
   inline static void post_allocation_setup_array(KlassHandle klass,
                                                  HeapWord* obj, int length);
 
+  inline static void post_allocation_setup_class(KlassHandle klass, HeapWord* obj, int size);
+
   // Clears an allocated object.
   inline static void init_obj(HeapWord* obj, size_t size);
 
@@ -194,6 +200,8 @@ class CollectedHeap : public CHeapObj<mtInternal> {
 
   virtual Name kind() const = 0;
 
+  virtual const char* name() const = 0;
+
   /**
    * Returns JNI error code JNI_ENOMEM if memory could not be allocated,
    * and JNI_OK on success.
@@ -203,7 +211,7 @@ class CollectedHeap : public CHeapObj<mtInternal> {
   // In many heaps, there will be a need to perform some initialization activities
   // after the Universe is fully formed, but before general heap allocation is allowed.
   // This is the correct place to place such initialization methods.
-  virtual void post_initialize();
+  virtual void post_initialize() = 0;
 
   // Stop any onging concurrent work and prepare for exit.
   virtual void stop() {}
@@ -294,9 +302,7 @@ class CollectedHeap : public CHeapObj<mtInternal> {
   inline static oop obj_allocate(KlassHandle klass, int size, TRAPS);
   inline static oop array_allocate(KlassHandle klass, int size, int length, TRAPS);
   inline static oop array_allocate_nozero(KlassHandle klass, int size, int length, TRAPS);
-
-  inline static void post_allocation_install_obj_klass(KlassHandle klass,
-                                                       oop obj);
+  inline static oop class_allocate(KlassHandle klass, int size, TRAPS);
 
   // Raw memory allocation facilities
   // The obj and array allocate methods are covers for these methods.
@@ -344,7 +350,7 @@ class CollectedHeap : public CHeapObj<mtInternal> {
   // These functions return the addresses of the fields that define the
   // boundaries of the contiguous allocation area.  (These fields should be
   // physically near to one another.)
-  virtual HeapWord** top_addr() const {
+  virtual HeapWord* volatile* top_addr() const {
     guarantee(false, "inline contiguous allocation not supported");
     return NULL;
   }
@@ -518,6 +524,9 @@ class CollectedHeap : public CHeapObj<mtInternal> {
   virtual void prepare_for_verify() = 0;
 
   // Generate any dumps preceding or following a full gc
+ private:
+  void full_gc_dump(GCTimer* timer, bool before);
+ public:
   void pre_full_gc_dump(GCTimer* timer);
   void post_full_gc_dump(GCTimer* timer);
 
@@ -568,7 +577,7 @@ class CollectedHeap : public CHeapObj<mtInternal> {
   void trace_heap_after_gc(const GCTracer* gc_tracer);
 
   // Heap verification
-  virtual void verify(bool silent, VerifyOption option) = 0;
+  virtual void verify(VerifyOption option) = 0;
 
   // Non product verification and debugging.
 #ifndef PRODUCT
@@ -603,9 +612,6 @@ class CollectedHeap : public CHeapObj<mtInternal> {
     return false;
   }
 
-  /////////////// Unit tests ///////////////
-
-  NOT_PRODUCT(static void test_is_in();)
 };
 
 // Class to set and reset the GC cause for a CollectedHeap.

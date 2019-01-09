@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,7 @@ import java.nio.channels.*;
 import java.nio.channels.spi.*;
 import java.util.*;
 import sun.net.ResourceManager;
-import sun.net.ExtendedOptionsImpl;
+import sun.net.ext.ExtendedSocketOptions;
 
 /**
  * An implementation of DatagramChannels.
@@ -58,8 +58,8 @@ class DatagramChannelImpl
     private final ProtocolFamily family;
 
     // IDs of native threads doing reads and writes, for signalling
-    private volatile long readerThread = 0;
-    private volatile long writerThread = 0;
+    private volatile long readerThread;
+    private volatile long writerThread;
 
     // Cached InetAddress and port for unconnected DatagramChannels
     // used by receive0
@@ -298,14 +298,17 @@ class DatagramChannelImpl
             set.add(StandardSocketOptions.SO_SNDBUF);
             set.add(StandardSocketOptions.SO_RCVBUF);
             set.add(StandardSocketOptions.SO_REUSEADDR);
+            if (Net.isReusePortAvailable()) {
+                set.add(StandardSocketOptions.SO_REUSEPORT);
+            }
             set.add(StandardSocketOptions.SO_BROADCAST);
             set.add(StandardSocketOptions.IP_TOS);
             set.add(StandardSocketOptions.IP_MULTICAST_IF);
             set.add(StandardSocketOptions.IP_MULTICAST_TTL);
             set.add(StandardSocketOptions.IP_MULTICAST_LOOP);
-            if (ExtendedOptionsImpl.flowSupported()) {
-                set.add(jdk.net.ExtendedSocketOptions.SO_FLOW_SLA);
-            }
+            ExtendedSocketOptions extendedOptions =
+                    ExtendedSocketOptions.getInstance();
+            set.addAll(extendedOptions.options());
             return Collections.unmodifiableSet(set);
         }
     }
@@ -325,8 +328,6 @@ class DatagramChannelImpl
     public SocketAddress receive(ByteBuffer dst) throws IOException {
         if (dst.isReadOnly())
             throw new IllegalArgumentException("Read-only buffer");
-        if (dst == null)
-            throw new NullPointerException();
         synchronized (readLock) {
             ensureOpen();
             // Socket was not bound before attempting receive
@@ -713,8 +714,6 @@ class DatagramChannelImpl
 
     @Override
     public DatagramChannel connect(SocketAddress sa) throws IOException {
-        int localPort = 0;
-
         synchronized(readLock) {
             synchronized(writeLock) {
                 synchronized (stateLock) {
@@ -1035,6 +1034,7 @@ class DatagramChannelImpl
         }
     }
 
+    @SuppressWarnings("deprecation")
     protected void finalize() throws IOException {
         // fd is null if constructor threw exception
         if (fd != null)

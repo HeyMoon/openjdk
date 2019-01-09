@@ -133,7 +133,7 @@ public class X11GraphicsConfig extends GraphicsConfiguration
     /**
      * Return the graphics device associated with this configuration.
      */
-    public GraphicsDevice getDevice() {
+    public X11GraphicsDevice getDevice() {
         return screen;
     }
 
@@ -256,7 +256,20 @@ public class X11GraphicsConfig extends GraphicsConfiguration
      * For image buffers, this Transform will be the Identity transform.
      */
     public AffineTransform getDefaultTransform() {
-        return new AffineTransform();
+        double scale = getScale();
+        return AffineTransform.getScaleInstance(scale, scale);
+    }
+
+    public int getScale() {
+        return getDevice().getScaleFactor();
+    }
+
+    public int scaleUp(int x) {
+        return x * getScale();
+    }
+
+    public int scaleDown(int x) {
+        return x / getScale();
     }
 
     /**
@@ -308,7 +321,14 @@ public class X11GraphicsConfig extends GraphicsConfiguration
     }
 
     public Rectangle getBounds() {
-        return pGetBounds(screen.getScreen());
+        Rectangle rect = pGetBounds(screen.getScreen());
+        if (getScale() != 1) {
+            rect.x = scaleDown(rect.x);
+            rect.y = scaleDown(rect.y);
+            rect.width = scaleDown(rect.width);
+            rect.height = scaleDown(rect.height);
+        }
+        return rect;
     }
 
     private native Rectangle pGetBounds(int screenNum);
@@ -432,8 +452,12 @@ public class X11GraphicsConfig extends GraphicsConfiguration
     public VolatileImage createBackBufferImage(Component target,
                                                long backBuffer)
     {
+        // it is possible for the component to have size 0x0, adjust it to
+        // be at least 1x1 to avoid IAE
+        int w = Math.max(1, target.getWidth());
+        int h = Math.max(1, target.getHeight());
         return new SunVolatileImage(target,
-                                    target.getWidth(), target.getHeight(),
+                                    w, h,
                                     Long.valueOf(backBuffer));
     }
 

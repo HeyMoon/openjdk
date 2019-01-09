@@ -34,7 +34,10 @@
  */
 
 package java.util.concurrent;
-import java.util.*;
+
+import java.util.Deque;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
 
 /**
  * A {@link Deque} that additionally supports blocking operations that wait
@@ -50,17 +53,17 @@ import java.util.*;
  * and the fourth blocks for only a given maximum time limit before giving
  * up.  These methods are summarized in the following table:
  *
- * <table BORDER CELLPADDING=3 CELLSPACING=1>
+ * <table class="plain">
  * <caption>Summary of BlockingDeque methods</caption>
  *  <tr>
- *    <td ALIGN=CENTER COLSPAN = 5> <b>First Element (Head)</b></td>
+ *    <td style="text-align:center" COLSPAN = 5> <b>First Element (Head)</b></td>
  *  </tr>
  *  <tr>
  *    <td></td>
- *    <td ALIGN=CENTER><em>Throws exception</em></td>
- *    <td ALIGN=CENTER><em>Special value</em></td>
- *    <td ALIGN=CENTER><em>Blocks</em></td>
- *    <td ALIGN=CENTER><em>Times out</em></td>
+ *    <td style="text-align:center"><em>Throws exception</em></td>
+ *    <td style="text-align:center"><em>Special value</em></td>
+ *    <td style="text-align:center"><em>Blocks</em></td>
+ *    <td style="text-align:center"><em>Times out</em></td>
  *  </tr>
  *  <tr>
  *    <td><b>Insert</b></td>
@@ -84,14 +87,14 @@ import java.util.*;
  *    <td><em>not applicable</em></td>
  *  </tr>
  *  <tr>
- *    <td ALIGN=CENTER COLSPAN = 5> <b>Last Element (Tail)</b></td>
+ *    <td style="text-align:center" COLSPAN = 5> <b>Last Element (Tail)</b></td>
  *  </tr>
  *  <tr>
  *    <td></td>
- *    <td ALIGN=CENTER><em>Throws exception</em></td>
- *    <td ALIGN=CENTER><em>Special value</em></td>
- *    <td ALIGN=CENTER><em>Blocks</em></td>
- *    <td ALIGN=CENTER><em>Times out</em></td>
+ *    <td style="text-align:center"><em>Throws exception</em></td>
+ *    <td style="text-align:center"><em>Special value</em></td>
+ *    <td style="text-align:center"><em>Blocks</em></td>
+ *    <td style="text-align:center"><em>Times out</em></td>
  *  </tr>
  *  <tr>
  *    <td><b>Insert</b></td>
@@ -125,14 +128,14 @@ import java.util.*;
  * {@code BlockingQueue} interface are precisely equivalent to
  * {@code BlockingDeque} methods as indicated in the following table:
  *
- * <table BORDER CELLPADDING=3 CELLSPACING=1>
+ * <table class="plain">
  * <caption>Comparison of BlockingQueue and BlockingDeque methods</caption>
  *  <tr>
- *    <td ALIGN=CENTER> <b>{@code BlockingQueue} Method</b></td>
- *    <td ALIGN=CENTER> <b>Equivalent {@code BlockingDeque} Method</b></td>
+ *    <td style="text-align:center"> <b>{@code BlockingQueue} Method</b></td>
+ *    <td style="text-align:center"> <b>Equivalent {@code BlockingDeque} Method</b></td>
  *  </tr>
  *  <tr>
- *    <td ALIGN=CENTER COLSPAN = 2> <b>Insert</b></td>
+ *    <td style="text-align:center" COLSPAN = 2> <b>Insert</b></td>
  *  </tr>
  *  <tr>
  *    <td>{@link #add(Object) add(e)}</td>
@@ -151,7 +154,7 @@ import java.util.*;
  *    <td>{@link #offerLast(Object, long, TimeUnit) offerLast(e, time, unit)}</td>
  *  </tr>
  *  <tr>
- *    <td ALIGN=CENTER COLSPAN = 2> <b>Remove</b></td>
+ *    <td style="text-align:center" COLSPAN = 2> <b>Remove</b></td>
  *  </tr>
  *  <tr>
  *    <td>{@link #remove() remove()}</td>
@@ -170,7 +173,7 @@ import java.util.*;
  *    <td>{@link #pollFirst(long, TimeUnit) pollFirst(time, unit)}</td>
  *  </tr>
  *  <tr>
- *    <td ALIGN=CENTER COLSPAN = 2> <b>Examine</b></td>
+ *    <td style="text-align:center" COLSPAN = 2> <b>Examine</b></td>
  *  </tr>
  *  <tr>
  *    <td>{@link #element() element()}</td>
@@ -190,12 +193,12 @@ import java.util.*;
  * the {@code BlockingDeque} in another thread.
  *
  * <p>This interface is a member of the
- * <a href="{@docRoot}/../technotes/guides/collections/index.html">
+ * <a href="{@docRoot}/java/util/package-summary.html#CollectionsFramework">
  * Java Collections Framework</a>.
  *
  * @since 1.6
  * @author Doug Lea
- * @param <E> the type of elements held in this collection
+ * @param <E> the type of elements held in this deque
  */
 public interface BlockingDeque<E> extends BlockingQueue<E>, Deque<E> {
     /*
@@ -401,9 +404,9 @@ public interface BlockingDeque<E> extends BlockingQueue<E>, Deque<E> {
      * @return {@code true} if an element was removed as a result of this call
      * @throws ClassCastException if the class of the specified element
      *         is incompatible with this deque
-     *         (<a href="../Collection.html#optional-restrictions">optional</a>)
+     * (<a href="{@docRoot}/java/util/Collection.html#optional-restrictions">optional</a>)
      * @throws NullPointerException if the specified element is null
-     *         (<a href="../Collection.html#optional-restrictions">optional</a>)
+     * (<a href="{@docRoot}/java/util/Collection.html#optional-restrictions">optional</a>)
      */
     boolean removeFirstOccurrence(Object o);
 
@@ -419,9 +422,9 @@ public interface BlockingDeque<E> extends BlockingQueue<E>, Deque<E> {
      * @return {@code true} if an element was removed as a result of this call
      * @throws ClassCastException if the class of the specified element
      *         is incompatible with this deque
-     *         (<a href="../Collection.html#optional-restrictions">optional</a>)
+     * (<a href="{@docRoot}/java/util/Collection.html#optional-restrictions">optional</a>)
      * @throws NullPointerException if the specified element is null
-     *         (<a href="../Collection.html#optional-restrictions">optional</a>)
+     * (<a href="{@docRoot}/java/util/Collection.html#optional-restrictions">optional</a>)
      */
     boolean removeLastOccurrence(Object o);
 
@@ -596,9 +599,9 @@ public interface BlockingDeque<E> extends BlockingQueue<E>, Deque<E> {
      * @return {@code true} if this deque changed as a result of the call
      * @throws ClassCastException if the class of the specified element
      *         is incompatible with this deque
-     *         (<a href="../Collection.html#optional-restrictions">optional</a>)
+     * (<a href="{@docRoot}/java/util/Collection.html#optional-restrictions">optional</a>)
      * @throws NullPointerException if the specified element is null
-     *         (<a href="../Collection.html#optional-restrictions">optional</a>)
+     * (<a href="{@docRoot}/java/util/Collection.html#optional-restrictions">optional</a>)
      */
     boolean remove(Object o);
 
@@ -611,18 +614,18 @@ public interface BlockingDeque<E> extends BlockingQueue<E>, Deque<E> {
      * @return {@code true} if this deque contains the specified element
      * @throws ClassCastException if the class of the specified element
      *         is incompatible with this deque
-     *         (<a href="../Collection.html#optional-restrictions">optional</a>)
+     * (<a href="{@docRoot}/java/util/Collection.html#optional-restrictions">optional</a>)
      * @throws NullPointerException if the specified element is null
-     *         (<a href="../Collection.html#optional-restrictions">optional</a>)
+     * (<a href="{@docRoot}/java/util/Collection.html#optional-restrictions">optional</a>)
      */
-    public boolean contains(Object o);
+    boolean contains(Object o);
 
     /**
      * Returns the number of elements in this deque.
      *
      * @return the number of elements in this deque
      */
-    public int size();
+    int size();
 
     /**
      * Returns an iterator over the elements in this deque in proper sequence.

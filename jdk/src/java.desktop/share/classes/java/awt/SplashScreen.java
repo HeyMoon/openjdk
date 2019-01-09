@@ -48,7 +48,7 @@ import sun.awt.image.SunWritableRaster;
  * Place the image in the jar archive and specify the path in the option.
  * The path should not have a leading slash.
  * <BR>
- * For example, in the <code>manifest.mf</code> file:
+ * For example, in the {@code manifest.mf} file:
  * <PRE>
  * Manifest-Version: 1.0
  * Main-Class: Test
@@ -65,6 +65,16 @@ import sun.awt.image.SunWritableRaster;
  * <PRE>
  * java -splash:filename.gif Test
  * </PRE>
+ * HiDPI scaled image is also supported.
+ * Unscaled image name i.e. filename.gif should be passed in
+ * {@code manifest.mf}/{@code -splash:} option for all image types irrespective of
+ * HiDPI and Non-HiDPI.
+ * Following is the naming convention for scaled images.
+ * Screen scale 1.25: filename@125pct.gif
+ * Screen scale 1.50: filename@150pct.gif
+ * Screen scale 2:    filename@200pct.gif and filename@2x.gif both are supported
+ * Screen scale 2.50: filename@250pct.gif
+ * Screen scale 3:    filename@300pct.gif and filename@3x.gif both are supported
  * The command line interface has higher precedence over the manifest
  * setting.
  * <p>
@@ -89,7 +99,7 @@ import sun.awt.image.SunWritableRaster;
  * can exist, and it may be obtained by using the {@link #getSplashScreen()}
  * static method. In case the splash screen has not been created at
  * application startup via the command line or manifest file option,
- * the <code>getSplashScreen</code> method returns <code>null</code>.
+ * the {@code getSplashScreen} method returns {@code null}.
  *
  * @author Oleg Semenov
  * @since 1.6
@@ -108,7 +118,7 @@ public final class SplashScreen {
      *         supported by the current toolkit
      * @throws HeadlessException if {@code GraphicsEnvironment.isHeadless()}
      *         returns true
-     * @return the {@link SplashScreen} instance, or <code>null</code> if there is
+     * @return the {@link SplashScreen} instance, or {@code null} if there is
      *         none or it has already been closed
      */
     public static  SplashScreen getSplashScreen() {
@@ -142,9 +152,9 @@ public final class SplashScreen {
      * The splash screen window is resized according to the size of
      * the image and is centered on the screen.
      *
-     * @param imageURL the non-<code>null</code> URL for the new
+     * @param imageURL the non-{@code null} URL for the new
      *        splash screen image
-     * @throws NullPointerException if {@code imageURL} is <code>null</code>
+     * @throws NullPointerException if {@code imageURL} is {@code null}
      * @throws IOException if there was an error while loading the image
      * @throws IllegalStateException if the splash screen has already been
      *         closed
@@ -251,7 +261,7 @@ public final class SplashScreen {
             assert scale > 0;
             if (scale > 0 && scale != 1) {
                 bounds.setSize((int) (bounds.getWidth() / scale),
-                        (int) (bounds.getWidth() / scale));
+                        (int) (bounds.getHeight() / scale));
             }
             return bounds;
         }
@@ -282,7 +292,7 @@ public final class SplashScreen {
      * displayed over the main image using alpha blending. Also note that drawing
      * on the overlay image does not necessarily update the contents of splash
      * screen window. You should call {@code update()} on the
-     * <code>SplashScreen</code> when you want the splash screen to be
+     * {@code SplashScreen} when you want the splash screen to be
      * updated immediately.
      * <p>
      * The pixel (0, 0) in the coordinate space of the graphics context
@@ -402,7 +412,7 @@ public final class SplashScreen {
 
     /**
      * The instance reference for the singleton.
-     * (<code>null</code> if no instance exists yet.)
+     * ({@code null} if no instance exists yet.)
      *
      * @see #getSplashScreen
      * @see #close
@@ -411,14 +421,14 @@ public final class SplashScreen {
 
     private static final PlatformLogger log = PlatformLogger.getLogger("java.awt.SplashScreen");
 
-    private native static void _update(long splashPtr, int[] data, int x, int y, int width, int height, int scanlineStride);
-    private native static boolean _isVisible(long splashPtr);
-    private native static Rectangle _getBounds(long splashPtr);
-    private native static long _getInstance();
-    private native static void _close(long splashPtr);
-    private native static String _getImageFileName(long splashPtr);
-    private native static String _getImageJarName(long SplashPtr);
-    private native static boolean _setImageData(long SplashPtr, byte[] data);
-    private native static float _getScaleFactor(long SplashPtr);
+    private static native void _update(long splashPtr, int[] data, int x, int y, int width, int height, int scanlineStride);
+    private static native boolean _isVisible(long splashPtr);
+    private static native Rectangle _getBounds(long splashPtr);
+    private static native long _getInstance();
+    private static native void _close(long splashPtr);
+    private static native String _getImageFileName(long splashPtr);
+    private static native String _getImageJarName(long SplashPtr);
+    private static native boolean _setImageData(long SplashPtr, byte[] data);
+    private static native float _getScaleFactor(long SplashPtr);
 
 }

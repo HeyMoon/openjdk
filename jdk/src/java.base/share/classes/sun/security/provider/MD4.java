@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@ package sun.security.provider;
 import java.security.*;
 
 import static sun.security.provider.ByteArrayAccess.*;
+import static sun.security.util.SecurityConstants.PROVIDER_VER;
 
 /**
  * The MD4 class is used to compute an MD4 message digest over a given
@@ -62,10 +63,11 @@ public final class MD4 extends DigestBase {
     private static final int S33 = 11;
     private static final int S34 = 15;
 
-    private final static Provider md4Provider;
+    private static final Provider md4Provider;
 
     static {
-        md4Provider = new Provider("MD4Provider", 1.9d, "MD4 MessageDigest") {
+        md4Provider = new Provider("MD4Provider", PROVIDER_VER,
+            "MD4 MessageDigest") {
             private static final long serialVersionUID = -8850464997518327965L;
         };
         AccessController.doPrivileged(new PrivilegedAction<Void>() {

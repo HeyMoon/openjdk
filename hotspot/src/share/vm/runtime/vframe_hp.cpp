@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -158,7 +158,7 @@ void compiledVFrame::update_local(BasicType type, int index, jvalue value) {
     deferred =  new(ResourceObj::C_HEAP, mtCompiler) GrowableArray<jvmtiDeferredLocalVariableSet*> (1, true);
     thread()->set_deferred_locals(deferred);
   }
-  deferred->push(new jvmtiDeferredLocalVariableSet(method(), bci(), fr().id()));
+  deferred->push(new jvmtiDeferredLocalVariableSet(method(), bci(), fr().id(), vframe_id()));
   assert(deferred->top()->id() == fr().id(), "Huh? Must match");
   deferred->top()->set_local_at(index, type, value);
 }
@@ -196,9 +196,9 @@ BasicLock* compiledVFrame::resolve_monitor_lock(Location location) const {
 GrowableArray<MonitorInfo*>* compiledVFrame::monitors() const {
   // Natives has no scope
   if (scope() == NULL) {
-    nmethod* nm = code();
+    CompiledMethod* nm = code();
     Method* method = nm->method();
-    assert(method->is_native(), "");
+    assert(method->is_native() || nm->is_aot(), "Expect a native method or precompiled method");
     if (!method->is_synchronized()) {
       return new GrowableArray<MonitorInfo*>(0);
     }
@@ -240,19 +240,21 @@ GrowableArray<MonitorInfo*>* compiledVFrame::monitors() const {
 }
 
 
-compiledVFrame::compiledVFrame(const frame* fr, const RegisterMap* reg_map, JavaThread* thread, nmethod* nm)
+compiledVFrame::compiledVFrame(const frame* fr, const RegisterMap* reg_map, JavaThread* thread, CompiledMethod* nm)
 : javaVFrame(fr, reg_map, thread) {
   _scope  = NULL;
+  _vframe_id = 0;
   // Compiled method (native stub or Java code)
   // native wrappers have no scope data, it is implied
-  if (!nm->is_native_method()) {
-    _scope  = nm->scope_desc_at(_fr.pc());
+  if (!nm->is_compiled() || !nm->as_compiled_method()->is_native_method()) {
+      _scope  = nm->scope_desc_at(_fr.pc());
   }
 }
 
-compiledVFrame::compiledVFrame(const frame* fr, const RegisterMap* reg_map, JavaThread* thread, ScopeDesc* scope)
+compiledVFrame::compiledVFrame(const frame* fr, const RegisterMap* reg_map, JavaThread* thread, ScopeDesc* scope, int vframe_id)
 : javaVFrame(fr, reg_map, thread) {
   _scope  = scope;
+  _vframe_id = vframe_id;
   guarantee(_scope != NULL, "scope must be present");
 }
 
@@ -264,15 +266,15 @@ bool compiledVFrame::is_top() const {
 }
 
 
-nmethod* compiledVFrame::code() const {
-  return CodeCache::find_nmethod(_fr.pc());
+CompiledMethod* compiledVFrame::code() const {
+  return CodeCache::find_compiled(_fr.pc());
 }
 
 
 Method* compiledVFrame::method() const {
   if (scope() == NULL) {
     // native nmethods have no scope the method is implied
-    nmethod* nm = code();
+    nmethod* nm = code()->as_nmethod();
     assert(nm->is_native_method(), "must be native");
     return nm->method();
   }
@@ -289,7 +291,7 @@ int compiledVFrame::bci() const {
 int compiledVFrame::raw_bci() const {
   if (scope() == NULL) {
     // native nmethods have no scope the method/bci is implied
-    nmethod* nm = code();
+    nmethod* nm = code()->as_nmethod();
     assert(nm->is_native_method(), "must be native");
     return 0;
   }
@@ -299,7 +301,7 @@ int compiledVFrame::raw_bci() const {
 bool compiledVFrame::should_reexecute() const {
   if (scope() == NULL) {
     // native nmethods have no scope the method/bci is implied
-    nmethod* nm = code();
+    nmethod* nm = code()->as_nmethod();
     assert(nm->is_native_method(), "must be native");
     return false;
   }
@@ -310,20 +312,21 @@ vframe* compiledVFrame::sender() const {
   const frame f = fr();
   if (scope() == NULL) {
     // native nmethods have no scope the method/bci is implied
-    nmethod* nm = code();
+    nmethod* nm = code()->as_nmethod();
     assert(nm->is_native_method(), "must be native");
     return vframe::sender();
   } else {
     return scope()->is_top()
       ? vframe::sender()
-      : new compiledVFrame(&f, register_map(), thread(), scope()->sender());
+      : new compiledVFrame(&f, register_map(), thread(), scope()->sender(), vframe_id() + 1);
   }
 }
 
-jvmtiDeferredLocalVariableSet::jvmtiDeferredLocalVariableSet(Method* method, int bci, intptr_t* id) {
+jvmtiDeferredLocalVariableSet::jvmtiDeferredLocalVariableSet(Method* method, int bci, intptr_t* id, int vframe_id) {
   _method = method;
   _bci = bci;
   _id = id;
+  _vframe_id = vframe_id;
   // Alway will need at least one, must be on C heap
   _locals = new(ResourceObj::C_HEAP, mtCompiler) GrowableArray<jvmtiDeferredLocalVariable*> (1, true);
 }
@@ -339,7 +342,11 @@ jvmtiDeferredLocalVariableSet::~jvmtiDeferredLocalVariableSet() {
 bool jvmtiDeferredLocalVariableSet::matches(vframe* vf) {
   if (!vf->is_compiled_frame()) return false;
   compiledVFrame* cvf = (compiledVFrame*)vf;
-  return cvf->fr().id() == id() && cvf->method() == method() && cvf->bci() == bci();
+  if (cvf->fr().id() == id() && cvf->vframe_id() == vframe_id()) {
+    assert(cvf->method() == method() && cvf->bci() == bci(), "must agree");
+    return true;
+  }
+  return false;
 }
 
 void jvmtiDeferredLocalVariableSet::set_local_at(int idx, BasicType type, jvalue val) {

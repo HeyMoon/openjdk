@@ -24,15 +24,14 @@
 /* @test
  * @bug 4118818
  * @summary allow null X.500 Names
- * @modules java.base/sun.misc
- *          java.base/sun.security.util
+ * @modules java.base/sun.security.util
  *          java.base/sun.security.x509
  */
 
 import java.util.Arrays;
 import sun.security.util.DerOutputStream;
 import sun.security.x509.*;
-import sun.misc.HexDumpEncoder;
+import sun.security.util.HexDumpEncoder;
 
 public class NullX500Name {
 

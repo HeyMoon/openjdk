@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -65,8 +65,13 @@ import javax.swing.border.EmptyBorder;
  *
  * @see java.security.Policy
  * @since   1.2
+ * @deprecated {@code policytool} has been deprecated for removal because it
+ * is rarely used, and it provides little value over editing policy
+ * files using a text editor.
  */
 
+@Deprecated(since="9", forRemoval=true)
+@SuppressWarnings("removal")
 public class PolicyTool {
 
     // for i18n
@@ -633,17 +638,16 @@ public class PolicyTool {
             type.equals(PolicyParser.PrincipalEntry.REPLACE_NAME)) {
             return;
         }
-        Class<?> PRIN = Class.forName("java.security.Principal");
         Class<?> pc = Class.forName(type, true,
                 Thread.currentThread().getContextClassLoader());
-        if (!PRIN.isAssignableFrom(pc)) {
+        if (!Principal.class.isAssignableFrom(pc)) {
             MessageFormat form = new MessageFormat(getMessage
                         ("Illegal.Principal.Type.type"));
             Object[] source = {type};
             throw new InstantiationException(form.format(source));
         }
 
-        if (ToolDialog.X500_PRIN_CLASS.equals(pc.getName())) {
+        if (X500Principal.class.getName().equals(pc.getName())) {
             // PolicyParser checks validity of X500Principal name
             // - PolicyTool needs to as well so that it doesn't store
             //   an invalid name that can't be read in later
@@ -739,6 +743,8 @@ public class PolicyTool {
      * run the PolicyTool
      */
     public static void main(String args[]) {
+        System.out.println("Note: The policytool tool has been deprecated and" +
+                " is planned to be removed in a future release.\n");
         parseArgs(args);
         SwingUtilities.invokeLater(new Runnable() {
             public void run() {
@@ -874,6 +880,8 @@ public class PolicyTool {
  * The Permission contains the (Type, Name, Action) triplet.
  *
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class PolicyEntry {
 
     private CodeSource codesource;
@@ -1013,6 +1021,8 @@ class PolicyEntry {
 /**
  * The main window for the PolicyTool
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class ToolWindow extends JFrame {
     // use serialVersionUID from JDK 1.2.2 for interoperability
     private static final long serialVersionUID = 5682568601210376777L;
@@ -1370,10 +1380,6 @@ class ToolWindow extends JFrame {
         ToolDialog ed = new ToolDialog
                 (PolicyTool.getMessage("Error"), tool, this, true);
 
-        // find where the PolicyTool gui is
-        Point location = ((w == null) ?
-                getLocationOnScreen() : w.getLocationOnScreen());
-        //ed.setBounds(location.x + 50, location.y + 50, 600, 100);
         ed.setLayout(new GridBagLayout());
 
         JLabel label = new JLabel(error);
@@ -1550,6 +1556,8 @@ class ToolWindow extends JFrame {
 /**
  * General dialog window
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class ToolDialog extends JDialog {
     // use serialVersionUID from JDK 1.2.2 for interoperability
     private static final long serialVersionUID = -372244357011301190L;
@@ -1562,14 +1570,6 @@ class ToolDialog extends JDialog {
     public static final int QUIT                = 1;
     public static final int NEW                 = 2;
     public static final int OPEN                = 3;
-
-    public static final String ALL_PERM_CLASS   =
-                "java.security.AllPermission";
-    public static final String FILE_PERM_CLASS  =
-                "java.io.FilePermission";
-
-    public static final String X500_PRIN_CLASS         =
-                "javax.security.auth.x500.X500Principal";
 
     /* popup menus */
     public static final String PERM             =
@@ -1752,11 +1752,11 @@ class ToolDialog extends JDialog {
         for (int i = 0; i < PERM_ARRAY.size(); i++) {
             Perm next = PERM_ARRAY.get(i);
             if (fullClassName) {
-                if (next.FULL_CLASS.equals(clazz)) {
+                if (next.getName().equals(clazz)) {
                     return next;
                 }
             } else {
-                if (next.CLASS.equals(clazz)) {
+                if (next.getSimpleName().equals(clazz)) {
                     return next;
                 }
             }
@@ -1772,11 +1772,11 @@ class ToolDialog extends JDialog {
         for (int i = 0; i < PRIN_ARRAY.size(); i++) {
             Prin next = PRIN_ARRAY.get(i);
             if (fullClassName) {
-                if (next.FULL_CLASS.equals(clazz)) {
+                if (next.getName().equals(clazz)) {
                     return next;
                 }
             } else {
-                if (next.CLASS.equals(clazz)) {
+                if (next.getSimpleName().equals(clazz)) {
                     return next;
                 }
             }
@@ -2170,7 +2170,7 @@ class ToolDialog extends JDialog {
         choice.getAccessibleContext().setAccessibleName(PRIN_TYPE);
         for (int i = 0; i < PRIN_ARRAY.size(); i++) {
             Prin next = PRIN_ARRAY.get(i);
-            choice.addItem(next.CLASS);
+            choice.addItem(next.getSimpleName());
         }
 
         if (edit) {
@@ -2180,7 +2180,7 @@ class ToolDialog extends JDialog {
             } else {
                 Prin inputPrin = getPrin(editMe.getPrincipalClass(), true);
                 if (inputPrin != null) {
-                    choice.setSelectedItem(inputPrin.CLASS);
+                    choice.setSelectedItem(inputPrin.getSimpleName());
                 }
             }
         }
@@ -2286,7 +2286,7 @@ class ToolDialog extends JDialog {
         choice.getAccessibleContext().setAccessibleName(PERM);
         for (int i = 0; i < PERM_ARRAY.size(); i++) {
             Perm next = PERM_ARRAY.get(i);
-            choice.addItem(next.CLASS);
+            choice.addItem(next.getSimpleName());
         }
         tw.addNewComponent(newTD, choice, PD_PERM_CHOICE,
                            0, 1, 1, 1, 0.0, 0.0, GridBagConstraints.BOTH,
@@ -2300,7 +2300,7 @@ class ToolDialog extends JDialog {
         if (edit) {
             Perm inputPerm = getPerm(editMe.permission, true);
             if (inputPerm != null) {
-                choice.setSelectedItem(inputPerm.CLASS);
+                choice.setSelectedItem(inputPerm.getSimpleName());
             }
         }
         tw.addNewComponent(newTD, tf, PD_PERM_TEXTFIELD,
@@ -2417,7 +2417,7 @@ class ToolDialog extends JDialog {
                         "\t'" + pname + "' will be interpreted " +
                                 "as a key store alias.\n" +
                         "\tThe final principal class will be " +
-                                ToolDialog.X500_PRIN_CLASS + ".\n" +
+                                X500Principal.class.getName() + ".\n" +
                         "\tThe final principal name will be " +
                                 "determined by the following:\n" +
                         "\n" +
@@ -2452,7 +2452,7 @@ class ToolDialog extends JDialog {
         if (tf.getText().trim().equals("") == false)
             name = new String(tf.getText().trim());
         if (permission.equals("") ||
-            (!permission.equals(ALL_PERM_CLASS) && name == null)) {
+            (!permission.equals(AllPermission.class.getName()) && name == null)) {
             throw new InvalidParameterException(PolicyTool.getMessage
                 ("Permission.and.Target.Name.must.have.a.value"));
         }
@@ -2467,7 +2467,8 @@ class ToolDialog extends JDialog {
         // \\server\share     0, legal
         // \\\\server\share   2, illegal
 
-        if (permission.equals(FILE_PERM_CLASS) && name.lastIndexOf("\\\\") > 0) {
+        if (permission.equals(FilePermission.class.getName())
+                && name.lastIndexOf("\\\\") > 0) {
             char result = tw.displayYesNoDialog(this,
                     PolicyTool.getMessage("Warning"),
                     PolicyTool.getMessage(
@@ -2920,6 +2921,8 @@ class ToolDialog extends JDialog {
 /**
  * Event handler for the PolicyTool window
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class ToolWindowListener implements WindowListener {
 
     private PolicyTool tool;
@@ -2964,6 +2967,8 @@ class ToolWindowListener implements WindowListener {
 /**
  * Event handler for the Policy List
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class PolicyListListener extends MouseAdapter implements ActionListener {
 
     private PolicyTool tool;
@@ -2993,6 +2998,8 @@ class PolicyListListener extends MouseAdapter implements ActionListener {
 /**
  * Event handler for the File Menu
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class FileMenuListener implements ActionListener {
 
     private PolicyTool tool;
@@ -3091,6 +3098,8 @@ class FileMenuListener implements ActionListener {
 /**
  * Event handler for the main window buttons and Edit Menu
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class MainWindowListener implements ActionListener {
 
     private PolicyTool tool;
@@ -3166,6 +3175,8 @@ class MainWindowListener implements ActionListener {
  *    if edit is FALSE, then we are ADDing a new PolicyEntry,
  *    so we only need to update the GUI listing.
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class AddEntryDoneButtonListener implements ActionListener {
 
     private PolicyTool tool;
@@ -3232,6 +3243,8 @@ class AddEntryDoneButtonListener implements ActionListener {
 /**
  * Event handler for ChangeKeyStoreOKButton button
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class ChangeKeyStoreOKButtonListener implements ActionListener {
 
     private PolicyTool tool;
@@ -3278,6 +3291,8 @@ class ChangeKeyStoreOKButtonListener implements ActionListener {
 /**
  * Event handler for AddPrinButton button
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class AddPrinButtonListener implements ActionListener {
 
     private PolicyTool tool;
@@ -3303,6 +3318,8 @@ class AddPrinButtonListener implements ActionListener {
 /**
  * Event handler for AddPermButton button
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class AddPermButtonListener implements ActionListener {
 
     private PolicyTool tool;
@@ -3328,6 +3345,8 @@ class AddPermButtonListener implements ActionListener {
 /**
  * Event handler for AddPrinOKButton button
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class NewPolicyPrinOKButtonListener implements ActionListener {
 
     private PolicyTool tool;
@@ -3391,6 +3410,8 @@ class NewPolicyPrinOKButtonListener implements ActionListener {
 /**
  * Event handler for AddPermOKButton button
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class NewPolicyPermOKButtonListener implements ActionListener {
 
     private PolicyTool tool;
@@ -3454,6 +3475,8 @@ class NewPolicyPermOKButtonListener implements ActionListener {
 /**
  * Event handler for RemovePrinButton button
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class RemovePrinButtonListener implements ActionListener {
 
     private PolicyTool tool;
@@ -3489,6 +3512,8 @@ class RemovePrinButtonListener implements ActionListener {
 /**
  * Event handler for RemovePermButton button
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class RemovePermButtonListener implements ActionListener {
 
     private PolicyTool tool;
@@ -3531,6 +3556,8 @@ class RemovePermButtonListener implements ActionListener {
  * GUI listing.  If the user is editing an existing PolicyEntry, we
  * update both the GUI listing and the actual PolicyEntry.
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class EditPrinButtonListener extends MouseAdapter implements ActionListener {
 
     private PolicyTool tool;
@@ -3577,6 +3604,8 @@ class EditPrinButtonListener extends MouseAdapter implements ActionListener {
  * GUI listing.  If the user is editing an existing PolicyEntry, we
  * update both the GUI listing and the actual PolicyEntry.
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class EditPermButtonListener extends MouseAdapter implements ActionListener {
 
     private PolicyTool tool;
@@ -3617,6 +3646,8 @@ class EditPermButtonListener extends MouseAdapter implements ActionListener {
 /**
  * Event handler for Principal Popup Menu
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class PrincipalTypeMenuListener implements ItemListener {
 
     private ToolDialog td;
@@ -3645,7 +3676,7 @@ class PrincipalTypeMenuListener implements ItemListener {
             if (prinField.getText() != null &&
                 prinField.getText().length() > 0) {
                 Prin inputPrin = ToolDialog.getPrin(prinField.getText(), true);
-                prin.setSelectedItem(inputPrin.CLASS);
+                prin.setSelectedItem(inputPrin.getSimpleName());
             }
             return;
         }
@@ -3660,7 +3691,7 @@ class PrincipalTypeMenuListener implements ItemListener {
         // set of names and actions
         Prin inputPrin = ToolDialog.getPrin((String)e.getItem(), false);
         if (inputPrin != null) {
-            prinField.setText(inputPrin.FULL_CLASS);
+            prinField.setText(inputPrin.getName());
         }
     }
 }
@@ -3668,6 +3699,8 @@ class PrincipalTypeMenuListener implements ItemListener {
 /**
  * Event handler for Permission Popup Menu
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class PermissionMenuListener implements ItemListener {
 
     private ToolDialog td;
@@ -3711,7 +3744,7 @@ class PermissionMenuListener implements ItemListener {
 
                 Perm inputPerm = ToolDialog.getPerm(permField.getText(), true);
                 if (inputPerm != null) {
-                    perms.setSelectedItem(inputPerm.CLASS);
+                    perms.setSelectedItem(inputPerm.getSimpleName());
                 }
             }
             return;
@@ -3732,7 +3765,7 @@ class PermissionMenuListener implements ItemListener {
         if (inputPerm == null) {
             permField.setText("");
         } else {
-            permField.setText(inputPerm.FULL_CLASS);
+            permField.setText(inputPerm.getName());
         }
         td.setPermissionNames(inputPerm, names, nameField);
         td.setPermissionActions(inputPerm, actions, actionsField);
@@ -3742,6 +3775,8 @@ class PermissionMenuListener implements ItemListener {
 /**
  * Event handler for Permission Name Popup Menu
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class PermissionNameMenuListener implements ItemListener {
 
     private ToolDialog td;
@@ -3895,6 +3930,8 @@ class StatusOKButtonListener implements ActionListener {
 /**
  * Event handler for UserSaveYes button
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class UserSaveYesButtonListener implements ActionListener {
 
     private ToolDialog us;
@@ -3949,6 +3986,8 @@ class UserSaveYesButtonListener implements ActionListener {
 /**
  * Event handler for UserSaveNoButton
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class UserSaveNoButtonListener implements ActionListener {
 
     private PolicyTool tool;
@@ -3997,6 +4036,8 @@ class UserSaveCancelButtonListener implements ActionListener {
 /**
  * Event handler for ConfirmRemovePolicyEntryOKButtonListener
  */
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class ConfirmRemovePolicyEntryOKButtonListener implements ActionListener {
 
     private PolicyTool tool;
@@ -4082,26 +4123,30 @@ class TaggedList extends JList<String> {
  */
 
 class Prin {
-    public final String CLASS;
-    public final String FULL_CLASS;
+    final Class<? extends Principal> CLASS;
 
-    public Prin(String clazz, String fullClass) {
+    Prin(Class<? extends Principal> clazz) {
         this.CLASS = clazz;
-        this.FULL_CLASS = fullClass;
+    }
+
+    String getName() {
+        return CLASS.getName();
+    }
+
+    String getSimpleName() {
+        return CLASS.getSimpleName();
     }
 }
 
 class KrbPrin extends Prin {
-    public KrbPrin() {
-        super("KerberosPrincipal",
-                "javax.security.auth.kerberos.KerberosPrincipal");
+    KrbPrin() {
+        super(javax.security.auth.kerberos.KerberosPrincipal.class);
     }
 }
 
 class X500Prin extends Prin {
-    public X500Prin() {
-        super("X500Principal",
-                "javax.security.auth.x500.X500Principal");
+    X500Prin() {
+        super(javax.security.auth.x500.X500Principal.class);
     }
 }
 
@@ -4110,44 +4155,50 @@ class X500Prin extends Prin {
  */
 
 class Perm {
-    public final String CLASS;
-    public final String FULL_CLASS;
-    public final String[] TARGETS;
-    public final String[] ACTIONS;
+    final Class<? extends Permission> CLASS;
+    final String[] TARGETS;
+    final String[] ACTIONS;
 
-    public Perm(String clazz, String fullClass,
+    Perm(Class<? extends Permission> clazz,
                 String[] targets, String[] actions) {
 
         this.CLASS = clazz;
-        this.FULL_CLASS = fullClass;
         this.TARGETS = targets;
         this.ACTIONS = actions;
+    }
+
+    String getName() {
+        return CLASS.getName();
+    }
+
+    String getSimpleName() {
+        return CLASS.getSimpleName();
     }
 }
 
 class AllPerm extends Perm {
-    public AllPerm() {
-        super("AllPermission", "java.security.AllPermission", null, null);
+    AllPerm() {
+        super(java.security.AllPermission.class, null, null);
     }
 }
 
 class AudioPerm extends Perm {
-    public AudioPerm() {
-        super("AudioPermission",
-        "javax.sound.sampled.AudioPermission",
-        new String[]    {
+    AudioPerm() {
+        super(javax.sound.sampled.AudioPermission.class,
+            new String[]    {
                 "play",
                 "record"
                 },
-        null);
+            null);
     }
 }
 
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class AuthPerm extends Perm {
-    public AuthPerm() {
-    super("AuthPermission",
-        "javax.security.auth.AuthPermission",
-        new String[]    {
+    AuthPerm() {
+        super(javax.security.auth.AuthPermission.class,
+            new String[]    {
                 "doAs",
                 "doAsPrivileged",
                 "getSubject",
@@ -4165,15 +4216,14 @@ class AuthPerm extends Perm {
                         PolicyTool.getMessage("configuration.type") + ">",
                 "refreshLoginConfiguration"
                 },
-        null);
+            null);
     }
 }
 
 class AWTPerm extends Perm {
-    public AWTPerm() {
-    super("AWTPermission",
-        "java.awt.AWTPermission",
-        new String[]    {
+    AWTPerm() {
+        super(java.awt.AWTPermission.class,
+            new String[]    {
                 "accessClipboard",
                 "accessEventQueue",
                 "accessSystemTray",
@@ -4187,30 +4237,28 @@ class AWTPerm extends Perm {
                 "showWindowWithoutWarningBanner",
                 "toolkitModality",
                 "watchMousePointer"
-        },
-        null);
+                },
+            null);
     }
 }
 
 class DelegationPerm extends Perm {
-    public DelegationPerm() {
-    super("DelegationPermission",
-        "javax.security.auth.kerberos.DelegationPermission",
-        new String[]    {
+    DelegationPerm() {
+        super(javax.security.auth.kerberos.DelegationPermission.class,
+            new String[]    {
                 // allow user input
                 },
-        null);
+            null);
     }
 }
 
 class FilePerm extends Perm {
-    public FilePerm() {
-    super("FilePermission",
-        "java.io.FilePermission",
-        new String[]    {
+    FilePerm() {
+        super(java.io.FilePermission.class,
+            new String[]    {
                 "<<ALL FILES>>"
                 },
-        new String[]    {
+            new String[]    {
                 "read",
                 "write",
                 "delete",
@@ -4219,65 +4267,62 @@ class FilePerm extends Perm {
     }
 }
 
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class URLPerm extends Perm {
-    public URLPerm() {
-        super("URLPermission",
-                "java.net.URLPermission",
-                new String[]    {
-                    "<"+ PolicyTool.getMessage("url") + ">",
-                },
-                new String[]    {
-                    "<" + PolicyTool.getMessage("method.list") + ">:<"
-                        + PolicyTool.getMessage("request.headers.list") + ">",
-                });
+    URLPerm() {
+        super(java.net.URLPermission.class,
+            new String[]    {
+                "<"+ PolicyTool.getMessage("url") + ">",
+            },
+            new String[]    {
+                "<" + PolicyTool.getMessage("method.list") + ">:<"
+                    + PolicyTool.getMessage("request.headers.list") + ">",
+            });
     }
 }
 
 class InqSecContextPerm extends Perm {
-    public InqSecContextPerm() {
-    super("InquireSecContextPermission",
-        "com.sun.security.jgss.InquireSecContextPermission",
-        new String[]    {
+    InqSecContextPerm() {
+        super(com.sun.security.jgss.InquireSecContextPermission.class,
+            new String[]    {
                 "KRB5_GET_SESSION_KEY",
                 "KRB5_GET_TKT_FLAGS",
                 "KRB5_GET_AUTHZ_DATA",
                 "KRB5_GET_AUTHTIME"
                 },
-        null);
+            null);
     }
 }
 
 class LogPerm extends Perm {
-    public LogPerm() {
-    super("LoggingPermission",
-        "java.util.logging.LoggingPermission",
-        new String[]    {
+    LogPerm() {
+        super(java.util.logging.LoggingPermission.class,
+            new String[]    {
                 "control"
                 },
-        null);
+            null);
     }
 }
 
 class MgmtPerm extends Perm {
-    public MgmtPerm() {
-    super("ManagementPermission",
-        "java.lang.management.ManagementPermission",
-        new String[]    {
+    MgmtPerm() {
+        super(java.lang.management.ManagementPermission.class,
+            new String[]    {
                 "control",
                 "monitor"
                 },
-        null);
+            null);
     }
 }
 
 class MBeanPerm extends Perm {
-    public MBeanPerm() {
-    super("MBeanPermission",
-        "javax.management.MBeanPermission",
-        new String[]    {
+    MBeanPerm() {
+        super(javax.management.MBeanPermission.class,
+            new String[]    {
                 // allow user input
                 },
-        new String[]    {
+            new String[]    {
                 "addNotificationListener",
                 "getAttribute",
                 "getClassLoader",
@@ -4300,35 +4345,32 @@ class MBeanPerm extends Perm {
 }
 
 class MBeanSvrPerm extends Perm {
-    public MBeanSvrPerm() {
-    super("MBeanServerPermission",
-        "javax.management.MBeanServerPermission",
-        new String[]    {
+    MBeanSvrPerm() {
+        super(javax.management.MBeanServerPermission.class,
+            new String[]    {
                 "createMBeanServer",
                 "findMBeanServer",
                 "newMBeanServer",
                 "releaseMBeanServer"
                 },
-        null);
+            null);
     }
 }
 
 class MBeanTrustPerm extends Perm {
-    public MBeanTrustPerm() {
-    super("MBeanTrustPermission",
-        "javax.management.MBeanTrustPermission",
-        new String[]    {
+    MBeanTrustPerm() {
+        super(javax.management.MBeanTrustPermission.class,
+            new String[]    {
                 "register"
                 },
-        null);
+            null);
     }
 }
 
 class NetPerm extends Perm {
-    public NetPerm() {
-    super("NetPermission",
-        "java.net.NetPermission",
-        new String[]    {
+    NetPerm() {
+        super(java.net.NetPermission.class,
+            new String[]    {
                 "allowHttpTrace",
                 "setDefaultAuthenticator",
                 "requestPasswordAuthentication",
@@ -4341,43 +4383,40 @@ class NetPerm extends Perm {
                 "setResponseCache",
                 "getResponseCache"
                 },
-        null);
+            null);
     }
 }
 
 class NetworkPerm extends Perm {
-    public NetworkPerm() {
-    super("NetworkPermission",
-        "jdk.net.NetworkPermission",
-        new String[]    {
+    NetworkPerm() {
+        super(jdk.net.NetworkPermission.class,
+            new String[]    {
                 "setOption.SO_FLOW_SLA",
                 "getOption.SO_FLOW_SLA"
                 },
-        null);
+            null);
     }
 }
 
 class PrivCredPerm extends Perm {
-    public PrivCredPerm() {
-    super("PrivateCredentialPermission",
-        "javax.security.auth.PrivateCredentialPermission",
-        new String[]    {
+    PrivCredPerm() {
+        super(javax.security.auth.PrivateCredentialPermission.class,
+            new String[]    {
                 // allow user input
                 },
-        new String[]    {
+            new String[]    {
                 "read"
                 });
     }
 }
 
 class PropPerm extends Perm {
-    public PropPerm() {
-    super("PropertyPermission",
-        "java.util.PropertyPermission",
-        new String[]    {
+    PropPerm() {
+        super(java.util.PropertyPermission.class,
+            new String[]    {
                 // allow user input
                 },
-        new String[]    {
+            new String[]    {
                 "read",
                 "write"
                 });
@@ -4385,21 +4424,21 @@ class PropPerm extends Perm {
 }
 
 class ReflectPerm extends Perm {
-    public ReflectPerm() {
-    super("ReflectPermission",
-        "java.lang.reflect.ReflectPermission",
-        new String[]    {
+    ReflectPerm() {
+        super(java.lang.reflect.ReflectPermission.class,
+            new String[]    {
                 "suppressAccessChecks"
                 },
-        null);
+            null);
     }
 }
 
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class RuntimePerm extends Perm {
-    public RuntimePerm() {
-    super("RuntimePermission",
-        "java.lang.RuntimePermission",
-        new String[]    {
+    RuntimePerm() {
+        super(java.lang.RuntimePermission.class,
+            new String[]    {
                 "createClassLoader",
                 "getClassLoader",
                 "setContextClassLoader",
@@ -4432,15 +4471,16 @@ class RuntimePerm extends Perm {
                 "usePolicy",
                 // "inheritedChannel"
                 },
-        null);
+            null);
     }
 }
 
+@SuppressWarnings({"deprecation",
+                   "removal"}) // PolicyTool
 class SecurityPerm extends Perm {
-    public SecurityPerm() {
-    super("SecurityPermission",
-        "java.security.SecurityPermission",
-        new String[]    {
+    SecurityPerm() {
+        super(java.security.SecurityPermission.class,
+            new String[]    {
                 "createAccessControlContext",
                 "getDomainCombiner",
                 "getPolicy",
@@ -4470,30 +4510,28 @@ class SecurityPerm extends Perm {
                 //"getSignerPrivateKey",
                 //"setSignerKeyPair"
                 },
-        null);
+            null);
     }
 }
 
 class SerialPerm extends Perm {
-    public SerialPerm() {
-    super("SerializablePermission",
-        "java.io.SerializablePermission",
-        new String[]    {
+    SerialPerm() {
+        super(java.io.SerializablePermission.class,
+            new String[]    {
                 "enableSubclassImplementation",
                 "enableSubstitution"
                 },
-        null);
+            null);
     }
 }
 
 class ServicePerm extends Perm {
-    public ServicePerm() {
-    super("ServicePermission",
-        "javax.security.auth.kerberos.ServicePermission",
-        new String[]    {
+    ServicePerm() {
+        super(javax.security.auth.kerberos.ServicePermission.class,
+            new String[]    {
                 // allow user input
                 },
-        new String[]    {
+            new String[]    {
                 "initiate",
                 "accept"
                 });
@@ -4501,13 +4539,12 @@ class ServicePerm extends Perm {
 }
 
 class SocketPerm extends Perm {
-    public SocketPerm() {
-    super("SocketPermission",
-        "java.net.SocketPermission",
-        new String[]    {
+    SocketPerm() {
+        super(java.net.SocketPermission.class,
+            new String[]    {
                 // allow user input
                 },
-        new String[]    {
+            new String[]    {
                 "accept",
                 "connect",
                 "listen",
@@ -4517,38 +4554,35 @@ class SocketPerm extends Perm {
 }
 
 class SQLPerm extends Perm {
-    public SQLPerm() {
-    super("SQLPermission",
-        "java.sql.SQLPermission",
-        new String[]    {
+    SQLPerm() {
+        super(java.sql.SQLPermission.class,
+            new String[]    {
                 "setLog",
                 "callAbort",
                 "setSyncFactory",
                 "setNetworkTimeout",
                 },
-        null);
+            null);
     }
 }
 
 class SSLPerm extends Perm {
-    public SSLPerm() {
-    super("SSLPermission",
-        "javax.net.ssl.SSLPermission",
-        new String[]    {
+    SSLPerm() {
+        super(javax.net.ssl.SSLPermission.class,
+            new String[]    {
                 "setHostnameVerifier",
                 "getSSLSessionContext"
                 },
-        null);
+            null);
     }
 }
 
 class SubjDelegPerm extends Perm {
-    public SubjDelegPerm() {
-    super("SubjectDelegationPermission",
-        "javax.management.remote.SubjectDelegationPermission",
-        new String[]    {
+    SubjDelegPerm() {
+        super(javax.management.remote.SubjectDelegationPermission.class,
+            new String[]    {
                 // allow user input
                 },
-        null);
+            null);
     }
 }

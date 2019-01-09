@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,25 +21,22 @@
  * questions.
  */
 
-import java.io.File;
-import java.util.ArrayList;
-import java.util.Collections;
-
-import jdk.test.lib.*;
-
 /*
  * @test
  * @bug 8050079
  * @summary Compiles a monomorphic call to finalizeObject() on a modified java.lang.Object to test C1 CHA.
- * @library /testlibrary
- * @modules java.base/sun.misc
- *          java.management
- *          java.base/jdk.internal
- * @compile -XDignore.symbol.file java/lang/Object.java TestMonomorphicObjectCall.java
- * @run main TestMonomorphicObjectCall
+ *
+ * @build java.base/java.lang.Object
+ * @run main/othervm -XX:+IgnoreUnrecognizedVMOptions -Xcomp -XX:-VerifyDependencies
+ *                   -XX:TieredStopAtLevel=1
+ *                   -XX:CompileCommand=compileonly,compiler.dependencies.MonomorphicObjectCall.TestMonomorphicObjectCall::callFinalize
+ *                   -XX:CompileCommand=compileonly,java.lang.Object::finalizeObject
+ *                   compiler.dependencies.MonomorphicObjectCall.TestMonomorphicObjectCall
  */
+
+package compiler.dependencies.MonomorphicObjectCall;
+
 public class TestMonomorphicObjectCall {
-    final static String testClasses = System.getProperty("test.classes") + File.separator;
 
     private static void callFinalize(Object object) throws Throwable {
         // Call modified version of java.lang.Object::finalize() that is
@@ -49,29 +46,7 @@ public class TestMonomorphicObjectCall {
     }
 
     public static void main(String[] args) throws Throwable {
-        if (args.length == 0) {
-            // Execute new instance with modified java.lang.Object
-            executeTestJvm();
-        } else {
-            // Trigger compilation of 'callFinalize'
-            callFinalize(new Object());
-        }
-    }
-
-    public static void executeTestJvm() throws Throwable {
-        // Execute test with modified version of java.lang.Object
-        // in -Xbootclasspath.
-        String[] vmOpts = new String[] {
-                "-Xbootclasspath/p:" + testClasses,
-                "-Xcomp",
-                "-XX:+IgnoreUnrecognizedVMOptions",
-                "-XX:-VerifyDependencies",
-                "-XX:CompileOnly=TestMonomorphicObjectCall::callFinalize",
-                "-XX:CompileOnly=Object::finalizeObject",
-                "-XX:TieredStopAtLevel=1",
-                TestMonomorphicObjectCall.class.getName(),
-                "true"};
-        OutputAnalyzer output = ProcessTools.executeTestJvm(vmOpts);
-        output.shouldHaveExitValue(0);
+        // Trigger compilation of 'callFinalize'
+        callFinalize(new Object());
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@
 #include "gc/shared/copyFailedInfo.hpp"
 #include "gc/shared/gcTrace.hpp"
 #include "gc/shared/plab.hpp"
+#include "gc/shared/preservedMarks.hpp"
 #include "gc/shared/taskqueue.hpp"
 #include "memory/padded.hpp"
 
@@ -65,17 +66,14 @@ class ParScanThreadState {
  private:
   ObjToScanQueue *_work_queue;
   Stack<oop, mtGC>* const _overflow_stack;
+  PreservedMarks* const _preserved_marks;
 
   PLAB _to_space_alloc_buffer;
 
   ParScanWithoutBarrierClosure         _to_space_closure; // scan_without_gc_barrier
   ParScanWithBarrierClosure            _old_gen_closure; // scan_with_gc_barrier
   ParRootScanWithoutBarrierClosure     _to_space_root_closure; // scan_root_without_gc_barrier
-  // One of these two will be passed to process_roots, which will
-  // set its generation.  The first is for two-gen configs where the
-  // old gen collects the perm gen; the second is for arbitrary configs.
-  // The second isn't used right now (it used to be used for the train, an
-  // incremental collector) but the declaration has been left as a reminder.
+  // Will be passed to process_roots to set its generation.
   ParRootScanWithBarrierTwoGensClosure _older_gen_closure;
   // This closure will always be bound to the old gen; it will be used
   // in evacuate_followers.
@@ -84,7 +82,6 @@ class ParScanThreadState {
   DefNewGeneration::IsAliveClosure     _is_alive_closure;
   ParScanWeakRefClosure                _scan_weak_ref_closure;
   ParKeepAliveClosure                  _keep_alive_closure;
-
 
   Space* _to_space;
   Space* to_space() { return _to_space; }
@@ -99,7 +96,7 @@ class ParScanThreadState {
 
   int _hash_seed;
   int _thread_num;
-  ageTable _ageTable;
+  AgeTable _ageTable;
 
   bool _to_space_full;
 
@@ -133,13 +130,16 @@ class ParScanThreadState {
                      Generation* old_gen_, int thread_num_,
                      ObjToScanQueueSet* work_queue_set_,
                      Stack<oop, mtGC>* overflow_stacks_,
+                     PreservedMarks* preserved_marks_,
                      size_t desired_plab_sz_,
                      ParallelTaskTerminator& term_);
 
  public:
-  ageTable* age_table() {return &_ageTable;}
+  AgeTable* age_table() {return &_ageTable;}
 
   ObjToScanQueue* work_queue() { return _work_queue; }
+
+  PreservedMarks* preserved_marks() const { return _preserved_marks; }
 
   PLAB* to_space_alloc_buffer() {
     return &_to_space_alloc_buffer;
@@ -169,11 +169,7 @@ class ParScanThreadState {
   // Allocate a to-space block of size "sz", or else return NULL.
   HeapWord* alloc_in_to_space_slow(size_t word_sz);
 
-  HeapWord* alloc_in_to_space(size_t word_sz) {
-    HeapWord* obj = to_space_alloc_buffer()->allocate_aligned(word_sz, SurvivorAlignmentInBytes);
-    if (obj != NULL) return obj;
-    else return alloc_in_to_space_slow(word_sz);
-  }
+  inline HeapWord* alloc_in_to_space(size_t word_sz);
 
   HeapWord* young_old_boundary() { return _young_old_boundary; }
 
@@ -327,7 +323,7 @@ class ParNewGeneration: public DefNewGeneration {
   // A list of from-space images of to-be-scanned objects, threaded through
   // klass-pointers (klass information already copied to the forwarded
   // image.)  Manipulated with CAS.
-  oop _overflow_list;
+  oopDesc* volatile _overflow_list;
   NOT_PRODUCT(ssize_t _num_par_pushes;)
 
   // This closure is used by the reference processor to filter out
@@ -339,10 +335,6 @@ class ParNewGeneration: public DefNewGeneration {
 
   static oop real_forwardee_slow(oop obj);
   static void waste_some_time();
-
-  // Preserve the mark of "obj", if necessary, in preparation for its mark
-  // word being overwritten with a self-forwarding-pointer.
-  void preserve_mark_if_necessary(oop obj, markOop m);
 
   void handle_promotion_failed(GenCollectedHeap* gch, ParScanThreadStateSet& thread_state_set);
 

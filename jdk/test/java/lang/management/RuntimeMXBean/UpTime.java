@@ -26,15 +26,14 @@
  * @bug     4530538
  * @summary Basic unit test of RuntimeMXBean.getUptime()
  * @author  Alexei Guibadoulline
- * @modules java.management
  */
 
 import java.lang.management.*;
 
 public class UpTime {
-    final static long DELAY = 5; // Seconds
-    final static long TIMEOUT = 30; // Minutes
-    final static long MULTIPLIER = 1000; // millisecond ticks
+    static final long DELAY = 5; // Seconds
+    static final long TIMEOUT = 30; // Minutes
+    static final long MULTIPLIER = 1000; // millisecond ticks
 
     private static final RuntimeMXBean metrics
         = ManagementFactory.getRuntimeMXBean();

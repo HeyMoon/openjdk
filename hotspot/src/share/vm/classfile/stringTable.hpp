@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,8 +29,9 @@
 #include "utilities/hashtable.hpp"
 
 template <class T, class N> class CompactHashtable;
-class CompactHashtableWriter;
+class CompactStringTableWriter;
 class FileMapInfo;
+class SerializeClosure;
 
 class StringTable : public RehashableHashtable<oop, mtSymbol> {
   friend class VMStructs;
@@ -55,14 +56,25 @@ private:
                 unsigned int hashValue, TRAPS);
 
   oop lookup_in_main_table(int index, jchar* chars, int length, unsigned int hashValue);
-  static oop lookup_shared(jchar* name, int len);
+  static oop lookup_shared(jchar* name, int len, unsigned int hash);
 
   // Apply the give oop closure to the entries to the buckets
   // in the range [start_idx, end_idx).
   static void buckets_oops_do(OopClosure* f, int start_idx, int end_idx);
+
+  typedef StringTable::BucketUnlinkContext BucketUnlinkContext;
   // Unlink or apply the give oop closure to the entries to the buckets
-  // in the range [start_idx, end_idx).
-  static void buckets_unlink_or_oops_do(BoolObjectClosure* is_alive, OopClosure* f, int start_idx, int end_idx, int* processed, int* removed);
+  // in the range [start_idx, end_idx). Unlinked bucket entries are collected in the given
+  // context to be freed later.
+  // This allows multiple threads to work on the table at once.
+  static void buckets_unlink_or_oops_do(BoolObjectClosure* is_alive, OopClosure* f, int start_idx, int end_idx, BucketUnlinkContext* context);
+
+  // Hashing algorithm, used as the hash value used by the
+  //     StringTable for bucket selection and comparison (stored in the
+  //     HashtableEntry structures).  This is used in the String.intern() method.
+  static unsigned int hash_string(const jchar* s, int len);
+  static unsigned int hash_string(oop string);
+  static unsigned int alt_hash_string(const jchar* s, int len);
 
   StringTable() : RehashableHashtable<oop, mtSymbol>((int)StringTableSize,
                               sizeof (HashtableEntry<oop, mtSymbol>)) {}
@@ -108,11 +120,6 @@ public:
   }
   static void possibly_parallel_oops_do(OopClosure* f);
 
-  // Hashing algorithm, used as the hash value used by the
-  //     StringTable for bucket selection and comparison (stored in the
-  //     HashtableEntry structures).  This is used in the String.intern() method.
-  static unsigned int hash_string(const jchar* s, int len);
-
   // Internal test.
   static void test_alt_hash() PRODUCT_RETURN;
 
@@ -154,10 +161,9 @@ public:
   static bool shared_string_ignored()       { return _ignore_shared_strings; }
   static void shared_oops_do(OopClosure* f);
   static bool copy_shared_string(GrowableArray<MemRegion> *string_space,
-                                 CompactHashtableWriter* ch_table);
-  static bool copy_compact_table(char** top, char* end, GrowableArray<MemRegion> *string_space,
-                                 size_t* space_size);
-  static const char* init_shared_table(FileMapInfo *mapinfo, char* buffer);
+                                 CompactStringTableWriter* ch_table);
+  static void serialize(SerializeClosure* soc, GrowableArray<MemRegion> *string_space,
+                        size_t* space_size);
   static void reverse() {
     the_table()->Hashtable<oop, mtSymbol>::reverse();
   }

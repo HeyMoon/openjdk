@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -25,13 +25,13 @@
 
 AC_DEFUN_ONCE([HELP_SETUP_DEPENDENCY_HELP],
 [
-  AC_CHECK_PROGS(PKGHANDLER, apt-get yum port pkgutil pkgadd)
+  AC_CHECK_PROGS(PKGHANDLER, apt-get yum brew port pkgutil pkgadd)
 ])
 
 AC_DEFUN([HELP_MSG_MISSING_DEPENDENCY],
 [
   # Print a helpful message on how to acquire the necessary build dependency.
-  # $1 is the help tag: freetype, cups, pulse, alsa etc
+  # $1 is the help tag: freetype, cups, alsa etc
   MISSING_DEPENDENCY=$1
 
   if test "x$OPENJDK_BUILD_OS_ENV" = "xwindows.cygwin"; then
@@ -46,6 +46,8 @@ AC_DEFUN([HELP_MSG_MISSING_DEPENDENCY],
         apt_help     $MISSING_DEPENDENCY ;;
       yum)
         yum_help     $MISSING_DEPENDENCY ;;
+      brew)
+        brew_help    $MISSING_DEPENDENCY ;;
       port)
         port_help    $MISSING_DEPENDENCY ;;
       pkgutil)
@@ -86,7 +88,11 @@ Then run configure with '--with-freetype-src=<freetype_src>'. This will
 automatically build the freetype library into '<freetype_src>/lib64' for 64-bit
 builds or into '<freetype_src>/lib32' for 32-bit builds.
 Afterwards you can always use '--with-freetype-include=<freetype_src>/include'
-and '--with-freetype-lib=<freetype_src>/lib[32|64]' for other builds."
+and '--with-freetype-lib=<freetype_src>/lib[32|64]' for other builds.
+
+Alternatively you can unpack the sources like this to use the default directory:
+
+tar --one-top-level=$HOME/freetype --strip-components=1 -xzf freetype-2.5.3.tar.gz"
       ;;
   esac
 }
@@ -97,22 +103,28 @@ msys_help() {
 
 apt_help() {
   case $1 in
+    reduced)
+      PKGHANDLER_COMMAND="sudo apt-get install gcc-multilib g++-multilib" ;;
     devkit)
       PKGHANDLER_COMMAND="sudo apt-get install build-essential" ;;
     openjdk)
-      PKGHANDLER_COMMAND="sudo apt-get install openjdk-7-jdk" ;;
+      PKGHANDLER_COMMAND="sudo apt-get install openjdk-8-jdk" ;;
     alsa)
       PKGHANDLER_COMMAND="sudo apt-get install libasound2-dev" ;;
     cups)
       PKGHANDLER_COMMAND="sudo apt-get install libcups2-dev" ;;
     freetype)
       PKGHANDLER_COMMAND="sudo apt-get install libfreetype6-dev" ;;
-    pulse)
-      PKGHANDLER_COMMAND="sudo apt-get install libpulse-dev" ;;
+    ffi)
+      PKGHANDLER_COMMAND="sudo apt-get install libffi-dev" ;;
     x11)
-      PKGHANDLER_COMMAND="sudo apt-get install libX11-dev libxext-dev libxrender-dev libxtst-dev libxt-dev" ;;
+      PKGHANDLER_COMMAND="sudo apt-get install libx11-dev libxext-dev libxrender-dev libxtst-dev libxt-dev" ;;
     ccache)
       PKGHANDLER_COMMAND="sudo apt-get install ccache" ;;
+    dtrace)
+      PKGHANDLER_COMMAND="sudo apt-get install systemtap-sdt-dev" ;;
+    elf)
+      PKGHANDLER_COMMAND="sudo apt-get install libelf-dev" ;;
   esac
 }
 
@@ -121,19 +133,30 @@ yum_help() {
     devkit)
       PKGHANDLER_COMMAND="sudo yum groupinstall \"Development Tools\"" ;;
     openjdk)
-      PKGHANDLER_COMMAND="sudo yum install java-1.7.0-openjdk" ;;
+      PKGHANDLER_COMMAND="sudo yum install java-1.8.0-openjdk-devel" ;;
     alsa)
       PKGHANDLER_COMMAND="sudo yum install alsa-lib-devel" ;;
     cups)
       PKGHANDLER_COMMAND="sudo yum install cups-devel" ;;
     freetype)
       PKGHANDLER_COMMAND="sudo yum install freetype-devel" ;;
-    pulse)
-      PKGHANDLER_COMMAND="sudo yum install pulseaudio-libs-devel" ;;
     x11)
       PKGHANDLER_COMMAND="sudo yum install libXtst-devel libXt-devel libXrender-devel libXi-devel" ;;
     ccache)
       PKGHANDLER_COMMAND="sudo yum install ccache" ;;
+    elf)
+      PKGHANDLER_COMMAND="sudo yum install elfutils-libelf-devel" ;;
+  esac
+}
+
+brew_help() {
+  case $1 in
+    openjdk)
+      PKGHANDLER_COMMAND="brew cask install java" ;;
+    freetype)
+      PKGHANDLER_COMMAND="brew install freetype" ;;
+    ccache)
+      PKGHANDLER_COMMAND="brew install ccache" ;;
   esac
 }
 
@@ -155,7 +178,9 @@ pkgadd_help() {
 # called at the very beginning in configure.ac.
 AC_DEFUN_ONCE([HELP_PRINT_ADDITIONAL_HELP_AND_EXIT],
 [
-  if test "x$CONFIGURE_PRINT_TOOLCHAIN_LIST" != x; then
+  if test "x$CONFIGURE_PRINT_ADDITIONAL_HELP" != x; then
+
+    # Print available toolchains
     $PRINTF "The following toolchains are available as arguments to --with-toolchain-type.\n"
     $PRINTF "Which are valid to use depends on the build platform.\n"
     for toolchain in $VALID_TOOLCHAINS_all; do
@@ -164,6 +189,13 @@ AC_DEFUN_ONCE([HELP_PRINT_ADDITIONAL_HELP_AND_EXIT],
       TOOLCHAIN_DESCRIPTION=${!toolchain_var_name}
       $PRINTF "  %-10s  %s\n" $toolchain "$TOOLCHAIN_DESCRIPTION"
     done
+    $PRINTF "\n"
+
+    # Print available jvm features
+    $PRINTF "The following JVM features are available as arguments to --with-jvm-features.\n"
+    $PRINTF "Which are valid to use depends on the target platform.\n  "
+    $PRINTF "%s " $VALID_JVM_FEATURES
+    $PRINTF "\n"
 
     # And now exit directly
     exit 0
@@ -200,8 +232,9 @@ AC_DEFUN_ONCE([HELP_PRINT_SUMMARY_AND_WARNINGS],
   printf "* Debug level:    $DEBUG_LEVEL\n"
   printf "* HS debug level: $HOTSPOT_DEBUG_LEVEL\n"
   printf "* JDK variant:    $JDK_VARIANT\n"
-  printf "* JVM variants:   $with_jvm_variants\n"
+  printf "* JVM variants:   $JVM_VARIANTS\n"
   printf "* OpenJDK target: OS: $OPENJDK_TARGET_OS, CPU architecture: $OPENJDK_TARGET_CPU_ARCH, address length: $OPENJDK_TARGET_CPU_BITS\n"
+  printf "* Version string: $VERSION_STRING ($VERSION_SHORT)\n"
 
   printf "\n"
   printf "Tools summary:\n"
@@ -225,7 +258,7 @@ AC_DEFUN_ONCE([HELP_PRINT_SUMMARY_AND_WARNINGS],
   fi
   printf "\n"
 
-  if test "x$BUILDING_MULTIPLE_JVM_VARIANTS" = "xyes"; then
+  if test "x$BUILDING_MULTIPLE_JVM_VARIANTS" = "xtrue"; then
     printf "NOTE: You have requested to build more than one version of the JVM, which\n"
     printf "will result in longer build times.\n"
     printf "\n"

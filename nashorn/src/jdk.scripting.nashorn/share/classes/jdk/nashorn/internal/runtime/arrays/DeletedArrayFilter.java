@@ -76,9 +76,10 @@ final class DeletedArrayFilter extends ArrayFilter {
     }
 
     @Override
-    public void shiftLeft(final int by) {
+    public ArrayData shiftLeft(final int by) {
         super.shiftLeft(by);
         deleted.shiftLeft(by, length());
+        return this;
     }
 
     @Override
@@ -115,12 +116,6 @@ final class DeletedArrayFilter extends ArrayFilter {
 
     @Override
     public ArrayData set(final int index, final int value, final boolean strict) {
-        deleted.clear(ArrayIndex.toLongIndex(index));
-        return super.set(index, value, strict);
-    }
-
-    @Override
-    public ArrayData set(final int index, final long value, final boolean strict) {
         deleted.clear(ArrayIndex.toLongIndex(index));
         return super.set(index, value, strict);
     }

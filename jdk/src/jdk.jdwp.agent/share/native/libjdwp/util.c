@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -86,7 +86,7 @@ tossGlobalRef(JNIEnv *env, jobject *pobj)
     *pobj = NULL;
 }
 
-static jclass
+jclass
 findClass(JNIEnv *env, const char * name)
 {
     jclass x;
@@ -109,7 +109,7 @@ findClass(JNIEnv *env, const char * name)
     return x;
 }
 
-static jmethodID
+jmethodID
 getMethod(JNIEnv *env, jclass clazz, const char * name, const char *signature)
 {
     jmethodID method;
@@ -250,8 +250,6 @@ util_initialize(JNIEnv *env)
                         = getPropertyUTF8(env, "java.vm.info");
         gdata->property_java_class_path
                         = getPropertyUTF8(env, "java.class.path");
-        gdata->property_sun_boot_class_path
-                        = getPropertyUTF8(env, "sun.boot.class.path");
         gdata->property_sun_boot_library_path
                         = getPropertyUTF8(env, "sun.boot.library.path");
         gdata->property_path_separator
@@ -259,9 +257,9 @@ util_initialize(JNIEnv *env)
         gdata->property_user_dir
                         = getPropertyUTF8(env, "user.dir");
 
-        /* Get agent properties: invoke sun.misc.VMSupport.getAgentProperties */
+        /* Get agent properties: invoke VMSupport.getAgentProperties */
         localVMSupportClass = JNI_FUNC_PTR(env,FindClass)
-                                          (env, "sun/misc/VMSupport");
+                                          (env, "jdk/internal/vm/VMSupport");
         if (localVMSupportClass == NULL) {
             gdata->agent_properties = NULL;
             if (JNI_FUNC_PTR(env,ExceptionOccurred)(env)) {
@@ -278,7 +276,7 @@ util_initialize(JNIEnv *env)
             if (JNI_FUNC_PTR(env,ExceptionOccurred)(env)) {
                 JNI_FUNC_PTR(env,ExceptionClear)(env);
                 EXIT_ERROR(AGENT_ERROR_INTERNAL,
-                    "Exception occurred calling sun.misc.VMSupport.getAgentProperties");
+                    "Exception occurred calling VMSupport.getAgentProperties");
             }
         }
 

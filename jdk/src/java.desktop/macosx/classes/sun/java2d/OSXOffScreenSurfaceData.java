@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -478,13 +478,9 @@ public class OSXOffScreenSurfaceData extends OSXSurfaceData // implements Raster
         // <rdar://problem/4488745> For the Sun2D renderer we should rely on the implementation of the super class.
         // BufImageSurfaceData.java doesn't have an implementation of copyArea() and relies on the super class.
 
-        int offsetX = 0;
-        int offsetY = 0;
-        if (sg2d.transformState == SunGraphics2D.TRANSFORM_ANY_TRANSLATE ||
-                    sg2d.transformState == SunGraphics2D.TRANSFORM_INT_TRANSLATE) {
-            offsetX = (int) sg2d.transform.getTranslateX();
-            offsetY = (int) sg2d.transform.getTranslateY();
-        } else if (sg2d.transformState != SunGraphics2D.TRANSFORM_ISIDENT) { return false; }
+        if (sg2d.transformState >= SunGraphics2D.TRANSFORM_TRANSLATESCALE) {
+            return false;
+        }
 
         // reset the clip (this is how it works on windows)
         // we actually can handle a case with any clips but windows ignores the light clip
@@ -498,18 +494,23 @@ public class OSXOffScreenSurfaceData extends OSXSurfaceData // implements Raster
             return true;
         }
 
-        // the rectangle returned from clipCopyArea() is in the coordinate space of the surface (image)
-        // we need to substract the offsetX and offsetY to move it to the coordinate space of the graphics2d.
-        // sg2d.drawImage expects the destination rect to be in the coord space of the graphics2d. <rdar://3746194>
-        // (vm)
-        x = clippedCopyAreaRect.x - offsetX;
-        y = clippedCopyAreaRect.y - offsetY;
+        // the rectangle returned from clipCopyArea() is in the coordinate space
+        // of the surface (image)
+        x = clippedCopyAreaRect.x;
+        y = clippedCopyAreaRect.y;
         w = clippedCopyAreaRect.width;
         h = clippedCopyAreaRect.height;
 
-        // copy (dst coordinates are in the coord space of the graphics2d, and src coordinates are
-        // in the coordinate space of the image)
-        sg2d.drawImage(this.bim, x + dx, y + dy, x + dx + w, y + dy + h, x + offsetX, y + offsetY, x + w + offsetX, y + h + offsetY, null);
+        // copy (dst coordinates are in the coord space of the graphics2d, and
+        // src coordinates are in the coordinate space of the image)
+        // sg2d.drawImage expects the destination rect to be in the coord space
+        // of the graphics2d. <rdar://3746194> (vm)
+        // we need to substract the transX and transY to move it
+        // to the coordinate space of the graphics2d.
+        int dstX = x + dx - sg2d.transX;
+        int dstY = y + dy - sg2d.transY;
+        sg2d.drawImage(this.bim, dstX, dstY, dstX + w, dstY + h,
+                       x, y, x + w, y + h, null);
 
         // restore the clip
         sg2d.setClip(clip);
@@ -607,6 +608,13 @@ public class OSXOffScreenSurfaceData extends OSXSurfaceData // implements Raster
         fImageInfoInt.put(kNeedToSyncFromJavaPixelsIndex, 1); // the pixels will change
     }
 
+    private void syncFromCustom() {
+
+    }
+
+    private void syncToCustom() {
+
+    }
 //    /**
 //     * Invoked when the raster's contents will be taken (via the Raster.getDataBuffer() method)
 //     */

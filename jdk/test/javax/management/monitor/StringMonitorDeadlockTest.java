@@ -24,10 +24,11 @@
 /*
  * @test
  * @bug 6303187
+ * @key intermittent
  * @summary Test that no locks are held when a monitor attribute is sampled
  * or notif delivered.
  * @author Eamonn McManus
- * @modules java.management
+ *
  * @run clean StringMonitorDeadlockTest
  * @run build StringMonitorDeadlockTest
  * @run main StringMonitorDeadlockTest 1

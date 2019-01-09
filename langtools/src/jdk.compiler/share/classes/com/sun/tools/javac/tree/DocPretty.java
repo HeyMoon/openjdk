@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,15 +25,15 @@
 
 package com.sun.tools.javac.tree;
 
+import java.io.IOException;
 import java.io.Writer;
+import java.util.List;
 
 import com.sun.source.doctree.*;
 import com.sun.source.doctree.AttributeTree.ValueKind;
 import com.sun.tools.javac.util.Convert;
 import com.sun.tools.javac.util.DefinedBy;
 import com.sun.tools.javac.util.DefinedBy.Api;
-import java.io.IOException;
-import java.util.List;
 
 /**
  * Prints out a doc comment tree.
@@ -129,8 +129,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         }
     }
 
-
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitAttribute(AttributeTree node, Void p) {
         try {
             print(node.getName());
@@ -162,7 +161,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitAuthor(AuthorTree node, Void p) {
         try {
             printTagName(node);
@@ -174,7 +173,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitComment(CommentTree node, Void p) {
         try {
             print(node.getBody());
@@ -184,7 +183,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitDeprecated(DeprecatedTree node, Void p) {
         try {
             printTagName(node);
@@ -198,17 +197,13 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitDocComment(DocCommentTree node, Void p) {
         try {
-            List<? extends DocTree> fs = node.getFirstSentence();
-            List<? extends DocTree> b = node.getBody();
+            List<? extends DocTree> b = node.getFullBody();
             List<? extends DocTree> t = node.getBlockTags();
-            print(fs);
-            if (!fs.isEmpty() && !b.isEmpty())
-                print(" ");
             print(b);
-            if ((!fs.isEmpty() || !b.isEmpty()) && !t.isEmpty())
+            if (!b.isEmpty() && !t.isEmpty())
                 print("\n");
             print(t, "\n");
         } catch (IOException e) {
@@ -217,7 +212,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitDocRoot(DocRootTree node, Void p) {
         try {
             print("{");
@@ -229,7 +224,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitEndElement(EndElementTree node, Void p) {
         try {
             print("</");
@@ -241,7 +236,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitEntity(EntityTree node, Void p) {
         try {
             print("&");
@@ -253,7 +248,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitErroneous(ErroneousTree node, Void p) {
         try {
             print(node.getBody());
@@ -263,7 +258,21 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
+    public Void visitHidden(HiddenTree node, Void p) {
+        try {
+            printTagName(node);
+            if (!node.getBody().isEmpty()) {
+                print(" ");
+                print(node.getBody());
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return null;
+    }
+
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitIdentifier(IdentifierTree node, Void p) {
         try {
             print(node.getName());
@@ -273,7 +282,25 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
+    public Void visitIndex(IndexTree node, Void p) {
+        try {
+            print("{");
+            printTagName(node);
+            print(" ");
+            print(node.getSearchTerm());
+            if (!node.getDescription().isEmpty()) {
+                print(" ");
+                print(node.getDescription());
+            }
+            print("}");
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return null;
+    }
+
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitInheritDoc(InheritDocTree node, Void p) {
         try {
             print("{");
@@ -285,7 +312,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitLink(LinkTree node, Void p) {
         try {
             print("{");
@@ -303,12 +330,15 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitLiteral(LiteralTree node, Void p) {
         try {
             print("{");
             printTagName(node);
-            print(" ");
+            String body = node.getBody().getBody();
+            if (!body.isEmpty() && !Character.isWhitespace(body.charAt(0))) {
+                print(" ");
+            }
             print(node.getBody());
             print("}");
         } catch (IOException e) {
@@ -317,7 +347,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitParam(ParamTree node, Void p) {
         try {
             printTagName(node);
@@ -335,7 +365,23 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
+    public Void visitProvides(ProvidesTree node, Void p) {
+        try {
+            printTagName(node);
+            print(" ");
+            print(node.getServiceType());
+            if (!node.getDescription().isEmpty()) {
+                print(" ");
+                print(node.getDescription());
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return null;
+    }
+
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitReference(ReferenceTree node, Void p) {
         try {
             print(node.getSignature());
@@ -345,7 +391,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitReturn(ReturnTree node, Void p) {
         try {
             printTagName(node);
@@ -357,7 +403,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitSee(SeeTree node, Void p) {
         try {
             printTagName(node);
@@ -375,7 +421,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitSerial(SerialTree node, Void p) {
         try {
             printTagName(node);
@@ -389,7 +435,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitSerialData(SerialDataTree node, Void p) {
         try {
             printTagName(node);
@@ -403,7 +449,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitSerialField(SerialFieldTree node, Void p) {
         try {
             printTagName(node);
@@ -421,7 +467,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitSince(SinceTree node, Void p) {
         try {
             printTagName(node);
@@ -433,7 +479,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitStartElement(StartElementTree node, Void p) {
         try {
             print("<");
@@ -456,7 +502,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitText(TextTree node, Void p) {
         try {
             print(node.getBody());
@@ -466,7 +512,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitThrows(ThrowsTree node, Void p) {
         try {
             printTagName(node);
@@ -482,7 +528,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitUnknownBlockTag(UnknownBlockTagTree node, Void p) {
         try {
             print("@");
@@ -495,7 +541,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitUnknownInlineTag(UnknownInlineTagTree node, Void p) {
         try {
             print("{");
@@ -510,7 +556,23 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
+    public Void visitUses(UsesTree node, Void p) {
+        try {
+            printTagName(node);
+            print(" ");
+            print(node.getServiceType());
+            if (!node.getDescription().isEmpty()) {
+                print(" ");
+                print(node.getDescription());
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return null;
+    }
+
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitValue(ValueTree node, Void p) {
         try {
             print("{");
@@ -526,7 +588,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitVersion(VersionTree node, Void p) {
         try {
             printTagName(node);
@@ -538,7 +600,7 @@ public class DocPretty implements DocTreeVisitor<Void,Void> {
         return null;
     }
 
-    @DefinedBy(Api.COMPILER_TREE)
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitOther(DocTree node, Void p) {
         try {
             print("(UNKNOWN: " + node + ")");

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,8 @@ import java.util.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.datatransfer.*;
+import java.awt.geom.Point2D;
+import java.awt.geom.Rectangle2D;
 import java.awt.im.InputContext;
 import java.beans.*;
 import java.io.*;
@@ -523,7 +525,7 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
      * adding 'TAB' and 'SHIFT-TAB' to traversalKeysSet in case
      * editor is non editable
      */
-
+    @SuppressWarnings("deprecation")
     void updateFocusTraversalKeys() {
         /*
          * Fix for 4514331 Non-editable JTextArea and similar
@@ -940,9 +942,10 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
                 rootView.setSize(d.width - i.left - i.right -
                         caretMargin, d.height - i.top - i.bottom);
             }
-            else if (d.width == 0 || d.height == 0) {
+            else if (!rootViewInitialized && (d.width <= 0 || d.height <= 0)) {
                 // Probably haven't been layed out yet, force some sort of
                 // initial sizing.
+                rootViewInitialized = true;
                 rootView.setSize(Integer.MAX_VALUE, Integer.MAX_VALUE);
             }
             d.width = (int) Math.min((long) rootView.getPreferredSpan(View.X_AXIS) +
@@ -971,7 +974,7 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
             ((AbstractDocument)doc).readLock();
         }
         try {
-            d.width = (int) rootView.getMinimumSpan(View.X_AXIS) + i.left + i.right;
+            d.width = (int) rootView.getMinimumSpan(View.X_AXIS) + i.left + i.right + caretMargin;
             d.height = (int)  rootView.getMinimumSpan(View.Y_AXIS) + i.top + i.bottom;
         } finally {
             if (doc instanceof AbstractDocument) {
@@ -996,7 +999,7 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
         }
         try {
             d.width = (int) Math.min((long) rootView.getMaximumSpan(View.X_AXIS) +
-                                     (long) i.left + (long) i.right, Integer.MAX_VALUE);
+                                     (long) i.left + (long) i.right + caretMargin, Integer.MAX_VALUE);
             d.height = (int) Math.min((long) rootView.getMaximumSpan(View.Y_AXIS) +
                                       (long) i.top + (long) i.bottom, Integer.MAX_VALUE);
         } finally {
@@ -1027,7 +1030,7 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
             Insets insets = editor.getInsets();
             alloc.x += insets.left;
             alloc.y += insets.top;
-            alloc.width -= insets.left + insets.right;
+            alloc.width -= insets.left + insets.right + caretMargin;
             alloc.height -= insets.top + insets.bottom;
             return alloc;
         }
@@ -1046,7 +1049,12 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
      * @exception BadLocationException  if the given position does not
      *   represent a valid location in the associated document
      * @see TextUI#modelToView
+     *
+     * @deprecated replaced by
+     *     {@link #modelToView2D(JTextComponent, int, Position.Bias)}
      */
+    @Deprecated(since = "9")
+    @Override
     public Rectangle modelToView(JTextComponent tc, int pos) throws BadLocationException {
         return modelToView(tc, pos, Position.Bias.Forward);
     }
@@ -1063,8 +1071,30 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
      * @exception BadLocationException  if the given position does not
      *   represent a valid location in the associated document
      * @see TextUI#modelToView
+     *
+     * @deprecated replaced by
+     *     {@link #modelToView2D(JTextComponent, int, Position.Bias)}
      */
-    public Rectangle modelToView(JTextComponent tc, int pos, Position.Bias bias) throws BadLocationException {
+    @Deprecated(since = "9")
+    @Override
+    public Rectangle modelToView(JTextComponent tc, int pos, Position.Bias bias)
+            throws BadLocationException
+    {
+        return (Rectangle) modelToView(tc, pos, bias, false);
+    }
+
+    @Override
+    public Rectangle2D modelToView2D(JTextComponent tc, int pos,
+                                     Position.Bias bias)
+            throws BadLocationException
+    {
+        return modelToView(tc, pos, bias, true);
+    }
+
+    private Rectangle2D modelToView(JTextComponent tc, int pos,
+                                    Position.Bias bias, boolean useFPAPI)
+            throws BadLocationException
+    {
         Document doc = editor.getDocument();
         if (doc instanceof AbstractDocument) {
             ((AbstractDocument)doc).readLock();
@@ -1075,7 +1105,7 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
                 rootView.setSize(alloc.width, alloc.height);
                 Shape s = rootView.modelToView(pos, alloc, bias);
                 if (s != null) {
-                  return s.getBounds();
+                    return useFPAPI ? s.getBounds2D() : s.getBounds();
                 }
             }
         } finally {
@@ -1098,7 +1128,12 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
      * @return the offset from the start of the document &gt;= 0,
      *   -1 if not painted
      * @see TextUI#viewToModel
+     *
+     * @deprecated replaced by
+     *     {@link #viewToModel2D(JTextComponent, Point2D, Position.Bias[])}
      */
+    @Deprecated(since = "9")
+    @Override
     public int viewToModel(JTextComponent tc, Point pt) {
         return viewToModel(tc, pt, discardBias);
     }
@@ -1115,9 +1150,25 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
      * @return the offset from the start of the document &gt;= 0,
      *   -1 if the component doesn't yet have a positive size.
      * @see TextUI#viewToModel
+     *
+     * @deprecated replaced by
+     *     {@link #viewToModel2D(JTextComponent, Point2D, Position.Bias[])}
      */
+    @Deprecated(since = "9")
+    @Override
     public int viewToModel(JTextComponent tc, Point pt,
                            Position.Bias[] biasReturn) {
+        return viewToModel(tc, pt.x, pt.y, biasReturn);
+    }
+
+    @Override
+    public int viewToModel2D(JTextComponent tc, Point2D pt,
+                             Position.Bias[] biasReturn) {
+        return viewToModel(tc, (float) pt.getX(), (float) pt.getY(), biasReturn);
+    }
+
+    private int viewToModel(JTextComponent tc, float x, float y,
+                            Position.Bias[] biasReturn) {
         int offs = -1;
         Document doc = editor.getDocument();
         if (doc instanceof AbstractDocument) {
@@ -1127,7 +1178,7 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
             Rectangle alloc = getVisibleEditorRect();
             if (alloc != null) {
                 rootView.setSize(alloc.width, alloc.height);
-                offs = rootView.viewToModel(pt.x, pt.y, alloc, biasReturn);
+                offs = rootView.viewToModel(x, y, alloc, biasReturn);
             }
         } finally {
             if (doc instanceof AbstractDocument) {
@@ -1232,14 +1283,13 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
      * text component (i.e. the root of the hierarchy) that
      * can be traversed to determine how the model is being
      * represented spatially.
-     * <p>
-     * <font style="color: red;"><b>NOTE:</b>The View hierarchy can
+     * <p style="color:red;">
+     * <b>NOTE:</b>The View hierarchy can
      * be traversed from the root view, and other things
      * can be done as well.  Things done in this way cannot
      * be protected like simple method calls through the TextUI.
      * Therefore, proper operation in the presence of concurrency
      * must be arranged by any logic that calls this method!
-     * </font>
      *
      * @param tc the text component for which this UI is installed
      * @return the view
@@ -1258,6 +1308,7 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
      * @see javax.swing.text.View#getToolTipText
      * @since 1.4
      */
+    @SuppressWarnings("deprecation")
     public String getToolTipText(JTextComponent t, Point pt) {
         if (!painted) {
             return null;
@@ -1346,6 +1397,7 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
     private static final Position.Bias[] discardBias = new Position.Bias[1];
     private DefaultCaret dropCaret;
     private int caretMargin;
+    private boolean rootViewInitialized;
 
     /**
      * Root view that acts as a gateway between the component
@@ -1730,7 +1782,7 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
          *
          * @param axis may be either X_AXIS or Y_AXIS
          * @param len specifies where a break is desired in the span
-         * @param the current allocation of the view
+         * @param a the current allocation of the view
          * @return the fragment of the view that represents the given span
          *   if the view can be broken, otherwise null
          */
@@ -2212,6 +2264,7 @@ public abstract class BasicTextUI extends TextUI implements ViewFactory {
          * <li>the press event is located over a selection
          * </ul>
          */
+        @SuppressWarnings("deprecation")
         protected boolean isDragPossible(MouseEvent e) {
             JTextComponent c = (JTextComponent)e.getSource();
             if (c.isEnabled()) {

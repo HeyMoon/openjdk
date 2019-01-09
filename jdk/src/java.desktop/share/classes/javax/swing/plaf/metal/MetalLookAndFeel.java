@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,6 +43,8 @@ import sun.awt.*;
 import sun.security.action.GetPropertyAction;
 import sun.swing.DefaultLayoutStyle;
 import static javax.swing.UIDefaults.LazyValue;
+
+import sun.swing.SwingAccessor;
 import sun.swing.SwingUtilities2;
 
 /**
@@ -288,89 +290,94 @@ public class MetalLookAndFeel extends BasicLookAndFeel
     /**
      * Populates {@code table} with system colors. The following values are
      * added to {@code table}:
-     * <table border="1" cellpadding="1" cellspacing="0"
-     *         summary="Metal's system color mapping">
-     *  <tr valign="top"  align="left">
-     *    <th style="background-color:#CCCCFF" align="left">Key
-     *    <th style="background-color:#CCCCFF" align="left">Value
-     *  <tr valign="top"  align="left">
+     *
+     * <table class="striped">
+     * <caption>Metal's system color mapping</caption>
+     * <thead>
+     *  <tr>
+     *    <th>Key
+     *    <th>Value
+     * </thead>
+     * <tbody>
+     *  <tr valign="top" style="text-align:left">
      *    <td>"desktop"
      *    <td>{@code theme.getDesktopColor()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"activeCaption"
      *    <td>{@code theme.getWindowTitleBackground()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"activeCaptionText"
      *    <td>{@code theme.getWindowTitleForeground()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"activeCaptionBorder"
      *    <td>{@code theme.getPrimaryControlShadow()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"inactiveCaption"
      *    <td>{@code theme.getWindowTitleInactiveBackground()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"inactiveCaptionText"
      *    <td>{@code theme.getWindowTitleInactiveForeground()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"inactiveCaptionBorder"
      *    <td>{@code theme.getControlShadow()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"window"
      *    <td>{@code theme.getWindowBackground()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"windowBorder"
      *    <td>{@code theme.getControl()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"windowText"
      *    <td>{@code theme.getUserTextColor()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"menu"
      *    <td>{@code theme.getMenuBackground()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"menuText"
      *    <td>{@code theme.getMenuForeground()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"text"
      *    <td>{@code theme.getWindowBackground()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"textText"
      *    <td>{@code theme.getUserTextColor()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"textHighlight"
      *    <td>{@code theme.getTextHighlightColor()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"textHighlightText"
      *    <td>{@code theme.getHighlightedTextColor()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"textInactiveText"
      *    <td>{@code theme.getInactiveSystemTextColor()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"control"
      *    <td>{@code theme.getControl()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"controlText"
      *    <td>{@code theme.getControlTextColor()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"controlHighlight"
      *    <td>{@code theme.getControlHighlight()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"controlLtHighlight"
      *    <td>{@code theme.getControlHighlight()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"controlShadow"
      *    <td>{@code theme.getControlShadow()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"controlDkShadow"
      *    <td>{@code theme.getControlDarkShadow()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"scrollbar"
      *    <td>{@code theme.getControl()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"info"
      *    <td>{@code theme.getPrimaryControl()}
-     *  <tr valign="top"  align="left">
+     *  <tr valign="top" style="text-align:left">
      *    <td>"infoText"
      *    <td>{@code theme.getPrimaryControlInfo()}
+     * </tbody>
      * </table>
      * The value {@code theme} corresponds to the current {@code MetalTheme}.
      *
@@ -418,7 +425,9 @@ public class MetalLookAndFeel extends BasicLookAndFeel
      * used for getting localized defaults.
      */
     private void initResourceBundle(UIDefaults table) {
-        table.addResourceBundle( "com.sun.swing.internal.plaf.metal.resources.metal" );
+        SwingAccessor.getUIDefaultsAccessor()
+                     .addInternalBundle(table,
+                             "com.sun.swing.internal.plaf.metal.resources.metal");
     }
 
     /**
@@ -1514,8 +1523,7 @@ public class MetalLookAndFeel extends BasicLookAndFeel
         flushUnreferenced(); // Remove old listeners
 
         boolean lafCond = SwingUtilities2.isLocalDisplay();
-        Object aaTextInfo = SwingUtilities2.AATextInfo.getAATextInfo(lafCond);
-        table.put(SwingUtilities2.AA_TEXT_PROPERTY_KEY, aaTextInfo);
+        SwingUtilities2.putAATextInfo(lafCond, table);
         new AATextListener(this);
     }
 
@@ -2204,9 +2212,7 @@ public class MetalLookAndFeel extends BasicLookAndFeel
             }
             UIDefaults defaults = UIManager.getLookAndFeelDefaults();
             boolean lafCond = SwingUtilities2.isLocalDisplay();
-            Object aaTextInfo =
-                SwingUtilities2.AATextInfo.getAATextInfo(lafCond);
-            defaults.put(SwingUtilities2.AA_TEXT_PROPERTY_KEY, aaTextInfo);
+            SwingUtilities2.putAATextInfo(lafCond, defaults);
             updateUI();
         }
 

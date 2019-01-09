@@ -31,6 +31,7 @@
 #include "gc/parallel/psPromotionManager.hpp"
 #include "gc/parallel/psScavenge.hpp"
 #include "gc/shared/taskqueue.inline.hpp"
+#include "logging/log.hpp"
 #include "oops/oop.inline.hpp"
 
 inline PSPromotionManager* PSPromotionManager::manager_array(uint index) {
@@ -260,15 +261,11 @@ inline oop PSPromotionManager::copy_to_survivor_space(oop o) {
     new_obj = o->forwardee();
   }
 
-#ifndef PRODUCT
   // This code must come after the CAS test, or it will print incorrect
   // information.
-  if (TraceScavenge) {
-    gclog_or_tty->print_cr("{%s %s " PTR_FORMAT " -> " PTR_FORMAT " (%d)}",
-       should_scavenge(&new_obj) ? "copying" : "tenuring",
-       new_obj->klass()->internal_name(), p2i((void *)o), p2i((void *)new_obj), new_obj->size());
-  }
-#endif
+  log_develop_trace(gc, scavenge)("{%s %s " PTR_FORMAT " -> " PTR_FORMAT " (%d)}",
+                                  should_scavenge(&new_obj) ? "copying" : "tenuring",
+                                  new_obj->klass()->internal_name(), p2i((void *)o), p2i((void *)new_obj), new_obj->size());
 
   return new_obj;
 }
@@ -285,15 +282,13 @@ inline void PSPromotionManager::copy_and_push_safe_barrier(T* p) {
         ? o->forwardee()
         : copy_to_survivor_space<promote_immediately>(o);
 
-#ifndef PRODUCT
   // This code must come after the CAS test, or it will print incorrect
   // information.
-  if (TraceScavenge &&  o->is_forwarded()) {
-    gclog_or_tty->print_cr("{%s %s " PTR_FORMAT " -> " PTR_FORMAT " (%d)}",
-       "forwarding",
-       new_obj->klass()->internal_name(), p2i((void *)o), p2i((void *)new_obj), new_obj->size());
+  if (log_develop_is_enabled(Trace, gc, scavenge) && o->is_forwarded()) {
+    log_develop_trace(gc, scavenge)("{%s %s " PTR_FORMAT " -> " PTR_FORMAT " (%d)}",
+                      "forwarding",
+                      new_obj->klass()->internal_name(), p2i((void *)o), p2i((void *)new_obj), new_obj->size());
   }
-#endif
 
   oopDesc::encode_store_heap_oop_not_null(p, new_obj);
 

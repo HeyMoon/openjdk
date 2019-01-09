@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,17 +32,16 @@
 #include "gc/parallel/psOldGen.hpp"
 #include "gc/parallel/psParallelCompact.inline.hpp"
 #include "gc/shared/taskqueue.inline.hpp"
+#include "logging/log.hpp"
 #include "memory/iterator.inline.hpp"
 #include "oops/instanceKlass.inline.hpp"
 #include "oops/instanceMirrorKlass.inline.hpp"
 #include "oops/objArrayKlass.inline.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 
 PSOldGen*            ParCompactionManager::_old_gen = NULL;
 ParCompactionManager**  ParCompactionManager::_manager_array = NULL;
-
-RegionTaskQueue**              ParCompactionManager::_region_list = NULL;
 
 OopTaskQueueSet*     ParCompactionManager::_stack_array = NULL;
 ParCompactionManager::ObjArrayTaskQueueSet*
@@ -51,14 +50,8 @@ ObjectStartArray*    ParCompactionManager::_start_array = NULL;
 ParMarkBitMap*       ParCompactionManager::_mark_bitmap = NULL;
 RegionTaskQueueSet*  ParCompactionManager::_region_array = NULL;
 
-uint*                 ParCompactionManager::_recycled_stack_index = NULL;
-int                   ParCompactionManager::_recycled_top = -1;
-int                   ParCompactionManager::_recycled_bottom = -1;
-
 ParCompactionManager::ParCompactionManager() :
-    _action(CopyAndUpdate),
-    _region_stack(NULL),
-    _region_stack_index((uint)max_uintx) {
+    _action(CopyAndUpdate) {
 
   ParallelScavengeHeap* heap = ParallelScavengeHeap::heap();
 
@@ -67,10 +60,9 @@ ParCompactionManager::ParCompactionManager() :
 
   marking_stack()->initialize();
   _objarray_stack.initialize();
-}
+  _region_stack.initialize();
 
-ParCompactionManager::~ParCompactionManager() {
-  delete _recycled_stack_index;
+  reset_bitmap_query_cache();
 }
 
 void ParCompactionManager::initialize(ParMarkBitMap* mbm) {
@@ -85,19 +77,6 @@ void ParCompactionManager::initialize(ParMarkBitMap* mbm) {
   _manager_array = NEW_C_HEAP_ARRAY(ParCompactionManager*, parallel_gc_threads+1, mtGC);
   guarantee(_manager_array != NULL, "Could not allocate manager_array");
 
-  _region_list = NEW_C_HEAP_ARRAY(RegionTaskQueue*,
-                         parallel_gc_threads+1, mtGC);
-  guarantee(_region_list != NULL, "Could not initialize promotion manager");
-
-  _recycled_stack_index = NEW_C_HEAP_ARRAY(uint, parallel_gc_threads, mtGC);
-
-  // parallel_gc-threads + 1 to be consistent with the number of
-  // compaction managers.
-  for(uint i=0; i<parallel_gc_threads + 1; i++) {
-    _region_list[i] = new RegionTaskQueue();
-    region_list(i)->initialize();
-  }
-
   _stack_array = new OopTaskQueueSet(parallel_gc_threads);
   guarantee(_stack_array != NULL, "Could not allocate stack_array");
   _objarray_queues = new ObjArrayTaskQueueSet(parallel_gc_threads);
@@ -111,7 +90,7 @@ void ParCompactionManager::initialize(ParMarkBitMap* mbm) {
     guarantee(_manager_array[i] != NULL, "Could not create ParCompactionManager");
     stack_array()->register_queue(i, _manager_array[i]->marking_stack());
     _objarray_queues->register_queue(i, &_manager_array[i]->_objarray_stack);
-    region_array()->register_queue(i, region_list(i));
+    region_array()->register_queue(i, _manager_array[i]->region_stack());
   }
 
   // The VMThread gets its own ParCompactionManager, which is not available
@@ -123,27 +102,11 @@ void ParCompactionManager::initialize(ParMarkBitMap* mbm) {
     "Not initialized?");
 }
 
-int ParCompactionManager::pop_recycled_stack_index() {
-  assert(_recycled_bottom <= _recycled_top, "list is empty");
-  // Get the next available index
-  if (_recycled_bottom < _recycled_top) {
-    uint cur, next, last;
-    do {
-      cur = _recycled_bottom;
-      next = cur + 1;
-      last = Atomic::cmpxchg(next, &_recycled_bottom, cur);
-    } while (cur != last);
-    return _recycled_stack_index[next];
-  } else {
-    return -1;
+void ParCompactionManager::reset_all_bitmap_query_caches() {
+  uint parallel_gc_threads = PSParallelCompact::gc_task_manager()->workers();
+  for (uint i=0; i<=parallel_gc_threads; i++) {
+    _manager_array[i]->reset_bitmap_query_cache();
   }
-}
-
-void ParCompactionManager::push_recycled_stack_index(uint v) {
-  // Get the next available index
-  int cur = Atomic::add(1, &_recycled_top);
-  _recycled_stack_index[cur] = v;
-  assert(_recycled_bottom <= _recycled_top, "list top and bottom are wrong");
 }
 
 bool ParCompactionManager::should_update() {
@@ -158,15 +121,6 @@ bool ParCompactionManager::should_copy() {
   return (action() == ParCompactionManager::Copy) ||
          (action() == ParCompactionManager::CopyAndUpdate) ||
          (action() == ParCompactionManager::UpdateAndCopy);
-}
-
-void ParCompactionManager::region_list_push(uint list_index,
-                                            size_t region_index) {
-  region_list(list_index)->push(region_index);
-}
-
-void ParCompactionManager::verify_region_list_empty(uint list_index) {
-  assert(region_list(list_index)->is_empty(), "Not empty");
 }
 
 ParCompactionManager*
@@ -200,7 +154,7 @@ void InstanceMirrorKlass::oop_pc_follow_contents(oop obj, ParCompactionManager* 
     // by calling follow_class_loader explicitly. For non-anonymous classes
     // the call to follow_class_loader is made when the class loader itself
     // is handled.
-    if (klass->oop_is_instance() && InstanceKlass::cast(klass)->is_anonymous()) {
+    if (klass->is_instance_klass() && InstanceKlass::cast(klass)->is_anonymous()) {
       cm->follow_class_loader(klass->class_loader_data());
     } else {
       cm->follow_klass(klass);
@@ -229,30 +183,18 @@ template <class T>
 static void oop_pc_follow_contents_specialized(InstanceRefKlass* klass, oop obj, ParCompactionManager* cm) {
   T* referent_addr = (T*)java_lang_ref_Reference::referent_addr(obj);
   T heap_oop = oopDesc::load_heap_oop(referent_addr);
-  debug_only(
-    if(TraceReferenceGC && PrintGCDetails) {
-      gclog_or_tty->print_cr("InstanceRefKlass::oop_pc_follow_contents " PTR_FORMAT, p2i(obj));
-    }
-  )
+  log_develop_trace(gc, ref)("InstanceRefKlass::oop_pc_follow_contents " PTR_FORMAT, p2i(obj));
   if (!oopDesc::is_null(heap_oop)) {
     oop referent = oopDesc::decode_heap_oop_not_null(heap_oop);
     if (PSParallelCompact::mark_bitmap()->is_unmarked(referent) &&
         PSParallelCompact::ref_processor()->discover_reference(obj, klass->reference_type())) {
       // reference already enqueued, referent will be traversed later
       klass->InstanceKlass::oop_pc_follow_contents(obj, cm);
-      debug_only(
-        if(TraceReferenceGC && PrintGCDetails) {
-          gclog_or_tty->print_cr("       Non NULL enqueued " PTR_FORMAT, p2i(obj));
-        }
-      )
+      log_develop_trace(gc, ref)("       Non NULL enqueued " PTR_FORMAT, p2i(obj));
       return;
     } else {
       // treat referent as normal oop
-      debug_only(
-        if(TraceReferenceGC && PrintGCDetails) {
-          gclog_or_tty->print_cr("       Non NULL normal " PTR_FORMAT, p2i(obj));
-        }
-      )
+      log_develop_trace(gc, ref)("       Non NULL normal " PTR_FORMAT, p2i(obj));
       cm->mark_and_push(referent_addr);
     }
   }
@@ -262,12 +204,7 @@ static void oop_pc_follow_contents_specialized(InstanceRefKlass* klass, oop obj,
   T  next_oop = oopDesc::load_heap_oop(next_addr);
   if (!oopDesc::is_null(next_oop)) { // i.e. ref is not "active"
     T* discovered_addr = (T*)java_lang_ref_Reference::discovered_addr(obj);
-    debug_only(
-      if(TraceReferenceGC && PrintGCDetails) {
-        gclog_or_tty->print_cr("   Process discovered as normal "
-                               PTR_FORMAT, p2i(discovered_addr));
-      }
-    )
+    log_develop_trace(gc, ref)("   Process discovered as normal " PTR_FORMAT, p2i(discovered_addr));
     cm->mark_and_push(discovered_addr);
   }
   cm->mark_and_push(next_addr);

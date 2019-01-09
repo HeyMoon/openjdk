@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,6 @@
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/codeCache.hpp"
-#include "code/codeCacheExtensions.hpp"
 #include "compiler/compileBroker.hpp"
 #include "compiler/disassembler.hpp"
 #include "gc/shared/collectedHeap.hpp"
@@ -35,7 +34,9 @@
 #include "interpreter/interpreterRuntime.hpp"
 #include "interpreter/linkResolver.hpp"
 #include "interpreter/templateTable.hpp"
+#include "logging/log.hpp"
 #include "memory/oopFactory.hpp"
+#include "memory/resourceArea.hpp"
 #include "memory/universe.inline.hpp"
 #include "oops/constantPool.hpp"
 #include "oops/instanceKlass.hpp"
@@ -46,7 +47,7 @@
 #include "oops/symbol.hpp"
 #include "prims/jvmtiExport.hpp"
 #include "prims/nativeLookup.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/biasedLocking.hpp"
 #include "runtime/compilationPolicy.hpp"
 #include "runtime/deoptimization.hpp"
@@ -65,8 +66,6 @@
 #ifdef COMPILER2
 #include "opto/runtime.hpp"
 #endif
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 class UnlockFlagSaver {
   private:
@@ -174,9 +173,6 @@ IRT_END
 
 
 IRT_ENTRY(void, InterpreterRuntime::anewarray(JavaThread* thread, ConstantPool* pool, int index, jint size))
-  // Note: no oopHandle for pool & klass needed since they are not used
-  //       anymore after new_objArray() and no GC can happen before.
-  //       (This may have to change if this code changes!)
   Klass*    klass = pool->klass_at(index, CHECK);
   objArrayOop obj = oopFactory::new_objArray(klass, size, CHECK);
   thread->set_vm_result(obj);
@@ -316,6 +312,16 @@ IRT_ENTRY(void, InterpreterRuntime::throw_StackOverflowError(JavaThread* thread)
   THROW_HANDLE(exception);
 IRT_END
 
+IRT_ENTRY(void, InterpreterRuntime::throw_delayed_StackOverflowError(JavaThread* thread))
+  Handle exception = get_preinitialized_exception(
+                                 SystemDictionary::StackOverflowError_klass(),
+                                 CHECK);
+  java_lang_Throwable::set_message(exception(),
+          Universe::delayed_stack_overflow_error_message());
+  // Increment counter for hs_err file reporting
+  Atomic::inc(&Exceptions::_stack_overflow_errors);
+  THROW_HANDLE(exception);
+IRT_END
 
 IRT_ENTRY(void, InterpreterRuntime::create_exception(JavaThread* thread, char* name, char* message))
   // lookup exception klass
@@ -364,7 +370,7 @@ IRT_ENTRY(void, InterpreterRuntime::throw_ClassCastException(
 
   ResourceMark rm(thread);
   char* message = SharedRuntime::generate_class_cast_message(
-    thread, obj->klass()->external_name());
+    thread, obj->klass());
 
   if (ProfileTraps) {
     note_trap(thread, Deoptimization::Reason_class_check, CHECK);
@@ -437,21 +443,13 @@ IRT_ENTRY(address, InterpreterRuntime::exception_handler_for_exception(JavaThrea
 #endif
 
     // tracing
-    if (TraceExceptions) {
+    if (log_is_enabled(Info, exceptions)) {
       ResourceMark rm(thread);
-      Symbol* message = java_lang_Throwable::detail_message(h_exception());
-      ttyLocker ttyl;  // Lock after getting the detail message
-      if (message != NULL) {
-        tty->print_cr("Exception <%s: %s> (" INTPTR_FORMAT ")",
-                      h_exception->print_value_string(), message->as_C_string(),
-                      (address)h_exception());
-      } else {
-        tty->print_cr("Exception <%s> (" INTPTR_FORMAT ")",
-                      h_exception->print_value_string(),
-                      (address)h_exception());
-      }
-      tty->print_cr(" thrown in interpreter method <%s>", h_method->print_value_string());
-      tty->print_cr(" at bci %d for thread " INTPTR_FORMAT, current_bci, thread);
+      stringStream tempst;
+      tempst.print("interpreter method <%s>\n"
+                   " at bci %d for thread " INTPTR_FORMAT,
+                   h_method->print_value_string(), current_bci, p2i(thread));
+      Exceptions::log_exception(h_exception, tempst);
     }
 // Don't go paging in something which won't be used.
 //     else if (extable->length() == 0) {
@@ -460,7 +458,7 @@ IRT_ENTRY(address, InterpreterRuntime::exception_handler_for_exception(JavaThrea
 //       // warning("performance bug: should not call runtime if method has no exception handlers");
 //     }
     // for AbortVMOnException flag
-    NOT_PRODUCT(Exceptions::debug_check_abort(h_exception));
+    Exceptions::debug_check_abort(h_exception);
 
     // exception handler lookup
     KlassHandle h_klass(THREAD, h_exception->klass());
@@ -481,6 +479,17 @@ IRT_ENTRY(address, InterpreterRuntime::exception_handler_for_exception(JavaThrea
     }
   } while (should_repeat == true);
 
+#if INCLUDE_JVMCI
+  if (EnableJVMCI && h_method->method_data() != NULL) {
+    ResourceMark rm(thread);
+    ProfileData* pdata = h_method->method_data()->allocate_bci_to_data(current_bci, NULL);
+    if (pdata != NULL && pdata->is_BitData()) {
+      BitData* bit_data = (BitData*) pdata;
+      bit_data->set_exception_seen();
+    }
+  }
+#endif
+
   // notify JVMTI of an exception throw; JVMTI will detect if this is a first
   // time throw or a stack unwinding throw and accordingly notify the debugger
   if (JvmtiExport::can_post_on_exceptions()) {
@@ -500,8 +509,10 @@ IRT_ENTRY(address, InterpreterRuntime::exception_handler_for_exception(JavaThrea
 #ifndef CC_INTERP
     continuation = Interpreter::remove_activation_entry();
 #endif
+#if COMPILER2_OR_JVMCI
     // Count this for compilation purposes
     h_method->interpreter_throwout_increment(THREAD);
+#endif
   } else {
     // handler in this method => change bci/bcp to handler bci/bcp and continue there
     handler_pc = h_method->code_base() + handler_bci;
@@ -546,6 +557,7 @@ void InterpreterRuntime::resolve_get_put(JavaThread* thread, Bytecodes::Code byt
   // resolve field
   fieldDescriptor info;
   constantPoolHandle pool(thread, method(thread)->constants());
+  methodHandle m(thread, method(thread));
   bool is_put    = (bytecode == Bytecodes::_putfield  || bytecode == Bytecodes::_nofast_putfield ||
                     bytecode == Bytecodes::_putstatic);
   bool is_static = (bytecode == Bytecodes::_getstatic || bytecode == Bytecodes::_putstatic);
@@ -553,7 +565,7 @@ void InterpreterRuntime::resolve_get_put(JavaThread* thread, Bytecodes::Code byt
   {
     JvmtiHideSingleStepping jhss(thread);
     LinkResolver::resolve_field_access(info, pool, get_index_u2_cpcache(thread, bytecode),
-                                       bytecode, CHECK);
+                                       m, bytecode, CHECK);
   } // end JvmtiHideSingleStepping
 
   // check if link resolution caused cpCache to be updated
@@ -563,25 +575,37 @@ void InterpreterRuntime::resolve_get_put(JavaThread* thread, Bytecodes::Code byt
   // compute auxiliary field attributes
   TosState state  = as_TosState(info.field_type());
 
-  // We need to delay resolving put instructions on final fields
-  // until we actually invoke one. This is required so we throw
-  // exceptions at the correct place. If we do not resolve completely
-  // in the current pass, leaving the put_code set to zero will
-  // cause the next put instruction to reresolve.
-  Bytecodes::Code put_code = (Bytecodes::Code)0;
+  // Resolution of put instructions on final fields is delayed. That is required so that
+  // exceptions are thrown at the correct place (when the instruction is actually invoked).
+  // If we do not resolve an instruction in the current pass, leaving the put_code
+  // set to zero will cause the next put instruction to the same field to reresolve.
 
-  // We also need to delay resolving getstatic instructions until the
-  // class is intitialized.  This is required so that access to the static
+  // Resolution of put instructions to final instance fields with invalid updates (i.e.,
+  // to final instance fields with updates originating from a method different than <init>)
+  // is inhibited. A putfield instruction targeting an instance final field must throw
+  // an IllegalAccessError if the instruction is not in an instance
+  // initializer method <init>. If resolution were not inhibited, a putfield
+  // in an initializer method could be resolved in the initializer. Subsequent
+  // putfield instructions to the same field would then use cached information.
+  // As a result, those instructions would not pass through the VM. That is,
+  // checks in resolve_field_access() would not be executed for those instructions
+  // and the required IllegalAccessError would not be thrown.
+  //
+  // Also, we need to delay resolving getstatic and putstatic instructions until the
+  // class is initialized.  This is required so that access to the static
   // field will call the initialization function every time until the class
   // is completely initialized ala. in 2.17.5 in JVM Specification.
   InstanceKlass* klass = InstanceKlass::cast(info.field_holder());
-  bool uninitialized_static = ((bytecode == Bytecodes::_getstatic || bytecode == Bytecodes::_putstatic) &&
-                               !klass->is_initialized());
-  Bytecodes::Code get_code = (Bytecodes::Code)0;
+  bool uninitialized_static = is_static && !klass->is_initialized();
+  bool has_initialized_final_update = info.field_holder()->major_version() >= 53 &&
+                                      info.has_initialized_final_update();
+  assert(!(has_initialized_final_update && !info.access_flags().is_final()), "Fields with initialized final updates must be final");
 
+  Bytecodes::Code get_code = (Bytecodes::Code)0;
+  Bytecodes::Code put_code = (Bytecodes::Code)0;
   if (!uninitialized_static) {
     get_code = ((is_static) ? Bytecodes::_getstatic : Bytecodes::_getfield);
-    if (is_put || !info.access_flags().is_final()) {
+    if ((is_put && !has_initialized_final_update) || !info.access_flags().is_final()) {
       put_code = ((is_static) ? Bytecodes::_putstatic : Bytecodes::_putfield);
     }
   }
@@ -696,7 +720,8 @@ void InterpreterRuntime::resolve_invoke(JavaThread* thread, Bytecodes::Code byte
   Thread* THREAD = thread;
   // extract receiver from the outgoing argument list if necessary
   Handle receiver(thread, NULL);
-  if (bytecode == Bytecodes::_invokevirtual || bytecode == Bytecodes::_invokeinterface) {
+  if (bytecode == Bytecodes::_invokevirtual || bytecode == Bytecodes::_invokeinterface ||
+      bytecode == Bytecodes::_invokespecial) {
     ResourceMark rm(thread);
     methodHandle m (thread, method(thread));
     Bytecode_invoke call(m, bci(thread));
@@ -739,12 +764,6 @@ void InterpreterRuntime::resolve_invoke(JavaThread* thread, Bytecodes::Code byte
   ConstantPoolCacheEntry* cp_cache_entry = cache_entry(thread);
   if (cp_cache_entry->is_resolved(bytecode)) return;
 
-  if (bytecode == Bytecodes::_invokeinterface) {
-    if (TraceItables && Verbose) {
-      ResourceMark rm(thread);
-      tty->print_cr("Resolving: klass: %s to method: %s", info.resolved_klass()->name()->as_C_string(), info.resolved_method()->name()->as_C_string());
-    }
-  }
 #ifdef ASSERT
   if (bytecode == Bytecodes::_invokeinterface) {
     if (info.resolved_method()->method_holder() ==
@@ -765,16 +784,25 @@ void InterpreterRuntime::resolve_invoke(JavaThread* thread, Bytecodes::Code byte
       int index = info.resolved_method()->itable_index();
       assert(info.itable_index() == index, "");
     }
+  } else if (bytecode == Bytecodes::_invokespecial) {
+    assert(info.call_kind() == CallInfo::direct_call, "must be direct call");
   } else {
     assert(info.call_kind() == CallInfo::direct_call ||
            info.call_kind() == CallInfo::vtable_call, "");
   }
 #endif
+  // Get sender or sender's host_klass, and only set cpCache entry to resolved if
+  // it is not an interface.  The receiver for invokespecial calls within interface
+  // methods must be checked for every call.
+  InstanceKlass* sender = pool->pool_holder();
+  sender = sender->is_anonymous() ? sender->host_klass() : sender;
+
   switch (info.call_kind()) {
   case CallInfo::direct_call:
     cp_cache_entry->set_direct_call(
       bytecode,
-      info.resolved_method());
+      info.resolved_method(),
+      sender->is_interface());
     break;
   case CallInfo::vtable_call:
     cp_cache_entry->set_vtable_call(
@@ -858,7 +886,7 @@ IRT_ENTRY(void, InterpreterRuntime::resolve_from_cache(JavaThread* thread, Bytec
     resolve_invokedynamic(thread);
     break;
   default:
-    fatal(err_msg("unexpected bytecode: %s", Bytecodes::name(bytecode)));
+    fatal("unexpected bytecode: %s", Bytecodes::name(bytecode));
     break;
   }
 }
@@ -885,7 +913,7 @@ nmethod* InterpreterRuntime::frequency_counter_overflow(JavaThread* thread, addr
 #ifndef PRODUCT
   if (TraceOnStackReplacement) {
     if (nm != NULL) {
-      tty->print("OSR entry @ pc: " INTPTR_FORMAT ": ", nm->osr_entry());
+      tty->print("OSR entry @ pc: " INTPTR_FORMAT ": ", p2i(nm->osr_entry()));
       nm->print();
     }
   }
@@ -1071,7 +1099,8 @@ IRT_ENTRY(void, InterpreterRuntime::post_field_modification(JavaThread *thread,
   char sig_type = '\0';
 
   switch(cp_entry->flag_state()) {
-    case btos: sig_type = 'Z'; break;
+    case btos: sig_type = 'B'; break;
+    case ztos: sig_type = 'Z'; break;
     case ctos: sig_type = 'C'; break;
     case stos: sig_type = 'S'; break;
     case itos: sig_type = 'I'; break;
@@ -1179,16 +1208,15 @@ address SignatureHandlerLibrary::set_handler(CodeBuffer* buffer) {
     ICache::invalidate_range(handler, insts_size);
     _handler = handler + insts_size;
   }
-  CodeCacheExtensions::handle_generated_handler(handler, buffer->name(), _handler);
   return handler;
 }
 
-void SignatureHandlerLibrary::add(methodHandle method) {
+void SignatureHandlerLibrary::add(const methodHandle& method) {
   if (method->signature_handler() == NULL) {
     // use slow signature handler if we can't do better
     int handler_index = -1;
     // check if we can use customized (fast) signature handler
-    if (UseFastSignatureHandlers && CodeCacheExtensions::support_fast_signature_handlers() && method->size_of_parameters() <= Fingerprinter::max_size_of_parameters) {
+    if (UseFastSignatureHandlers && method->size_of_parameters() <= Fingerprinter::max_size_of_parameters) {
       // use customized signature handler
       MutexLocker mu(SignatureHandlerLibrary_lock);
       // make sure data structure is initialized
@@ -1205,15 +1233,6 @@ void SignatureHandlerLibrary::add(methodHandle method) {
           round_to((intptr_t)_buffer, CodeEntryAlignment) - (address)_buffer;
         CodeBuffer buffer((address)(_buffer + align_offset),
                           SignatureHandlerLibrary::buffer_size - align_offset);
-        if (!CodeCacheExtensions::support_dynamic_code()) {
-          // we need a name for the signature (for lookups or saving)
-          const int SYMBOL_SIZE = 50;
-          char *symbolName = NEW_RESOURCE_ARRAY(char, SYMBOL_SIZE);
-          // support for named signatures
-          jio_snprintf(symbolName, SYMBOL_SIZE,
-                       "native_" UINT64_FORMAT, fingerprint);
-          buffer.set_name(symbolName);
-        }
         InterpreterRuntime::SignatureHandlerGenerator(method, &buffer).generate(fingerprint);
         // copy into code heap
         address handler = set_handler(&buffer);
@@ -1222,6 +1241,7 @@ void SignatureHandlerLibrary::add(methodHandle method) {
         } else {
           // debugging suppport
           if (PrintSignatureHandlers && (handler != Interpreter::slow_signature_handler())) {
+            ttyLocker ttyl;
             tty->cr();
             tty->print_cr("argument handler #%d for: %s %s (fingerprint = " UINT64_FORMAT ", %d bytes generated)",
                           _handlers->length(),
@@ -1230,7 +1250,6 @@ void SignatureHandlerLibrary::add(methodHandle method) {
                           fingerprint,
                           buffer.insts_size());
             if (buffer.insts_size() > 0) {
-              // buffer may be empty for pregenerated handlers
               Disassembler::decode(handler, handler + buffer.insts_size());
             }
 #ifndef PRODUCT
@@ -1303,9 +1322,9 @@ void SignatureHandlerLibrary::add(uint64_t fingerprint, address handler) {
   if (handler_index < 0) {
     if (PrintSignatureHandlers && (handler != Interpreter::slow_signature_handler())) {
       tty->cr();
-      tty->print_cr("argument handler #%d at "PTR_FORMAT" for fingerprint " UINT64_FORMAT,
+      tty->print_cr("argument handler #%d at " PTR_FORMAT " for fingerprint " UINT64_FORMAT,
                     _handlers->length(),
-                    handler,
+                    p2i(handler),
                     fingerprint);
     }
     _fingerprints->append(fingerprint);
@@ -1313,11 +1332,11 @@ void SignatureHandlerLibrary::add(uint64_t fingerprint, address handler) {
   } else {
     if (PrintSignatureHandlers) {
       tty->cr();
-      tty->print_cr("duplicate argument handler #%d for fingerprint " UINT64_FORMAT "(old: "PTR_FORMAT", new : "PTR_FORMAT")",
+      tty->print_cr("duplicate argument handler #%d for fingerprint " UINT64_FORMAT "(old: " PTR_FORMAT ", new : " PTR_FORMAT ")",
                     _handlers->length(),
                     fingerprint,
-                    _handlers->at(handler_index),
-                    handler);
+                    p2i(_handlers->at(handler_index)),
+                    p2i(handler));
     }
   }
 }
@@ -1396,3 +1415,17 @@ IRT_ENTRY(void, InterpreterRuntime::member_name_arg_or_null(JavaThread* thread, 
   }
 IRT_END
 #endif // INCLUDE_JVMTI
+
+#ifndef PRODUCT
+// This must be a IRT_LEAF function because the interpreter must save registers on x86 to
+// call this, which changes rsp and makes the interpreter's expression stack not walkable.
+// The generated code still uses call_VM because that will set up the frame pointer for
+// bcp and method.
+IRT_LEAF(intptr_t, InterpreterRuntime::trace_bytecode(JavaThread* thread, intptr_t preserve_this_value, intptr_t tos, intptr_t tos2))
+  const frame f = thread->last_frame();
+  assert(f.is_interpreted_frame(), "must be an interpreted frame");
+  methodHandle mh(thread, f.interpreter_frame_method());
+  BytecodeTracer::trace(mh, f.interpreter_frame_bcp(), tos, tos2);
+  return preserve_this_value;
+IRT_END
+#endif // !PRODUCT

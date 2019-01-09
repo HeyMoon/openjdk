@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,8 +30,7 @@
 #include "memory/resourceArea.hpp"
 #include "runtime/stubCodeGenerator.hpp"
 #include "utilities/copy.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
+#include "oops/oop.inline.hpp"
 
 const RelocationHolder RelocationHolder::none; // its type is relocInfo::none
 
@@ -82,7 +81,6 @@ relocInfo* relocInfo::finish_prefix(short* prefix_limit) {
   return (relocInfo*)prefix_limit;
 }
 
-
 void relocInfo::set_type(relocType t) {
   int old_offset = addr_offset();
   int old_format = format();
@@ -92,6 +90,9 @@ void relocInfo::set_type(relocType t) {
   assert(format()==old_format, "sanity check");
 }
 
+nmethod* RelocIterator::code_as_nmethod() const {
+  return _code->as_nmethod();
+}
 
 void relocInfo::set_format(int f) {
   int old_offset = addr_offset();
@@ -122,15 +123,15 @@ void relocInfo::remove_reloc_info_for_address(RelocIterator *itr, address pc, re
 // ----------------------------------------------------------------------------------------------------
 // Implementation of RelocIterator
 
-void RelocIterator::initialize(nmethod* nm, address begin, address limit) {
+void RelocIterator::initialize(CompiledMethod* nm, address begin, address limit) {
   initialize_misc();
 
   if (nm == NULL && begin != NULL) {
     // allow nmethod to be deduced from beginning address
     CodeBlob* cb = CodeCache::find_blob(begin);
-    nm = cb->as_nmethod_or_null();
+    nm = (cb != NULL) ? cb->as_compiled_method_or_null() : NULL;
   }
-  assert(nm != NULL, "must be able to deduce nmethod from other arguments");
+  guarantee(nm != NULL, "must be able to deduce nmethod from other arguments");
 
   _code    = nm;
   _current = nm->relocation_begin() - 1;
@@ -424,6 +425,30 @@ void Relocation::set_value(address x) {
   ShouldNotReachHere();
 }
 
+void Relocation::const_set_data_value(address x) {
+#ifdef _LP64
+  if (format() == relocInfo::narrow_oop_in_const) {
+    *(narrowOop*)addr() = oopDesc::encode_heap_oop((oop) x);
+  } else {
+#endif
+    *(address*)addr() = x;
+#ifdef _LP64
+  }
+#endif
+}
+
+void Relocation::const_verify_data_value(address x) {
+#ifdef _LP64
+  if (format() == relocInfo::narrow_oop_in_const) {
+    guarantee(*(narrowOop*)addr() == oopDesc::encode_heap_oop((oop) x), "must agree");
+  } else {
+#endif
+    guarantee(*(address*)addr() == x, "must agree");
+#ifdef _LP64
+  }
+#endif
+}
+
 
 RelocationHolder Relocation::spec_simple(relocInfo::relocType rtype) {
   if (rtype == relocInfo::none)  return RelocationHolder::none;
@@ -432,49 +457,6 @@ RelocationHolder Relocation::spec_simple(relocInfo::relocType rtype) {
   itr.set_current(ri);
   itr.reloc();
   return itr._rh;
-}
-
-int32_t Relocation::runtime_address_to_index(address runtime_address) {
-  assert(!is_reloc_index((intptr_t)runtime_address), "must not look like an index");
-
-  if (runtime_address == NULL)  return 0;
-
-  StubCodeDesc* p = StubCodeDesc::desc_for(runtime_address);
-  if (p != NULL && p->begin() == runtime_address) {
-    assert(is_reloc_index(p->index()), "there must not be too many stubs");
-    return (int32_t)p->index();
-  } else {
-    // Known "miscellaneous" non-stub pointers:
-    // os::get_polling_page(), SafepointSynchronize::address_of_state()
-    if (PrintRelocations) {
-      tty->print_cr("random unregistered address in relocInfo: " INTPTR_FORMAT, runtime_address);
-    }
-#ifndef _LP64
-    return (int32_t) (intptr_t)runtime_address;
-#else
-    // didn't fit return non-index
-    return -1;
-#endif /* _LP64 */
-  }
-}
-
-
-address Relocation::index_to_runtime_address(int32_t index) {
-  if (index == 0)  return NULL;
-
-  if (is_reloc_index(index)) {
-    StubCodeDesc* p = StubCodeDesc::desc_for_index(index);
-    assert(p != NULL, "there must be a stub for this index");
-    return p->begin();
-  } else {
-#ifndef _LP64
-    // this only works on 32bit machines
-    return (address) ((intptr_t) index);
-#else
-    fatal("Relocation::index_to_runtime_address, int32_t not pointer sized");
-    return NULL;
-#endif /* _LP64 */
-  }
 }
 
 address Relocation::old_addr_for(address newa,
@@ -558,29 +540,43 @@ void virtual_call_Relocation::pack_data_to(CodeSection* dest) {
 
   normalize_address(_cached_value, dest);
   jint x0 = scaled_offset_null_special(_cached_value, point);
-  p = pack_1_int_to(p, x0);
+  p = pack_2_ints_to(p, x0, _method_index);
   dest->set_locs_end((relocInfo*) p);
 }
 
 
 void virtual_call_Relocation::unpack_data() {
-  jint x0 = unpack_1_int();
+  jint x0 = 0;
+  unpack_2_ints(x0, _method_index);
   address point = addr();
   _cached_value = x0==0? NULL: address_from_scaled_offset(x0, point);
 }
 
+void runtime_call_w_cp_Relocation::pack_data_to(CodeSection * dest) {
+  short* p = pack_1_int_to((short *)dest->locs_end(), (jint)(_offset >> 2));
+  dest->set_locs_end((relocInfo*) p);
+}
+
+void runtime_call_w_cp_Relocation::unpack_data() {
+  _offset = unpack_1_int() << 2;
+}
 
 void static_stub_Relocation::pack_data_to(CodeSection* dest) {
   short* p = (short*) dest->locs_end();
   CodeSection* insts = dest->outer()->insts();
   normalize_address(_static_call, insts);
-  p = pack_1_int_to(p, scaled_offset(_static_call, insts->start()));
+  jint is_aot = _is_aot ? 1 : 0;
+  p = pack_2_ints_to(p, scaled_offset(_static_call, insts->start()), is_aot);
   dest->set_locs_end((relocInfo*) p);
 }
 
 void static_stub_Relocation::unpack_data() {
   address base = binding()->section_start(CodeBuffer::SECT_INSTS);
-  _static_call = address_from_scaled_offset(unpack_1_int(), base);
+  jint offset;
+  jint is_aot;
+  unpack_2_ints(offset, is_aot);
+  _static_call = address_from_scaled_offset(offset, base);
+  _is_aot = (is_aot == 1);
 }
 
 void trampoline_stub_Relocation::pack_data_to(CodeSection* dest ) {
@@ -598,20 +594,13 @@ void trampoline_stub_Relocation::unpack_data() {
 
 void external_word_Relocation::pack_data_to(CodeSection* dest) {
   short* p = (short*) dest->locs_end();
-  int32_t index = runtime_address_to_index(_target);
 #ifndef _LP64
-  p = pack_1_int_to(p, index);
+  p = pack_1_int_to(p, (int32_t) (intptr_t)_target);
 #else
-  if (is_reloc_index(index)) {
-    p = pack_2_ints_to(p, index, 0);
-  } else {
-    jlong t = (jlong) _target;
-    int32_t lo = low(t);
-    int32_t hi = high(t);
-    p = pack_2_ints_to(p, lo, hi);
-    DEBUG_ONLY(jlong t1 = jlong_from(hi, lo));
-    assert(!is_reloc_index(t1) && (address) t1 == _target, "not symmetric");
-  }
+  jlong t = (jlong) _target;
+  int32_t lo = low(t);
+  int32_t hi = high(t);
+  p = pack_2_ints_to(p, lo, hi);
 #endif /* _LP64 */
   dest->set_locs_end((relocInfo*) p);
 }
@@ -619,16 +608,12 @@ void external_word_Relocation::pack_data_to(CodeSection* dest) {
 
 void external_word_Relocation::unpack_data() {
 #ifndef _LP64
-  _target = index_to_runtime_address(unpack_1_int());
+  _target = (address) (intptr_t)unpack_1_int();
 #else
   int32_t lo, hi;
   unpack_2_ints(lo, hi);
   jlong t = jlong_from(hi, lo);;
-  if (is_reloc_index(t)) {
-    _target = index_to_runtime_address(t);
-  } else {
-    _target = (address) t;
-  }
+  _target = (address) t;
 #endif /* _LP64 */
 }
 
@@ -769,6 +754,14 @@ address virtual_call_Relocation::cached_value() {
   return _cached_value;
 }
 
+Method* virtual_call_Relocation::method_value() {
+  CompiledMethod* cm = code();
+  if (cm == NULL) return (Method*)NULL;
+  Metadata* m = cm->metadata_at(_method_index);
+  assert(m != NULL || _method_index == 0, "should be non-null for non-zero index");
+  assert(m == NULL || m->is_method(), "not a method");
+  return (Method*)m;
+}
 
 void virtual_call_Relocation::clear_inline_cache() {
   // No stubs for ICs
@@ -779,6 +772,25 @@ void virtual_call_Relocation::clear_inline_cache() {
 }
 
 
+void opt_virtual_call_Relocation::pack_data_to(CodeSection* dest) {
+  short* p = (short*) dest->locs_end();
+  p = pack_1_int_to(p, _method_index);
+  dest->set_locs_end((relocInfo*) p);
+}
+
+void opt_virtual_call_Relocation::unpack_data() {
+  _method_index = unpack_1_int();
+}
+
+Method* opt_virtual_call_Relocation::method_value() {
+  CompiledMethod* cm = code();
+  if (cm == NULL) return (Method*)NULL;
+  Metadata* m = cm->metadata_at(_method_index);
+  assert(m != NULL || _method_index == 0, "should be non-null for non-zero index");
+  assert(m == NULL || m->is_method(), "not a method");
+  return (Method*)m;
+}
+
 void opt_virtual_call_Relocation::clear_inline_cache() {
   // No stubs for ICs
   // Clean IC
@@ -788,13 +800,14 @@ void opt_virtual_call_Relocation::clear_inline_cache() {
 }
 
 
-address opt_virtual_call_Relocation::static_stub() {
+address opt_virtual_call_Relocation::static_stub(bool is_aot) {
   // search for the static stub who points back to this static call
   address static_call_addr = addr();
   RelocIterator iter(code());
   while (iter.next()) {
     if (iter.type() == relocInfo::static_stub_type) {
-      if (iter.static_stub_reloc()->static_call() == static_call_addr) {
+      static_stub_Relocation* stub_reloc = iter.static_stub_reloc();
+      if (stub_reloc->static_call() == static_call_addr && stub_reloc->is_aot() == is_aot) {
         return iter.addr();
       }
     }
@@ -802,21 +815,40 @@ address opt_virtual_call_Relocation::static_stub() {
   return NULL;
 }
 
+Method* static_call_Relocation::method_value() {
+  CompiledMethod* cm = code();
+  if (cm == NULL) return (Method*)NULL;
+  Metadata* m = cm->metadata_at(_method_index);
+  assert(m != NULL || _method_index == 0, "should be non-null for non-zero index");
+  assert(m == NULL || m->is_method(), "not a method");
+  return (Method*)m;
+}
+
+void static_call_Relocation::pack_data_to(CodeSection* dest) {
+  short* p = (short*) dest->locs_end();
+  p = pack_1_int_to(p, _method_index);
+  dest->set_locs_end((relocInfo*) p);
+}
+
+void static_call_Relocation::unpack_data() {
+  _method_index = unpack_1_int();
+}
 
 void static_call_Relocation::clear_inline_cache() {
   // Safe call site info
-  CompiledStaticCall* handler = compiledStaticCall_at(this);
+  CompiledStaticCall* handler = this->code()->compiledStaticCall_at(this);
   handler->set_to_clean();
 }
 
 
-address static_call_Relocation::static_stub() {
+address static_call_Relocation::static_stub(bool is_aot) {
   // search for the static stub who points back to this static call
   address static_call_addr = addr();
   RelocIterator iter(code());
   while (iter.next()) {
     if (iter.type() == relocInfo::static_stub_type) {
-      if (iter.static_stub_reloc()->static_call() == static_call_addr) {
+      static_stub_Relocation* stub_reloc = iter.static_stub_reloc();
+      if (stub_reloc->static_call() == static_call_addr && stub_reloc->is_aot() == is_aot) {
         return iter.addr();
       }
     }
@@ -847,7 +879,7 @@ address trampoline_stub_Relocation::get_trampoline_for(address call, nmethod* co
 void static_stub_Relocation::clear_inline_cache() {
   // Call stub is only used when calling the interpreted code.
   // It does not really need to be cleared, except that we want to clean out the methodoop.
-  CompiledStaticCall::set_stub_to_clean(this);
+  CompiledDirectStaticCall::set_stub_to_clean(this);
 }
 
 
@@ -925,7 +957,7 @@ void RelocIterator::print_current() {
     return;
   }
   tty->print("relocInfo@" INTPTR_FORMAT " [type=%d(%s) addr=" INTPTR_FORMAT " offset=%d",
-             _current, type(), reloc_type_string((relocInfo::relocType) type()), _addr, _current->addr_offset());
+             p2i(_current), type(), reloc_type_string((relocInfo::relocType) type()), p2i(_addr), _current->addr_offset());
   if (current()->format() != 0)
     tty->print(" format=%d", current()->format());
   if (datalen() == 1) {
@@ -951,12 +983,14 @@ void RelocIterator::print_current() {
         oop_value = r->oop_value();
       }
       tty->print(" | [oop_addr=" INTPTR_FORMAT " *=" INTPTR_FORMAT " offset=%d]",
-                 oop_addr, (address)raw_oop, r->offset());
+                 p2i(oop_addr), p2i(raw_oop), r->offset());
       // Do not print the oop by default--we want this routine to
       // work even during GC or other inconvenient times.
       if (WizardMode && oop_value != NULL) {
-        tty->print("oop_value=" INTPTR_FORMAT ": ", (address)oop_value);
-        oop_value->print_value_on(tty);
+        tty->print("oop_value=" INTPTR_FORMAT ": ", p2i(oop_value));
+        if (oop_value->is_oop()) {
+          oop_value->print_value_on(tty);
+        }
       }
       break;
     }
@@ -972,9 +1006,9 @@ void RelocIterator::print_current() {
         metadata_value = r->metadata_value();
       }
       tty->print(" | [metadata_addr=" INTPTR_FORMAT " *=" INTPTR_FORMAT " offset=%d]",
-                 metadata_addr, (address)raw_metadata, r->offset());
+                 p2i(metadata_addr), p2i(raw_metadata), r->offset());
       if (metadata_value != NULL) {
-        tty->print("metadata_value=" INTPTR_FORMAT ": ", (address)metadata_value);
+        tty->print("metadata_value=" INTPTR_FORMAT ": ", p2i(metadata_value));
         metadata_value->print_value_on(tty);
       }
       break;
@@ -984,33 +1018,47 @@ void RelocIterator::print_current() {
   case relocInfo::section_word_type:
     {
       DataRelocation* r = (DataRelocation*) reloc();
-      tty->print(" | [target=" INTPTR_FORMAT "]", r->value()); //value==target
+      tty->print(" | [target=" INTPTR_FORMAT "]", p2i(r->value())); //value==target
       break;
     }
   case relocInfo::static_call_type:
+    {
+      static_call_Relocation* r = (static_call_Relocation*) reloc();
+      tty->print(" | [destination=" INTPTR_FORMAT " metadata=" INTPTR_FORMAT "]",
+                 p2i(r->destination()), p2i(r->method_value()));
+      break;
+    }
   case relocInfo::runtime_call_type:
+  case relocInfo::runtime_call_w_cp_type:
     {
       CallRelocation* r = (CallRelocation*) reloc();
-      tty->print(" | [destination=" INTPTR_FORMAT "]", r->destination());
+      tty->print(" | [destination=" INTPTR_FORMAT "]", p2i(r->destination()));
       break;
     }
   case relocInfo::virtual_call_type:
     {
       virtual_call_Relocation* r = (virtual_call_Relocation*) reloc();
-      tty->print(" | [destination=" INTPTR_FORMAT " cached_value=" INTPTR_FORMAT "]",
-                 r->destination(), r->cached_value());
+      tty->print(" | [destination=" INTPTR_FORMAT " cached_value=" INTPTR_FORMAT " metadata=" INTPTR_FORMAT "]",
+                 p2i(r->destination()), p2i(r->cached_value()), p2i(r->method_value()));
       break;
     }
   case relocInfo::static_stub_type:
     {
       static_stub_Relocation* r = (static_stub_Relocation*) reloc();
-      tty->print(" | [static_call=" INTPTR_FORMAT "]", r->static_call());
+      tty->print(" | [static_call=" INTPTR_FORMAT "]", p2i(r->static_call()));
       break;
     }
   case relocInfo::trampoline_stub_type:
     {
       trampoline_stub_Relocation* r = (trampoline_stub_Relocation*) reloc();
-      tty->print(" | [trampoline owner=" INTPTR_FORMAT "]", r->owner());
+      tty->print(" | [trampoline owner=" INTPTR_FORMAT "]", p2i(r->owner()));
+      break;
+    }
+  case relocInfo::opt_virtual_call_type:
+    {
+      opt_virtual_call_Relocation* r = (opt_virtual_call_Relocation*) reloc();
+      tty->print(" | [destination=" INTPTR_FORMAT " metadata=" INTPTR_FORMAT "]",
+                 p2i(r->destination()), p2i(r->method_value()));
       break;
     }
   }
@@ -1029,7 +1077,7 @@ void RelocIterator::print() {
     got_next = (skip_next || next());
     skip_next = false;
 
-    tty->print("         @" INTPTR_FORMAT ": ", scan);
+    tty->print("         @" INTPTR_FORMAT ": ", p2i(scan));
     relocInfo* newscan = _current+1;
     if (!has_current())  newscan -= 1;  // nothing to scan here!
     while (scan < newscan) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,9 +32,9 @@
 #include "compiler/disassembler.hpp"
 #include "interpreter/interpreter.hpp"
 #include "jvm_solaris.h"
+#include "logging/log.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/filemap.hpp"
-#include "mutex_solaris.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "os_share_solaris.hpp"
 #include "os_solaris.inline.hpp"
@@ -42,7 +42,7 @@
 #include "prims/jvm.h"
 #include "prims/jvm_misc.hpp"
 #include "runtime/arguments.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/extendedPC.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/interfaceSupport.hpp"
@@ -68,6 +68,7 @@
 #include "utilities/defaultStream.hpp"
 #include "utilities/events.hpp"
 #include "utilities/growableArray.hpp"
+#include "utilities/macros.hpp"
 #include "utilities/vmError.hpp"
 
 // put OS-includes here
@@ -77,7 +78,6 @@
 # include <link.h>
 # include <poll.h>
 # include <pthread.h>
-# include <pwd.h>
 # include <schedctl.h>
 # include <setjmp.h>
 # include <signal.h>
@@ -138,11 +138,6 @@
   #define LGRP_RSRC_MEM      1       /* memory resources */
 #endif
 
-// see thr_setprio(3T) for the basis of these numbers
-#define MinimumPriority 0
-#define NormalPriority  64
-#define MaximumPriority 127
-
 // Values for ThreadPriorityPolicy == 1
 int prio_policy1[CriticalPriority+1] = {
   -99999,  0, 16,  32,  48,  64,
@@ -164,6 +159,7 @@ address os::Solaris::handler_end;    // end pc of thr_sighndlrinfo
 
 address os::Solaris::_main_stack_base = NULL;  // 4352906 workaround
 
+os::Solaris::pthread_setname_np_func_t os::Solaris::_pthread_setname_np = NULL;
 
 // "default" initializers for missing libc APIs
 extern "C" {
@@ -181,75 +177,6 @@ extern "C" {
 }
 
 static void unpackTime(timespec* absTime, bool isAbsolute, jlong time);
-
-// Thread Local Storage
-// This is common to all Solaris platforms so it is defined here,
-// in this common file.
-// The declarations are in the os_cpu threadLS*.hpp files.
-//
-// Static member initialization for TLS
-Thread* ThreadLocalStorage::_get_thread_cache[ThreadLocalStorage::_pd_cache_size] = {NULL};
-
-#ifndef PRODUCT
-  #define _PCT(n,d)       ((100.0*(double)(n))/(double)(d))
-
-int ThreadLocalStorage::_tcacheHit = 0;
-int ThreadLocalStorage::_tcacheMiss = 0;
-
-void ThreadLocalStorage::print_statistics() {
-  int total = _tcacheMiss+_tcacheHit;
-  tty->print_cr("Thread cache hits %d misses %d total %d percent %f\n",
-                _tcacheHit, _tcacheMiss, total, _PCT(_tcacheHit, total));
-}
-  #undef _PCT
-#endif // PRODUCT
-
-Thread* ThreadLocalStorage::get_thread_via_cache_slowly(uintptr_t raw_id,
-                                                        int index) {
-  Thread *thread = get_thread_slow();
-  if (thread != NULL) {
-    address sp = os::current_stack_pointer();
-    guarantee(thread->_stack_base == NULL ||
-              (sp <= thread->_stack_base &&
-              sp >= thread->_stack_base - thread->_stack_size) ||
-              is_error_reported(),
-              "sp must be inside of selected thread stack");
-
-    thread->set_self_raw_id(raw_id);  // mark for quick retrieval
-    _get_thread_cache[index] = thread;
-  }
-  return thread;
-}
-
-
-static const double all_zero[sizeof(Thread) / sizeof(double) + 1] = {0};
-#define NO_CACHED_THREAD ((Thread*)all_zero)
-
-void ThreadLocalStorage::pd_set_thread(Thread* thread) {
-
-  // Store the new value before updating the cache to prevent a race
-  // between get_thread_via_cache_slowly() and this store operation.
-  os::thread_local_storage_at_put(ThreadLocalStorage::thread_index(), thread);
-
-  // Update thread cache with new thread if setting on thread create,
-  // or NO_CACHED_THREAD (zeroed) thread if resetting thread on exit.
-  uintptr_t raw = pd_raw_thread_id();
-  int ix = pd_cache_index(raw);
-  _get_thread_cache[ix] = thread == NULL ? NO_CACHED_THREAD : thread;
-}
-
-void ThreadLocalStorage::pd_init() {
-  for (int i = 0; i < _pd_cache_size; i++) {
-    _get_thread_cache[i] = NO_CACHED_THREAD;
-  }
-}
-
-// Invalidate all the caches (happens to be the same as pd_init).
-void ThreadLocalStorage::pd_invalidate_all() { pd_init(); }
-
-#undef NO_CACHED_THREAD
-
-// END Thread Local Storage
 
 static inline size_t adjust_stack_size(address base, size_t size) {
   if ((ssize_t)size < 0) {
@@ -513,8 +440,15 @@ static bool assign_distribution(processorid_t* id_array,
 }
 
 void os::set_native_thread_name(const char *name) {
-  // Not yet implemented.
-  return;
+  if (Solaris::_pthread_setname_np != NULL) {
+    // Only the first 31 bytes of 'name' are processed by pthread_setname_np
+    // but we explicitly copy into a size-limited buffer to avoid any
+    // possible overflow.
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%s", name);
+    buf[sizeof(buf) - 1] = '\0';
+    Solaris::_pthread_setname_np(pthread_self(), buf);
+  }
 }
 
 bool os::distribute_processes(uint length, uint* distribution) {
@@ -600,13 +534,12 @@ void os::init_system_properties_values() {
 #define SYS_EXT_DIR     "/usr/jdk/packages"
 #define EXTENSIONS_DIR  "/lib/ext"
 
-  char cpu_arch[12];
   // Buffer that fits several sprintfs.
   // Note that the space for the colon and the trailing null are provided
   // by the nulls included by the sizeof operator.
   const size_t bufsize =
     MAX3((size_t)MAXPATHLEN,  // For dll_dir & friends.
-         sizeof(SYS_EXT_DIR) + sizeof("/lib/") + strlen(cpu_arch), // invariant ld_library_path
+         sizeof(SYS_EXT_DIR) + sizeof("/lib/"), // invariant ld_library_path
          (size_t)MAXPATHLEN + sizeof(EXTENSIONS_DIR) + sizeof(SYS_EXT_DIR) + sizeof(EXTENSIONS_DIR)); // extensions dir
   char *buf = (char *)NEW_C_HEAP_ARRAY(char, bufsize, mtInternal);
 
@@ -627,11 +560,7 @@ void os::init_system_properties_values() {
     if (pslash != NULL) {
       pslash = strrchr(buf, '/');
       if (pslash != NULL) {
-        *pslash = '\0';          // Get rid of /<arch>.
-        pslash = strrchr(buf, '/');
-        if (pslash != NULL) {
-          *pslash = '\0';        // Get rid of /lib.
-        }
+        *pslash = '\0';        // Get rid of /lib.
       }
     }
     Arguments::set_java_home(buf);
@@ -689,21 +618,8 @@ void os::init_system_properties_values() {
     // However, to prevent the proliferation of improperly built native
     // libraries, the new path component /usr/jdk/packages is added here.
 
-    // Determine the actual CPU architecture.
-    sysinfo(SI_ARCHITECTURE, cpu_arch, sizeof(cpu_arch));
-#ifdef _LP64
-    // If we are a 64-bit vm, perform the following translations:
-    //   sparc   -> sparcv9
-    //   i386    -> amd64
-    if (strcmp(cpu_arch, "sparc") == 0) {
-      strcat(cpu_arch, "v9");
-    } else if (strcmp(cpu_arch, "i386") == 0) {
-      strcpy(cpu_arch, "amd64");
-    }
-#endif
-
     // Construct the invariant part of ld_library_path.
-    sprintf(common_path, SYS_EXT_DIR "/lib/%s", cpu_arch);
+    sprintf(common_path, SYS_EXT_DIR "/lib");
 
     // Struct size is more than sufficient for the path components obtained
     // through the dlinfo() call, so only add additional space for the path
@@ -789,8 +705,8 @@ extern "C" void breakpoint() {
 
 static thread_t main_thread;
 
-// Thread start routine for all new Java threads
-extern "C" void* java_start(void* thread_addr) {
+// Thread start routine for all newly created threads
+extern "C" void* thread_native_entry(void* thread_addr) {
   // Try to randomize the cache line index of hot stack frames.
   // This helps when threads of the same stack traces evict each other's
   // cache lines. The threads can be either from the same JVM instance, or
@@ -802,10 +718,16 @@ extern "C" void* java_start(void* thread_addr) {
 
   int prio;
   Thread* thread = (Thread*)thread_addr;
+
+  thread->initialize_thread_current();
+
   OSThread* osthr = thread->osthread();
 
   osthr->set_lwp_id(_lwp_self());  // Store lwp in case we are bound
   thread->_schedctl = (void *) schedctl_init();
+
+  log_info(os, thread)("Thread is alive (tid: " UINTX_FORMAT ").",
+    os::current_thread_id());
 
   if (UseNUMA) {
     int lgrp_id = os::numa_get_group_id();
@@ -814,15 +736,9 @@ extern "C" void* java_start(void* thread_addr) {
     }
   }
 
-  // If the creator called set priority before we started,
-  // we need to call set_native_priority now that we have an lwp.
-  // We used to get the priority from thr_getprio (we called
-  // thr_setprio way back in create_thread) and pass it to
-  // set_native_priority, but Solaris scales the priority
-  // in java_to_os_priority, so when we read it back here,
-  // we pass trash to set_native_priority instead of what's
-  // in java_to_os_priority. So we save the native priority
-  // in the osThread and recall it here.
+  // Our priority was set when we were created, and stored in the
+  // osthread, but couldn't be passed through to our LWP until now.
+  // So read back the priority and set it again.
 
   if (osthr->thread_id() != -1) {
     if (UseThreadPriorities) {
@@ -850,6 +766,17 @@ extern "C" void* java_start(void* thread_addr) {
   // which frees the CodeHeap containing the Atomic::dec code
   if (thread != VMThread::vm_thread() && VMThread::vm_thread() != NULL) {
     Atomic::dec(&os::Solaris::_os_thread_count);
+  }
+
+  log_info(os, thread)("Thread finished (tid: " UINTX_FORMAT ").", os::current_thread_id());
+
+  // If a thread has not deleted itself ("delete this") as part of its
+  // termination sequence, we have to ensure thread-local-storage is
+  // cleared before we actually terminate. No threads should ever be
+  // deleted asynchronously with respect to their termination.
+  if (Thread::current_or_null_safe() != NULL) {
+    assert(Thread::current_or_null_safe() == thread, "current thread is wrong");
+    thread->clear_thread_current();
   }
 
   if (UseDetachedThreads) {
@@ -890,19 +817,19 @@ static OSThread* create_os_thread(Thread* thread, thread_t thread_id) {
 void os::Solaris::hotspot_sigmask(Thread* thread) {
   //Save caller's signal mask
   sigset_t sigmask;
-  thr_sigsetmask(SIG_SETMASK, NULL, &sigmask);
+  pthread_sigmask(SIG_SETMASK, NULL, &sigmask);
   OSThread *osthread = thread->osthread();
   osthread->set_caller_sigmask(sigmask);
 
-  thr_sigsetmask(SIG_UNBLOCK, os::Solaris::unblocked_signals(), NULL);
+  pthread_sigmask(SIG_UNBLOCK, os::Solaris::unblocked_signals(), NULL);
   if (!ReduceSignalUsage) {
     if (thread->is_VM_thread()) {
       // Only the VM thread handles BREAK_SIGNAL ...
-      thr_sigsetmask(SIG_UNBLOCK, vm_signals(), NULL);
+      pthread_sigmask(SIG_UNBLOCK, vm_signals(), NULL);
     } else {
       // ... all other threads block BREAK_SIGNAL
       assert(!sigismember(vm_signals(), SIGINT), "SIGINT should not be blocked");
-      thr_sigsetmask(SIG_BLOCK, vm_signals(), NULL);
+      pthread_sigmask(SIG_BLOCK, vm_signals(), NULL);
     }
   }
 }
@@ -923,6 +850,9 @@ bool os::create_attached_thread(JavaThread* thread) {
   // initialize signal mask for this thread
   // and save the caller's signal mask
   os::Solaris::hotspot_sigmask(thread);
+
+  log_info(os, thread)("Thread attached (tid: " UINTX_FORMAT ").",
+    os::current_thread_id());
 
   return true;
 }
@@ -950,9 +880,34 @@ bool os::create_main_thread(JavaThread* thread) {
   return true;
 }
 
+// Helper function to trace thread attributes, similar to os::Posix::describe_pthread_attr()
+static char* describe_thr_create_attributes(char* buf, size_t buflen,
+                                            size_t stacksize, long flags) {
+  stringStream ss(buf, buflen);
+  ss.print("stacksize: " SIZE_FORMAT "k, ", stacksize / 1024);
+  ss.print("flags: ");
+  #define PRINT_FLAG(f) if (flags & f) ss.print( #f " ");
+  #define ALL(X) \
+    X(THR_SUSPENDED) \
+    X(THR_DETACHED) \
+    X(THR_BOUND) \
+    X(THR_NEW_LWP) \
+    X(THR_DAEMON)
+  ALL(PRINT_FLAG)
+  #undef ALL
+  #undef PRINT_FLAG
+  return buf;
+}
+
+// return default stack size for thr_type
+size_t os::Posix::default_stack_size(os::ThreadType thr_type) {
+  // default stack size when not specified by caller is 1M (2M for LP64)
+  size_t s = (BytesPerWord >> 2) * K * K;
+  return s;
+}
 
 bool os::create_thread(Thread* thread, ThreadType thr_type,
-                       size_t stack_size) {
+                       size_t req_stack_size) {
   // Allocate the OSThread object
   OSThread* osthread = new OSThread(NULL, NULL);
   if (osthread == NULL) {
@@ -987,31 +942,8 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
     tty->print_cr("In create_thread, creating a %s thread\n", thrtyp);
   }
 
-  // Calculate stack size if it's not specified by caller.
-  if (stack_size == 0) {
-    // The default stack size 1M (2M for LP64).
-    stack_size = (BytesPerWord >> 2) * K * K;
-
-    switch (thr_type) {
-    case os::java_thread:
-      // Java threads use ThreadStackSize which default value can be changed with the flag -Xss
-      if (JavaThread::stack_size_at_create() > 0) stack_size = JavaThread::stack_size_at_create();
-      break;
-    case os::compiler_thread:
-      if (CompilerThreadStackSize > 0) {
-        stack_size = (size_t)(CompilerThreadStackSize * K);
-        break;
-      } // else fall through:
-        // use VMThreadStackSize if CompilerThreadStackSize is not defined
-    case os::vm_thread:
-    case os::pgc_thread:
-    case os::cgc_thread:
-    case os::watcher_thread:
-      if (VMThreadStackSize > 0) stack_size = (size_t)(VMThreadStackSize * K);
-      break;
-    }
-  }
-  stack_size = MAX2(stack_size, os::Solaris::min_stack_allowed);
+  // calculate stack size if it's not specified by caller
+  size_t stack_size = os::Posix::get_initial_stack_size(thr_type, req_stack_size);
 
   // Initial state is ALLOCATED but not INITIALIZED
   osthread->set_state(ALLOCATED);
@@ -1044,11 +976,18 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
   osthread->set_lwp_id(-1);
   osthread->set_thread_id(-1);
 
-  status = thr_create(NULL, stack_size, java_start, thread, flags, &tid);
+  status = thr_create(NULL, stack_size, thread_native_entry, thread, flags, &tid);
+
+  char buf[64];
+  if (status == 0) {
+    log_info(os, thread)("Thread started (tid: " UINTX_FORMAT ", attributes: %s). ",
+      (uintx) tid, describe_thr_create_attributes(buf, sizeof(buf), stack_size, flags));
+  } else {
+    log_warning(os, thread)("Failed to start thread - thr_create failed (%s) for attributes: %s.",
+      os::errno_name(status), describe_thr_create_attributes(buf, sizeof(buf), stack_size, flags));
+  }
+
   if (status != 0) {
-    if (PrintMiscellaneous && (Verbose || WizardMode)) {
-      perror("os::create_thread");
-    }
     thread->set_osthread(NULL);
     // Need to clean up stuff we've allocated so far
     delete osthread;
@@ -1063,6 +1002,10 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
   // Remember that we created this thread so we can set priority on it
   osthread->set_vm_created();
 
+  // Most thread types will set an explicit priority before starting the thread,
+  // but for those that don't we need a valid value to read back in thread_native_entry.
+  osthread->set_native_priority(NormPriority);
+
   // Initial thread state is INITIALIZED, not SUSPENDED
   osthread->set_state(INITIALIZED);
 
@@ -1071,9 +1014,9 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
 }
 
 // defined for >= Solaris 10. This allows builds on earlier versions
-// of Solaris to take advantage of the newly reserved Solaris JVM signals
-// With SIGJVM1, SIGJVM2, INTERRUPT_SIGNAL is SIGJVM1, ASYNC_SIGNAL is SIGJVM2
-// and -XX:+UseAltSigs does nothing since these should have no conflict
+// of Solaris to take advantage of the newly reserved Solaris JVM signals.
+// With SIGJVM1, SIGJVM2, ASYNC_SIGNAL is SIGJVM2. Previously INTERRUPT_SIGNAL
+// was SIGJVM1.
 //
 #if !defined(SIGJVM1)
   #define SIGJVM1 39
@@ -1082,7 +1025,7 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
 
 debug_only(static bool signal_sets_initialized = false);
 static sigset_t unblocked_sigs, vm_sigs, allowdebug_blocked_sigs;
-int os::Solaris::_SIGinterrupt = INTERRUPT_SIGNAL;
+
 int os::Solaris::_SIGasync = ASYNC_SIGNAL;
 
 bool os::Solaris::is_sig_ignored(int sig) {
@@ -1126,18 +1069,10 @@ void os::Solaris::signal_sets_init() {
   sigaddset(&unblocked_sigs, SIGBUS);
   sigaddset(&unblocked_sigs, SIGFPE);
 
-  if (isJVM1available) {
-    os::Solaris::set_SIGinterrupt(SIGJVM1);
-    os::Solaris::set_SIGasync(SIGJVM2);
-  } else if (UseAltSigs) {
-    os::Solaris::set_SIGinterrupt(ALT_INTERRUPT_SIGNAL);
-    os::Solaris::set_SIGasync(ALT_ASYNC_SIGNAL);
-  } else {
-    os::Solaris::set_SIGinterrupt(INTERRUPT_SIGNAL);
-    os::Solaris::set_SIGasync(ASYNC_SIGNAL);
-  }
+  // Always true on Solaris 10+
+  guarantee(isJVM1available(), "SIGJVM1/2 missing!");
+  os::Solaris::set_SIGasync(SIGJVM2);
 
-  sigaddset(&unblocked_sigs, os::Solaris::SIGinterrupt());
   sigaddset(&unblocked_sigs, os::Solaris::SIGasync());
 
   if (!ReduceSignalUsage) {
@@ -1187,8 +1122,7 @@ sigset_t* os::Solaris::allowdebug_blocked_signals() {
 
 
 void _handle_uncaught_cxx_exception() {
-  VMError err("An uncaught C++ exception");
-  err.report_and_die();
+  VMError::report_and_die("An uncaught C++ exception");
 }
 
 
@@ -1258,18 +1192,15 @@ void os::initialize_thread(Thread* thr) {
 void os::free_thread(OSThread* osthread) {
   assert(osthread != NULL, "os::free_thread but osthread not set");
 
-
   // We are told to free resources of the argument thread,
   // but we can only really operate on the current thread.
-  // The main thread must take the VMThread down synchronously
-  // before the main thread exits and frees up CodeHeap
-  guarantee((Thread::current()->osthread() == osthread
-             || (osthread == VMThread::vm_thread()->osthread())), "os::free_thread but not current thread");
-  if (Thread::current()->osthread() == osthread) {
-    // Restore caller's signal mask
-    sigset_t sigmask = osthread->caller_sigmask();
-    thr_sigsetmask(SIG_SETMASK, &sigmask, NULL);
-  }
+  assert(Thread::current()->osthread() == osthread,
+         "os::free_thread but not current thread");
+
+  // Restore caller's signal mask
+  sigset_t sigmask = osthread->caller_sigmask();
+  pthread_sigmask(SIG_SETMASK, &sigmask, NULL);
+
   delete osthread;
 }
 
@@ -1288,67 +1219,6 @@ static pid_t _initial_pid = 0;
 int os::current_process_id() {
   return (int)(_initial_pid ? _initial_pid : getpid());
 }
-
-int os::allocate_thread_local_storage() {
-  // %%%       in Win32 this allocates a memory segment pointed to by a
-  //           register.  Dan Stein can implement a similar feature in
-  //           Solaris.  Alternatively, the VM can do the same thing
-  //           explicitly: malloc some storage and keep the pointer in a
-  //           register (which is part of the thread's context) (or keep it
-  //           in TLS).
-  // %%%       In current versions of Solaris, thr_self and TSD can
-  //           be accessed via short sequences of displaced indirections.
-  //           The value of thr_self is available as %g7(36).
-  //           The value of thr_getspecific(k) is stored in %g7(12)(4)(k*4-4),
-  //           assuming that the current thread already has a value bound to k.
-  //           It may be worth experimenting with such access patterns,
-  //           and later having the parameters formally exported from a Solaris
-  //           interface.  I think, however, that it will be faster to
-  //           maintain the invariant that %g2 always contains the
-  //           JavaThread in Java code, and have stubs simply
-  //           treat %g2 as a caller-save register, preserving it in a %lN.
-  thread_key_t tk;
-  if (thr_keycreate(&tk, NULL)) {
-    fatal(err_msg("os::allocate_thread_local_storage: thr_keycreate failed "
-                  "(%s)", strerror(errno)));
-  }
-  return int(tk);
-}
-
-void os::free_thread_local_storage(int index) {
-  // %%% don't think we need anything here
-  // if (pthread_key_delete((pthread_key_t) tk)) {
-  //   fatal("os::free_thread_local_storage: pthread_key_delete failed");
-  // }
-}
-
-// libthread allocate for tsd_common is a version specific
-// small number - point is NO swap space available
-#define SMALLINT 32
-void os::thread_local_storage_at_put(int index, void* value) {
-  // %%% this is used only in threadLocalStorage.cpp
-  if (thr_setspecific((thread_key_t)index, value)) {
-    if (errno == ENOMEM) {
-      vm_exit_out_of_memory(SMALLINT, OOM_MALLOC_ERROR,
-                            "thr_setspecific: out of swap space");
-    } else {
-      fatal(err_msg("os::thread_local_storage_at_put: thr_setspecific failed "
-                    "(%s)", strerror(errno)));
-    }
-  } else {
-    ThreadLocalStorage::set_thread_in_slot((Thread *) value);
-  }
-}
-
-// This function could be called before TLS is initialized, for example, when
-// VM receives an async signal or when VM causes a fatal error during
-// initialization. Return NULL if thr_getspecific() fails.
-void* os::thread_local_storage_at(int index) {
-  // %%% this is used only in threadLocalStorage.cpp
-  void* r = NULL;
-  return thr_getspecific((thread_key_t)index, &r) != 0 ? NULL : r;
-}
-
 
 // gethrtime() should be monotonic according to the documentation,
 // but some virtualized platforms are known to break this guarantee.
@@ -1414,61 +1284,29 @@ bool os::getTimesSecs(double* process_real_time,
 }
 
 bool os::supports_vtime() { return true; }
-
-bool os::enable_vtime() {
-  int fd = ::open("/proc/self/ctl", O_WRONLY);
-  if (fd == -1) {
-    return false;
-  }
-
-  long cmd[] = { PCSET, PR_MSACCT };
-  int res = ::write(fd, cmd, sizeof(long) * 2);
-  ::close(fd);
-  if (res != sizeof(long) * 2) {
-    return false;
-  }
-  return true;
-}
-
-bool os::vtime_enabled() {
-  int fd = ::open("/proc/self/status", O_RDONLY);
-  if (fd == -1) {
-    return false;
-  }
-
-  pstatus_t status;
-  int res = os::read(fd, (void*) &status, sizeof(pstatus_t));
-  ::close(fd);
-  if (res != sizeof(pstatus_t)) {
-    return false;
-  }
-  return status.pr_flags & PR_MSACCT;
-}
+bool os::enable_vtime() { return false; }
+bool os::vtime_enabled() { return false; }
 
 double os::elapsedVTime() {
   return (double)gethrvtime() / (double)hrtime_hz;
-}
-
-// Used internally for comparisons only
-// getTimeMillis guaranteed to not move backwards on Solaris
-jlong getTimeMillis() {
-  jlong nanotime = getTimeNanos();
-  return (jlong)(nanotime / NANOSECS_PER_MILLISEC);
 }
 
 // Must return millis since Jan 1 1970 for JVM_CurrentTimeMillis
 jlong os::javaTimeMillis() {
   timeval t;
   if (gettimeofday(&t, NULL) == -1) {
-    fatal(err_msg("os::javaTimeMillis: gettimeofday (%s)", strerror(errno)));
+    fatal("os::javaTimeMillis: gettimeofday (%s)", os::strerror(errno));
   }
   return jlong(t.tv_sec) * 1000  +  jlong(t.tv_usec) / 1000;
 }
 
+// Must return seconds+nanos since Jan 1 1970. This must use the same
+// time source as javaTimeMillis and can't use get_nsec_fromepoch as
+// we need better than 1ms accuracy
 void os::javaTimeSystemUTC(jlong &seconds, jlong &nanos) {
   timeval t;
   if (gettimeofday(&t, NULL) == -1) {
-    fatal(err_msg("os::javaTimeSystemUTC: gettimeofday (%s)", strerror(errno)));
+    fatal("os::javaTimeSystemUTC: gettimeofday (%s)", os::strerror(errno));
   }
   seconds = jlong(t.tv_sec);
   nanos = jlong(t.tv_usec) * 1000;
@@ -1521,7 +1359,7 @@ void os::shutdown() {
 // Note: os::abort() might be called very early during initialization, or
 // called from signal handler. Before adding something to os::abort(), make
 // sure it is async-safe and can handle partially initialized VM.
-void os::abort(bool dump_core, void* siginfo, void* context) {
+void os::abort(bool dump_core, void* siginfo, const void* context) {
   os::shutdown();
   if (dump_core) {
 #ifndef PRODUCT
@@ -1925,6 +1763,19 @@ int os::stat(const char *path, struct stat *sbuf) {
   return ::stat(pathbuf, sbuf);
 }
 
+static inline time_t get_mtime(const char* filename) {
+  struct stat st;
+  int ret = os::stat(filename, &st);
+  assert(ret == 0, "failed to stat() file '%s': %s", filename, strerror(errno));
+  return st.st_mtime;
+}
+
+int os::compare_file_modified_times(const char* file1, const char* file2) {
+  time_t t1 = get_mtime(file1);
+  time_t t2 = get_mtime(file2);
+  return t1 - t2;
+}
+
 static bool _print_ascii_file(const char* filename, outputStream* st) {
   int fd = ::open(filename, O_RDONLY);
   if (fd == -1) {
@@ -1971,6 +1822,26 @@ void os::Solaris::print_distro_info(outputStream* st) {
   st->cr();
 }
 
+void os::get_summary_os_info(char* buf, size_t buflen) {
+  strncpy(buf, "Solaris", buflen);  // default to plain solaris
+  FILE* fp = fopen("/etc/release", "r");
+  if (fp != NULL) {
+    char tmp[256];
+    // Only get the first line and chop out everything but the os name.
+    if (fgets(tmp, sizeof(tmp), fp)) {
+      char* ptr = tmp;
+      // skip past whitespace characters
+      while (*ptr != '\0' && (*ptr == ' ' || *ptr == '\t' || *ptr == '\n')) ptr++;
+      if (*ptr != '\0') {
+        char* nl = strchr(ptr, '\n');
+        if (nl != NULL) *nl = '\0';
+        strncpy(buf, ptr, buflen);
+      }
+    }
+    fclose(fp);
+  }
+}
+
 void os::Solaris::print_libversion_info(outputStream* st) {
   st->print("  (T2 libthread)");
   st->cr();
@@ -1978,24 +1849,58 @@ void os::Solaris::print_libversion_info(outputStream* st) {
 
 static bool check_addr0(outputStream* st) {
   jboolean status = false;
+  const int read_chunk = 200;
+  int ret = 0;
+  int nmap = 0;
   int fd = ::open("/proc/self/map",O_RDONLY);
   if (fd >= 0) {
-    prmap_t p;
-    while (::read(fd, &p, sizeof(p)) > 0) {
-      if (p.pr_vaddr == 0x0) {
-        st->print("Warning: Address: 0x%x, Size: %dK, ",p.pr_vaddr, p.pr_size/1024, p.pr_mapname);
-        st->print("Mapped file: %s, ", p.pr_mapname[0] == '\0' ? "None" : p.pr_mapname);
-        st->print("Access:");
-        st->print("%s",(p.pr_mflags & MA_READ)  ? "r" : "-");
-        st->print("%s",(p.pr_mflags & MA_WRITE) ? "w" : "-");
-        st->print("%s",(p.pr_mflags & MA_EXEC)  ? "x" : "-");
-        st->cr();
-        status = true;
+    prmap_t *p = NULL;
+    char *mbuff = (char *) calloc(read_chunk, sizeof(prmap_t));
+    if (NULL == mbuff) {
+      ::close(fd);
+      return status;
+    }
+    while ((ret = ::read(fd, mbuff, read_chunk*sizeof(prmap_t))) > 0) {
+      //check if read() has not read partial data
+      if( 0 != ret % sizeof(prmap_t)){
+        break;
+      }
+      nmap = ret / sizeof(prmap_t);
+      p = (prmap_t *)mbuff;
+      for(int i = 0; i < nmap; i++){
+        if (p->pr_vaddr == 0x0) {
+          st->print("Warning: Address: " PTR_FORMAT ", Size: " SIZE_FORMAT "K, ",p->pr_vaddr, p->pr_size/1024);
+          st->print("Mapped file: %s, ", p->pr_mapname[0] == '\0' ? "None" : p->pr_mapname);
+          st->print("Access: ");
+          st->print("%s",(p->pr_mflags & MA_READ)  ? "r" : "-");
+          st->print("%s",(p->pr_mflags & MA_WRITE) ? "w" : "-");
+          st->print("%s",(p->pr_mflags & MA_EXEC)  ? "x" : "-");
+          st->cr();
+          status = true;
+        }
+        p++;
       }
     }
+    free(mbuff);
     ::close(fd);
   }
   return status;
+}
+
+void os::get_summary_cpu_info(char* buf, size_t buflen) {
+  // Get MHz with system call. We don't seem to already have this.
+  processor_info_t stats;
+  processorid_t id = getcpuid();
+  int clock = 0;
+  if (processor_info(id, &stats) != -1) {
+    clock = stats.pi_clock;  // pi_processor_type isn't more informative than below
+  }
+#ifdef AMD64
+  snprintf(buf, buflen, "x86 64 bit %d MHz", clock);
+#else
+  // must be sparc
+  snprintf(buf, buflen, "Sparcv9 64 bit %d MHz", clock);
+#endif
 }
 
 void os::pd_print_cpu_info(outputStream* st, char* buf, size_t buflen) {
@@ -2011,30 +1916,11 @@ void os::print_memory_info(outputStream* st) {
   (void) check_addr0(st);
 }
 
-void os::print_siginfo(outputStream* st, void* siginfo) {
-  const siginfo_t* si = (const siginfo_t*)siginfo;
-
-  os::Posix::print_siginfo_brief(st, si);
-
-  if (si && (si->si_signo == SIGBUS || si->si_signo == SIGSEGV) &&
-      UseSharedSpaces) {
-    FileMapInfo* mapinfo = FileMapInfo::current_info();
-    if (mapinfo->is_in_shared_space(si->si_addr)) {
-      st->print("\n\nError accessing class data sharing archive."   \
-                " Mapped file inaccessible during execution, "      \
-                " possible disk/network problem.");
-    }
-  }
-  st->cr();
-}
-
 // Moved from whole group, because we need them here for diagnostic
 // prints.
 #define OLDMAXSIGNUM 32
 static int Maxsignum = 0;
 static int *ourSigFlags = NULL;
-
-extern "C" void sigINTRHandler(int, siginfo_t*, void*);
 
 int os::Solaris::get_our_sigflags(int sig) {
   assert(ourSigFlags!=NULL, "signal data structure not initialized");
@@ -2100,8 +1986,7 @@ static void print_signal_handler(outputStream* st, int sig,
   os::Posix::print_sa_flags(st, sa.sa_flags);
 
   // Check: is it our handler?
-  if (handler == CAST_FROM_FN_PTR(address, signalHandler) ||
-      handler == CAST_FROM_FN_PTR(address, sigINTRHandler)) {
+  if (handler == CAST_FROM_FN_PTR(address, signalHandler)) {
     // It is our signal handler
     // check for flags
     if (sa.sa_flags != os::Solaris::get_our_sigflags(sig)) {
@@ -2121,13 +2006,11 @@ void os::print_signal_handlers(outputStream* st, char* buf, size_t buflen) {
   print_signal_handler(st, SIGPIPE, buf, buflen);
   print_signal_handler(st, SIGXFSZ, buf, buflen);
   print_signal_handler(st, SIGILL , buf, buflen);
-  print_signal_handler(st, INTERRUPT_SIGNAL, buf, buflen);
   print_signal_handler(st, ASYNC_SIGNAL, buf, buflen);
   print_signal_handler(st, BREAK_SIGNAL, buf, buflen);
   print_signal_handler(st, SHUTDOWN1_SIGNAL , buf, buflen);
   print_signal_handler(st, SHUTDOWN2_SIGNAL , buf, buflen);
   print_signal_handler(st, SHUTDOWN3_SIGNAL, buf, buflen);
-  print_signal_handler(st, os::Solaris::SIGinterrupt(), buf, buflen);
   print_signal_handler(st, os::Solaris::SIGasync(), buf, buflen);
 }
 
@@ -2175,18 +2058,9 @@ void os::jvm_path(char *buf, jint buflen) {
       // Look for JAVA_HOME in the environment.
       char* java_home_var = ::getenv("JAVA_HOME");
       if (java_home_var != NULL && java_home_var[0] != 0) {
-        char cpu_arch[12];
         char* jrelib_p;
         int   len;
-        sysinfo(SI_ARCHITECTURE, cpu_arch, sizeof(cpu_arch));
-#ifdef _LP64
-        // If we are on sparc running a 64-bit vm, look in jre/lib/sparcv9.
-        if (strcmp(cpu_arch, "sparc") == 0) {
-          strcat(cpu_arch, "v9");
-        } else if (strcmp(cpu_arch, "i386") == 0) {
-          strcpy(cpu_arch, "amd64");
-        }
-#endif
+
         // Check the current module name "libjvm.so".
         p = strrchr(buf, '/');
         assert(strstr(p, "/libjvm") == p, "invalid library name");
@@ -2197,9 +2071,9 @@ void os::jvm_path(char *buf, jint buflen) {
         len = strlen(buf);
         assert(len < buflen, "Ran out of buffer space");
         jrelib_p = buf + len;
-        snprintf(jrelib_p, buflen-len, "/jre/lib/%s", cpu_arch);
+        snprintf(jrelib_p, buflen-len, "/jre/lib");
         if (0 != access(buf, F_OK)) {
-          snprintf(jrelib_p, buflen-len, "/lib/%s", cpu_arch);
+          snprintf(jrelib_p, buflen-len, "/lib");
         }
 
         if (0 == access(buf, F_OK)) {
@@ -2234,7 +2108,7 @@ void os::print_jni_name_suffix_on(outputStream* st, int args_size) {
 size_t os::lasterror(char *buf, size_t len) {
   if (errno == 0)  return 0;
 
-  const char *s = ::strerror(errno);
+  const char *s = os::strerror(errno);
   size_t n = ::strlen(s);
   if (n >= len) {
     n = len - 1;
@@ -2443,7 +2317,7 @@ static void warn_fail_commit_memory(char* addr, size_t bytes, bool exec,
                                     int err) {
   warning("INFO: os::commit_memory(" PTR_FORMAT ", " SIZE_FORMAT
           ", %d) failed; error='%s' (errno=%d)", addr, bytes, exec,
-          strerror(err), err);
+          os::strerror(err), err);
 }
 
 static void warn_fail_commit_memory(char* addr, size_t bytes,
@@ -2451,7 +2325,7 @@ static void warn_fail_commit_memory(char* addr, size_t bytes,
                                     int err) {
   warning("INFO: os::commit_memory(" PTR_FORMAT ", " SIZE_FORMAT
           ", " SIZE_FORMAT ", %d) failed; error='%s' (errno=%d)", addr, bytes,
-          alignment_hint, exec, strerror(err), err);
+          alignment_hint, exec, os::strerror(err), err);
 }
 
 int os::Solaris::commit_memory_impl(char* addr, size_t bytes, bool exec) {
@@ -2486,14 +2360,14 @@ void os::pd_commit_memory_or_exit(char* addr, size_t bytes, bool exec,
   if (err != 0) {
     // the caller wants all commit errors to exit with the specified mesg:
     warn_fail_commit_memory(addr, bytes, exec, err);
-    vm_exit_out_of_memory(bytes, OOM_MMAP_ERROR, mesg);
+    vm_exit_out_of_memory(bytes, OOM_MMAP_ERROR, "%s", mesg);
   }
 }
 
 size_t os::Solaris::page_size_for_alignment(size_t alignment) {
   assert(is_size_aligned(alignment, (size_t) vm_page_size()),
-         err_msg(SIZE_FORMAT " is not aligned to " SIZE_FORMAT,
-                 alignment, (size_t) vm_page_size()));
+         SIZE_FORMAT " is not aligned to " SIZE_FORMAT,
+         alignment, (size_t) vm_page_size());
 
   for (int i = 0; _page_sizes[i] != 0; i++) {
     if (is_size_aligned(alignment, _page_sizes[i])) {
@@ -2509,7 +2383,7 @@ int os::Solaris::commit_memory_impl(char* addr, size_t bytes,
   int err = Solaris::commit_memory_impl(addr, bytes, exec);
   if (err == 0 && UseLargePages && alignment_hint > 0) {
     assert(is_size_aligned(bytes, alignment_hint),
-           err_msg(SIZE_FORMAT " is not aligned to " SIZE_FORMAT, bytes, alignment_hint));
+           SIZE_FORMAT " is not aligned to " SIZE_FORMAT, bytes, alignment_hint);
 
     // The syscall memcntl requires an exact page size (see man memcntl for details).
     size_t page_size = page_size_for_alignment(alignment_hint);
@@ -2533,7 +2407,7 @@ void os::pd_commit_memory_or_exit(char* addr, size_t bytes,
   if (err != 0) {
     // the caller wants all commit errors to exit with the specified mesg:
     warn_fail_commit_memory(addr, bytes, alignment_hint, exec, err);
-    vm_exit_out_of_memory(bytes, OOM_MMAP_ERROR, mesg);
+    vm_exit_out_of_memory(bytes, OOM_MMAP_ERROR, "%s", mesg);
   }
 }
 
@@ -2662,7 +2536,7 @@ bool os::get_page_info(char *start, page_info* info) {
   uint64_t outdata[2];
   uint_t validity = 0;
 
-  if (os::Solaris::meminfo(&addr, 1, info_types, 2, outdata, &validity) < 0) {
+  if (meminfo(&addr, 1, info_types, 2, outdata, &validity) < 0) {
     return false;
   }
 
@@ -2700,7 +2574,7 @@ char *os::scan_pages(char *start, char* end, page_info* page_expected,
       addrs_count++;
     }
 
-    if (os::Solaris::meminfo(addrs, addrs_count, info_types, types, outdata, validity) < 0) {
+    if (meminfo(addrs, addrs_count, info_types, types, outdata, validity) < 0) {
       return NULL;
     }
 
@@ -2828,13 +2702,13 @@ char* os::pd_attempt_reserve_memory_at(size_t bytes, char* requested_addr) {
     pd_unmap_memory(addr, bytes);
   }
 
-  if (PrintMiscellaneous && Verbose) {
+  if (log_is_enabled(Warning, os)) {
     char buf[256];
     buf[0] = '\0';
     if (addr == NULL) {
-      jio_snprintf(buf, sizeof(buf), ": %s", strerror(err));
+      jio_snprintf(buf, sizeof(buf), ": %s", os::strerror(err));
     }
-    warning("attempt_reserve_memory_at: couldn't reserve " SIZE_FORMAT " bytes at "
+    log_info(os)("attempt_reserve_memory_at: couldn't reserve " SIZE_FORMAT " bytes at "
             PTR_FORMAT ": reserve_memory_helper returned " PTR_FORMAT
             "%s", bytes, requested_addr, addr, buf);
   }
@@ -2864,9 +2738,7 @@ char* os::pd_attempt_reserve_memory_at(size_t bytes, char* requested_addr) {
           assert(i > 0, "gap adjustment code problem");
           have_adjusted_gap = true;  // adjust the gap only once, just in case
           gap = actual_gap;
-          if (PrintMiscellaneous && Verbose) {
-            warning("attempt_reserve_memory_at: adjusted gap to 0x%lx", gap);
-          }
+          log_info(os)("attempt_reserve_memory_at: adjusted gap to 0x%lx", gap);
           unmap_memory(base[i], bytes);
           unmap_memory(base[i-1], size[i-1]);
           i-=2;
@@ -2898,8 +2770,8 @@ char* os::pd_attempt_reserve_memory_at(size_t bytes, char* requested_addr) {
       } else {
         size_t bottom_overlap = base[i] + bytes - requested_addr;
         if (bottom_overlap >= 0 && bottom_overlap < bytes) {
-          if (PrintMiscellaneous && Verbose && bottom_overlap == 0) {
-            warning("attempt_reserve_memory_at: possible alignment bug");
+          if (bottom_overlap == 0) {
+            log_info(os)("attempt_reserve_memory_at: possible alignment bug");
           }
           unmap_memory(requested_addr, bottom_overlap);
           size[i] = bytes - bottom_overlap;
@@ -3063,11 +2935,11 @@ bool os::Solaris::is_valid_page_size(size_t bytes) {
 }
 
 bool os::Solaris::setup_large_pages(caddr_t start, size_t bytes, size_t align) {
-  assert(is_valid_page_size(align), err_msg(SIZE_FORMAT " is not a valid page size", align));
+  assert(is_valid_page_size(align), SIZE_FORMAT " is not a valid page size", align);
   assert(is_ptr_aligned((void*) start, align),
-         err_msg(PTR_FORMAT " is not aligned to " SIZE_FORMAT, p2i((void*) start), align));
+         PTR_FORMAT " is not aligned to " SIZE_FORMAT, p2i((void*) start), align);
   assert(is_size_aligned(bytes, align),
-         err_msg(SIZE_FORMAT " is not aligned to " SIZE_FORMAT, bytes, align));
+         SIZE_FORMAT " is not aligned to " SIZE_FORMAT, bytes, align);
 
   // Signal to OS that we want large pages for addresses
   // from addr, addr + bytes
@@ -3241,7 +3113,7 @@ static int  myMax       = 0;
 static int  myCur       = 0;
 static bool priocntl_enable = false;
 
-static const int criticalPrio = 60; // FX/60 is critical thread class/priority on T4
+static const int criticalPrio = FXCriticalPriority;
 static int java_MaxPriority_to_os_priority = 0; // Saved mapping
 
 
@@ -3688,7 +3560,7 @@ void os::Solaris::SR_handler(Thread* thread, ucontext_t* uc) {
       sigset_t suspend_set;  // signals for sigsuspend()
 
       // get current set of blocked signals and unblock resume signal
-      thr_sigsetmask(SIG_BLOCK, NULL, &suspend_set);
+      pthread_sigmask(SIG_BLOCK, NULL, &suspend_set);
       sigdelset(&suspend_set, os::Solaris::SIGasync());
 
       sr_semaphore.signal();
@@ -3724,7 +3596,7 @@ void os::Solaris::SR_handler(Thread* thread, ucontext_t* uc) {
 void os::print_statistics() {
 }
 
-int os::message_box(const char* title, const char* message) {
+bool os::message_box(const char* title, const char* message) {
   int i;
   fdStream err(defaultStream::error_fd());
   for (i = 0; i < 78; i++) err.print_raw("=");
@@ -3846,7 +3718,7 @@ void PcFetcher::do_task(const os::SuspendedThreadTaskContext& context) {
   Thread* thread = context.thread();
   OSThread* osthread = thread->osthread();
   if (osthread->ucontext() != NULL) {
-    _epc = os::Solaris::ucontext_get_pc((ucontext_t *) context.ucontext());
+    _epc = os::Solaris::ucontext_get_pc((const ucontext_t *) context.ucontext());
   } else {
     // NULL context is unexpected, double-check this is the VMThread
     guarantee(thread->is_VM_thread(), "can only be called for VMThread");
@@ -3869,7 +3741,7 @@ ExtendedPC os::get_thread_pc(Thread* thread) {
 // This does not do anything on Solaris. This is basically a hook for being
 // able to use structured exception handling (thread-local exception filters) on, e.g., Win32.
 void os::os_exception_wrapper(java_call_t f, JavaValue* value,
-                              methodHandle* method, JavaCallArguments* args,
+                              const methodHandle& method, JavaCallArguments* args,
                               Thread* thread) {
   f(value, method, args, thread);
 }
@@ -3891,7 +3763,6 @@ void os::os_exception_wrapper(java_call_t f, JavaValue* value,
 // SIGBUS, SIGSEGV, SIGILL, SIGFPE, BREAK_SIGNAL, SIGPIPE, SIGXFSZ,
 // os::Solaris::SIGasync
 // It should be consulted by handlers for any of those signals.
-// It explicitly does not recognize os::Solaris::SIGinterrupt
 //
 // The caller of this routine must pass in the three arguments supplied
 // to the function referred to in the "sa_sigaction" (not the "sa_handler")
@@ -3911,20 +3782,6 @@ void signalHandler(int sig, siginfo_t* info, void* ucVoid) {
   int orig_errno = errno;  // Preserve errno value over signal handler.
   JVM_handle_solaris_signal(sig, info, ucVoid, true);
   errno = orig_errno;
-}
-
-// Do not delete - if guarantee is ever removed,  a signal handler (even empty)
-// is needed to provoke threads blocked on IO to return an EINTR
-// Note: this explicitly does NOT call JVM_handle_solaris_signal and
-// does NOT participate in signal chaining due to requirement for
-// NOT setting SA_RESTART to make EINTR work.
-extern "C" void sigINTRHandler(int sig, siginfo_t* info, void* ucVoid) {
-  if (UseSignalChaining) {
-    struct sigaction *actp = os::Solaris::get_chained_signal_action(sig);
-    if (actp && actp->sa_handler) {
-      vm_exit_during_initialization("Signal chaining detected for VM interrupt signal, try -XX:+UseAltSigs");
-    }
-  }
 }
 
 // This boolean allows users to forward their own non-matching signals
@@ -3980,7 +3837,7 @@ static bool call_chained_handler(struct sigaction *actp, int sig,
 
     // try to honor the signal mask
     sigset_t oset;
-    thr_sigsetmask(SIG_SETMASK, &(actp->sa_mask), &oset);
+    pthread_sigmask(SIG_SETMASK, &(actp->sa_mask), &oset);
 
     // call into the chained handler
     if (siginfo_flag_set) {
@@ -3990,7 +3847,7 @@ static bool call_chained_handler(struct sigaction *actp, int sig,
     }
 
     // restore the signal mask
-    thr_sigsetmask(SIG_SETMASK, &oset, 0);
+    pthread_sigmask(SIG_SETMASK, &oset, 0);
   }
   // Tell jvm's signal handler the signal is taken care of.
   return true;
@@ -4045,13 +3902,13 @@ void os::Solaris::set_signal_handler(int sig, bool set_installed,
         // save the old handler in jvm
         save_preinstalled_handler(sig, oldAct);
       } else {
-        vm_exit_during_initialization("Signal chaining not allowed for VM interrupt signal, try -XX:+UseAltSigs.");
+        vm_exit_during_initialization("Signal chaining not allowed for VM interrupt signal.");
       }
       // libjsig also interposes the sigaction() call below and saves the
       // old sigaction on it own.
     } else {
-      fatal(err_msg("Encountered unexpected pre-existing sigaction handler "
-                    "%#lx for signal %d.", (long)oldhand, sig));
+      fatal("Encountered unexpected pre-existing sigaction handler "
+            "%#lx for signal %d.", (long)oldhand, sig);
     }
   }
 
@@ -4064,13 +3921,6 @@ void os::Solaris::set_signal_handler(int sig, bool set_installed,
   // not using stack banging
   if (!UseStackBanging && sig == SIGSEGV) {
     sigAct.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
-  } else if (sig == os::Solaris::SIGinterrupt()) {
-    // Interruptible i/o requires SA_RESTART cleared so EINTR
-    // is returned instead of restarting system calls
-    sigemptyset(&sigAct.sa_mask);
-    sigAct.sa_handler = NULL;
-    sigAct.sa_flags = SA_SIGINFO;
-    sigAct.sa_sigaction = sigINTRHandler;
   } else {
     sigAct.sa_flags = SA_SIGINFO | SA_RESTART;
   }
@@ -4121,8 +3971,7 @@ void os::run_periodic_checks() {
     DO_SIGNAL_CHECK(BREAK_SIGNAL);
   }
 
-  // See comments above for using JVM1/JVM2 and UseAltSigs
-  DO_SIGNAL_CHECK(os::Solaris::SIGinterrupt());
+  // See comments above for using JVM1/JVM2
   DO_SIGNAL_CHECK(os::Solaris::SIGasync());
 
 }
@@ -4167,12 +4016,9 @@ void os::Solaris::check_signal_handler(int sig) {
     break;
 
   default:
-    int intrsig = os::Solaris::SIGinterrupt();
     int asynsig = os::Solaris::SIGasync();
 
-    if (sig == intrsig) {
-      jvmHandler = CAST_FROM_FN_PTR(address, sigINTRHandler);
-    } else if (sig == asynsig) {
+    if (sig == asynsig) {
       jvmHandler = CAST_FROM_FN_PTR(address, signalHandler);
     } else {
       return;
@@ -4194,8 +4040,12 @@ void os::Solaris::check_signal_handler(int sig) {
     }
   } else if(os::Solaris::get_our_sigflags(sig) != 0 && act.sa_flags != os::Solaris::get_our_sigflags(sig)) {
     tty->print("Warning: %s handler flags ", exception_name(sig, buf, O_BUFLEN));
-    tty->print("expected:" PTR32_FORMAT, os::Solaris::get_our_sigflags(sig));
-    tty->print_cr("  found:" PTR32_FORMAT, act.sa_flags);
+    tty->print("expected:");
+    os::Posix::print_sa_flags(tty, os::Solaris::get_our_sigflags(sig));
+    tty->cr();
+    tty->print("  found:");
+    os::Posix::print_sa_flags(tty, act.sa_flags);
+    tty->cr();
     // No need to check this sig any longer
     sigaddset(&check_signal_done, sig);
   }
@@ -4243,8 +4093,7 @@ void os::Solaris::install_signal_handlers() {
   set_signal_handler(SIGFPE, true, true);
 
 
-  if (os::Solaris::SIGinterrupt() > OLDMAXSIGNUM || os::Solaris::SIGasync() > OLDMAXSIGNUM) {
-
+  if (os::Solaris::SIGasync() > OLDMAXSIGNUM) {
     // Pre-1.4.1 Libjsig limited to signal chaining signals <= 32 so
     // can not register overridable signals which might be > 32
     if (libjsig_is_loaded && libjsigversion <= JSIG_VERSION_1_4_1) {
@@ -4254,8 +4103,6 @@ void os::Solaris::install_signal_handlers() {
     }
   }
 
-  // Never ok to chain our SIGinterrupt
-  set_signal_handler(os::Solaris::SIGinterrupt(), true, false);
   set_signal_handler(os::Solaris::SIGasync(), true, true);
 
   if (libjsig_is_loaded && !libjsigdone) {
@@ -4286,35 +4133,6 @@ void os::Solaris::install_signal_handlers() {
 void report_error(const char* file_name, int line_no, const char* title,
                   const char* format, ...);
 
-const char * signames[] = {
-  "SIG0",
-  "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGTRAP",
-  "SIGABRT", "SIGEMT", "SIGFPE", "SIGKILL", "SIGBUS",
-  "SIGSEGV", "SIGSYS", "SIGPIPE", "SIGALRM", "SIGTERM",
-  "SIGUSR1", "SIGUSR2", "SIGCLD", "SIGPWR", "SIGWINCH",
-  "SIGURG", "SIGPOLL", "SIGSTOP", "SIGTSTP", "SIGCONT",
-  "SIGTTIN", "SIGTTOU", "SIGVTALRM", "SIGPROF", "SIGXCPU",
-  "SIGXFSZ", "SIGWAITING", "SIGLWP", "SIGFREEZE", "SIGTHAW",
-  "SIGCANCEL", "SIGLOST"
-};
-
-const char* os::exception_name(int exception_code, char* buf, size_t size) {
-  if (0 < exception_code && exception_code <= SIGRTMAX) {
-    // signal
-    if (exception_code < sizeof(signames)/sizeof(const char*)) {
-      jio_snprintf(buf, size, "%s", signames[exception_code]);
-    } else {
-      jio_snprintf(buf, size, "SIG%d", exception_code);
-    }
-    return buf;
-  } else {
-    return NULL;
-  }
-}
-
-// (Static) wrapper for getisax(2) call.
-os::Solaris::getisax_func_t os::Solaris::_getisax = 0;
-
 // (Static) wrappers for the liblgrp API
 os::Solaris::lgrp_home_func_t os::Solaris::_lgrp_home;
 os::Solaris::lgrp_init_func_t os::Solaris::_lgrp_init;
@@ -4325,9 +4143,6 @@ os::Solaris::lgrp_resources_func_t os::Solaris::_lgrp_resources;
 os::Solaris::lgrp_nlgrps_func_t os::Solaris::_lgrp_nlgrps;
 os::Solaris::lgrp_cookie_stale_func_t os::Solaris::_lgrp_cookie_stale;
 os::Solaris::lgrp_cookie_t os::Solaris::_lgrp_cookie = 0;
-
-// (Static) wrapper for meminfo() call.
-os::Solaris::meminfo_func_t os::Solaris::_meminfo = 0;
 
 static address resolve_symbol_lazy(const char* name) {
   address addr = (address) dlsym(RTLD_DEFAULT, name);
@@ -4452,27 +4267,6 @@ bool os::Solaris::liblgrp_init() {
   return false;
 }
 
-void os::Solaris::misc_sym_init() {
-  address func;
-
-  // getisax
-  func = resolve_symbol_lazy("getisax");
-  if (func != NULL) {
-    os::Solaris::_getisax = CAST_TO_FN_PTR(getisax_func_t, func);
-  }
-
-  // meminfo
-  func = resolve_symbol_lazy("meminfo");
-  if (func != NULL) {
-    os::Solaris::set_meminfo(CAST_TO_FN_PTR(meminfo_func_t, func));
-  }
-}
-
-uint_t os::Solaris::getisax(uint32_t* array, uint_t n) {
-  assert(_getisax != NULL, "_getisax not set");
-  return _getisax(array, n);
-}
-
 // int pset_getloadavg(psetid_t pset, double loadavg[], int nelem);
 typedef long (*pset_getloadavg_type)(psetid_t pset, double loadavg[], int nelem);
 static pset_getloadavg_type pset_getloadavg_ptr = NULL;
@@ -4480,8 +4274,8 @@ static pset_getloadavg_type pset_getloadavg_ptr = NULL;
 void init_pset_getloadavg_ptr(void) {
   pset_getloadavg_ptr =
     (pset_getloadavg_type)dlsym(RTLD_DEFAULT, "pset_getloadavg");
-  if (PrintMiscellaneous && Verbose && pset_getloadavg_ptr == NULL) {
-    warning("pset_getloadavg function not found");
+  if (pset_getloadavg_ptr == NULL) {
+    log_warning(os)("pset_getloadavg function not found");
   }
 }
 
@@ -4497,20 +4291,15 @@ void os::init(void) {
 
   page_size = sysconf(_SC_PAGESIZE);
   if (page_size == -1) {
-    fatal(err_msg("os_solaris.cpp: os::init: sysconf failed (%s)",
-                  strerror(errno)));
+    fatal("os_solaris.cpp: os::init: sysconf failed (%s)", os::strerror(errno));
   }
   init_page_sizes((size_t) page_size);
 
   Solaris::initialize_system_info();
 
-  // Initialize misc. symbols as soon as possible, so we can use them
-  // if we need them.
-  Solaris::misc_sym_init();
-
   int fd = ::open("/dev/zero", O_RDWR);
   if (fd < 0) {
-    fatal(err_msg("os::init: cannot open /dev/zero (%s)", strerror(errno)));
+    fatal("os::init: cannot open /dev/zero (%s)", os::strerror(errno));
   } else {
     Solaris::set_dev_zero_fd(fd);
 
@@ -4537,14 +4326,19 @@ void os::init(void) {
   // Constant minimum stack size allowed. It must be at least
   // the minimum of what the OS supports (thr_min_stack()), and
   // enough to allow the thread to get to user bytecode execution.
-  Solaris::min_stack_allowed = MAX2(thr_min_stack(), Solaris::min_stack_allowed);
-  // If the pagesize of the VM is greater than 8K determine the appropriate
-  // number of initial guard pages.  The user can change this with the
-  // command line arguments, if needed.
-  if (vm_page_size() > 8*K) {
-    StackYellowPages = 1;
-    StackRedPages = 1;
-    StackShadowPages = round_to((StackShadowPages*8*K), vm_page_size()) / vm_page_size();
+  Posix::_compiler_thread_min_stack_allowed = MAX2(thr_min_stack(),
+                                                   Posix::_compiler_thread_min_stack_allowed);
+  Posix::_java_thread_min_stack_allowed = MAX2(thr_min_stack(),
+                                               Posix::_java_thread_min_stack_allowed);
+  Posix::_vm_internal_thread_min_stack_allowed = MAX2(thr_min_stack(),
+                                                      Posix::_vm_internal_thread_min_stack_allowed);
+
+  // dynamic lookup of functions that may not be available in our lowest
+  // supported Solaris release
+  void * handle = dlopen("libc.so.1", RTLD_LAZY);
+  if (handle != NULL) {
+    Solaris::_pthread_setname_np =  // from 11.3
+        (Solaris::pthread_setname_np_func_t)dlsym(handle, "pthread_setname_np");
   }
 }
 
@@ -4573,63 +4367,19 @@ jint os::init_2(void) {
   }
 
   os::set_polling_page(polling_page);
-
-#ifndef PRODUCT
-  if (Verbose && PrintMiscellaneous) {
-    tty->print("[SafePoint Polling address: " INTPTR_FORMAT "]\n",
-               (intptr_t)polling_page);
-  }
-#endif
+  log_info(os)("SafePoint Polling address: " INTPTR_FORMAT, p2i(polling_page));
 
   if (!UseMembar) {
     address mem_serialize_page = (address)Solaris::mmap_chunk(NULL, page_size, MAP_PRIVATE, PROT_READ | PROT_WRITE);
     guarantee(mem_serialize_page != NULL, "mmap Failed for memory serialize page");
     os::set_memory_serialize_page(mem_serialize_page);
-
-#ifndef PRODUCT
-    if (Verbose && PrintMiscellaneous) {
-      tty->print("[Memory Serialize  Page address: " INTPTR_FORMAT "]\n",
-                 (intptr_t)mem_serialize_page);
-    }
-#endif
+    log_info(os)("Memory Serialize Page address: " INTPTR_FORMAT, p2i(mem_serialize_page));
   }
 
-  // Check minimum allowable stack size for thread creation and to initialize
-  // the java system classes, including StackOverflowError - depends on page
-  // size.  Add a page for compiler2 recursion in main thread.
-  // Add in 2*BytesPerWord times page size to account for VM stack during
-  // class initialization depending on 32 or 64 bit VM.
-  os::Solaris::min_stack_allowed = MAX2(os::Solaris::min_stack_allowed,
-                                        (size_t)(StackYellowPages+StackRedPages+StackShadowPages+
-                                        2*BytesPerWord COMPILER2_PRESENT(+1)) * page_size);
-
-  size_t threadStackSizeInBytes = ThreadStackSize * K;
-  if (threadStackSizeInBytes != 0 &&
-      threadStackSizeInBytes < os::Solaris::min_stack_allowed) {
-    tty->print_cr("\nThe stack size specified is too small, Specify at least %dk",
-                  os::Solaris::min_stack_allowed/K);
+  // Check and sets minimum stack sizes against command line options
+  if (Posix::set_minimum_stack_sizes() == JNI_ERR) {
     return JNI_ERR;
   }
-
-  // For 64kbps there will be a 64kb page size, which makes
-  // the usable default stack size quite a bit less.  Increase the
-  // stack for 64kb (or any > than 8kb) pages, this increases
-  // virtual memory fragmentation (since we're not creating the
-  // stack on a power of 2 boundary.  The real fix for this
-  // should be to fix the guard page mechanism.
-
-  if (vm_page_size() > 8*K) {
-    threadStackSizeInBytes = (threadStackSizeInBytes != 0)
-       ? threadStackSizeInBytes +
-         ((StackYellowPages + StackRedPages) * vm_page_size())
-       : 0;
-    ThreadStackSize = threadStackSizeInBytes/K;
-  }
-
-  // Make the stack size a multiple of the page size so that
-  // the yellow/red zones can be guarded.
-  JavaThread::set_stack_size_at_create(round_to(threadStackSizeInBytes,
-                                                vm_page_size()));
 
   Solaris::libthread_init();
 
@@ -4669,16 +4419,12 @@ jint os::init_2(void) {
     struct rlimit nbr_files;
     int status = getrlimit(RLIMIT_NOFILE, &nbr_files);
     if (status != 0) {
-      if (PrintMiscellaneous && (Verbose || WizardMode)) {
-        perror("os::init_2 getrlimit failed");
-      }
+      log_info(os)("os::init_2 getrlimit failed: %s", os::strerror(errno));
     } else {
       nbr_files.rlim_cur = nbr_files.rlim_max;
       status = setrlimit(RLIMIT_NOFILE, &nbr_files);
       if (status != 0) {
-        if (PrintMiscellaneous && (Verbose || WizardMode)) {
-          perror("os::init_2 setrlimit failed");
-        }
+        log_info(os)("os::init_2 setrlimit failed: %s", os::strerror(errno));
       }
     }
   }
@@ -4737,10 +4483,6 @@ void os::make_polling_page_readable(void) {
     fatal("Could not enable polling page");
   }
 }
-
-// OS interface.
-
-bool os::check_heap(bool force) { return true; }
 
 // Is a (classpath) directory empty?
 bool os::dir_is_empty(const char* path) {
@@ -5677,7 +5419,7 @@ void Parker::park(bool isAbsolute, jlong time) {
   // (This allows a debugger to break into the running thread.)
   sigset_t oldsigs;
   sigset_t* allowdebug_blocked = os::Solaris::allowdebug_blocked_signals();
-  thr_sigsetmask(SIG_BLOCK, allowdebug_blocked, &oldsigs);
+  pthread_sigmask(SIG_BLOCK, allowdebug_blocked, &oldsigs);
 #endif
 
   OSThreadWaitState osts(thread->osthread(), false /* not Object.wait() */);
@@ -5704,7 +5446,7 @@ void Parker::park(bool isAbsolute, jlong time) {
                 status, "cond_timedwait");
 
 #ifdef ASSERT
-  thr_sigsetmask(SIG_SETMASK, &oldsigs, NULL);
+  pthread_sigmask(SIG_SETMASK, &oldsigs, NULL);
 #endif
   _counter = 0;
   status = os::Solaris::mutex_unlock(_mutex);
@@ -5748,7 +5490,7 @@ int os::fork_and_exec(char* cmd) {
 
   // fork is async-safe, fork1 is not so can't use in signal handler
   pid_t pid;
-  Thread* t = ThreadLocalStorage::get_thread_slow();
+  Thread* t = Thread::current_or_null_safe();
   if (t != NULL && t->is_inside_signal_handler()) {
     pid = fork();
   } else {
@@ -5757,7 +5499,7 @@ int os::fork_and_exec(char* cmd) {
 
   if (pid < 0) {
     // fork failed
-    warning("fork failed: %s", strerror(errno));
+    warning("fork failed: %s", os::strerror(errno));
     return -1;
 
   } else if (pid == 0) {
@@ -5852,8 +5594,6 @@ bool os::is_headless_jre() {
 
 size_t os::write(int fd, const void *buf, unsigned int nBytes) {
   size_t res;
-  assert(((JavaThread*)Thread::current())->thread_state() == _thread_in_native,
-         "Assumed _thread_in_native");
   RESTARTABLE((size_t) ::write(fd, buf, (size_t) nBytes), res);
   return res;
 }
@@ -5947,3 +5687,27 @@ void TestReserveMemorySpecial_test() {
   // No tests available for this platform
 }
 #endif
+
+bool os::start_debugging(char *buf, int buflen) {
+  int len = (int)strlen(buf);
+  char *p = &buf[len];
+
+  jio_snprintf(p, buflen-len,
+               "\n\n"
+               "Do you want to debug the problem?\n\n"
+               "To debug, run 'dbx - %d'; then switch to thread " INTX_FORMAT "\n"
+               "Enter 'yes' to launch dbx automatically (PATH must include dbx)\n"
+               "Otherwise, press RETURN to abort...",
+               os::current_process_id(), os::current_thread_id());
+
+  bool yes = os::message_box("Unexpected Error", buf);
+
+  if (yes) {
+    // yes, user asked VM to launch debugger
+    jio_snprintf(buf, sizeof(buf), "dbx - %d", os::current_process_id());
+
+    os::fork_and_exec(buf);
+    yes = false;
+  }
+  return yes;
+}

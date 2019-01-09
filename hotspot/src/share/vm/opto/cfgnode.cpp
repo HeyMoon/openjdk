@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,8 +25,10 @@
 #include "precompiled.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "opto/addnode.hpp"
+#include "opto/castnode.hpp"
 #include "opto/cfgnode.hpp"
 #include "opto/connode.hpp"
 #include "opto/convertnode.hpp"
@@ -47,7 +49,7 @@
 //=============================================================================
 //------------------------------Value------------------------------------------
 // Compute the type of the RegionNode.
-const Type *RegionNode::Value( PhaseTransform *phase ) const {
+const Type* RegionNode::Value(PhaseGVN* phase) const {
   for( uint i=1; i<req(); ++i ) {       // For all paths in
     Node *n = in(i);            // Get Control source
     if( !n ) continue;          // Missing inputs are TOP
@@ -59,7 +61,7 @@ const Type *RegionNode::Value( PhaseTransform *phase ) const {
 
 //------------------------------Identity---------------------------------------
 // Check for Region being Identity.
-Node *RegionNode::Identity( PhaseTransform *phase ) {
+Node* RegionNode::Identity(PhaseGVN* phase) {
   // Cannot have Region be an identity, even if it has only 1 input.
   // Phi users cannot have their Region input folded away for them,
   // since they need to select the proper data input
@@ -802,7 +804,7 @@ PhiNode* PhiNode::split_out_instance(const TypePtr* at, PhaseIterGVN *igvn) cons
   Compile *C = igvn->C;
   Arena *a = Thread::current()->resource_area();
   Node_Array node_map = new Node_Array(a);
-  Node_Stack stack(a, C->unique() >> 4);
+  Node_Stack stack(a, C->live_nodes() >> 4);
   PhiNode *nphi = slice_memory(at);
   igvn->register_new_node_with_optimizer( nphi );
   node_map.map(_idx, nphi);
@@ -891,7 +893,7 @@ void PhiNode::verify_adr_type(bool recursive) const {
 
 //------------------------------Value------------------------------------------
 // Compute the type of the PhiNode
-const Type *PhiNode::Value( PhaseTransform *phase ) const {
+const Type* PhiNode::Value(PhaseGVN* phase) const {
   Node *r = in(0);              // RegionNode
   if( !r )                      // Copy or dead
     return in(1) ? phase->type(in(1)) : Type::TOP;
@@ -902,24 +904,35 @@ const Type *PhiNode::Value( PhaseTransform *phase ) const {
     return Type::TOP;
 
   // Check for trip-counted loop.  If so, be smarter.
-  CountedLoopNode *l = r->is_CountedLoop() ? r->as_CountedLoop() : NULL;
-  if( l && l->can_be_counted_loop(phase) &&
-      ((const Node*)l->phi() == this) ) { // Trip counted loop!
+  CountedLoopNode* l = r->is_CountedLoop() ? r->as_CountedLoop() : NULL;
+  if (l && ((const Node*)l->phi() == this)) { // Trip counted loop!
     // protect against init_trip() or limit() returning NULL
-    const Node *init   = l->init_trip();
-    const Node *limit  = l->limit();
-    if( init != NULL && limit != NULL && l->stride_is_con() ) {
-      const TypeInt *lo = init ->bottom_type()->isa_int();
-      const TypeInt *hi = limit->bottom_type()->isa_int();
-      if( lo && hi ) {            // Dying loops might have TOP here
-        int stride = l->stride_con();
-        if( stride < 0 ) {          // Down-counter loop
-          const TypeInt *tmp = lo; lo = hi; hi = tmp;
-          stride = -stride;
+    if (l->can_be_counted_loop(phase)) {
+      const Node *init   = l->init_trip();
+      const Node *limit  = l->limit();
+      const Node* stride = l->stride();
+      if (init != NULL && limit != NULL && stride != NULL) {
+        const TypeInt* lo = phase->type(init)->isa_int();
+        const TypeInt* hi = phase->type(limit)->isa_int();
+        const TypeInt* stride_t = phase->type(stride)->isa_int();
+        if (lo != NULL && hi != NULL && stride_t != NULL) { // Dying loops might have TOP here
+          assert(stride_t->_hi >= stride_t->_lo, "bad stride type");
+          if (stride_t->_hi < 0) {          // Down-counter loop
+            swap(lo, hi);
+            return TypeInt::make(MIN2(lo->_lo, hi->_lo) , hi->_hi, 3);
+          } else if (stride_t->_lo >= 0) {
+            return TypeInt::make(lo->_lo, MAX2(lo->_hi, hi->_hi), 3);
+          }
         }
-        if( lo->_hi < hi->_lo )     // Reversed endpoints are well defined :-(
-          return TypeInt::make(lo->_lo,hi->_hi,3);
       }
+    } else if (l->in(LoopNode::LoopBackControl) != NULL &&
+               in(LoopNode::EntryControl) != NULL &&
+               phase->type(l->in(LoopNode::LoopBackControl)) == Type::TOP) {
+      // During CCP, if we saturate the type of a counted loop's Phi
+      // before the special code for counted loop above has a chance
+      // to run (that is as long as the type of the backedge's control
+      // is top), we might end up with non monotonic types
+      return phase->type(in(LoopNode::EntryControl));
     }
   }
 
@@ -984,7 +997,7 @@ const Type *PhiNode::Value( PhaseTransform *phase ) const {
 #ifdef ASSERT
   // The following logic has been moved into TypeOopPtr::filter.
   const Type* jt = t->join_speculative(_type);
-  if( jt->empty() ) {           // Emptied out???
+  if (jt->empty()) {           // Emptied out???
 
     // Check for evil case of 't' being a class and '_type' expecting an
     // interface.  This can happen because the bytecodes do not contain
@@ -995,14 +1008,21 @@ const Type *PhiNode::Value( PhaseTransform *phase ) const {
     // be 'I' or 'j/l/O'.  Thus we'll pick 'j/l/O'.  If this then flows
     // into a Phi which "knows" it's an Interface type we'll have to
     // uplift the type.
-    if( !t->empty() && ttip && ttip->is_loaded() && ttip->klass()->is_interface() )
-      { assert(ft == _type, ""); } // Uplift to interface
-    else if( !t->empty() && ttkp && ttkp->is_loaded() && ttkp->klass()->is_interface() )
-      { assert(ft == _type, ""); } // Uplift to interface
-    // Otherwise it's something stupid like non-overlapping int ranges
-    // found on dying counted loops.
-    else
-      { assert(ft == Type::TOP, ""); } // Canonical empty value
+    if (!t->empty() && ttip && ttip->is_loaded() && ttip->klass()->is_interface()) {
+      assert(ft == _type, ""); // Uplift to interface
+    } else if (!t->empty() && ttkp && ttkp->is_loaded() && ttkp->klass()->is_interface()) {
+      assert(ft == _type, ""); // Uplift to interface
+    } else {
+      // We also have to handle 'evil cases' of interface- vs. class-arrays
+      Type::get_arrays_base_elements(jt, _type, NULL, &ttip);
+      if (!t->empty() && ttip != NULL && ttip->is_loaded() && ttip->klass()->is_interface()) {
+          assert(ft == _type, "");   // Uplift to array of interface
+      } else {
+        // Otherwise it's something stupid like non-overlapping int ranges
+        // found on dying counted loops.
+        assert(ft == Type::TOP, ""); // Canonical empty value
+      }
+    }
   }
 
   else {
@@ -1135,13 +1155,13 @@ Node* PhiNode::is_cmove_id(PhaseTransform* phase, int true_path) {
 
 //------------------------------Identity---------------------------------------
 // Check for Region being Identity.
-Node *PhiNode::Identity( PhaseTransform *phase ) {
+Node* PhiNode::Identity(PhaseGVN* phase) {
   // Check for no merging going on
   // (There used to be special-case code here when this->region->is_Loop.
   // It would check for a tributary phi on the backedge that the main phi
   // trivially, perhaps with a single cast.  The unique_input method
   // does all this and more, by reducing such tributaries to 'this'.)
-  Node* uin = unique_input(phase);
+  Node* uin = unique_input(phase, false);
   if (uin != NULL) {
     return uin;
   }
@@ -1158,11 +1178,10 @@ Node *PhiNode::Identity( PhaseTransform *phase ) {
 //-----------------------------unique_input------------------------------------
 // Find the unique value, discounting top, self-loops, and casts.
 // Return top if there are no inputs, and self if there are multiple.
-Node* PhiNode::unique_input(PhaseTransform* phase) {
-  //  1) One unique direct input, or
-  //  2) some of the inputs have an intervening ConstraintCast and
-  //     the type of input is the same or sharper (more specific)
-  //     than the phi's type.
+Node* PhiNode::unique_input(PhaseTransform* phase, bool uncast) {
+  //  1) One unique direct input,
+  // or if uncast is true:
+  //  2) some of the inputs have an intervening ConstraintCast
   //  3) an input is a self loop
   //
   //  1) input   or   2) input     or   3) input __
@@ -1173,8 +1192,7 @@ Node* PhiNode::unique_input(PhaseTransform* phase) {
 
   Node* r = in(0);                      // RegionNode
   if (r == NULL)  return in(1);         // Already degraded to a Copy
-  Node* uncasted_input = NULL; // The unique uncasted input (ConstraintCasts removed)
-  Node* direct_input   = NULL; // The unique direct input
+  Node* input = NULL; // The unique direct input (maybe uncasted = ConstraintCasts removed)
 
   for (uint i = 1, cnt = req(); i < cnt; ++i) {
     Node* rc = r->in(i);
@@ -1183,34 +1201,37 @@ Node* PhiNode::unique_input(PhaseTransform* phase) {
     Node* n = in(i);
     if (n == NULL)
       continue;
-    Node* un = n->uncast();
+    Node* un = n;
+    if (uncast) {
+#ifdef ASSERT
+      Node* m = un->uncast();
+#endif
+      while (un != NULL && un->req() == 2 && un->is_ConstraintCast()) {
+        Node* next = un->in(1);
+        if (phase->type(next)->isa_rawptr() && phase->type(un)->isa_oopptr()) {
+          // risk exposing raw ptr at safepoint
+          break;
+        }
+        un = next;
+      }
+      assert(m == un || un->in(1) == m, "Only expected at CheckCastPP from allocation");
+    }
     if (un == NULL || un == this || phase->type(un) == Type::TOP) {
       continue; // ignore if top, or in(i) and "this" are in a data cycle
     }
-    // Check for a unique uncasted input
-    if (uncasted_input == NULL) {
-      uncasted_input = un;
-    } else if (uncasted_input != un) {
-      uncasted_input = NodeSentinel; // no unique uncasted input
-    }
-    // Check for a unique direct input
-    if (direct_input == NULL) {
-      direct_input = n;
-    } else if (direct_input != n) {
-      direct_input = NodeSentinel; // no unique direct input
+    // Check for a unique input (maybe uncasted)
+    if (input == NULL) {
+      input = un;
+    } else if (input != un) {
+      input = NodeSentinel; // no unique input
     }
   }
-  if (direct_input == NULL) {
+  if (input == NULL) {
     return phase->C->top();        // no inputs
   }
-  assert(uncasted_input != NULL,"");
 
-  if (direct_input != NodeSentinel) {
-    return direct_input;           // one unique direct input
-  }
-  if (uncasted_input != NodeSentinel &&
-      phase->type(uncasted_input)->higher_equal(type())) {
-    return uncasted_input;         // one unique uncasted input
+  if (input != NodeSentinel) {
+    return input;           // one unique direct input
   }
 
   // Nothing.
@@ -1643,7 +1664,12 @@ Node *PhiNode::Ideal(PhaseGVN *phase, bool can_reshape) {
     return top;
   }
 
-  Node* uin = unique_input(phase);
+  bool uncasted = false;
+  Node* uin = unique_input(phase, false);
+  if (uin == NULL && can_reshape) {
+    uncasted = true;
+    uin = unique_input(phase, true);
+  }
   if (uin == top) {             // Simplest case: no alive inputs.
     if (can_reshape)            // IGVN transformation
       return top;
@@ -1676,6 +1702,59 @@ Node *PhiNode::Ideal(PhaseGVN *phase, bool can_reshape) {
       }
     }
 
+    if (uncasted) {
+      // Add cast nodes between the phi to be removed and its unique input.
+      // Wait until after parsing for the type information to propagate from the casts.
+      assert(can_reshape, "Invalid during parsing");
+      const Type* phi_type = bottom_type();
+      assert(phi_type->isa_int() || phi_type->isa_ptr(), "bad phi type");
+      // Add casts to carry the control dependency of the Phi that is
+      // going away
+      Node* cast = NULL;
+      if (phi_type->isa_int()) {
+        cast = ConstraintCastNode::make_cast(Op_CastII, r, uin, phi_type, true);
+      } else {
+        const Type* uin_type = phase->type(uin);
+        if (!phi_type->isa_oopptr() && !uin_type->isa_oopptr()) {
+          cast = ConstraintCastNode::make_cast(Op_CastPP, r, uin, phi_type, true);
+        } else {
+          // Use a CastPP for a cast to not null and a CheckCastPP for
+          // a cast to a new klass (and both if both null-ness and
+          // klass change).
+
+          // If the type of phi is not null but the type of uin may be
+          // null, uin's type must be casted to not null
+          if (phi_type->join(TypePtr::NOTNULL) == phi_type->remove_speculative() &&
+              uin_type->join(TypePtr::NOTNULL) != uin_type->remove_speculative()) {
+            cast = ConstraintCastNode::make_cast(Op_CastPP, r, uin, TypePtr::NOTNULL, true);
+          }
+
+          // If the type of phi and uin, both casted to not null,
+          // differ the klass of uin must be (check)cast'ed to match
+          // that of phi
+          if (phi_type->join_speculative(TypePtr::NOTNULL) != uin_type->join_speculative(TypePtr::NOTNULL)) {
+            Node* n = uin;
+            if (cast != NULL) {
+              cast = phase->transform(cast);
+              n = cast;
+            }
+            cast = ConstraintCastNode::make_cast(Op_CheckCastPP, r, n, phi_type, true);
+          }
+          if (cast == NULL) {
+            cast = ConstraintCastNode::make_cast(Op_CastPP, r, uin, phi_type, true);
+          }
+        }
+      }
+      assert(cast != NULL, "cast should be set");
+      cast = phase->transform(cast);
+      // set all inputs to the new cast(s) so the Phi is removed by Identity
+      PhaseIterGVN* igvn = phase->is_IterGVN();
+      for (uint i = 1; i < req(); i++) {
+        set_req_X(i, cast, igvn);
+      }
+      uin = cast;
+    }
+
     // One unique input.
     debug_only(Node* ident = Identity(phase));
     // The unique input must eventually be detected by the Identity call.
@@ -1691,7 +1770,6 @@ Node *PhiNode::Ideal(PhaseGVN *phase, bool can_reshape) {
     assert(ident == uin || ident->is_top(), "Identity must clean this up");
     return NULL;
   }
-
 
   Node* opt = NULL;
   int true_path = is_diamond_phi();
@@ -1811,6 +1889,12 @@ Node *PhiNode::Ideal(PhaseGVN *phase, bool can_reshape) {
     bool saw_self = false;
     for( uint i=1; i<req(); ++i ) {// For all paths in
       Node *ii = in(i);
+      // TOP inputs should not be counted as safe inputs because if the
+      // Phi references itself through all other inputs then splitting the
+      // Phi through memory merges would create dead loop at later stage.
+      if (ii == top) {
+        return NULL; // Delay optimization until graph is cleaned.
+      }
       if (ii->is_MergeMem()) {
         MergeMemNode* n = ii->as_MergeMem();
         merge_width = MAX2(merge_width, n->req());
@@ -2019,10 +2103,19 @@ const RegMask &PhiNode::out_RegMask() const {
   uint ideal_reg = _type->ideal_reg();
   assert( ideal_reg != Node::NotAMachineReg, "invalid type at Phi" );
   if( ideal_reg == 0 ) return RegMask::Empty;
+  assert(ideal_reg != Op_RegFlags, "flags register is not spillable");
   return *(Compile::current()->matcher()->idealreg2spillmask[ideal_reg]);
 }
 
 #ifndef PRODUCT
+void PhiNode::related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const {
+  // For a PhiNode, the set of related nodes includes all inputs till level 2,
+  // and all outputs till level 1. In compact mode, inputs till level 1 are
+  // collected.
+  this->collect_nodes(in_rel, compact ? 1 : 2, false, false);
+  this->collect_nodes(out_rel, -1, false, false);
+}
+
 void PhiNode::dump_spec(outputStream *st) const {
   TypeNode::dump_spec(st);
   if (is_tripcount()) {
@@ -2033,13 +2126,13 @@ void PhiNode::dump_spec(outputStream *st) const {
 
 
 //=============================================================================
-const Type *GotoNode::Value( PhaseTransform *phase ) const {
+const Type* GotoNode::Value(PhaseGVN* phase) const {
   // If the input is reachable, then we are executed.
   // If the input is not reachable, then we are not executed.
   return phase->type(in(0));
 }
 
-Node *GotoNode::Identity( PhaseTransform *phase ) {
+Node* GotoNode::Identity(PhaseGVN* phase) {
   return in(0);                // Simple copy of incoming control
 }
 
@@ -2047,10 +2140,32 @@ const RegMask &GotoNode::out_RegMask() const {
   return RegMask::Empty;
 }
 
+#ifndef PRODUCT
+//-----------------------------related-----------------------------------------
+// The related nodes of a GotoNode are all inputs at level 1, as well as the
+// outputs at level 1. This is regardless of compact mode.
+void GotoNode::related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const {
+  this->collect_nodes(in_rel, 1, false, false);
+  this->collect_nodes(out_rel, -1, false, false);
+}
+#endif
+
+
 //=============================================================================
 const RegMask &JumpNode::out_RegMask() const {
   return RegMask::Empty;
 }
+
+#ifndef PRODUCT
+//-----------------------------related-----------------------------------------
+// The related nodes of a JumpNode are all inputs at level 1, as well as the
+// outputs at level 2 (to include actual jump targets beyond projection nodes).
+// This is regardless of compact mode.
+void JumpNode::related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const {
+  this->collect_nodes(in_rel, 1, false, false);
+  this->collect_nodes(out_rel, -2, false, false);
+}
+#endif
 
 //=============================================================================
 const RegMask &JProjNode::out_RegMask() const {
@@ -2079,7 +2194,7 @@ const Type *PCTableNode::bottom_type() const {
 //------------------------------Value------------------------------------------
 // Compute the type of the PCTableNode.  If reachable it is a tuple of
 // Control, otherwise the table targets are not reachable
-const Type *PCTableNode::Value( PhaseTransform *phase ) const {
+const Type* PCTableNode::Value(PhaseGVN* phase) const {
   if( phase->type(in(0)) == Type::CONTROL )
     return bottom_type();
   return Type::TOP;             // All paths dead?  Then so are we
@@ -2105,7 +2220,18 @@ uint JumpProjNode::cmp( const Node &n ) const {
 #ifndef PRODUCT
 void JumpProjNode::dump_spec(outputStream *st) const {
   ProjNode::dump_spec(st);
-   st->print("@bci %d ",_dest_bci);
+  st->print("@bci %d ",_dest_bci);
+}
+
+void JumpProjNode::dump_compact_spec(outputStream *st) const {
+  ProjNode::dump_compact_spec(st);
+  st->print("(%d)%d@%d", _switch_val, _proj_no, _dest_bci);
+}
+
+void JumpProjNode::related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const {
+  // The related nodes of a JumpProjNode are its inputs and outputs at level 1.
+  this->collect_nodes(in_rel, 1, false, false);
+  this->collect_nodes(out_rel, -1, false, false);
 }
 #endif
 
@@ -2113,7 +2239,7 @@ void JumpProjNode::dump_spec(outputStream *st) const {
 //------------------------------Value------------------------------------------
 // Check for being unreachable, or for coming from a Rethrow.  Rethrow's cannot
 // have the default "fall_through_index" path.
-const Type *CatchNode::Value( PhaseTransform *phase ) const {
+const Type* CatchNode::Value(PhaseGVN* phase) const {
   // Unreachable?  Then so are all paths from here.
   if( phase->type(in(0)) == Type::TOP ) return Type::TOP;
   // First assume all paths are reachable
@@ -2157,7 +2283,7 @@ uint CatchProjNode::cmp( const Node &n ) const {
 
 //------------------------------Identity---------------------------------------
 // If only 1 target is possible, choose it if it is the main control
-Node *CatchProjNode::Identity( PhaseTransform *phase ) {
+Node* CatchProjNode::Identity(PhaseGVN* phase) {
   // If my value is control and no other value is, then treat as ID
   const TypeTuple *t = phase->type(in(0))->is_tuple();
   if (t->field_at(_con) != Type::CONTROL)  return this;
@@ -2200,7 +2326,7 @@ void CatchProjNode::dump_spec(outputStream *st) const {
 //=============================================================================
 //------------------------------Identity---------------------------------------
 // Check for CreateEx being Identity.
-Node *CreateExNode::Identity( PhaseTransform *phase ) {
+Node* CreateExNode::Identity(PhaseGVN* phase) {
   if( phase->type(in(1)) == Type::TOP ) return in(1);
   if( phase->type(in(0)) == Type::TOP ) return in(0);
   // We only come from CatchProj, unless the CatchProj goes away.
@@ -2216,7 +2342,7 @@ Node *CreateExNode::Identity( PhaseTransform *phase ) {
 //=============================================================================
 //------------------------------Value------------------------------------------
 // Check for being unreachable.
-const Type *NeverBranchNode::Value( PhaseTransform *phase ) const {
+const Type* NeverBranchNode::Value(PhaseGVN* phase) const {
   if (!in(0) || in(0)->is_top()) return Type::TOP;
   return bottom_type();
 }

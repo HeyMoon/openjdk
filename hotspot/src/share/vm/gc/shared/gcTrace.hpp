@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,13 +45,13 @@ class MetaspaceChunkFreeListSummary;
 class MetaspaceSummary;
 class PSHeapSummary;
 class G1HeapSummary;
+class G1EvacSummary;
 class ReferenceProcessorStats;
 class TimePartitions;
 class BoolObjectClosure;
 
 class SharedGCInfo VALUE_OBJ_CLASS_SPEC {
  private:
-  GCId _gc_id;
   GCName _name;
   GCCause::Cause _cause;
   Ticks     _start_timestamp;
@@ -61,7 +61,6 @@ class SharedGCInfo VALUE_OBJ_CLASS_SPEC {
 
  public:
   SharedGCInfo(GCName name) :
-    _gc_id(GCId::undefined()),
     _name(name),
     _cause(GCCause::_last_gc_cause),
     _start_timestamp(),
@@ -69,9 +68,6 @@ class SharedGCInfo VALUE_OBJ_CLASS_SPEC {
     _sum_of_pauses(),
     _longest_pause() {
   }
-
-  void set_gc_id(GCId gc_id) { _gc_id = gc_id; }
-  const GCId& gc_id() const { return _gc_id; }
 
   void set_start_timestamp(const Ticks& timestamp) { _start_timestamp = timestamp; }
   const Ticks start_timestamp() const { return _start_timestamp; }
@@ -127,12 +123,10 @@ class GCTracer : public ResourceObj {
   void report_metaspace_summary(GCWhen::Type when, const MetaspaceSummary& metaspace_summary) const;
   void report_gc_reference_stats(const ReferenceProcessorStats& rp) const;
   void report_object_count_after_gc(BoolObjectClosure* object_filter) NOT_SERVICES_RETURN;
-  bool has_reported_gc_start() const;
-  const GCId& gc_id() { return _shared_gc_info.gc_id(); }
 
  protected:
   GCTracer(GCName name) : _shared_gc_info(name) {}
-  void report_gc_start_impl(GCCause::Cause cause, const Ticks& timestamp);
+  virtual void report_gc_start_impl(GCCause::Cause cause, const Ticks& timestamp);
   virtual void report_gc_end_impl(const Ticks& timestamp, TimePartitions* time_partitions);
 
  private:
@@ -171,6 +165,7 @@ class YoungGCTracer : public GCTracer {
    *
    * plab_size is the size of the newly allocated PLAB in bytes.
    */
+  bool should_report_promotion_events() const;
   bool should_report_promotion_in_new_plab_event() const;
   bool should_report_promotion_outside_plab_event() const;
   void report_promotion_in_new_plab_event(Klass* klass, size_t obj_size,
@@ -240,10 +235,10 @@ class ParNewTracer : public YoungGCTracer {
 
 #if INCLUDE_ALL_GCS
 class G1MMUTracer : public AllStatic {
-  static void send_g1_mmu_event(const GCId& gcId, double timeSlice, double gcTime, double maxTime);
+  static void send_g1_mmu_event(double time_slice_ms, double gc_time_ms, double max_time_ms);
 
  public:
-  static void report_mmu(const GCId& gcId, double timeSlice, double gcTime, double maxTime);
+  static void report_mmu(double time_slice_sec, double gc_time_sec, double max_time_sec);
 };
 
 class G1NewTracer : public YoungGCTracer {
@@ -257,10 +252,42 @@ class G1NewTracer : public YoungGCTracer {
   void report_evacuation_info(EvacuationInfo* info);
   void report_evacuation_failed(EvacuationFailedInfo& ef_info);
 
+  void report_evacuation_statistics(const G1EvacSummary& young_summary, const G1EvacSummary& old_summary) const;
+
+  void report_basic_ihop_statistics(size_t threshold,
+                                    size_t target_occupancy,
+                                    size_t current_occupancy,
+                                    size_t last_allocation_size,
+                                    double last_allocation_duration,
+                                    double last_marking_length);
+  void report_adaptive_ihop_statistics(size_t threshold,
+                                       size_t internal_target_occupancy,
+                                       size_t current_occupancy,
+                                       size_t additional_buffer_size,
+                                       double predicted_allocation_rate,
+                                       double predicted_marking_length,
+                                       bool prediction_active);
  private:
   void send_g1_young_gc_event();
   void send_evacuation_info_event(EvacuationInfo* info);
   void send_evacuation_failed_event(const EvacuationFailedInfo& ef_info) const;
+
+  void send_young_evacuation_statistics(const G1EvacSummary& summary) const;
+  void send_old_evacuation_statistics(const G1EvacSummary& summary) const;
+
+  void send_basic_ihop_statistics(size_t threshold,
+                                  size_t target_occupancy,
+                                  size_t current_occupancy,
+                                  size_t last_allocation_size,
+                                  double last_allocation_duration,
+                                  double last_marking_length);
+  void send_adaptive_ihop_statistics(size_t threshold,
+                                     size_t internal_target_occupancy,
+                                     size_t current_occupancy,
+                                     size_t additional_buffer_size,
+                                     double predicted_allocation_rate,
+                                     double predicted_marking_length,
+                                     bool prediction_active);
 };
 #endif
 
@@ -270,8 +297,11 @@ class CMSTracer : public OldGCTracer {
 };
 
 class G1OldTracer : public OldGCTracer {
+ protected:
+  void report_gc_start_impl(GCCause::Cause cause, const Ticks& timestamp);
  public:
   G1OldTracer() : OldGCTracer(G1Old) {}
+  void set_gc_cause(GCCause::Cause cause);
 };
 
 #endif // SHARE_VM_GC_SHARED_GCTRACE_HPP

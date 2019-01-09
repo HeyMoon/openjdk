@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2014, 2015, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -47,20 +47,13 @@ class MacroAssembler: public Assembler {
   // This is the base routine called by the different versions of call_VM_leaf. The interpreter
   // may customize this version by overriding it for its purposes (e.g., to save/restore
   // additional registers when doing a VM call).
-#ifdef CC_INTERP
-  // c++ interpreter never wants to use interp_masm version of call_VM
-  #define VIRTUAL
-#else
-  #define VIRTUAL virtual
-#endif
-
-  VIRTUAL void call_VM_leaf_base(
+  virtual void call_VM_leaf_base(
     address entry_point,               // the entry point
     int     number_of_arguments,        // the number of arguments to pop after the call
     Label *retaddr = NULL
   );
 
-  VIRTUAL void call_VM_leaf_base(
+  virtual void call_VM_leaf_base(
     address entry_point,               // the entry point
     int     number_of_arguments,        // the number of arguments to pop after the call
     Label &retaddr) {
@@ -75,7 +68,7 @@ class MacroAssembler: public Assembler {
   // returns the register which contains the thread upon return. If a thread register has been
   // specified, the return value will correspond to that register. If no last_java_sp is specified
   // (noreg) than rsp will be used instead.
-  VIRTUAL void call_VM_base(           // returns the register containing the thread upon return
+  virtual void call_VM_base(           // returns the register containing the thread upon return
     Register oop_result,               // where an oop-result ends up if any; use noreg otherwise
     Register java_thread,              // the thread if computed before     ; use noreg otherwise
     Register last_java_sp,             // to set up last_Java_frame in stubs; use noreg otherwise
@@ -107,9 +100,7 @@ class MacroAssembler: public Assembler {
   // Biased locking support
   // lock_reg and obj_reg must be loaded up with the appropriate values.
   // swap_reg is killed.
-  // tmp_reg is optional. If it is supplied (i.e., != noreg) it will
-  // be killed; if not supplied, push/pop will be used internally to
-  // allocate a temporary (inefficient, avoid if possible).
+  // tmp_reg must be supplied and must not be rscratch1 or rscratch2
   // Optional slow case is for implementations (interpreter and C1) which branch to
   // slow case directly. Leaves condition codes set for C2's Fast_Lock node.
   // Returns offset of first potentially-faulting instruction for null
@@ -126,10 +117,10 @@ class MacroAssembler: public Assembler {
 
   // Helper functions for statistics gathering.
   // Unconditional atomic increment.
-  void atomic_incw(Register counter_addr, Register tmp);
-  void atomic_incw(Address counter_addr, Register tmp1, Register tmp2) {
+  void atomic_incw(Register counter_addr, Register tmp, Register tmp2);
+  void atomic_incw(Address counter_addr, Register tmp1, Register tmp2, Register tmp3) {
     lea(tmp1, counter_addr);
-    atomic_incw(tmp1, tmp2);
+    atomic_incw(tmp1, tmp2, tmp3);
   }
   // Load Effective Address
   void lea(Register r, const Address &a) {
@@ -153,6 +144,13 @@ class MacroAssembler: public Assembler {
       subw(scratch, scratch, (unsigned)-imm);
     strw(scratch, a);
   }
+
+  void bind(Label& L) {
+    Assembler::bind(L);
+    code()->clear_last_membar();
+  }
+
+  void membar(Membar_mask_bits order_constraint);
 
   // Frame creation and destruction shared between JITs.
   void build_frame(int framesize);
@@ -210,8 +208,11 @@ class MacroAssembler: public Assembler {
   inline void moviw(Register Rd, unsigned imm) { orrw(Rd, zr, imm); }
   inline void movi(Register Rd, unsigned imm) { orr(Rd, zr, imm); }
 
-  inline void tstw(Register Rd, unsigned imm) { andsw(zr, Rd, imm); }
-  inline void tst(Register Rd, unsigned imm) { ands(zr, Rd, imm); }
+  inline void tstw(Register Rd, Register Rn) { andsw(zr, Rd, Rn); }
+  inline void tst(Register Rd, Register Rn) { ands(zr, Rd, Rn); }
+
+  inline void tstw(Register Rd, uint64_t imm) { andsw(zr, Rd, imm); }
+  inline void tst(Register Rd, uint64_t imm) { ands(zr, Rd, imm); }
 
   inline void bfiw(Register Rd, Register Rn, unsigned lsb, unsigned width) {
     bfmw(Rd, Rn, ((32 - lsb) & 31), (width - 1));
@@ -409,7 +410,7 @@ class MacroAssembler: public Assembler {
 
 #define WRAP(INSN)                                                            \
   void INSN(Register Rd, Register Rn, Register Rm, Register Ra) {             \
-    if ((VM_Version::cpu_cpuFeatures() & VM_Version::CPU_A53MAC) && Ra != zr) \
+    if ((VM_Version::features() & VM_Version::CPU_A53MAC) && Ra != zr)        \
       nop();                                                                  \
     Assembler::INSN(Rd, Rn, Rm, Ra);                                          \
   }
@@ -435,6 +436,13 @@ private:
 public:
   void push(RegSet regs, Register stack) { if (regs.bits()) push(regs.bits(), stack); }
   void pop(RegSet regs, Register stack) { if (regs.bits()) pop(regs.bits(), stack); }
+
+  // Push and pop everything that might be clobbered by a native
+  // runtime call except rscratch1 and rscratch2.  (They are always
+  // scratch, so we don't have to protect them.)  Only save the lower
+  // 64 bits of each vector register.
+  void push_call_clobbered_registers();
+  void pop_call_clobbered_registers();
 
   // now mov instructions for loading absolute addresses and 32 or
   // 64 bit integers
@@ -464,9 +472,46 @@ public:
     mov(dst, (long)i);
   }
 
+  void mov(Register dst, RegisterOrConstant src) {
+    if (src.is_register())
+      mov(dst, src.as_register());
+    else
+      mov(dst, src.as_constant());
+  }
+
   void movptr(Register r, uintptr_t imm64);
 
   void mov(FloatRegister Vd, SIMD_Arrangement T, u_int32_t imm32);
+
+  void mov(FloatRegister Vd, SIMD_Arrangement T, FloatRegister Vn) {
+    orr(Vd, T, Vn, Vn);
+  }
+
+public:
+
+  // Generalized Test Bit And Branch, including a "far" variety which
+  // spans more than 32KiB.
+  void tbr(Condition cond, Register Rt, int bitpos, Label &dest, bool far = false) {
+    assert(cond == EQ || cond == NE, "must be");
+
+    if (far)
+      cond = ~cond;
+
+    void (Assembler::* branch)(Register Rt, int bitpos, Label &L);
+    if (cond == Assembler::EQ)
+      branch = &Assembler::tbz;
+    else
+      branch = &Assembler::tbnz;
+
+    if (far) {
+      Label L;
+      (this->*branch)(Rt, bitpos, L);
+      b(dest);
+      bind(L);
+    } else {
+      (this->*branch)(Rt, bitpos, dest);
+    }
+  }
 
   // macro instructions for accessing and updating floating point
   // status register
@@ -489,6 +534,24 @@ public:
   inline void clear_fpsr()
   {
     msr(0b011, 0b0100, 0b0100, 0b001, zr);
+  }
+
+  // DCZID_EL0: op1 == 011
+  //            CRn == 0000
+  //            CRm == 0000
+  //            op2 == 111
+  inline void get_dczid_el0(Register reg)
+  {
+    mrs(0b011, 0b0000, 0b0000, 0b111, reg);
+  }
+
+  // CTR_EL0:   op1 == 011
+  //            CRn == 0000
+  //            CRm == 0000
+  //            op2 == 001
+  inline void get_ctr_el0(Register reg)
+  {
+    mrs(0b011, 0b0000, 0b0000, 0b001, reg);
   }
 
   // idiv variant which deals with MINLONG as dividend and -1 as divisor
@@ -527,8 +590,9 @@ public:
 #endif
 
   static int patch_oop(address insn_addr, address o);
+  static int patch_narrow_klass(address insn_addr, narrowKlass n);
 
-  void emit_trampoline_stub(int insts_call_instruction_offset, address target);
+  address emit_trampoline_stub(int insts_call_instruction_offset, address target);
 
   // The following 4 methods return the offset of the appropriate move instruction
 
@@ -694,10 +758,10 @@ public:
                            Register last_java_pc,
                            Register scratch);
 
-  void reset_last_Java_frame(Register thread, bool clearfp, bool clear_pc);
+  void reset_last_Java_frame(Register thread);
 
-  // thread in the default location (r15_thread on 64bit)
-  void reset_last_Java_frame(bool clear_fp, bool clear_pc);
+  // thread in the default location (rthread)
+  void reset_last_Java_frame(bool clear_fp);
 
   // Stores
   void store_check(Register obj);                // store check for obj - register is destroyed afterwards
@@ -724,6 +788,8 @@ public:
   void load_klass(Register dst, Register src);
   void store_klass(Register dst, Register src);
   void cmp_klass(Register oop, Register trial_klass, Register tmp);
+
+  void load_mirror(Register dst, Register method);
 
   void load_heap_oop(Register dst, Address src);
 
@@ -768,8 +834,8 @@ public:
 
   DEBUG_ONLY(void verify_heapbase(const char* msg);)
 
-  void push_CPU_state();
-  void pop_CPU_state() ;
+  void push_CPU_state(bool save_vectors = false);
+  void pop_CPU_state(bool restore_vectors = false) ;
 
   // Round up to a power of two
   void round_to(Register reg, int modulus);
@@ -791,6 +857,7 @@ public:
     Label&   slow_case                 // continuation point if fast allocation fails
   );
   Register tlab_refill(Label& retry_tlab, Label& try_eden, Label& slow_case); // returns TLS address
+  void zero_memory(Register addr, Register len, Register t1);
   void verify_tlab();
 
   void incr_allocated_bytes(Register thread,
@@ -890,6 +957,9 @@ public:
   // stack overflow + shadow pages.  Also, clobbers tmp
   void bang_stack_size(Register size, Register tmp);
 
+  // Check for reserved stack access in method being exited (for JIT)
+  void reserved_stack_check();
+
   virtual RegisterOrConstant delayed_value_impl(intptr_t* delayed_value_addr,
                                                 Register tmp,
                                                 int offset);
@@ -899,14 +969,10 @@ public:
 
   // Arithmetics
 
-  void addptr(Address dst, int32_t src) {
-    lea(rscratch2, dst);
-    ldr(rscratch1, Address(rscratch2));
-    add(rscratch1, rscratch1, src);
-    str(rscratch1, Address(rscratch2));
-  }
-
+  void addptr(const Address &dst, int32_t src);
   void cmpptr(Register src1, Address src2);
+
+  // Various forms of CAS
 
   void cmpxchgptr(Register oldv, Register newv, Register addr, Register tmp,
                   Label &suceed, Label *fail);
@@ -916,9 +982,13 @@ public:
 
   void atomic_add(Register prev, RegisterOrConstant incr, Register addr);
   void atomic_addw(Register prev, RegisterOrConstant incr, Register addr);
+  void atomic_addal(Register prev, RegisterOrConstant incr, Register addr);
+  void atomic_addalw(Register prev, RegisterOrConstant incr, Register addr);
 
   void atomic_xchg(Register prev, Register newv, Register addr);
   void atomic_xchgw(Register prev, Register newv, Register addr);
+  void atomic_xchgal(Register prev, Register newv, Register addr);
+  void atomic_xchgalw(Register prev, Register newv, Register addr);
 
   void orptr(Address adr, RegisterOrConstant src) {
     ldr(rscratch2, adr);
@@ -929,9 +999,16 @@ public:
     str(rscratch2, adr);
   }
 
+  // A generic CAS; success or failure is in the EQ flag.
+  // Clobbers rscratch1
+  void cmpxchg(Register addr, Register expected, Register new_val,
+               enum operand_size size,
+               bool acquire, bool release, bool weak,
+               Register result);
+
   // Calls
 
-  void trampoline_call(Address entry, CodeBuffer *cbuf = NULL);
+  address trampoline_call(Address entry, CodeBuffer *cbuf = NULL);
 
   static bool far_branches() {
     return ReservedCodeCacheSize > branch_range;
@@ -951,7 +1028,7 @@ public:
   }
 
   // Emit the CompiledIC call idiom
-  void ic_call(address entry);
+  address ic_call(address entry, jint method_index = 0);
 
 public:
 
@@ -971,8 +1048,6 @@ public:
   void kernel_crc32c(Register crc, Register buf, Register len,
         Register table0, Register table1, Register table2, Register table3,
         Register tmp, Register tmp2, Register tmp3);
-
-#undef VIRTUAL
 
   // Stack push and pop individual 64 bit registers
   void push(Register src);
@@ -1045,6 +1120,8 @@ public:
 
   void add(Register Rd, Register Rn, RegisterOrConstant increment);
   void addw(Register Rd, Register Rn, RegisterOrConstant increment);
+  void sub(Register Rd, Register Rn, RegisterOrConstant decrement);
+  void subw(Register Rd, Register Rn, RegisterOrConstant decrement);
 
   void adrp(Register reg1, const Address &dest, unsigned long &byte_offset);
 
@@ -1064,6 +1141,15 @@ public:
   // is up to you to ensure that the shift provided matches the size
   // of your data.
   Address form_address(Register Rd, Register base, long byte_offset, int shift);
+
+  // Return true iff an address is within the 48-bit AArch64 address
+  // space.
+  bool is_valid_AArch64_address(address a) {
+    return ((uint64_t)a >> 48) == 0;
+  }
+
+  // Load the base of the cardtable byte map into reg.
+  void load_byte_map_base(Register reg);
 
   // Prolog generator routines to support switch between x86 code and
   // generated ARM code
@@ -1118,12 +1204,27 @@ public:
 
   void string_compare(Register str1, Register str2,
                       Register cnt1, Register cnt2, Register result,
-                      Register tmp1);
-  void string_equals(Register str1, Register str2,
-                     Register cnt, Register result,
-                     Register tmp1);
-  void char_arrays_equals(Register ary1, Register ary2,
-                          Register result, Register tmp1);
+                      Register tmp1,
+                      FloatRegister vtmp, FloatRegister vtmpZ, int ae);
+
+  void arrays_equals(Register a1, Register a2,
+                     Register result, Register cnt1,
+                     int elem_size, bool is_string);
+
+  void fill_words(Register base, Register cnt, Register value);
+  void zero_words(Register base, u_int64_t cnt);
+  void zero_words(Register base, Register cnt);
+  void block_zero(Register base, Register cnt, bool is_large = false);
+
+  void byte_array_inflate(Register src, Register dst, Register len,
+                          FloatRegister vtmp1, FloatRegister vtmp2,
+                          FloatRegister vtmp3, Register tmp4);
+
+  void char_array_compress(Register src, Register dst, Register len,
+                           FloatRegister tmp1Reg, FloatRegister tmp2Reg,
+                           FloatRegister tmp3Reg, FloatRegister tmp4Reg,
+                           Register result);
+
   void encode_iso_array(Register src, Register dst,
                         Register len, Register result,
                         FloatRegister Vtmp1, FloatRegister Vtmp2,
@@ -1132,7 +1233,10 @@ public:
                       Register cnt1, Register cnt2,
                       Register tmp1, Register tmp2,
                       Register tmp3, Register tmp4,
-                      int int_cnt1, Register result);
+                      int int_cnt1, Register result, int ae);
+  void string_indexof_char(Register str1, Register cnt1,
+                           Register ch, Register result,
+                           Register tmp1, Register tmp2, Register tmp3);
 private:
   void add2_with_carry(Register final_dest_hi, Register dest_hi, Register dest_lo,
                        Register src1, Register src2);
@@ -1161,6 +1265,46 @@ private:
   // Uses rscratch2.
   Address offsetted_address(Register r, Register r1, Address::extend ext,
                             int offset, int size);
+
+private:
+  // Returns an address on the stack which is reachable with a ldr/str of size
+  // Uses rscratch2 if the address is not directly reachable
+  Address spill_address(int size, int offset, Register tmp=rscratch2);
+
+public:
+  void spill(Register Rx, bool is64, int offset) {
+    if (is64) {
+      str(Rx, spill_address(8, offset));
+    } else {
+      strw(Rx, spill_address(4, offset));
+    }
+  }
+  void spill(FloatRegister Vx, SIMD_RegVariant T, int offset) {
+    str(Vx, T, spill_address(1 << (int)T, offset));
+  }
+  void unspill(Register Rx, bool is64, int offset) {
+    if (is64) {
+      ldr(Rx, spill_address(8, offset));
+    } else {
+      ldrw(Rx, spill_address(4, offset));
+    }
+  }
+  void unspill(FloatRegister Vx, SIMD_RegVariant T, int offset) {
+    ldr(Vx, T, spill_address(1 << (int)T, offset));
+  }
+  void spill_copy128(int src_offset, int dst_offset,
+                     Register tmp1=rscratch1, Register tmp2=rscratch2) {
+    if (src_offset < 512 && (src_offset & 7) == 0 &&
+        dst_offset < 512 && (dst_offset & 7) == 0) {
+      ldp(tmp1, tmp2, Address(sp, src_offset));
+      stp(tmp1, tmp2, Address(sp, dst_offset));
+    } else {
+      unspill(tmp1, true, src_offset);
+      spill(tmp1, true, dst_offset);
+      unspill(tmp1, true, src_offset+8);
+      spill(tmp1, true, dst_offset+8);
+    }
+  }
 };
 
 #ifdef ASSERT

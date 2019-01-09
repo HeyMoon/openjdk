@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,8 +26,11 @@
 package com.sun.tools.javac.code;
 
 import com.sun.tools.javac.code.Kinds.Kind;
+import java.lang.ref.WeakReference;
 import java.util.*;
+import java.util.function.BiConsumer;
 
+import com.sun.tools.javac.code.Symbol.CompletionFailure;
 import com.sun.tools.javac.code.Symbol.TypeSymbol;
 import com.sun.tools.javac.tree.JCTree.JCImport;
 import com.sun.tools.javac.util.*;
@@ -35,8 +38,8 @@ import com.sun.tools.javac.util.List;
 
 import static com.sun.tools.javac.code.Scope.LookupKind.NON_RECURSIVE;
 import static com.sun.tools.javac.code.Scope.LookupKind.RECURSIVE;
-import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
+import static com.sun.tools.javac.util.Iterators.createCompoundIterator;
+import static com.sun.tools.javac.util.Iterators.createFilterIterator;
 
 /** A scope represents an area of visibility in a Java program. The
  *  Scope class is a container for symbols which provides
@@ -134,12 +137,13 @@ public abstract class Scope {
     /** Returns true iff the given Symbol is in this scope or any outward scope.
      */
     public boolean includes(final Symbol sym) {
-        return getSymbolsByName(sym.name, new Filter<Symbol>() {
-            @Override
-            public boolean accepts(Symbol t) {
-                return t == sym;
-            }
-        }).iterator().hasNext();
+        return includes(sym, RECURSIVE);
+    }
+
+    /** Returns true iff the given Symbol is in this scope, optionally checking outward scopes.
+     */
+    public boolean includes(final Symbol sym, LookupKind lookupKind) {
+        return getSymbolsByName(sym.name, t -> t == sym, lookupKind).iterator().hasNext();
     }
 
     /** Returns true iff this scope does not contain any Symbol. Does not inspect outward scopes.
@@ -160,15 +164,49 @@ public abstract class Scope {
 
     /** A list of scopes to be notified if items are to be removed from this scope.
      */
-    List<ScopeListener> listeners = List.nil();
-
-    public void addScopeListener(ScopeListener sl) {
-        listeners = listeners.prepend(sl);
-    }
+    ScopeListenerList listeners = new ScopeListenerList();
 
     public interface ScopeListener {
-        public void symbolAdded(Symbol sym, Scope s);
-        public void symbolRemoved(Symbol sym, Scope s);
+        void symbolAdded(Symbol sym, Scope s);
+        void symbolRemoved(Symbol sym, Scope s);
+    }
+
+    /**
+     * A list of scope listeners; listeners are stored in weak references, to avoid memory leaks.
+     * When the listener list is scanned (upon notification), elements corresponding to GC-ed
+     * listeners are removed so that the listener list size is kept in check.
+     */
+    public static class ScopeListenerList {
+
+        List<WeakReference<ScopeListener>> listeners = List.nil();
+
+        void add(ScopeListener sl) {
+            listeners = listeners.prepend(new WeakReference<>(sl));
+        }
+
+        void symbolAdded(Symbol sym, Scope scope) {
+            walkReferences(sym, scope, false);
+        }
+
+        void symbolRemoved(Symbol sym, Scope scope) {
+            walkReferences(sym, scope, true);
+        }
+
+        private void walkReferences(Symbol sym, Scope scope, boolean isRemove) {
+            ListBuffer<WeakReference<ScopeListener>> newListeners = new ListBuffer<>();
+            for (WeakReference<ScopeListener> wsl : listeners) {
+                ScopeListener sl = wsl.get();
+                if (sl != null) {
+                    if (isRemove) {
+                        sl.symbolRemoved(sym, scope);
+                    } else {
+                        sl.symbolAdded(sym, scope);
+                    }
+                    newListeners.add(wsl);
+                }
+            }
+            listeners = newListeners.toList();
+        }
     }
 
     public enum LookupKind {
@@ -258,6 +296,8 @@ public abstract class Scope {
          * This includes deleted elements, whose value is the sentinel.
          */
         int nelems = 0;
+
+        int removeCount = 0;
 
         /** Use as a "not-found" result for lookup.
          * Also used to mark deleted entries in the table.
@@ -402,9 +442,7 @@ public abstract class Scope {
             elems = e;
 
             //notify listeners
-            for (List<ScopeListener> l = listeners; l.nonEmpty(); l = l.tail) {
-                l.head.symbolAdded(sym, this);
-            }
+            listeners.symbolAdded(sym, this);
         }
 
         /** Remove symbol from this scope.
@@ -439,10 +477,10 @@ public abstract class Scope {
                 te = te.sibling;
             }
 
+            removeCount++;
+
             //notify listeners
-            for (List<ScopeListener> l = listeners; l.nonEmpty(); l = l.tail) {
-                l.head.symbolRemoved(sym, this);
-            }
+            listeners.symbolRemoved(sym, this);
         }
 
         /** Enter symbol sym in this scope if not already there.
@@ -531,49 +569,56 @@ public abstract class Scope {
 
         public Iterable<Symbol> getSymbols(final Filter<Symbol> sf,
                                            final LookupKind lookupKind) {
-            return new Iterable<Symbol>() {
-                public Iterator<Symbol> iterator() {
-                    return new Iterator<Symbol>() {
-                        private ScopeImpl currScope = ScopeImpl.this;
-                        private Scope.Entry currEntry = elems;
-                        {
-                            update();
-                        }
+            return () -> new Iterator<Symbol>() {
+                private ScopeImpl currScope = ScopeImpl.this;
+                private Entry currEntry = elems;
+                private int seenRemoveCount = currScope.removeCount;
+                {
+                    update();
+                }
 
-                        public boolean hasNext() {
-                            return currEntry != null;
-                        }
+                public boolean hasNext() {
+                    if (seenRemoveCount != currScope.removeCount &&
+                        currEntry != null &&
+                        !currEntry.scope.includes(currEntry.sym)) {
+                        doNext(); //skip entry that is no longer in the Scope
+                        seenRemoveCount = currScope.removeCount;
+                    }
+                    return currEntry != null;
+                }
 
-                        public Symbol next() {
-                            Symbol sym = (currEntry == null ? null : currEntry.sym);
-                            if (currEntry != null) {
-                                currEntry = currEntry.sibling;
-                            }
-                            update();
-                            return sym;
-                        }
+                public Symbol next() {
+                    if (!hasNext()) {
+                        throw new NoSuchElementException();
+                    }
 
-                        public void remove() {
-                            throw new UnsupportedOperationException();
-                        }
+                    return doNext();
+                }
+                private Symbol doNext() {
+                    Symbol sym = (currEntry == null ? null : currEntry.sym);
+                    if (currEntry != null) {
+                        currEntry = currEntry.sibling;
+                    }
+                    update();
+                    return sym;
+                }
 
-                        private void update() {
+                private void update() {
+                    skipToNextMatchingEntry();
+                    if (lookupKind == RECURSIVE) {
+                        while (currEntry == null && currScope.next != null) {
+                            currScope = currScope.next;
+                            currEntry = currScope.elems;
+                            seenRemoveCount = currScope.removeCount;
                             skipToNextMatchingEntry();
-                            if (lookupKind == RECURSIVE) {
-                                while (currEntry == null && currScope.next != null) {
-                                    currScope = currScope.next;
-                                    currEntry = currScope.elems;
-                                    skipToNextMatchingEntry();
-                                }
-                            }
                         }
+                    }
+                }
 
-                        void skipToNextMatchingEntry() {
-                            while (currEntry != null && sf != null && !sf.accepts(currEntry.sym)) {
-                                currEntry = currEntry.sibling;
-                            }
-                        }
-                    };
+                void skipToNextMatchingEntry() {
+                    while (currEntry != null && sf != null && !sf.accepts(currEntry.sym)) {
+                        currEntry = currEntry.sibling;
+                    }
                 }
             };
         }
@@ -581,27 +626,36 @@ public abstract class Scope {
         public Iterable<Symbol> getSymbolsByName(final Name name,
                                                  final Filter<Symbol> sf,
                                                  final LookupKind lookupKind) {
-            return new Iterable<Symbol>() {
-                public Iterator<Symbol> iterator() {
-                     return new Iterator<Symbol>() {
-                        Scope.Entry currentEntry = lookup(name, sf);
+            return () -> new Iterator<Symbol>() {
+               Entry currentEntry = lookup(name, sf);
+               int seenRemoveCount = currentEntry.scope != null ?
+                       currentEntry.scope.removeCount : -1;
 
-                        public boolean hasNext() {
-                            return currentEntry.scope != null &&
-                                    (lookupKind == RECURSIVE ||
-                                     currentEntry.scope == ScopeImpl.this);
-                        }
-                        public Symbol next() {
-                            Scope.Entry prevEntry = currentEntry;
-                            currentEntry = currentEntry.next(sf);
-                            return prevEntry.sym;
-                        }
-                        public void remove() {
-                            throw new UnsupportedOperationException();
-                        }
-                    };
-                }
-            };
+               public boolean hasNext() {
+                   if (currentEntry.scope != null &&
+                       seenRemoveCount != currentEntry.scope.removeCount &&
+                       !currentEntry.scope.includes(currentEntry.sym)) {
+                       doNext(); //skip entry that is no longer in the Scope
+                   }
+                   return currentEntry.scope != null &&
+                           (lookupKind == RECURSIVE ||
+                            currentEntry.scope == ScopeImpl.this);
+               }
+               public Symbol next() {
+                   if (!hasNext()) {
+                       throw new NoSuchElementException();
+                   }
+                   return doNext();
+               }
+               private Symbol doNext() {
+                   Entry prevEntry = currentEntry;
+                   currentEntry = currentEntry.next(sf);
+                   return prevEntry.sym;
+               }
+               public void remove() {
+                   throw new UnsupportedOperationException();
+               }
+           };
         }
 
         public Scope getOrigin(Symbol s) {
@@ -653,9 +707,9 @@ public abstract class Scope {
         /** The entry's scope.
          *  scope == null   iff   this == sentinel
          */
-        public Scope scope;
+        public ScopeImpl scope;
 
-        public Entry(Symbol sym, Entry shadowed, Entry sibling, Scope scope) {
+        public Entry(Symbol sym, Entry shadowed, Entry sibling, ScopeImpl scope) {
             this.sym = sym;
             this.shadowed = shadowed;
             this.sibling = sibling;
@@ -696,11 +750,12 @@ public abstract class Scope {
                         finalized.enter(sym);
                     }
 
-                    finalized.addScopeListener(new ScopeListener() {
+                    finalized.listeners.add(new ScopeListener() {
                         @Override
                         public void symbolAdded(Symbol sym, Scope s) {
                             Assert.error("The scope is sealed.");
                         }
+
                         @Override
                         public void symbolRemoved(Symbol sym, Scope s) {
                             Assert.error("The scope is sealed.");
@@ -721,8 +776,8 @@ public abstract class Scope {
             prependSubScope(currentFileScope);
         }
 
-        public Scope importByName(Types types, Scope origin, Name name, ImportFilter filter) {
-            return appendScope(new FilterImportScope(types, origin, name, filter, true));
+        public Scope importByName(Types types, Scope origin, Name name, ImportFilter filter, JCImport imp, BiConsumer<JCImport, CompletionFailure> cfHandler) {
+            return appendScope(new FilterImportScope(types, origin, name, filter, imp, cfHandler));
         }
 
         public Scope importType(Scope delegate, Scope origin, Symbol sym) {
@@ -754,7 +809,7 @@ public abstract class Scope {
 
             @Override
             public Iterable<Symbol> getSymbols(Filter<Symbol> sf, LookupKind lookupKind) {
-                return sf == null || sf.accepts(sym) ? content : Collections.<Symbol>emptyList();
+                return sf == null || sf.accepts(sym) ? content : Collections.emptyList();
             }
 
             @Override
@@ -762,7 +817,7 @@ public abstract class Scope {
                                                      Filter<Symbol> sf,
                                                      LookupKind lookupKind) {
                 return sym.name == name &&
-                       (sf == null || sf.accepts(sym)) ? content : Collections.<Symbol>emptyList();
+                       (sf == null || sf.accepts(sym)) ? content : Collections.emptyList();
             }
 
             @Override
@@ -786,15 +841,16 @@ public abstract class Scope {
 
         public void importAll(Types types, Scope origin,
                               ImportFilter filter,
-                              boolean staticImport) {
+                              JCImport imp,
+                              BiConsumer<JCImport, CompletionFailure> cfHandler) {
             for (Scope existing : subScopes) {
                 Assert.check(existing instanceof FilterImportScope);
                 FilterImportScope fis = (FilterImportScope) existing;
                 if (fis.origin == origin && fis.filter == filter &&
-                    fis.staticImport == staticImport)
+                    fis.imp.staticImport == imp.staticImport)
                     return ; //avoid entering the same scope twice
             }
-            prependSubScope(new FilterImportScope(types, origin, null, filter, staticImport));
+            prependSubScope(new FilterImportScope(types, origin, null, filter, imp, cfHandler));
         }
 
         public boolean isFilled() {
@@ -813,32 +869,44 @@ public abstract class Scope {
         private final Scope origin;
         private final Name  filterName;
         private final ImportFilter filter;
-        private final boolean staticImport;
+        private final JCImport imp;
+        private final BiConsumer<JCImport, CompletionFailure> cfHandler;
 
         public FilterImportScope(Types types,
                                  Scope origin,
                                  Name  filterName,
                                  ImportFilter filter,
-                                 boolean staticImport) {
+                                 JCImport imp,
+                                 BiConsumer<JCImport, CompletionFailure> cfHandler) {
             super(origin.owner);
             this.types = types;
             this.origin = origin;
             this.filterName = filterName;
             this.filter = filter;
-            this.staticImport = staticImport;
+            this.imp = imp;
+            this.cfHandler = cfHandler;
         }
 
         @Override
         public Iterable<Symbol> getSymbols(final Filter<Symbol> sf, final LookupKind lookupKind) {
             if (filterName != null)
                 return getSymbolsByName(filterName, sf, lookupKind);
-            SymbolImporter si = new SymbolImporter(staticImport) {
-                @Override
-                Iterable<Symbol> doLookup(TypeSymbol tsym) {
-                    return tsym.members().getSymbols(sf, lookupKind);
-                }
-            };
-            return si.importFrom((TypeSymbol) origin.owner) :: iterator;
+            try {
+                SymbolImporter si = new SymbolImporter(imp.staticImport) {
+                    @Override
+                    Iterable<Symbol> doLookup(TypeSymbol tsym) {
+                        return tsym.members().getSymbols(sf, lookupKind);
+                    }
+                };
+                List<Iterable<Symbol>> results =
+                        si.importFrom((TypeSymbol) origin.owner, List.nil());
+                return () -> createFilterIterator(createCompoundIterator(results,
+                                                                         Iterable::iterator),
+                                                  s -> filter.accepts(origin, s));
+            } catch (CompletionFailure cf) {
+                cfHandler.accept(imp, cf);
+                return Collections.emptyList();
+            }
         }
 
         @Override
@@ -847,13 +915,22 @@ public abstract class Scope {
                                                  final LookupKind lookupKind) {
             if (filterName != null && filterName != name)
                 return Collections.emptyList();
-            SymbolImporter si = new SymbolImporter(staticImport) {
-                @Override
-                Iterable<Symbol> doLookup(TypeSymbol tsym) {
-                    return tsym.members().getSymbolsByName(name, sf, lookupKind);
-                }
-            };
-            return si.importFrom((TypeSymbol) origin.owner) :: iterator;
+            try {
+                SymbolImporter si = new SymbolImporter(imp.staticImport) {
+                    @Override
+                    Iterable<Symbol> doLookup(TypeSymbol tsym) {
+                        return tsym.members().getSymbolsByName(name, sf, lookupKind);
+                    }
+                };
+                List<Iterable<Symbol>> results =
+                        si.importFrom((TypeSymbol) origin.owner, List.nil());
+                return () -> createFilterIterator(createCompoundIterator(results,
+                                                                         Iterable::iterator),
+                                                  s -> filter.accepts(origin, s));
+            } catch (CompletionFailure cf) {
+                cfHandler.accept(imp, cf);
+                return Collections.emptyList();
+            }
         }
 
         @Override
@@ -863,7 +940,7 @@ public abstract class Scope {
 
         @Override
         public boolean isStaticallyImported(Symbol byName) {
-            return staticImport;
+            return imp.staticImport;
         }
 
         abstract class SymbolImporter {
@@ -873,22 +950,19 @@ public abstract class Scope {
             public SymbolImporter(boolean inspectSuperTypes) {
                 this.inspectSuperTypes = inspectSuperTypes;
             }
-            Stream<Symbol> importFrom(TypeSymbol tsym) {
+            List<Iterable<Symbol>> importFrom(TypeSymbol tsym, List<Iterable<Symbol>> results) {
                 if (tsym == null || !processed.add(tsym))
-                    return Stream.empty();
+                    return results;
 
-                Stream<Symbol> result = Stream.empty();
 
                 if (inspectSuperTypes) {
                     // also import inherited names
-                    result = importFrom(types.supertype(tsym.type).tsym);
+                    results = importFrom(types.supertype(tsym.type).tsym, results);
                     for (Type t : types.interfaces(tsym.type))
-                        result = Stream.concat(importFrom(t.tsym), result);
+                        results = importFrom(t.tsym, results);
                 }
 
-                return Stream.concat(StreamSupport.stream(doLookup(tsym).spliterator(), false)
-                                                  .filter(s -> filter.accepts(origin, s)),
-                                     result);
+                return results.prepend(doLookup(tsym));
             }
             abstract Iterable<Symbol> doLookup(TypeSymbol tsym);
         }
@@ -913,26 +987,20 @@ public abstract class Scope {
         public void prependSubScope(Scope that) {
            if (that != null) {
                 subScopes = subScopes.prepend(that);
-                that.addScopeListener(this);
+                that.listeners.add(this);
                 mark++;
-                for (ScopeListener sl : listeners) {
-                    sl.symbolAdded(null, this); //propagate upwards in case of nested CompoundScopes
-                }
+                listeners.symbolAdded(null, this);
            }
         }
 
         public void symbolAdded(Symbol sym, Scope s) {
             mark++;
-            for (ScopeListener sl : listeners) {
-                sl.symbolAdded(sym, s);
-            }
+            listeners.symbolAdded(sym, s);
         }
 
         public void symbolRemoved(Symbol sym, Scope s) {
             mark++;
-            for (ScopeListener sl : listeners) {
-                sl.symbolRemoved(sym, s);
-            }
+            listeners.symbolRemoved(sym, s);
         }
 
         public int getMark() {

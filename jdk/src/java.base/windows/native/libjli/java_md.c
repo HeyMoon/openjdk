@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,6 +47,10 @@
 static jboolean GetJVMPath(const char *jrepath, const char *jvmtype,
                            char *jvmpath, jint jvmpathsize);
 static jboolean GetJREPath(char *path, jint pathsize);
+
+#ifdef USE_REGISTRY_LOOKUP
+jboolean GetPublicJREHome(char *buf, jint bufsize);
+#endif
 
 /* We supports warmup for UI stack that is performed in parallel
  * to VM initialization.
@@ -147,22 +151,6 @@ IsJavaw()
 }
 
 /*
- * Returns the arch path, to get the current arch use the
- * macro GetArch, nbits here is ignored for now.
- */
-const char *
-GetArchPath(int nbits)
-{
-#ifdef _M_AMD64
-    return "amd64";
-#elif defined(_M_IA64)
-    return "ia64";
-#else
-    return "i386";
-#endif
-}
-
-/*
  *
  */
 void
@@ -203,8 +191,8 @@ CreateExecutionEnvironment(int *pargc, char ***pargv,
         exit(2);
     }
 
-    JLI_Snprintf(jvmcfg, so_jvmcfg, "%s%slib%s%s%sjvm.cfg",
-        jrepath, FILESEP, FILESEP, (char*)GetArch(), FILESEP);
+    JLI_Snprintf(jvmcfg, so_jvmcfg, "%s%slib%sjvm.cfg",
+        jrepath, FILESEP, FILESEP);
 
     /* Find the specified JVM type */
     if (ReadKnownVMs(jvmcfg, JNI_FALSE) < 1) {
@@ -337,9 +325,25 @@ GetJREPath(char *path, jint pathsize)
         }
     }
 
+    /* Try getting path to JRE from path to JLI.DLL */
+    if (GetApplicationHomeFromDll(path, pathsize)) {
+        JLI_Snprintf(javadll, sizeof(javadll), "%s\\bin\\" JAVA_DLL, path);
+        if (stat(javadll, &s) == 0) {
+            JLI_TraceLauncher("JRE path is %s\n", path);
+            return JNI_TRUE;
+        }
+    }
+
+#ifdef USE_REGISTRY_LOOKUP
+    /* Lookup public JRE using Windows registry. */
+    if (GetPublicJREHome(path, pathsize)) {
+        JLI_TraceLauncher("JRE path is %s\n", path);
+        return JNI_TRUE;
+    }
+#endif
+
     JLI_ReportErrorMessage(JRE_ERROR8 JAVA_DLL);
     return JNI_FALSE;
-
 }
 
 /*
@@ -404,13 +408,13 @@ LoadJavaVM(const char *jvmpath, InvocationFunctions *ifn)
 }
 
 /*
- * If app is "c:\foo\bin\javac", then put "c:\foo" into buf.
+ * Removes the trailing file name and one sub-folder from a path.
+ * If buf is "c:\foo\bin\javac", then put "c:\foo" into buf.
  */
 jboolean
-GetApplicationHome(char *buf, jint bufsize)
+TruncatePath(char *buf)
 {
     char *cp;
-    GetModuleFileName(0, buf, bufsize);
     *JLI_StrRChr(buf, '\\') = '\0'; /* remove .exe file name */
     if ((cp = JLI_StrRChr(buf, '\\')) == 0) {
         /* This happens if the application is in a drive root, and
@@ -418,8 +422,38 @@ GetApplicationHome(char *buf, jint bufsize)
         buf[0] = '\0';
         return JNI_FALSE;
     }
-    *cp = '\0';  /* remove the bin\ part */
+    *cp = '\0'; /* remove the bin\ part */
     return JNI_TRUE;
+}
+
+/*
+ * Retrieves the path to the JRE home by locating the executable file
+ * of the current process and then truncating the path to the executable
+ */
+jboolean
+GetApplicationHome(char *buf, jint bufsize)
+{
+    GetModuleFileName(NULL, buf, bufsize);
+    return TruncatePath(buf);
+}
+
+/*
+ * Retrieves the path to the JRE home by locating JLI.DLL and
+ * then truncating the path to JLI.DLL
+ */
+jboolean
+GetApplicationHomeFromDll(char *buf, jint bufsize)
+{
+    HMODULE module;
+    DWORD flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                  GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+
+    if (GetModuleHandleEx(flags, (LPCSTR)&GetJREPath, &module) != 0) {
+        if (GetModuleFileName(module, buf, bufsize) != 0) {
+            return TruncatePath(buf);
+        }
+    }
+    return JNI_FALSE;
 }
 
 /*
@@ -587,11 +621,6 @@ void  JLI_ReportExceptionDescription(JNIEnv * env) {
     } else {
         (*env)->ExceptionDescribe(env);
     }
-}
-
-jboolean
-ServerClassMachine() {
-    return (GetErgoPolicy() == ALWAYS_SERVER_CLASS) ? JNI_TRUE : JNI_FALSE;
 }
 
 /*
@@ -904,26 +933,6 @@ ProcessPlatformOption(const char *arg)
     return JNI_FALSE;
 }
 
-int
-filterArgs(StdArg *stdargs, const int nargc, StdArg **pargv) {
-    StdArg* argv = NULL;
-    int nargs = 0;
-    int i;
-
-    /* Copy the non-vm args */
-    for (i = 0; i < nargc ; i++) {
-        const char *arg = stdargs[i].arg;
-        if (arg[0] == '-' && arg[1] == 'J')
-            continue;
-        argv = (StdArg*) JLI_MemRealloc(argv, (nargs+1) * sizeof(StdArg));
-        argv[nargs].arg = JLI_StringDup(arg);
-        argv[nargs].has_wildcard = stdargs[i].has_wildcard;
-        nargs++;
-    }
-    *pargv = argv;
-    return nargs;
-}
-
 /*
  * At this point we have the arguments to the application, and we need to
  * check with original stdargs in order to compare which of these truly
@@ -936,12 +945,13 @@ CreateApplicationArgs(JNIEnv *env, char **strv, int argc)
     int i, j, idx;
     size_t tlen;
     jobjectArray outArray, inArray;
-    char *ostart, *astart, **nargv;
+    char *arg, **nargv;
     jboolean needs_expansion = JNI_FALSE;
     jmethodID mid;
-    int filteredargc, stdargc;
+    int stdargc;
     StdArg *stdargs;
-    StdArg *filteredargs;
+    int *appArgIdx;
+    int isTool;
     jclass cls = GetLauncherHelperClass(env);
     NULL_CHECK0(cls);
 
@@ -952,8 +962,6 @@ CreateApplicationArgs(JNIEnv *env, char **strv, int argc)
     stdargs = JLI_GetStdArgs();
     stdargc = JLI_GetStdArgc();
 
-    filteredargc = filterArgs(stdargs, stdargc, &filteredargs);
-
     // sanity check, this should never happen
     if (argc > stdargc) {
         JLI_TraceLauncher("Warning: app args is larger than the original, %d %d\n", argc, stdargc);
@@ -962,23 +970,37 @@ CreateApplicationArgs(JNIEnv *env, char **strv, int argc)
     }
 
     // sanity check, match the args we have, to the holy grail
-    idx = filteredargc - argc;
-    ostart = filteredargs[idx].arg;
-    astart = strv[0];
-    // sanity check, ensure that the first argument of the arrays are the same
-    if (JLI_StrCmp(ostart, astart) != 0) {
-        // some thing is amiss the args don't match
-        JLI_TraceLauncher("Warning: app args parsing error\n");
-        JLI_TraceLauncher("passing arguments as-is\n");
+    idx = JLI_GetAppArgIndex();
+    isTool = (idx == 0);
+    if (isTool) { idx++; } // skip tool name
+    JLI_TraceLauncher("AppArgIndex: %d points to %s\n", idx, stdargs[idx].arg);
+
+    appArgIdx = calloc(argc, sizeof(int));
+    for (i = idx, j = 0; i < stdargc; i++) {
+        if (isTool) { // filter -J used by tools to pass JVM options
+            arg = stdargs[i].arg;
+            if (arg[0] == '-' && arg[1] == 'J') {
+                continue;
+            }
+        }
+        appArgIdx[j++] = i;
+    }
+    // sanity check, ensure same number of arguments for application
+    if (j != argc) {
+        JLI_TraceLauncher("Warning: app args count doesn't match, %d %d\n", j, argc);
+        JLI_TraceLauncher("passing arguments as-is.\n");
+        JLI_MemFree(appArgIdx);
         return NewPlatformStringArray(env, strv, argc);
     }
 
     // make a copy of the args which will be expanded in java if required.
     nargv = (char **)JLI_MemAlloc(argc * sizeof(char*));
-    for (i = 0, j = idx; i < argc; i++, j++) {
-        jboolean arg_expand = (JLI_StrCmp(filteredargs[j].arg, strv[i]) == 0)
-                                ? filteredargs[j].has_wildcard
-                                : JNI_FALSE;
+    for (i = 0; i < argc; i++) {
+        jboolean arg_expand;
+        j = appArgIdx[i];
+        arg_expand = (JLI_StrCmp(stdargs[j].arg, strv[i]) == 0)
+            ? stdargs[j].has_wildcard
+            : JNI_FALSE;
         if (needs_expansion == JNI_FALSE)
             needs_expansion = arg_expand;
 
@@ -1000,6 +1022,7 @@ CreateApplicationArgs(JNIEnv *env, char **strv, int argc)
             JLI_MemFree(nargv[i]);
         }
         JLI_MemFree(nargv);
+        JLI_MemFree(appArgIdx);
         return NewPlatformStringArray(env, strv, argc);
     }
     NULL_CHECK0(mid = (*env)->GetStaticMethodID(env, cls,
@@ -1014,6 +1037,6 @@ CreateApplicationArgs(JNIEnv *env, char **strv, int argc)
         JLI_MemFree(nargv[i]);
     }
     JLI_MemFree(nargv);
-    JLI_MemFree(filteredargs);
+    JLI_MemFree(appArgIdx);
     return outArray;
 }

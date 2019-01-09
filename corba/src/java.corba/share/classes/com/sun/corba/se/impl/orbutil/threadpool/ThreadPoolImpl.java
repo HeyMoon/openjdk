@@ -54,7 +54,6 @@ import com.sun.corba.se.spi.monitoring.LongMonitoredAttributeBase;
 import com.sun.corba.se.impl.logging.ORBUtilSystemException;
 import com.sun.corba.se.impl.orbutil.ORBConstants;
 import com.sun.corba.se.spi.logging.CORBALogDomains;
-import com.sun.corba.se.impl.transport.ManagedLocalsThread;
 
 public class ThreadPoolImpl implements ThreadPool
 {
@@ -460,7 +459,7 @@ public class ThreadPoolImpl implements ThreadPool
     }
 
 
-    private class WorkerThread extends ManagedLocalsThread implements Closeable
+    private class WorkerThread extends Thread implements Closeable
     {
         private Work currentWork;
         private int threadId = 0; // unique id for the thread
@@ -470,7 +469,7 @@ public class ThreadPoolImpl implements ThreadPool
         private StringBuffer workerThreadName = new StringBuffer();
 
         WorkerThread(ThreadGroup tg, String threadPoolName) {
-            super(tg, "Idle");
+            super(tg, null, "Idle", 0, false);
             this.threadId = ThreadPoolImpl.getUniqueThreadId();
             this.threadPoolName = threadPoolName;
             setName(composeWorkerThreadName(threadPoolName, "Idle"));

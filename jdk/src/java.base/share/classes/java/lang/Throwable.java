@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1994, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1994, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 
 package java.lang;
+
 import  java.io.*;
 import  java.util.*;
 
@@ -116,7 +117,7 @@ public class Throwable implements Serializable {
     private static final long serialVersionUID = -3042686055658047285L;
 
     /**
-     * Native code saves some indication of the stack backtrace in this slot.
+     * The JVM saves some indication of the stack backtrace in this slot.
      */
     private transient Object backtrace;
 
@@ -209,10 +210,14 @@ public class Throwable implements Serializable {
      */
     private StackTraceElement[] stackTrace = UNASSIGNED_STACK;
 
+    /**
+     * The JVM code sets the depth of the backtrace for later retrieval
+     */
+    private transient int depth;
+
     // Setting this static field introduces an acceptable
     // initialization dependency on a few java.util classes.
-    private static final List<Throwable> SUPPRESSED_SENTINEL =
-        Collections.unmodifiableList(new ArrayList<Throwable>(0));
+    private static final List<Throwable> SUPPRESSED_SENTINEL = Collections.emptyList();
 
     /**
      * The list of suppressed exceptions, as returned by {@link
@@ -820,10 +825,7 @@ public class Throwable implements Serializable {
         // backtrace if this is the first call to this method
         if (stackTrace == UNASSIGNED_STACK ||
             (stackTrace == null && backtrace != null) /* Out of protocol state */) {
-            int depth = getStackTraceDepth();
-            stackTrace = new StackTraceElement[depth];
-            for (int i=0; i < depth; i++)
-                stackTrace[i] = getStackTraceElement(i);
+            stackTrace = StackTraceElement.of(this, depth);
         } else if (stackTrace == null) {
             return UNASSIGNED_STACK;
         }
@@ -873,25 +875,6 @@ public class Throwable implements Serializable {
             this.stackTrace = defensiveCopy;
         }
     }
-
-    /**
-     * Returns the number of elements in the stack trace (or 0 if the stack
-     * trace is unavailable).
-     *
-     * package-protection for use by SharedSecrets.
-     */
-    native int getStackTraceDepth();
-
-    /**
-     * Returns the specified element of the stack trace.
-     *
-     * package-protection for use by SharedSecrets.
-     *
-     * @param index index of the element to return.
-     * @throws IndexOutOfBoundsException if {@code index < 0 ||
-     *         index >= getStackTraceDepth() }
-     */
-    native StackTraceElement getStackTraceElement(int index);
 
     /**
      * Reads a {@code Throwable} from a stream, enforcing

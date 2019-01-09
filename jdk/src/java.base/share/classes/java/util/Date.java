@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1994, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1994, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -82,16 +82,18 @@ import sun.util.calendar.ZoneInfo;
  * well; for example, the time scale used by the satellite-based
  * global positioning system (GPS) is synchronized to UTC but is
  * <i>not</i> adjusted for leap seconds. An interesting source of
- * further information is the U.S. Naval Observatory, particularly
- * the Directorate of Time at:
+ * further information is the United States Naval Observatory (USNO):
  * <blockquote><pre>
- *     <a href=http://tycho.usno.navy.mil>http://tycho.usno.navy.mil</a>
+ *     <a href="http://www.usno.navy.mil/USNO">http://www.usno.navy.mil/USNO</a>
  * </pre></blockquote>
  * <p>
- * and their definitions of "Systems of Time" at:
+ * and the material regarding "Systems of Time" at:
  * <blockquote><pre>
- *     <a href=http://tycho.usno.navy.mil/systime.html>http://tycho.usno.navy.mil/systime.html</a>
+ *     <a href="http://www.usno.navy.mil/USNO/time/master-clock/systems-of-time">http://www.usno.navy.mil/USNO/time/master-clock/systems-of-time</a>
  * </pre></blockquote>
+ * <p>
+ * which has descriptions of various different time systems including
+ * UT, UT1, and UTC.
  * <p>
  * In all methods of class {@code Date} that accept or return
  * year, month, date, hours, minutes, and seconds values, the
@@ -613,7 +615,7 @@ public class Date
         // syntax error
         throw new IllegalArgumentException();
     }
-    private final static String wtb[] = {
+    private static final String wtb[] = {
         "am", "pm",
         "monday", "tuesday", "wednesday", "thursday", "friday",
         "saturday", "sunday",
@@ -622,7 +624,7 @@ public class Date
         "gmt", "ut", "utc", "est", "edt", "cst", "cdt",
         "mst", "mdt", "pst", "pdt"
     };
-    private final static int ttb[] = {
+    private static final int ttb[] = {
         14, 1, 0, 0, 0, 0, 0, 0, 0,
         2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
         10000 + 0, 10000 + 0, 10000 + 0,    // GMT/UT/UTC
@@ -726,7 +728,6 @@ public class Date
      * @see     java.util.Calendar
      * @deprecated As of JDK version 1.1,
      * replaced by {@code Calendar.get(Calendar.DAY_OF_MONTH)}.
-     * @deprecated
      */
     @Deprecated
     public int getDate() {
@@ -952,6 +953,9 @@ public class Date
      * without affecting its internal state.
      */
     static final long getMillisOf(Date date) {
+        if (date.getClass() != Date.class) {
+            return date.getTime();
+        }
         if (date.cdate == null || date.cdate.isNormalized()) {
             return date.fastTime;
         }
@@ -1300,7 +1304,7 @@ public class Date
         return gcal;
     }
 
-    synchronized private static final BaseCalendar getJulianCalendar() {
+    private static final synchronized BaseCalendar getJulianCalendar() {
         if (jcal == null) {
             jcal = (BaseCalendar) CalendarSystem.forName("julian");
         }

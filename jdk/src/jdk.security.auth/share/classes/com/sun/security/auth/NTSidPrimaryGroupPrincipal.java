@@ -39,7 +39,6 @@ package com.sun.security.auth;
  * @see java.security.Principal
  * @see javax.security.auth.Subject
  */
-@jdk.Exported
 public class NTSidPrimaryGroupPrincipal extends NTSid {
 
     private static final long serialVersionUID = 8011978367305190527L;
@@ -66,9 +65,8 @@ public class NTSidPrimaryGroupPrincipal extends NTSid {
      */
     public String toString() {
         java.text.MessageFormat form = new java.text.MessageFormat
-                (sun.security.util.ResourcesMgr.getString
-                        ("NTSidPrimaryGroupPrincipal.name",
-                        "sun.security.util.AuthResources"));
+                (sun.security.util.ResourcesMgr.getAuthResourceString
+                        ("NTSidPrimaryGroupPrincipal.name"));
         Object[] source = {getName()};
         return form.format(source);
     }

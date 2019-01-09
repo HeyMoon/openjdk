@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -111,6 +111,7 @@ class Universe: AllStatic {
   friend jint  universe_init();
   friend void  universe2_init();
   friend bool  universe_post_init();
+  friend void  universe_post_module_init();
 
  private:
   // Known classes in the VM
@@ -149,6 +150,7 @@ class Universe: AllStatic {
   static LatestMethodCache* _loader_addClass_cache;    // method for registering loaded classes in class loader vector
   static LatestMethodCache* _pd_implies_cache;         // method for checking protection domain attributes
   static LatestMethodCache* _throw_illegal_access_error_cache; // Unsafe.throwIllegalAccessError() method
+  static LatestMethodCache* _do_stack_walk_cache;      // method for stack walker callback
 
   // preallocated error objects (no backtrace)
   static oop          _out_of_memory_error_java_heap;
@@ -157,6 +159,9 @@ class Universe: AllStatic {
   static oop          _out_of_memory_error_array_size;
   static oop          _out_of_memory_error_gc_overhead_limit;
   static oop          _out_of_memory_error_realloc_objects;
+
+  // preallocated cause message for delayed StackOverflowError
+  static oop          _delayed_stack_overflow_error_message;
 
   static Array<int>*       _the_empty_int_array;    // Canonicalized int array
   static Array<u2>*        _the_empty_short_array;  // Canonicalized short array
@@ -180,6 +185,9 @@ class Universe: AllStatic {
 
   static oop          _allocation_context_notification_obj;
 
+  // References waiting to be transferred to the ReferenceHandler
+  static oop          _reference_pending_list;
+
   // The particular choice of collected heap.
   static CollectedHeap* _collectedHeap;
 
@@ -201,6 +209,7 @@ class Universe: AllStatic {
 
   // Initialization
   static bool _bootstrapping;                         // true during genesis
+  static bool _module_initialized;                    // true after call_initPhase2 called
   static bool _fully_initialized;                     // true after universe_init and initialize_vtables called
 
   // the array of preallocated errors with backtraces
@@ -214,7 +223,9 @@ class Universe: AllStatic {
   static size_t _heap_capacity_at_last_gc;
   static size_t _heap_used_at_last_gc;
 
-  template <class Heap, class Policy> static jint create_heap();
+  template <class Heap, class Policy> static CollectedHeap* create_heap_with_policy();
+  static CollectedHeap* create_heap();
+  static CollectedHeap* create_heap_ext();
   static jint initialize_heap();
   static void initialize_basic_type_mirrors(TRAPS);
   static void fixup_mirrors(TRAPS);
@@ -246,9 +257,15 @@ class Universe: AllStatic {
 
   // Debugging
   static int _verify_count;                           // number of verifies done
+
   // True during call to verify().  Should only be set/cleared in verify().
   static bool _verify_in_progress;
+  static long verify_flags;
 
+  static uintptr_t _verify_oop_mask;
+  static uintptr_t _verify_oop_bits;
+
+  static void calculate_verify_data(HeapWord* low_boundary, HeapWord* high_boundary) PRODUCT_RETURN;
   static void compute_verify_oop_data();
 
  public:
@@ -267,7 +284,7 @@ class Universe: AllStatic {
   }
 
   static Klass* typeArrayKlassObj(BasicType t) {
-    assert((uint)t < T_VOID+1, err_msg("range check for type: %s", type2name(t)));
+    assert((uint)t < T_VOID+1, "range check for type: %s", type2name(t));
     assert(_typeArrayKlassObjs[t] != NULL, "domain check");
     return _typeArrayKlassObjs[t];
   }
@@ -307,6 +324,11 @@ class Universe: AllStatic {
   static Method*      protection_domain_implies_method() { return _pd_implies_cache->get_method(); }
   static Method*      throw_illegal_access_error()    { return _throw_illegal_access_error_cache->get_method(); }
 
+  static Method*      do_stack_walk_method()          { return _do_stack_walk_cache->get_method(); }
+
+  // Function to initialize these
+  static void initialize_known_methods(TRAPS);
+
   static oop          null_ptr_exception_instance()   { return _null_ptr_exception_instance;   }
   static oop          arithmetic_exception_instance() { return _arithmetic_exception_instance; }
   static oop          virtual_machine_error_instance() { return _virtual_machine_error_instance; }
@@ -314,6 +336,17 @@ class Universe: AllStatic {
 
   static inline oop   allocation_context_notification_obj();
   static inline void  set_allocation_context_notification_obj(oop obj);
+
+  // Reference pending list manipulation.  Access is protected by
+  // Heap_lock.  The getter, setter and predicate require the caller
+  // owns the lock.  Swap is used by parallel non-concurrent reference
+  // processing threads, where some higher level controller owns
+  // Heap_lock, so requires the lock is locked, but not necessarily by
+  // the current thread.
+  static oop          reference_pending_list();
+  static void         set_reference_pending_list(oop list);
+  static bool         has_reference_pending_list();
+  static oop          swap_reference_pending_list(oop list);
 
   static Array<int>*       the_empty_int_array()    { return _the_empty_int_array; }
   static Array<u2>*        the_empty_short_array()  { return _the_empty_short_array; }
@@ -329,6 +362,7 @@ class Universe: AllStatic {
   static oop out_of_memory_error_array_size()         { return gen_out_of_memory_error(_out_of_memory_error_array_size); }
   static oop out_of_memory_error_gc_overhead_limit()  { return gen_out_of_memory_error(_out_of_memory_error_gc_overhead_limit);  }
   static oop out_of_memory_error_realloc_objects()    { return gen_out_of_memory_error(_out_of_memory_error_realloc_objects);  }
+  static oop delayed_stack_overflow_error_message()   { return _delayed_stack_overflow_error_message; }
 
   // Accessors needed for fast allocation
   static Klass** boolArrayKlassObj_addr()           { return &_boolArrayKlassObj;   }
@@ -421,6 +455,7 @@ class Universe: AllStatic {
 
   // Testers
   static bool is_bootstrapping()                      { return _bootstrapping; }
+  static bool is_module_initialized()                 { return _module_initialized; }
   static bool is_fully_initialized()                  { return _fully_initialized; }
 
   static inline bool element_type_should_be_aligned(BasicType type);
@@ -449,27 +484,35 @@ class Universe: AllStatic {
   static void init_self_patching_vtbl_list(void** list, int count);
 
   // Debugging
+  enum VERIFY_FLAGS {
+    Verify_Threads = 1,
+    Verify_Heap = 2,
+    Verify_SymbolTable = 4,
+    Verify_StringTable = 8,
+    Verify_CodeCache = 16,
+    Verify_SystemDictionary = 32,
+    Verify_ClassLoaderDataGraph = 64,
+    Verify_MetaspaceAux = 128,
+    Verify_JNIHandles = 256,
+    Verify_CodeCacheOops = 512,
+    Verify_All = -1
+  };
+  static void initialize_verify_flags();
+  static bool should_verify_subset(uint subset);
   static bool verify_in_progress() { return _verify_in_progress; }
-  static void verify(VerifyOption option, const char* prefix, bool silent = VerifySilently);
-  static void verify(const char* prefix, bool silent = VerifySilently) {
-    verify(VerifyOption_Default, prefix, silent);
+  static void verify(VerifyOption option, const char* prefix);
+  static void verify(const char* prefix) {
+    verify(VerifyOption_Default, prefix);
   }
-  static void verify(bool silent = VerifySilently) {
-    verify("", silent);
+  static void verify() {
+    verify("");
   }
 
   static int  verify_count()       { return _verify_count; }
-  // The default behavior is to call print_on() on gclog_or_tty.
-  static void print();
-  // The extended parameter determines which method on the heap will
-  // be called: print_on() (extended == false) or print_extended_on()
-  // (extended == true).
-  static void print_on(outputStream* st, bool extended = false);
+  static void print_on(outputStream* st);
   static void print_heap_at_SIGBREAK();
-  static void print_heap_before_gc() { print_heap_before_gc(gclog_or_tty); }
-  static void print_heap_after_gc()  { print_heap_after_gc(gclog_or_tty); }
-  static void print_heap_before_gc(outputStream* st, bool ignore_extended = false);
-  static void print_heap_after_gc(outputStream* st, bool ignore_extended = false);
+  static void print_heap_before_gc();
+  static void print_heap_after_gc();
 
   // Change the number of dummy objects kept reachable by the full gc dummy
   // array; this should trigger relocation in a sliding compaction collector.

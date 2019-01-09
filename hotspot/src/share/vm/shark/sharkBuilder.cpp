@@ -25,8 +25,11 @@
 
 #include "precompiled.hpp"
 #include "ci/ciMethod.hpp"
+#include "gc/shared/barrierSet.hpp"
+#include "gc/shared/cardTableModRefBS.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/method.hpp"
+#include "prims/unsafe.hpp"
 #include "runtime/os.hpp"
 #include "runtime/synchronizer.hpp"
 #include "runtime/thread.hpp"
@@ -324,7 +327,6 @@ Value* SharkBuilder::fabs() {
 }
 
 Value* SharkBuilder::unsafe_field_offset_to_byte_offset() {
-  extern jlong Unsafe_field_offset_to_byte_offset(jlong field_offset);
   return make_function((address) Unsafe_field_offset_to_byte_offset, "l", "l");
 }
 
@@ -438,11 +440,13 @@ CallInst* SharkBuilder::CreateDump(Value* value) {
 // HotSpot memory barriers
 
 void SharkBuilder::CreateUpdateBarrierSet(BarrierSet* bs, Value* field) {
-  if (bs->kind() != BarrierSet::CardTableModRef)
+  if (bs->kind() != BarrierSet::CardTableForRS &&
+      bs->kind() != BarrierSet::CardTableExtension) {
     Unimplemented();
+  }
 
   CreateStore(
-    LLVMValue::jbyte_constant(CardTableModRefBS::dirty_card),
+    LLVMValue::jbyte_constant(CardTableModRefBS::dirty_card_val()),
     CreateIntToPtr(
       CreateAdd(
         LLVMValue::intptr_constant(

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,7 +43,7 @@
 #include <jvm.h>
 #include <jvm_md.h>
 #include <jlong.h>
-
+#include "systemScale.h"
 #include <stdlib.h>
 
 #include "awt_GraphicsEnv.h"
@@ -442,7 +442,7 @@ getAllConfigs (JNIEnv *env, int screen, AwtScreenDataPtr screenDataPtr) {
 
 #ifndef __linux__ /* SOLARIS */
         if (xrenderLibHandle == NULL) {
-            xrenderLibHandle = dlopen("/usr/sfw/lib/libXrender.so.1",
+            xrenderLibHandle = dlopen("/usr/lib/libXrender.so.1",
                                       RTLD_LAZY | RTLD_GLOBAL);
         }
 #endif
@@ -1564,6 +1564,9 @@ Java_sun_awt_X11GraphicsDevice_getDoubleBufferVisuals(JNIEnv *env,
     for (i = 0; i < visScreenInfo->count; i++) {
         XdbeVisualInfo* visInfo = visScreenInfo->visinfo;
         (*env)->CallVoidMethod(env, this, midAddVisual, (visInfo[i]).visual);
+        if ((*env)->ExceptionCheck(env)) {
+            break;
+        }
     }
 #endif /* !HEADLESS */
 }
@@ -1654,6 +1657,21 @@ typedef Rotation
     (*XRRConfigRotationsType)(XRRScreenConfiguration *config,
                               Rotation *current_rotation);
 
+typedef XRRScreenResources* (*XRRGetScreenResourcesType)(Display *dpy,
+                                                                 Window window);
+
+typedef void (*XRRFreeScreenResourcesType)(XRRScreenResources *resources);
+
+typedef XRROutputInfo * (*XRRGetOutputInfoType)(Display *dpy,
+                                XRRScreenResources *resources, RROutput output);
+
+typedef void (*XRRFreeOutputInfoType)(XRROutputInfo *outputInfo);
+
+typedef XRRCrtcInfo* (*XRRGetCrtcInfoType)(Display *dpy,
+                                    XRRScreenResources *resources, RRCrtc crtc);
+
+typedef void (*XRRFreeCrtcInfoType)(XRRCrtcInfo *crtcInfo);
+
 static XRRQueryVersionType               awt_XRRQueryVersion;
 static XRRGetScreenInfoType              awt_XRRGetScreenInfo;
 static XRRFreeScreenConfigInfoType       awt_XRRFreeScreenConfigInfo;
@@ -1663,6 +1681,12 @@ static XRRConfigSizesType                awt_XRRConfigSizes;
 static XRRConfigCurrentConfigurationType awt_XRRConfigCurrentConfiguration;
 static XRRSetScreenConfigAndRateType     awt_XRRSetScreenConfigAndRate;
 static XRRConfigRotationsType            awt_XRRConfigRotations;
+static XRRGetScreenResourcesType         awt_XRRGetScreenResources;
+static XRRFreeScreenResourcesType        awt_XRRFreeScreenResources;
+static XRRGetOutputInfoType              awt_XRRGetOutputInfo;
+static XRRFreeOutputInfoType             awt_XRRFreeOutputInfo;
+static XRRGetCrtcInfoType                awt_XRRGetCrtcInfo;
+static XRRFreeCrtcInfoType               awt_XRRFreeCrtcInfo;
 
 #define LOAD_XRANDR_FUNC(f) \
     do { \
@@ -1734,6 +1758,12 @@ X11GD_InitXrandrFuncs(JNIEnv *env)
     LOAD_XRANDR_FUNC(XRRConfigCurrentConfiguration);
     LOAD_XRANDR_FUNC(XRRSetScreenConfigAndRate);
     LOAD_XRANDR_FUNC(XRRConfigRotations);
+    LOAD_XRANDR_FUNC(XRRGetScreenResources);
+    LOAD_XRANDR_FUNC(XRRFreeScreenResources);
+    LOAD_XRANDR_FUNC(XRRGetOutputInfo);
+    LOAD_XRANDR_FUNC(XRRFreeOutputInfo);
+    LOAD_XRANDR_FUNC(XRRGetCrtcInfo);
+    LOAD_XRANDR_FUNC(XRRFreeCrtcInfo);
 
     return JNI_TRUE;
 }
@@ -1874,31 +1904,76 @@ Java_sun_awt_X11GraphicsDevice_getCurrentDisplayMode
 
     AWT_LOCK();
 
-    config = awt_XRRGetScreenInfo(awt_display,
-                                  RootWindow(awt_display, screen));
-    if (config != NULL) {
-        Rotation rotation;
-        short curRate;
-        SizeID curSizeIndex;
-        XRRScreenSize *sizes;
-        int nsizes;
-
-        curSizeIndex = awt_XRRConfigCurrentConfiguration(config, &rotation);
-        sizes = awt_XRRConfigSizes(config, &nsizes);
-        curRate = awt_XRRConfigCurrentRate(config);
-
-        if ((sizes != NULL) &&
-            (curSizeIndex < nsizes))
-        {
-            XRRScreenSize curSize = sizes[curSizeIndex];
-            displayMode = X11GD_CreateDisplayMode(env,
-                                                  curSize.width,
-                                                  curSize.height,
-                                                  BIT_DEPTH_MULTI,
-                                                  curRate);
+    if (usingXinerama && XScreenCount(awt_display) > 0) {
+        XRRScreenResources *res = awt_XRRGetScreenResources(awt_display,
+                                                    RootWindow(awt_display, 0));
+        if (res) {
+            if (res->noutput > screen) {
+                XRROutputInfo *output_info = awt_XRRGetOutputInfo(awt_display,
+                                                     res, res->outputs[screen]);
+                if (output_info) {
+                    if (output_info->crtc) {
+                        XRRCrtcInfo *crtc_info =
+                                    awt_XRRGetCrtcInfo (awt_display, res,
+                                                        output_info->crtc);
+                        if (crtc_info) {
+                            if (crtc_info->mode) {
+                                int i;
+                                for (i = 0; i < res->nmode; i++) {
+                                    XRRModeInfo *mode = &res->modes[i];
+                                    if (mode->id == crtc_info->mode) {
+                                        float rate = 0;
+                                        if (mode->hTotal && mode->vTotal) {
+                                             rate = ((float)mode->dotClock /
+                                                    ((float)mode->hTotal *
+                                                    (float)mode->vTotal));
+                                        }
+                                        displayMode = X11GD_CreateDisplayMode(
+                                                           env,
+                                                           mode->width,
+                                                           mode->height,
+                                                           BIT_DEPTH_MULTI,
+                                                           (int)(rate +.2));
+                                        break;
+                                    }
+                                }
+                            }
+                            awt_XRRFreeCrtcInfo(crtc_info);
+                        }
+                    }
+                    awt_XRRFreeOutputInfo(output_info);
+                }
+            }
+            awt_XRRFreeScreenResources(res);
         }
+    } else {
 
-        awt_XRRFreeScreenConfigInfo(config);
+        config = awt_XRRGetScreenInfo(awt_display,
+                                      RootWindow(awt_display, screen));
+        if (config != NULL) {
+            Rotation rotation;
+            short curRate;
+            SizeID curSizeIndex;
+            XRRScreenSize *sizes;
+            int nsizes;
+
+            curSizeIndex = awt_XRRConfigCurrentConfiguration(config, &rotation);
+            sizes = awt_XRRConfigSizes(config, &nsizes);
+            curRate = awt_XRRConfigCurrentRate(config);
+
+            if ((sizes != NULL) &&
+                (curSizeIndex < nsizes))
+            {
+                XRRScreenSize curSize = sizes[curSizeIndex];
+                displayMode = X11GD_CreateDisplayMode(env,
+                                                      curSize.width,
+                                                      curSize.height,
+                                                      BIT_DEPTH_MULTI,
+                                                      curRate);
+            }
+
+            awt_XRRFreeScreenConfigInfo(config);
+        }
     }
 
     AWT_FLUSH_UNLOCK();
@@ -1918,36 +1993,77 @@ Java_sun_awt_X11GraphicsDevice_enumDisplayModes
      jint screen, jobject arrayList)
 {
 #ifndef HEADLESS
-    XRRScreenConfiguration *config;
 
     AWT_LOCK();
 
-    config = awt_XRRGetScreenInfo(awt_display,
-                                  RootWindow(awt_display, screen));
-    if (config != NULL) {
-        int nsizes, i, j;
-        XRRScreenSize *sizes = awt_XRRConfigSizes(config, &nsizes);
+    if (usingXinerama && XScreenCount(awt_display) > 0) {
+        XRRScreenResources *res = awt_XRRGetScreenResources(awt_display,
+                                                    RootWindow(awt_display, 0));
+        if (res) {
+           if (res->noutput > screen) {
+                XRROutputInfo *output_info = awt_XRRGetOutputInfo(awt_display,
+                                                     res, res->outputs[screen]);
+                if (output_info) {
+                    int i;
+                    for (i = 0; i < output_info->nmode; i++) {
+                        RRMode m = output_info->modes[i];
+                        int j;
+                        XRRModeInfo *mode;
+                        for (j = 0; j < res->nmode; j++) {
+                            mode = &res->modes[j];
+                            if (mode->id == m) {
+                                 float rate = 0;
+                                 if (mode->hTotal && mode->vTotal) {
+                                     rate = ((float)mode->dotClock /
+                                                   ((float)mode->hTotal *
+                                                          (float)mode->vTotal));
+                                 }
+                                 X11GD_AddDisplayMode(env, arrayList,
+                                        mode->width, mode->height,
+                                              BIT_DEPTH_MULTI, (int)(rate +.2));
+                                 if ((*env)->ExceptionCheck(env)) {
+                                     goto ret0;
+                                 }
+                                 break;
+                            }
+                        }
+                    }
+ret0:
+                    awt_XRRFreeOutputInfo(output_info);
+                }
+            }
+            awt_XRRFreeScreenResources(res);
+        }
+    } else {
+        XRRScreenConfiguration *config;
 
-        if (sizes != NULL) {
-            for (i = 0; i < nsizes; i++) {
-                int nrates;
-                XRRScreenSize size = sizes[i];
-                short *rates = awt_XRRConfigRates(config, i, &nrates);
+        config = awt_XRRGetScreenInfo(awt_display,
+                                      RootWindow(awt_display, screen));
+        if (config != NULL) {
+            int nsizes, i, j;
+            XRRScreenSize *sizes = awt_XRRConfigSizes(config, &nsizes);
 
-                for (j = 0; j < nrates; j++) {
-                    X11GD_AddDisplayMode(env, arrayList,
-                                         size.width,
-                                         size.height,
-                                         BIT_DEPTH_MULTI,
-                                         rates[j]);
-                    if ((*env)->ExceptionCheck(env)) {
-                        break;
+            if (sizes != NULL) {
+                for (i = 0; i < nsizes; i++) {
+                    int nrates;
+                    XRRScreenSize size = sizes[i];
+                    short *rates = awt_XRRConfigRates(config, i, &nrates);
+
+                    for (j = 0; j < nrates; j++) {
+                        X11GD_AddDisplayMode(env, arrayList,
+                                             size.width,
+                                             size.height,
+                                             BIT_DEPTH_MULTI,
+                                             rates[j]);
+                        if ((*env)->ExceptionCheck(env)) {
+                            goto ret1;
+                        }
                     }
                 }
             }
+ret1:
+            awt_XRRFreeScreenConfigInfo(config);
         }
-
-        awt_XRRFreeScreenConfigInfo(config);
     }
 
     AWT_FLUSH_UNLOCK();
@@ -2079,3 +2195,52 @@ Java_sun_awt_X11GraphicsDevice_exitFullScreenExclusive
 /**
  * End DisplayMode/FullScreen support
  */
+
+static char *get_output_screen_name(JNIEnv *env, int screen) {
+    if (!awt_XRRGetScreenResources || !awt_XRRGetOutputInfo) {
+        return NULL;
+    }
+    char *name = NULL;
+    AWT_LOCK();
+    int scr = 0, out = 0;
+    if (usingXinerama && XScreenCount(awt_display) > 0) {
+        out = screen;
+    } else {
+        scr = screen;
+    }
+
+    XRRScreenResources *res = awt_XRRGetScreenResources(awt_display,
+                                                  RootWindow(awt_display, scr));
+    if (res) {
+       if (res->noutput > out) {
+            XRROutputInfo *output_info = awt_XRRGetOutputInfo(awt_display,
+                                                        res, res->outputs[out]);
+            if (output_info) {
+                if (output_info->name) {
+                    name = strdup(output_info->name);
+                }
+                awt_XRRFreeOutputInfo(output_info);
+            }
+        }
+        awt_XRRFreeScreenResources(res);
+    }
+    AWT_UNLOCK();
+    return name;
+}
+
+/*
+ * Class:     sun_awt_X11GraphicsDevice
+ * Method:    getNativeScaleFactor
+ * Signature: (I)D
+ */
+JNIEXPORT jdouble JNICALL
+Java_sun_awt_X11GraphicsDevice_getNativeScaleFactor
+    (JNIEnv *env, jobject this, jint screen) {
+    // in case of Xinerama individual screen scales are not supported
+    char *name = get_output_screen_name(env, usingXinerama ? 0 : screen);
+    double scale = getNativeScaleFactor(name);
+    if (name) {
+        free(name);
+    }
+    return scale;
+}

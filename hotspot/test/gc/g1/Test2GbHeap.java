@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,17 +25,20 @@
  * @test Test2GbHeap
  * @bug 8031686
  * @summary Regression test to ensure we can start G1 with 2gb heap.
+ * Skip test on 32 bit system: it typically does not support the many and large virtual memory reservations needed.
+ * @requires vm.gc.G1
+ * @requires vm.bits != "32"
  * @key gc
  * @key regression
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  */
 
 import java.util.ArrayList;
 
-import jdk.test.lib.OutputAnalyzer;
-import jdk.test.lib.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
 
 public class Test2GbHeap {
   public static void main(String[] args) throws Exception {
@@ -48,17 +51,6 @@ public class Test2GbHeap {
     ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(testArguments.toArray(new String[0]));
 
     OutputAnalyzer output = new OutputAnalyzer(pb.start());
-
-    // Avoid failing test for setups not supported.
-    if (output.getOutput().contains("Could not reserve enough space for 2097152KB object heap")) {
-      // Will fail on machines with too little memory (and Windows 32-bit VM), ignore such failures.
-      output.shouldHaveExitValue(1);
-    } else if (output.getOutput().contains("G1 GC is disabled in this release")) {
-      // G1 is not supported on embedded, ignore such failures.
-      output.shouldHaveExitValue(1);
-    } else {
-      // Normally everything should be fine.
-      output.shouldHaveExitValue(0);
-    }
+    output.shouldHaveExitValue(0);
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -64,11 +64,11 @@ import sun.awt.SunToolkit;
 import sun.awt.OSInfo;
 import sun.awt.shell.ShellFolder;
 import sun.font.FontUtilities;
-import sun.misc.ManagedLocalsThread;
 import sun.security.action.GetPropertyAction;
 
 import sun.swing.DefaultLayoutStyle;
 import sun.swing.ImageIconUIResource;
+import sun.swing.SwingAccessor;
 import sun.swing.icon.SortArrowIcon;
 import sun.swing.SwingUtilities2;
 import sun.swing.StringUIClientPropertyKey;
@@ -288,7 +288,9 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
      * used for getting localized defaults.
      */
     private void initResourceBundle(UIDefaults table) {
-        table.addResourceBundle( "com.sun.java.swing.plaf.windows.resources.windows" );
+        SwingAccessor.getUIDefaultsAccessor()
+                     .addInternalBundle(table,
+                             "com.sun.java.swing.plaf.windows.resources.windows");
     }
 
     // XXX - there are probably a lot of redundant values that could be removed.
@@ -556,8 +558,7 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
              * for both client property and UIDefaults.
              * Also need to set up listeners for changes in these settings.
              */
-            Object aaTextInfo = SwingUtilities2.AATextInfo.getAATextInfo(true);
-            table.put(SwingUtilities2.AA_TEXT_PROPERTY_KEY, aaTextInfo);
+            SwingUtilities2.putAATextInfo(true, table);
             this.aaSettings =
                 new FontDesktopProperty(SunToolkit.DESKTOPFONTHINTS);
         }
@@ -671,7 +672,7 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
             "ComboBox.buttonHighlight", ControlHighlightColor,
             "ComboBox.selectionBackground", SelectionBackgroundColor,
             "ComboBox.selectionForeground", SelectionTextColor,
-            "ComboBox.editorBorder", new XPValue(new EmptyBorder(1,2,1,1),
+            "ComboBox.editorBorder", new XPValue(new EmptyBorder(1,4,1,1),
                                                  new EmptyBorder(1,4,1,4)),
             "ComboBox.disabledBackground",
                         new XPColorValue(Part.CP_COMBOBOX, State.DISABLED,
@@ -699,7 +700,7 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
 
             // DeskTop.
             "Desktop.background", new DesktopProperty(
-                                                 "win.desktop.backgroundColor",
+                                                 "win.mdi.backgroundColor",
                                                   table.get("desktop")),
             "Desktop.ancestorInputMap",
                new UIDefaults.LazyInputMap(new Object[] {
@@ -835,12 +836,12 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
             "InternalFrame.closeIcon",
                 WindowsIconFactory.createFrameCloseIcon(),
             "InternalFrame.icon",
-               (LazyValue) t -> new Object[]{
+                (LazyValue) t -> new WindowsInternalFrameTitlePane.ScalableIconUIResource(new Object[]{
                     // The constructor takes one arg: an array of UIDefaults.LazyValue
                     // representing the icons
                         SwingUtilities2.makeIcon(getClass(), BasicLookAndFeel.class, "icons/JavaCup16.png"),
                         SwingUtilities2.makeIcon(getClass(), WindowsLookAndFeel.class, "icons/JavaCup32.png")
-                },
+                }),
             // Internal Frame Auditory Cue Mappings
             "InternalFrame.closeSound", "win.sound.close",
             "InternalFrame.maximizeSound", "win.sound.maximize",
@@ -1087,6 +1088,8 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
               }),
             "FormattedTextField.inactiveBackground", ReadOnlyTextBackground,
             "FormattedTextField.disabledBackground", DisabledTextBackground,
+            "FormattedTextField.background", TextBackground,
+            "FormattedTextField.foreground", WindowTextColor,
 
             // *** Panel
             "Panel.font", ControlFont,
@@ -1570,6 +1573,11 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
                 && OSInfo.getWindowsVersion().compareTo(OSInfo.WINDOWS_VISTA) >= 0;
     }
 
+    static boolean isOnWindows7() {
+        return OSInfo.getOSType() == OSInfo.OSType.WINDOWS
+                && OSInfo.getWindowsVersion().compareTo(OSInfo.WINDOWS_7) >= 0;
+    }
+
     private void initVistaComponentDefaults(UIDefaults table) {
         if (! isOnVista()) {
             return;
@@ -1639,28 +1647,30 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
         }
         table.putDefaults(menuDefaults);
 
-        /* no margins */
-        InsetsUIResource insets = new InsetsUIResource(0, 0, 0, 0);
-        for (int i = 0, j = 0; i < menuClasses.length; i++) {
-            String key = menuClasses[i] + ".margin";
-            Object oldValue = table.get(key);
-            menuDefaults[j++] = key;
-            menuDefaults[j++] = new XPValue(insets, oldValue);
-        }
-        table.putDefaults(menuDefaults);
+        /*For Windows7 margin and checkIconOffset should be greater than 0 */
+        if (!isOnWindows7()) {
+            /* no margins */
+            InsetsUIResource insets = new InsetsUIResource(0, 0, 0, 0);
+            for (int i = 0, j = 0; i < menuClasses.length; i++) {
+                String key = menuClasses[i] + ".margin";
+                Object oldValue = table.get(key);
+                menuDefaults[j++] = key;
+                menuDefaults[j++] = new XPValue(insets, oldValue);
+            }
+            table.putDefaults(menuDefaults);
 
-        /* set checkIcon offset */
-        Integer checkIconOffsetInteger =
-            Integer.valueOf(0);
-        for (int i = 0, j = 0; i < menuClasses.length; i++) {
-            String key = menuClasses[i] + ".checkIconOffset";
-            Object oldValue = table.get(key);
-            menuDefaults[j++] = key;
-            menuDefaults[j++] =
-                new XPValue(checkIconOffsetInteger, oldValue);
+            /* set checkIcon offset */
+            Integer checkIconOffsetInteger =
+                Integer.valueOf(0);
+            for (int i = 0, j = 0; i < menuClasses.length; i++) {
+                String key = menuClasses[i] + ".checkIconOffset";
+                Object oldValue = table.get(key);
+                menuDefaults[j++] = key;
+                menuDefaults[j++] =
+                    new XPValue(checkIconOffsetInteger, oldValue);
+            }
+            table.putDefaults(menuDefaults);
         }
-        table.putDefaults(menuDefaults);
-
         /* set width of the gap after check icon */
         Integer afterCheckIconGap = WindowsPopupMenuUI.getSpanBeforeGutter()
                 + WindowsPopupMenuUI.getGutterWidth()
@@ -1804,6 +1814,11 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
 
         LazyValue menuArrowIcon = t -> WindowsIconFactory.getMenuArrowIcon();
 
+        Color highlight = (Color) Toolkit.getDefaultToolkit().
+                getDesktopProperty("win.3d.highlightColor");
+
+        Color shadow = (Color) Toolkit.getDefaultToolkit().
+                getDesktopProperty("win.3d.shadowColor");
 
         Object[] lazyDefaults = {
             "Button.border", buttonBorder,
@@ -1832,8 +1847,12 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
             "TextArea.margin", textFieldMargin,
             "TextField.border", textFieldBorder,
             "TextField.margin", textFieldMargin,
-            "TitledBorder.border",
-                        new XPBorderValue(Part.BP_GROUPBOX, etchedBorder),
+            "TitledBorder.border", new UIDefaults.LazyValue() {
+                public Object createValue(UIDefaults table) {
+                    return new BorderUIResource.
+                            EtchedBorderUIResource(highlight, shadow);
+                }
+            },
             "ToggleButton.border", radioButtonBorder,
             "ToolBar.border", toolBarBorder,
             "ToolTip.border", toolTipBorder,
@@ -2038,7 +2057,7 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
             if (audioRunnable != null) {
                 // Runnable appears to block until completed playing, hence
                 // start up another thread to handle playing.
-                new ManagedLocalsThread(audioRunnable).start();
+                new Thread(null, audioRunnable, "Audio", 0, false).start();
             }
         }
     }
@@ -2272,7 +2291,7 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
         protected Object classicValue, xpValue;
 
         // A constant that lets you specify null when using XP styles.
-        private final static Object NULL_VALUE = new Object();
+        private static final Object NULL_VALUE = new Object();
 
         XPValue(Object xpValue, Object classicValue) {
             this.xpValue = xpValue;
@@ -2402,9 +2421,8 @@ public class WindowsLookAndFeel extends BasicLookAndFeel
         }
 
         protected void updateUI() {
-            Object aaTextInfo = SwingUtilities2.AATextInfo.getAATextInfo(true);
             UIDefaults defaults = UIManager.getLookAndFeelDefaults();
-            defaults.put(SwingUtilities2.AA_TEXT_PROPERTY_KEY, aaTextInfo);
+            SwingUtilities2.putAATextInfo(true, defaults);
             super.updateUI();
         }
     }

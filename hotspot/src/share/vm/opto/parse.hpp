@@ -104,13 +104,6 @@ public:
   // For temporary (stack-allocated, stateless) ilts:
   InlineTree(Compile* c, ciMethod* callee_method, JVMState* caller_jvms, float site_invoke_ratio, int max_inline_level);
 
-  // InlineTree enum
-  enum InlineStyle {
-    Inline_do_not_inline             =   0, //
-    Inline_cha_is_monomorphic        =   1, //
-    Inline_type_profile_monomorphic  =   2  //
-  };
-
   // See if it is OK to inline.
   // The receiver is the inline tree for the caller.
   //
@@ -173,14 +166,11 @@ class Parse : public GraphKit {
     int                _all_successors; // Include exception paths also.
     Block**            _successors;
 
-    // Use init_node/init_graph to initialize Blocks.
-    // Block() : _live_locals((uintptr_t*)NULL,0) { ShouldNotReachHere(); }
-    Block() : _live_locals(NULL,0) { ShouldNotReachHere(); }
-
    public:
 
     // Set up the block data structure itself.
-    void init_node(Parse* outer, int po);
+    Block(Parse* outer, int rpo);
+
     // Set up the block's relations to other blocks.
     void init_graph(Parse* outer);
 
@@ -348,9 +338,6 @@ class Parse : public GraphKit {
 
   Block*            _block;     // block currently getting parsed
   ciBytecodeStream  _iter;      // stream of this method's bytecodes
-
-  int           _blocks_merged; // Progress meter: state merges from BB preds
-  int           _blocks_parsed; // Progress meter: BBs actually parsed
 
   const FastLockNode* _synch_lock; // FastLockNode for synchronized method
 
@@ -538,10 +525,6 @@ class Parse : public GraphKit {
   // common code for actually performing the load or store
   void do_get_xxx(Node* obj, ciField* field, bool is_field);
   void do_put_xxx(Node* obj, ciField* field, bool is_field);
-
-  // loading from a constant field or the constant pool
-  // returns false if push failed (non-perm field constants only, not ldcs)
-  bool push_constant(ciConstant con, bool require_constant = false, bool is_autobox_cache = false, const Type* basic_type = NULL);
 
   // implementation of object creation bytecodes
   void emit_guard_for_new(ciInstanceKlass* klass);

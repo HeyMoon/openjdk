@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@ class HeapRegion;
 class HeapRegionClosure;
 class HeapRegionClaimer;
 class FreeRegionList;
+class WorkGang;
 
 class G1HeapRegionTable : public G1BiasedMappedArray<HeapRegion*> {
  protected:
@@ -83,7 +84,7 @@ class HeapRegionManager: public CHeapObj<mtGC> {
 
   // Each bit in this bitmap indicates that the corresponding region is available
   // for allocation.
-  BitMap _available_map;
+  CHeapBitMap _available_map;
 
    // The number of regions committed in the heap.
   uint _num_committed;
@@ -94,10 +95,10 @@ class HeapRegionManager: public CHeapObj<mtGC> {
   HeapWord* heap_bottom() const { return _regions.bottom_address_mapped(); }
   HeapWord* heap_end() const {return _regions.end_address_mapped(); }
 
-  void make_regions_available(uint index, uint num_regions = 1);
+  void make_regions_available(uint index, uint num_regions = 1, WorkGang* pretouch_gang = NULL);
 
   // Pass down commit calls to the VirtualSpace.
-  void commit_regions(uint index, size_t num_regions = 1);
+  void commit_regions(uint index, size_t num_regions = 1, WorkGang* pretouch_gang = NULL);
   void uncommit_regions(uint index, size_t num_regions = 1);
 
   // Notify other data structures about change in the heap layout.
@@ -149,6 +150,10 @@ public:
   // Return the HeapRegion at the given index. Assume that the index
   // is valid.
   inline HeapRegion* at(uint index) const;
+
+  // Return the next region (by index) that is part of the same
+  // humongous object that hr is part of.
+  inline HeapRegion* next_region_in_humongous(HeapRegion* hr) const;
 
   // If addr is within the committed space return its corresponding
   // HeapRegion, otherwise return NULL.
@@ -205,12 +210,12 @@ public:
   // HeapRegions, or re-use existing ones. Returns the number of regions the
   // sequence was expanded by. If a HeapRegion allocation fails, the resulting
   // number of regions might be smaller than what's desired.
-  uint expand_by(uint num_regions);
+  uint expand_by(uint num_regions, WorkGang* pretouch_workers);
 
   // Makes sure that the regions from start to start+num_regions-1 are available
   // for allocation. Returns the number of regions that were committed to achieve
   // this.
-  uint expand_at(uint start, uint num_regions);
+  uint expand_at(uint start, uint num_regions, WorkGang* pretouch_workers);
 
   // Find a contiguous set of empty regions of length num. Returns the start index of
   // that set, or G1_NO_HRM_INDEX.
@@ -229,7 +234,7 @@ public:
   // Allocate the regions that contain the address range specified, committing the
   // regions if necessary. Return false if any of the regions is already committed
   // and not free, and return the number of regions newly committed in commit_count.
-  bool allocate_containing_regions(MemRegion range, size_t* commit_count);
+  bool allocate_containing_regions(MemRegion range, size_t* commit_count, WorkGang* pretouch_workers);
 
   // Apply blk->doHeapRegion() on all committed regions in address order,
   // terminating the iteration early if doHeapRegion() returns true.
@@ -241,6 +246,10 @@ public:
   // Return the actual number of uncommitted regions.
   uint shrink_by(uint num_regions_to_remove);
 
+  // Uncommit a number of regions starting at the specified index, which must be available,
+  // empty, and free.
+  void shrink_at(uint index, size_t num_regions);
+
   void verify();
 
   // Do some sanity checking.
@@ -250,9 +259,9 @@ public:
 // The HeapRegionClaimer is used during parallel iteration over heap regions,
 // allowing workers to claim heap regions, gaining exclusive rights to these regions.
 class HeapRegionClaimer : public StackObj {
-  uint  _n_workers;
-  uint  _n_regions;
-  uint* _claims;
+  uint           _n_workers;
+  uint           _n_regions;
+  volatile uint* _claims;
 
   static const uint Unclaimed = 0;
   static const uint Claimed   = 1;
@@ -276,4 +285,3 @@ class HeapRegionClaimer : public StackObj {
   bool claim_region(uint region_index);
 };
 #endif // SHARE_VM_GC_G1_HEAPREGIONMANAGER_HPP
-

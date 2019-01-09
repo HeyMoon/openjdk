@@ -38,12 +38,10 @@ import jdk.nashorn.internal.ir.Expression;
 import jdk.nashorn.internal.ir.ExpressionStatement;
 import jdk.nashorn.internal.ir.ForNode;
 import jdk.nashorn.internal.ir.FunctionNode;
-import jdk.nashorn.internal.ir.FunctionNode.CompilationState;
 import jdk.nashorn.internal.ir.IdentNode;
 import jdk.nashorn.internal.ir.IfNode;
 import jdk.nashorn.internal.ir.IndexNode;
 import jdk.nashorn.internal.ir.JoinPredecessorExpression;
-import jdk.nashorn.internal.ir.LexicalContext;
 import jdk.nashorn.internal.ir.LoopNode;
 import jdk.nashorn.internal.ir.Node;
 import jdk.nashorn.internal.ir.Optimistic;
@@ -53,7 +51,7 @@ import jdk.nashorn.internal.ir.TernaryNode;
 import jdk.nashorn.internal.ir.UnaryNode;
 import jdk.nashorn.internal.ir.VarNode;
 import jdk.nashorn.internal.ir.WhileNode;
-import jdk.nashorn.internal.ir.visitor.NodeVisitor;
+import jdk.nashorn.internal.ir.visitor.SimpleNodeVisitor;
 import jdk.nashorn.internal.parser.TokenType;
 import jdk.nashorn.internal.runtime.ScriptObject;
 
@@ -62,7 +60,7 @@ import jdk.nashorn.internal.runtime.ScriptObject;
  * must not ever be marked as optimistic, assigning narrowest non-invalidated types to program points from the
  * compilation environment, as well as initializing optimistic types of global properties for scripts.
  */
-final class OptimisticTypesCalculator extends NodeVisitor<LexicalContext> {
+final class OptimisticTypesCalculator extends SimpleNodeVisitor {
 
     final Compiler compiler;
 
@@ -70,7 +68,6 @@ final class OptimisticTypesCalculator extends NodeVisitor<LexicalContext> {
     final Deque<BitSet> neverOptimistic = new ArrayDeque<>();
 
     OptimisticTypesCalculator(final Compiler compiler) {
-        super(new LexicalContext());
         this.compiler = compiler;
     }
 
@@ -82,7 +79,7 @@ final class OptimisticTypesCalculator extends NodeVisitor<LexicalContext> {
 
     @Override
     public boolean enterPropertyNode(final PropertyNode propertyNode) {
-        if(propertyNode.getKeyName().equals(ScriptObject.PROTO_PROPERTY_NAME)) {
+        if(ScriptObject.PROTO_PROPERTY_NAME.equals(propertyNode.getKeyName())) {
             tagNeverOptimistic(propertyNode.getValue());
         }
         return super.enterPropertyNode(propertyNode);
@@ -102,7 +99,9 @@ final class OptimisticTypesCalculator extends NodeVisitor<LexicalContext> {
                     tagNeverOptimistic(binaryNode.rhs());
                 }
             }
-        } else if(binaryNode.isTokenType(TokenType.INSTANCEOF)) {
+        } else if(binaryNode.isTokenType(TokenType.INSTANCEOF)
+                || binaryNode.isTokenType(TokenType.EQ_STRICT)
+                || binaryNode.isTokenType(TokenType.NE_STRICT)) {
             tagNeverOptimistic(binaryNode.lhs());
             tagNeverOptimistic(binaryNode.rhs());
         }
@@ -133,7 +132,7 @@ final class OptimisticTypesCalculator extends NodeVisitor<LexicalContext> {
 
     @Override
     public boolean enterForNode(final ForNode forNode) {
-        if(forNode.isForIn()) {
+        if(forNode.isForInOrOf()) {
             // for..in has the iterable in its "modify"
             tagNeverOptimistic(forNode.getModify());
         } else {
@@ -208,7 +207,7 @@ final class OptimisticTypesCalculator extends NodeVisitor<LexicalContext> {
     @Override
     public Node leaveFunctionNode(final FunctionNode functionNode) {
         neverOptimistic.pop();
-        return functionNode.setState(lc, CompilationState.OPTIMISTIC_TYPES_ASSIGNED);
+        return functionNode;
     }
 
     @Override

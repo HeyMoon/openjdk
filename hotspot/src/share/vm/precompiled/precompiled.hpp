@@ -23,7 +23,7 @@
  */
 
 // Precompiled headers are turned off for Sun Studion,
-// or if the user passes USE_PRECOMPILED_HEADER=0 to the makefiles.
+// or if the user passes --disable-precompiled-headers to configure.
 
 #ifndef DONT_USE_PRECOMPILED_HEADER
 # include "asm/assembler.hpp"
@@ -57,15 +57,15 @@
 # include "classfile/classFileParser.hpp"
 # include "classfile/classFileStream.hpp"
 # include "classfile/classLoader.hpp"
-# include "classfile/imageDecompressor.hpp"
-# include "classfile/imageFile.hpp"
 # include "classfile/javaClasses.hpp"
+# include "classfile/moduleEntry.hpp"
+# include "classfile/modules.hpp"
+# include "classfile/packageEntry.hpp"
 # include "classfile/symbolTable.hpp"
 # include "classfile/systemDictionary.hpp"
 # include "classfile/vmSymbols.hpp"
 # include "code/codeBlob.hpp"
 # include "code/codeCache.hpp"
-# include "code/codeCacheExtensions.hpp"
 # include "code/compressedStream.hpp"
 # include "code/debugInfo.hpp"
 # include "code/debugInfoRec.hpp"
@@ -103,7 +103,6 @@
 # include "gc/shared/gcStats.hpp"
 # include "gc/shared/gcUtil.hpp"
 # include "gc/shared/genCollectedHeap.hpp"
-# include "gc/shared/genRemSet.hpp"
 # include "gc/shared/generation.hpp"
 # include "gc/shared/generationCounters.hpp"
 # include "gc/shared/modRefBarrierSet.hpp"
@@ -113,7 +112,6 @@
 # include "gc/shared/spaceDecorator.hpp"
 # include "gc/shared/taskqueue.hpp"
 # include "gc/shared/threadLocalAllocBuffer.hpp"
-# include "gc/shared/watermark.hpp"
 # include "gc/shared/workgroup.hpp"
 # include "interpreter/abstractInterpreter.hpp"
 # include "interpreter/bytecode.hpp"
@@ -130,6 +128,7 @@
 # include "interpreter/templateInterpreter.hpp"
 # include "interpreter/templateTable.hpp"
 # include "jvmtifiles/jvmti.h"
+# include "logging/log.hpp"
 # include "memory/allocation.hpp"
 # include "memory/allocation.inline.hpp"
 # include "memory/heap.hpp"
@@ -206,7 +205,6 @@
 # include "runtime/stubRoutines.hpp"
 # include "runtime/synchronizer.hpp"
 # include "runtime/thread.hpp"
-# include "runtime/threadLocalStorage.hpp"
 # include "runtime/timer.hpp"
 # include "runtime/unhandledOops.hpp"
 # include "runtime/vframe.hpp"
@@ -232,7 +230,6 @@
 # include "utilities/constantTag.hpp"
 # include "utilities/copy.hpp"
 # include "utilities/debug.hpp"
-# include "utilities/endian.hpp"
 # include "utilities/exceptions.hpp"
 # include "utilities/globalDefinitions.hpp"
 # include "utilities/growableArray.hpp"
@@ -244,7 +241,6 @@
 # include "utilities/ostream.hpp"
 # include "utilities/preserveException.hpp"
 # include "utilities/sizes.hpp"
-# include "utilities/top.hpp"
 # include "utilities/utf8.hpp"
 #ifdef COMPILER2
 # include "libadt/dict.hpp"
@@ -293,6 +289,9 @@
 # include "c1/c1_ValueType.hpp"
 # include "c1/c1_globals.hpp"
 #endif // COMPILER1
+#if INCLUDE_JVMCI
+# include "jvmci/jvmci_globals.hpp"
+#endif // INCLUDE_JVMCI
 #if INCLUDE_ALL_GCS
 # include "gc/cms/compactibleFreeListSpace.hpp"
 # include "gc/cms/concurrentMarkSweepGeneration.hpp"
@@ -305,7 +304,7 @@
 # include "gc/g1/g1OopClosures.hpp"
 # include "gc/g1/g1_globals.hpp"
 # include "gc/g1/ptrQueue.hpp"
-# include "gc/g1/satbQueue.hpp"
+# include "gc/g1/satbMarkQueue.hpp"
 # include "gc/parallel/gcAdaptivePolicyCounters.hpp"
 # include "gc/parallel/objectStartArray.hpp"
 # include "gc/parallel/parMarkBitMap.hpp"

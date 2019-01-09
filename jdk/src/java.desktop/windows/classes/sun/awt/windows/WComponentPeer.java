@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,7 +28,6 @@ import java.awt.*;
 import java.awt.peer.*;
 import java.awt.image.VolatileImage;
 import sun.awt.RepaintArea;
-import sun.awt.CausedFocusEvent;
 import sun.awt.image.SunVolatileImage;
 import sun.awt.image.ToolkitImage;
 import java.awt.image.BufferedImage;
@@ -56,6 +55,7 @@ import sun.awt.event.IgnorePaintEvent;
 
 import java.awt.dnd.DropTarget;
 import java.awt.dnd.peer.DropTargetPeer;
+import java.awt.geom.AffineTransform;
 import sun.awt.AWTAccessor;
 
 import sun.util.logging.PlatformLogger;
@@ -233,7 +233,7 @@ public abstract class WComponentPeer extends WObjectPeer
         paintArea.paint(target, shouldClearRectBeforePaint());
     }
 
-    native synchronized void updateWindow();
+    synchronized native void updateWindow();
 
     @Override
     public void paint(Graphics g) {
@@ -321,7 +321,7 @@ public abstract class WComponentPeer extends WObjectPeer
                   WKeyboardFocusManagerPeer.shouldFocusOnClick((Component)target))
               {
                   WKeyboardFocusManagerPeer.requestFocusFor((Component)target,
-                                                            CausedFocusEvent.Cause.MOUSE_EVENT);
+                                                            FocusEvent.Cause.MOUSE_EVENT);
               }
               break;
         }
@@ -566,7 +566,7 @@ public abstract class WComponentPeer extends WObjectPeer
     }
 
     // fallback default font object
-    final static Font defaultFont = new Font(Font.DIALOG, Font.PLAIN, 12);
+    static final Font defaultFont = new Font(Font.DIALOG, Font.PLAIN, 12);
 
     @Override
     public Graphics getGraphics() {
@@ -687,7 +687,7 @@ public abstract class WComponentPeer extends WObjectPeer
     @Override
     public boolean requestFocus(Component lightweightChild, boolean temporary,
                                 boolean focusedWindowChangeAllowed, long time,
-                                CausedFocusEvent.Cause cause)
+                                FocusEvent.Cause cause)
     {
         if (WKeyboardFocusManagerPeer.
             processSynchronousLightweightTransfer((Component)target, lightweightChild, temporary,
@@ -1129,6 +1129,12 @@ public abstract class WComponentPeer extends WObjectPeer
         }
 
         if (shape != null) {
+            AffineTransform tx = winGraphicsConfig.getDefaultTransform();
+            double scaleX = tx.getScaleX();
+            double scaleY = tx.getScaleY();
+            if (scaleX != 1 || scaleY != 1) {
+                shape = shape.getScaledRegion(scaleX, scaleY);
+            }
             setRectangularShape(shape.getLoX(), shape.getLoY(), shape.getHiX(), shape.getHiY(),
                     (shape.isRectangular() ? null : shape));
         } else {

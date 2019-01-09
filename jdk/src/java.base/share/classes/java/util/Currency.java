@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -92,7 +92,12 @@ import sun.util.logging.PlatformLogger;
  * and the remainder of entries in file are processed. For instances where duplicate
  * country code entries exist, the behavior of the Currency information for that
  * {@code Currency} is undefined and the remainder of entries in file are processed.
+ * <p>
+ * It is recommended to use {@link java.math.BigDecimal} class while dealing
+ * with {@code Currency} or monetary values as it provides better handling of floating
+ * point numbers and their operations.
  *
+ * @see java.math.BigDecimal
  * @since 1.4
  */
 public final class Currency implements Serializable {
@@ -110,13 +115,13 @@ public final class Currency implements Serializable {
      * Default fraction digits for this currency.
      * Set from currency data tables.
      */
-    transient private final int defaultFractionDigits;
+    private final transient int defaultFractionDigits;
 
     /**
      * ISO 4217 numeric code for this currency.
      * Set from currency data tables.
      */
-    transient private final int numericCode;
+    private final transient int numericCode;
 
 
     // class data: instance map
@@ -148,33 +153,13 @@ public final class Currency implements Serializable {
     //   - bits 0-4: final char for currency code for simple country, or ID of special case
     // - special case IDs:
     //   - 0: country has no currency
-    //   - other: index into sc* arrays + 1
-    // - scCutOverTimes: cut-over time in millis as returned by
-    //   System.currentTimeMillis for special case countries that are changing
-    //   currencies; Long.MAX_VALUE for countries that are not changing currencies
-    // - scOldCurrencies: old currencies for special case countries
-    // - scNewCurrencies: new currencies for special case countries that are
-    //   changing currencies; null for others
-    // - scOldCurrenciesDFD: default fraction digits for old currencies
-    // - scNewCurrenciesDFD: default fraction digits for new currencies, 0 for
-    //   countries that are not changing currencies
-    // - otherCurrencies: concatenation of all currency codes that are not the
-    //   main currency of a simple country, separated by "-"
-    // - otherCurrenciesDFD: decimal format digits for currencies in otherCurrencies, same order
+    //   - other: index into specialCasesList
 
     static int formatVersion;
     static int dataVersion;
     static int[] mainTable;
-    static long[] scCutOverTimes;
-    static String[] scOldCurrencies;
-    static String[] scNewCurrencies;
-    static int[] scOldCurrenciesDFD;
-    static int[] scNewCurrenciesDFD;
-    static int[] scOldCurrenciesNumericCode;
-    static int[] scNewCurrenciesNumericCode;
-    static String otherCurrencies;
-    static int[] otherCurrenciesDFD;
-    static int[] otherCurrenciesNumericCode;
+    static List<SpecialCaseEntry> specialCasesList;
+    static List<OtherCurrencyEntry> otherCurrenciesList;
 
     // handy constants - must match definitions in GenerateCurrencyData
     // magic number
@@ -209,7 +194,7 @@ public final class Currency implements Serializable {
     private static final int NUMERIC_CODE_SHIFT = 10;
 
     // Currency data format version
-    private static final int VALID_FORMAT_VERSION = 2;
+    private static final int VALID_FORMAT_VERSION = 3;
 
     static {
         AccessController.doPrivileged(new PrivilegedAction<>() {
@@ -231,17 +216,9 @@ public final class Currency implements Serializable {
                         dataVersion = dis.readInt();
                         mainTable = readIntArray(dis, A_TO_Z * A_TO_Z);
                         int scCount = dis.readInt();
-                        scCutOverTimes = readLongArray(dis, scCount);
-                        scOldCurrencies = readStringArray(dis, scCount);
-                        scNewCurrencies = readStringArray(dis, scCount);
-                        scOldCurrenciesDFD = readIntArray(dis, scCount);
-                        scNewCurrenciesDFD = readIntArray(dis, scCount);
-                        scOldCurrenciesNumericCode = readIntArray(dis, scCount);
-                        scNewCurrenciesNumericCode = readIntArray(dis, scCount);
+                        specialCasesList = readSpecialCases(dis, scCount);
                         int ocCount = dis.readInt();
-                        otherCurrencies = dis.readUTF();
-                        otherCurrenciesDFD = readIntArray(dis, ocCount);
-                        otherCurrenciesNumericCode = readIntArray(dis, ocCount);
+                        otherCurrenciesList = readOtherCurrencies(dis, ocCount);
                     }
                 } catch (IOException e) {
                     throw new InternalError(e);
@@ -324,6 +301,7 @@ public final class Currency implements Serializable {
             // Currency code not internally generated, need to verify first
             // A currency code must have 3 characters and exist in the main table
             // or in the list of other currencies.
+            boolean found = false;
             if (currencyCode.length() != 3) {
                 throw new IllegalArgumentException();
             }
@@ -335,17 +313,23 @@ public final class Currency implements Serializable {
                     && currencyCode.charAt(2) - 'A' == (tableEntry & SIMPLE_CASE_COUNTRY_FINAL_CHAR_MASK)) {
                 defaultFractionDigits = (tableEntry & SIMPLE_CASE_COUNTRY_DEFAULT_DIGITS_MASK) >> SIMPLE_CASE_COUNTRY_DEFAULT_DIGITS_SHIFT;
                 numericCode = (tableEntry & NUMERIC_CODE_MASK) >> NUMERIC_CODE_SHIFT;
-            } else {
-                // Check for '-' separately so we don't get false hits in the table.
-                if (currencyCode.charAt(2) == '-') {
+                found = true;
+            } else { //special case
+                int[] fractionAndNumericCode = SpecialCaseEntry.findEntry(currencyCode);
+                if (fractionAndNumericCode != null) {
+                    defaultFractionDigits = fractionAndNumericCode[0];
+                    numericCode = fractionAndNumericCode[1];
+                    found = true;
+                }
+            }
+
+            if (!found) {
+                OtherCurrencyEntry ocEntry = OtherCurrencyEntry.findEntry(currencyCode);
+                if (ocEntry == null) {
                     throw new IllegalArgumentException();
                 }
-                int index = otherCurrencies.indexOf(currencyCode);
-                if (index == -1) {
-                    throw new IllegalArgumentException();
-                }
-                defaultFractionDigits = otherCurrenciesDFD[index / 4];
-                numericCode = otherCurrenciesNumericCode[index / 4];
+                defaultFractionDigits = ocEntry.fraction;
+                numericCode = ocEntry.numericCode;
             }
         }
 
@@ -371,8 +355,8 @@ public final class Currency implements Serializable {
      * instance is needed
      * @return the <code>Currency</code> instance for the country of the given
      * locale, or {@code null}
-     * @exception NullPointerException if <code>locale</code> or its country
-     * code is {@code null}
+     * @exception NullPointerException if <code>locale</code>
+     * is {@code null}
      * @exception IllegalArgumentException if the country of the given {@code locale}
      * is not a supported ISO 3166 country code.
      */
@@ -405,13 +389,17 @@ public final class Currency implements Serializable {
             if (tableEntry == COUNTRY_WITHOUT_CURRENCY_ENTRY) {
                 return null;
             } else {
-                int index = (tableEntry & SPECIAL_CASE_COUNTRY_INDEX_MASK) - SPECIAL_CASE_COUNTRY_INDEX_DELTA;
-                if (scCutOverTimes[index] == Long.MAX_VALUE || System.currentTimeMillis() < scCutOverTimes[index]) {
-                    return getInstance(scOldCurrencies[index], scOldCurrenciesDFD[index],
-                        scOldCurrenciesNumericCode[index]);
+                int index = SpecialCaseEntry.toIndex(tableEntry);
+                SpecialCaseEntry scEntry = specialCasesList.get(index);
+                if (scEntry.cutOverTime == Long.MAX_VALUE
+                        || System.currentTimeMillis() < scEntry.cutOverTime) {
+                    return getInstance(scEntry.oldCurrency,
+                            scEntry.oldCurrencyFraction,
+                            scEntry.oldCurrencyNumericCode);
                 } else {
-                    return getInstance(scNewCurrencies[index], scNewCurrenciesDFD[index],
-                        scNewCurrenciesNumericCode[index]);
+                    return getInstance(scEntry.newCurrency,
+                            scEntry.newCurrencyFraction,
+                            scEntry.newCurrencyNumericCode);
                 }
             }
         }
@@ -446,14 +434,29 @@ public final class Currency implements Serializable {
                             sb.append(c2);
                             sb.append(finalChar);
                             available.add(getInstance(sb.toString(), defaultFractionDigits, numericCode));
+                        } else if ((tableEntry & COUNTRY_TYPE_MASK) == SPECIAL_CASE_COUNTRY_MASK
+                                && tableEntry != INVALID_COUNTRY_ENTRY
+                                && tableEntry != COUNTRY_WITHOUT_CURRENCY_ENTRY) {
+                            int index = SpecialCaseEntry.toIndex(tableEntry);
+                            SpecialCaseEntry scEntry = specialCasesList.get(index);
+
+                            if (scEntry.cutOverTime == Long.MAX_VALUE
+                                    || System.currentTimeMillis() < scEntry.cutOverTime) {
+                                available.add(getInstance(scEntry.oldCurrency,
+                                        scEntry.oldCurrencyFraction,
+                                        scEntry.oldCurrencyNumericCode));
+                            } else {
+                                available.add(getInstance(scEntry.newCurrency,
+                                        scEntry.newCurrencyFraction,
+                                        scEntry.newCurrencyNumericCode));
+                            }
                         }
                     }
                 }
 
                 // Now add other currencies
-                StringTokenizer st = new StringTokenizer(otherCurrencies, "-");
-                while (st.hasMoreElements()) {
-                    available.add(getInstance((String)st.nextElement()));
+                for (OtherCurrencyEntry entry : otherCurrenciesList) {
+                    available.add(getInstance(entry.currencyCode));
                 }
             }
         }
@@ -517,13 +520,15 @@ public final class Currency implements Serializable {
 
     /**
      * Gets the default number of fraction digits used with this currency.
+     * Note that the number of fraction digits is the same as ISO 4217's
+     * minor unit for the currency.
      * For example, the default number of fraction digits for the Euro is 2,
      * while for the Japanese Yen it's 0.
      * In the case of pseudo-currencies, such as IMF Special Drawing Rights,
      * -1 is returned.
      *
      * @return the default number of fraction digits used with this currency
-     */
+    */
     public int getDefaultFractionDigits() {
         return defaultFractionDigits;
     }
@@ -536,6 +541,33 @@ public final class Currency implements Serializable {
      */
     public int getNumericCode() {
         return numericCode;
+    }
+
+    /**
+     * Returns the 3 digit ISO 4217 numeric code of this currency as a {@code String}.
+     * Unlike {@link getNumericCode()}, which returns the numeric code as {@code int},
+     * this method always returns the numeric code as a 3 digit string.
+     * e.g. a numeric value of 32 would be returned as "032",
+     * and a numeric value of 6 would be returned as "006".
+     *
+     * @return the 3 digit ISO 4217 numeric code of this currency as a {@code String}
+     * @since 9
+     */
+    public String getNumericCodeAsString() {
+        /* numeric code could be returned as a 3 digit string simply by using
+           String.format("%03d",numericCode); which uses regex to parse the format,
+           "%03d" in this case. Parsing a regex gives an extra performance overhead,
+           so String.format() approach is avoided in this scenario.
+        */
+        if (numericCode < 100) {
+            StringBuilder sb = new StringBuilder();
+            sb.append('0');
+            if (numericCode < 10) {
+                sb.append('0');
+            }
+            return sb.append(numericCode).toString();
+        }
+        return String.valueOf(numericCode);
     }
 
     /**
@@ -659,22 +691,55 @@ public final class Currency implements Serializable {
         return ret;
     }
 
-    private static long[] readLongArray(DataInputStream dis, int count) throws IOException {
-        long[] ret = new long[count];
-        for (int i = 0; i < count; i++) {
-            ret[i] = dis.readLong();
-        }
+    private static List<SpecialCaseEntry> readSpecialCases(DataInputStream dis,
+            int count)
+            throws IOException {
 
-        return ret;
+        List<SpecialCaseEntry> list = new ArrayList<>(count);
+        long cutOverTime;
+        String oldCurrency;
+        String newCurrency;
+        int oldCurrencyFraction;
+        int newCurrencyFraction;
+        int oldCurrencyNumericCode;
+        int newCurrencyNumericCode;
+
+        for (int i = 0; i < count; i++) {
+            cutOverTime = dis.readLong();
+            oldCurrency = dis.readUTF();
+            newCurrency = dis.readUTF();
+            oldCurrencyFraction = dis.readInt();
+            newCurrencyFraction = dis.readInt();
+            oldCurrencyNumericCode = dis.readInt();
+            newCurrencyNumericCode = dis.readInt();
+            SpecialCaseEntry sc = new SpecialCaseEntry(cutOverTime,
+                    oldCurrency, newCurrency,
+                    oldCurrencyFraction, newCurrencyFraction,
+                    oldCurrencyNumericCode, newCurrencyNumericCode);
+            list.add(sc);
+        }
+        return list;
     }
 
-    private static String[] readStringArray(DataInputStream dis, int count) throws IOException {
-        String[] ret = new String[count];
-        for (int i = 0; i < count; i++) {
-            ret[i] = dis.readUTF();
-        }
+    private static List<OtherCurrencyEntry> readOtherCurrencies(DataInputStream dis,
+            int count)
+            throws IOException {
 
-        return ret;
+        List<OtherCurrencyEntry> list = new ArrayList<>(count);
+        String currencyCode;
+        int fraction;
+        int numericCode;
+
+        for (int i = 0; i < count; i++) {
+            currencyCode = dis.readUTF();
+            fraction = dis.readInt();
+            numericCode = dis.readInt();
+            OtherCurrencyEntry oc = new OtherCurrencyEntry(currencyCode,
+                    fraction,
+                    numericCode);
+            list.add(oc);
+        }
+        return list;
     }
 
     /**
@@ -732,21 +797,27 @@ public final class Currency implements Serializable {
             return;
         }
 
-        int index;
-        for (index = 0; index < scOldCurrencies.length; index++) {
-            if (scOldCurrencies[index].equals(code)) {
-                break;
-            }
+        int index = SpecialCaseEntry.indexOf(code, fraction, numeric);
+
+        /* if a country switches from simple case to special case or
+         * one special case to other special case which is not present
+         * in the sc arrays then insert the new entry in special case arrays
+         */
+        if (index == -1 && (ctry.charAt(0) != code.charAt(0)
+                || ctry.charAt(1) != code.charAt(1))) {
+
+            specialCasesList.add(new SpecialCaseEntry(code, fraction, numeric));
+            index = specialCasesList.size() - 1;
         }
 
-        if (index == scOldCurrencies.length) {
+        if (index == -1) {
             // simple case
-            entry |= (fraction << SIMPLE_CASE_COUNTRY_DEFAULT_DIGITS_SHIFT) |
-                     (code.charAt(2) - 'A');
+            entry |= (fraction << SIMPLE_CASE_COUNTRY_DEFAULT_DIGITS_SHIFT)
+                    | (code.charAt(2) - 'A');
         } else {
             // special case
-            entry |= SPECIAL_CASE_COUNTRY_MASK |
-                     (index + SPECIAL_CASE_COUNTRY_INDEX_DELTA);
+            entry = SPECIAL_CASE_COUNTRY_MASK
+                    | (index + SPECIAL_CASE_COUNTRY_INDEX_DELTA);
         }
         setMainTableEntry(ctry.charAt(0), ctry.charAt(1), entry);
     }
@@ -780,4 +851,128 @@ public final class Currency implements Serializable {
             }
         }
     }
+
+    /* Used to represent a special case currency entry
+     * - cutOverTime: cut-over time in millis as returned by
+     *   System.currentTimeMillis for special case countries that are changing
+     *   currencies; Long.MAX_VALUE for countries that are not changing currencies
+     * - oldCurrency: old currencies for special case countries
+     * - newCurrency: new currencies for special case countries that are
+     *   changing currencies; null for others
+     * - oldCurrencyFraction: default fraction digits for old currencies
+     * - newCurrencyFraction: default fraction digits for new currencies, 0 for
+     *   countries that are not changing currencies
+     * - oldCurrencyNumericCode: numeric code for old currencies
+     * - newCurrencyNumericCode: numeric code for new currencies, 0 for countries
+     *   that are not changing currencies
+    */
+    private static class SpecialCaseEntry {
+
+        final private long cutOverTime;
+        final private String oldCurrency;
+        final private String newCurrency;
+        final private int oldCurrencyFraction;
+        final private int newCurrencyFraction;
+        final private int oldCurrencyNumericCode;
+        final private int newCurrencyNumericCode;
+
+        private SpecialCaseEntry(long cutOverTime, String oldCurrency, String newCurrency,
+                int oldCurrencyFraction, int newCurrencyFraction,
+                int oldCurrencyNumericCode, int newCurrencyNumericCode) {
+            this.cutOverTime = cutOverTime;
+            this.oldCurrency = oldCurrency;
+            this.newCurrency = newCurrency;
+            this.oldCurrencyFraction = oldCurrencyFraction;
+            this.newCurrencyFraction = newCurrencyFraction;
+            this.oldCurrencyNumericCode = oldCurrencyNumericCode;
+            this.newCurrencyNumericCode = newCurrencyNumericCode;
+        }
+
+        private SpecialCaseEntry(String currencyCode, int fraction,
+                int numericCode) {
+            this(Long.MAX_VALUE, currencyCode, "", fraction, 0, numericCode, 0);
+        }
+
+        //get the index of the special case entry
+        private static int indexOf(String code, int fraction, int numeric) {
+            int size = specialCasesList.size();
+            for (int index = 0; index < size; index++) {
+                SpecialCaseEntry scEntry = specialCasesList.get(index);
+                if (scEntry.oldCurrency.equals(code)
+                        && scEntry.oldCurrencyFraction == fraction
+                        && scEntry.oldCurrencyNumericCode == numeric
+                        && scEntry.cutOverTime == Long.MAX_VALUE) {
+                    return index;
+                }
+            }
+            return -1;
+        }
+
+        // get the fraction and numericCode of the sc currencycode
+        private static int[] findEntry(String code) {
+            int[] fractionAndNumericCode = null;
+            int size = specialCasesList.size();
+            for (int index = 0; index < size; index++) {
+                SpecialCaseEntry scEntry = specialCasesList.get(index);
+                if (scEntry.oldCurrency.equals(code) && (scEntry.cutOverTime == Long.MAX_VALUE
+                        || System.currentTimeMillis() < scEntry.cutOverTime)) {
+                    //consider only when there is no new currency or cutover time is not passed
+                    fractionAndNumericCode = new int[2];
+                    fractionAndNumericCode[0] = scEntry.oldCurrencyFraction;
+                    fractionAndNumericCode[1] = scEntry.oldCurrencyNumericCode;
+                    break;
+                } else if (scEntry.newCurrency.equals(code)
+                        && System.currentTimeMillis() >= scEntry.cutOverTime) {
+                    //consider only if the cutover time is passed
+                    fractionAndNumericCode = new int[2];
+                    fractionAndNumericCode[0] = scEntry.newCurrencyFraction;
+                    fractionAndNumericCode[1] = scEntry.newCurrencyNumericCode;
+                    break;
+                }
+            }
+            return fractionAndNumericCode;
+        }
+
+        // convert the special case entry to sc arrays index
+        private static int toIndex(int tableEntry) {
+            return (tableEntry & SPECIAL_CASE_COUNTRY_INDEX_MASK) - SPECIAL_CASE_COUNTRY_INDEX_DELTA;
+        }
+
+    }
+
+    /* Used to represent Other currencies
+     * - currencyCode: currency codes that are not the main currency
+     *   of a simple country
+     * - otherCurrenciesDFD: decimal format digits for other currencies
+     * - otherCurrenciesNumericCode: numeric code for other currencies
+     */
+    private static class OtherCurrencyEntry {
+
+        final private String currencyCode;
+        final private int fraction;
+        final private int numericCode;
+
+        private OtherCurrencyEntry(String currencyCode, int fraction,
+                int numericCode) {
+            this.currencyCode = currencyCode;
+            this.fraction = fraction;
+            this.numericCode = numericCode;
+        }
+
+        //get the instance of the other currency code
+        private static OtherCurrencyEntry findEntry(String code) {
+            int size = otherCurrenciesList.size();
+            for (int index = 0; index < size; index++) {
+                OtherCurrencyEntry ocEntry = otherCurrenciesList.get(index);
+                if (ocEntry.currencyCode.equalsIgnoreCase(code)) {
+                    return ocEntry;
+                }
+            }
+            return null;
+        }
+
+    }
+
 }
+
+

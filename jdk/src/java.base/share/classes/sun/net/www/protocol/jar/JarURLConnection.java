@@ -82,6 +82,9 @@ public class JarURLConnection extends java.net.JarURLConnection {
 
         jarFileURL = getJarFileURL();
         jarFileURLConnection = jarFileURL.openConnection();
+        // whether, or not, the embedded URL should use the cache will depend
+        // on this instance's cache value
+        jarFileURLConnection.setUseCaches(useCaches);
         entryName = getEntryName();
     }
 
@@ -125,7 +128,9 @@ public class JarURLConnection extends java.net.JarURLConnection {
              * to get the jarFile, and set it as our permission.
              */
             if (getUseCaches()) {
+                boolean oldUseCaches = jarFileURLConnection.getUseCaches();
                 jarFileURLConnection = factory.getConnection(jarFile);
+                jarFileURLConnection.setUseCaches(oldUseCaches);
             }
 
             if ((entryName != null)) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #ifndef SHARE_VM_GC_G1_G1GCPHASETIMES_HPP
 #define SHARE_VM_GC_G1_G1GCPHASETIMES_HPP
 
+#include "logging/logLevel.hpp"
 #include "memory/allocation.hpp"
 
 class LineBuffer;
@@ -32,10 +33,9 @@ class LineBuffer;
 template <class T> class WorkerDataArray;
 
 class G1GCPhaseTimes : public CHeapObj<mtGC> {
-  friend class G1GCParPhasePrinter;
-
-  uint _active_gc_threads;
   uint _max_gc_threads;
+  jlong _gc_start_counter;
+  double _gc_pause_time_ms;
 
  public:
   enum GCParPhases {
@@ -56,8 +56,12 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
     WeakCLDRoots,
     SATBFiltering,
     UpdateRS,
+    ScanHCC,
     ScanRS,
     CodeRoots,
+#if INCLUDE_AOT
+    AOTCodeRoots,
+#endif
     ObjCopy,
     Termination,
     Other,
@@ -66,6 +70,9 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
     StringDedupQueueFixup,
     StringDedupTableFixup,
     RedirtyCards,
+    PreserveCMReferents,
+    YoungFreeCSet,
+    NonYoungFreeCSet,
     GCParPhasesSentinel
   };
 
@@ -91,19 +98,29 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
   double _cur_string_dedup_fixup_time_ms;
 
   double _cur_clear_ct_time_ms;
+  double _cur_expand_heap_time_ms;
   double _cur_ref_proc_time_ms;
   double _cur_ref_enq_time_ms;
 
   double _cur_collection_start_sec;
   double _root_region_scan_wait_time_ms;
 
+  double _external_accounted_time_ms;
+
+  double _recorded_clear_claimed_marks_time_ms;
+
   double _recorded_young_cset_choice_time_ms;
   double _recorded_non_young_cset_choice_time_ms;
 
   double _recorded_redirty_logged_cards_time_ms;
 
-  double _recorded_young_free_cset_time_ms;
-  double _recorded_non_young_free_cset_time_ms;
+  double _recorded_preserve_cm_referents_time_ms;
+
+  double _recorded_merge_pss_time_ms;
+
+  double _recorded_total_free_cset_time_ms;
+
+  double _recorded_serial_free_cset_time_ms;
 
   double _cur_fast_reclaim_humongous_time_ms;
   double _cur_fast_reclaim_humongous_register_time_ms;
@@ -114,16 +131,31 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
   double _cur_verify_before_time_ms;
   double _cur_verify_after_time_ms;
 
-  // Helper methods for detailed logging
-  void print_stats(int level, const char* str, double value);
-  void print_stats(int level, const char* str, size_t value);
-  void print_stats(int level, const char* str, double value, uint workers);
+  double worker_time(GCParPhases phase, uint worker);
+  void note_gc_end();
+  void reset();
+
+  template <class T>
+  void details(T* phase, const char* indent) const;
+
+  void log_phase(WorkerDataArray<double>* phase, uint indent, outputStream* out, bool print_sum) const;
+  void debug_phase(WorkerDataArray<double>* phase) const;
+  void trace_phase(WorkerDataArray<double>* phase, bool print_sum = true) const;
+
+  void info_time(const char* name, double value) const;
+  void debug_time(const char* name, double value) const;
+  void trace_time(const char* name, double value) const;
+  void trace_count(const char* name, size_t value) const;
+
+  double print_pre_evacuate_collection_set() const;
+  double print_evacuate_collection_set() const;
+  double print_post_evacuate_collection_set() const;
+  void print_other(double accounted_ms) const;
 
  public:
   G1GCPhaseTimes(uint max_gc_threads);
-  void note_gc_start(uint active_gc_threads, bool mark_in_progress);
-  void note_gc_end();
-  void print(double pause_time_sec);
+  void note_gc_start();
+  void print();
 
   // record the time a phase took in seconds
   void record_time_secs(GCParPhases phase, uint worker_i, double secs);
@@ -138,20 +170,14 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
 
   size_t sum_thread_work_items(GCParPhases phase);
 
- private:
-  double get_time_ms(GCParPhases phase, uint worker_i);
-  double sum_time_ms(GCParPhases phase);
-  double min_time_ms(GCParPhases phase);
-  double max_time_ms(GCParPhases phase);
-  size_t get_thread_work_item(GCParPhases phase, uint worker_i);
-  double average_thread_work_items(GCParPhases phase);
-  size_t min_thread_work_items(GCParPhases phase);
-  size_t max_thread_work_items(GCParPhases phase);
-
  public:
 
   void record_clear_ct_time(double ms) {
     _cur_clear_ct_time_ms = ms;
+  }
+
+  void record_expand_heap_time(double ms) {
+    _cur_expand_heap_time_ms = ms;
   }
 
   void record_par_time(double ms) {
@@ -194,12 +220,12 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
     _root_region_scan_wait_time_ms = time_ms;
   }
 
-  void record_young_free_cset_time_ms(double time_ms) {
-    _recorded_young_free_cset_time_ms = time_ms;
+  void record_total_free_cset_time_ms(double time_ms) {
+    _recorded_total_free_cset_time_ms = time_ms;
   }
 
-  void record_non_young_free_cset_time_ms(double time_ms) {
-    _recorded_non_young_free_cset_time_ms = time_ms;
+  void record_serial_free_cset_time_ms(double time_ms) {
+    _recorded_serial_free_cset_time_ms = time_ms;
   }
 
   void record_fast_reclaim_humongous_stats(double time_ms, size_t total, size_t candidates) {
@@ -225,6 +251,14 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
     _recorded_redirty_logged_cards_time_ms = time_ms;
   }
 
+  void record_preserve_cm_referents_time_ms(double time_ms) {
+    _recorded_preserve_cm_referents_time_ms = time_ms;
+  }
+
+  void record_merge_pss_time_ms(double time_ms) {
+    _recorded_merge_pss_time_ms = time_ms;
+  }
+
   void record_cur_collection_start_sec(double time_ms) {
     _cur_collection_start_sec = time_ms;
   }
@@ -237,7 +271,13 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
     _cur_verify_after_time_ms = time_ms;
   }
 
-  double accounted_time_ms();
+  void inc_external_accounted_time_ms(double time_ms) {
+    _external_accounted_time_ms += time_ms;
+  }
+
+  void record_clear_claimed_marks_time_ms(double recorded_clear_claimed_marks_time_ms) {
+    _recorded_clear_claimed_marks_time_ms = recorded_clear_claimed_marks_time_ms;
+  }
 
   double cur_collection_start_sec() {
     return _cur_collection_start_sec;
@@ -251,6 +291,10 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
     return _cur_clear_ct_time_ms;
   }
 
+  double cur_expand_heap_time_ms() {
+    return _cur_expand_heap_time_ms;
+  }
+
   double root_region_scan_wait_time_ms() {
     return _root_region_scan_wait_time_ms;
   }
@@ -259,16 +303,12 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
     return _recorded_young_cset_choice_time_ms;
   }
 
-  double young_free_cset_time_ms() {
-    return _recorded_young_free_cset_time_ms;
+  double total_free_cset_time_ms() {
+    return _recorded_total_free_cset_time_ms;
   }
 
   double non_young_cset_choice_time_ms() {
     return _recorded_non_young_cset_choice_time_ms;
-  }
-
-  double non_young_free_cset_time_ms() {
-    return _recorded_non_young_free_cset_time_ms;
   }
 
   double fast_reclaim_humongous_time_ms() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@
  */
 
 #include    <jni.h>
+#include    <jvm.h>
 #include    <jvmti.h>
 #include    <stdlib.h>
 #include    <string.h>
@@ -271,6 +272,7 @@ initializeJPLISAgent(   JPLISAgent *    agent,
     agent->mNativeMethodPrefixAdded                  = JNI_FALSE;
     agent->mAgentClassName                           = NULL;
     agent->mOptionsString                            = NULL;
+    agent->mJarfile                                  = NULL;
 
     /* make sure we can recover either handle in either direction.
      * the agent has a ref to the jvmti; make it mutual
@@ -769,6 +771,31 @@ addRedefineClassesCapability(JPLISAgent * agent) {
     }
 }
 
+static jobject
+getModuleObject(jvmtiEnv*               jvmti,
+                jobject                 loaderObject,
+                const char*             cname) {
+    jvmtiError err = JVMTI_ERROR_NONE;
+    jobject moduleObject = NULL;
+
+    /* find last slash in the class name */
+    char* last_slash = (cname == NULL) ? NULL : strrchr(cname, '/');
+    int len = (last_slash == NULL) ? 0 : (int)(last_slash - cname);
+    char* pkg_name_buf = (char*)malloc(len + 1);
+
+    jplis_assert_msg(pkg_name_buf != NULL, "OOM error in native tmp buffer allocation");
+    if (last_slash != NULL) {
+        strncpy(pkg_name_buf, cname, len);
+    }
+    pkg_name_buf[len] = '\0';
+
+    err = (*jvmti)->GetNamedModule(jvmti, loaderObject, pkg_name_buf, &moduleObject);
+    free((void*)pkg_name_buf);
+    check_phase_ret_blob(err, NULL);
+    jplis_assert_msg(err == JVMTI_ERROR_NONE, "error in the JVMTI GetNamedModule");
+
+    return moduleObject;
+}
 
 /*
  *  Support for the JVMTI callbacks
@@ -810,7 +837,7 @@ transformClassFile(             JPLISAgent *            agent,
             classFileBufferObject = (*jnienv)->NewByteArray(jnienv,
                                                             class_data_len);
             errorOutstanding = checkForAndClearThrowable(jnienv);
-            jplis_assert_msg(!errorOutstanding, "can't create byte arrau");
+            jplis_assert_msg(!errorOutstanding, "can't create byte array");
         }
 
         if ( !errorOutstanding ) {
@@ -828,12 +855,21 @@ transformClassFile(             JPLISAgent *            agent,
         /*  now call the JPL agents to do the transforming */
         /*  potential future optimization: may want to skip this if there are none */
         if ( !errorOutstanding ) {
+            jobject moduleObject = NULL;
+
+            if (classBeingRedefined == NULL) {
+                moduleObject = getModuleObject(jvmti(agent), loaderObject, name);
+            } else {
+                // Redefine or retransform, InstrumentationImpl.transform() will use
+                // classBeingRedefined.getModule() to get the module.
+            }
             jplis_assert(agent->mInstrumentationImpl != NULL);
             jplis_assert(agent->mTransform != NULL);
             transformedBufferObject = (*jnienv)->CallObjectMethod(
                                                 jnienv,
                                                 agent->mInstrumentationImpl,
                                                 agent->mTransform,
+                                                moduleObject,
                                                 loaderObject,
                                                 classNameStringObject,
                                                 classBeingRedefined,

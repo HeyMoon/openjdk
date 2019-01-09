@@ -33,10 +33,9 @@ import static jdk.nashorn.internal.runtime.ScriptRuntime.UNDEFINED;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
-import java.text.NumberFormat;
 import java.util.Locale;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.LinkRequest;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.LinkRequest;
 import jdk.nashorn.internal.objects.annotations.Attribute;
 import jdk.nashorn.internal.objects.annotations.Constructor;
 import jdk.nashorn.internal.objects.annotations.Function;
@@ -48,6 +47,8 @@ import jdk.nashorn.internal.runtime.JSType;
 import jdk.nashorn.internal.runtime.PropertyMap;
 import jdk.nashorn.internal.runtime.ScriptObject;
 import jdk.nashorn.internal.runtime.ScriptRuntime;
+import jdk.nashorn.internal.runtime.doubleconv.DoubleConversion;
+import jdk.nashorn.internal.runtime.linker.NashornGuards;
 import jdk.nashorn.internal.runtime.linker.PrimitiveLookup;
 
 /**
@@ -183,12 +184,7 @@ public final class NativeNumber extends ScriptObject {
             return JSType.toString(x);
         }
 
-        final NumberFormat format = NumberFormat.getNumberInstance(Locale.US);
-        format.setMinimumFractionDigits(fractionDigits);
-        format.setMaximumFractionDigits(fractionDigits);
-        format.setGroupingUsed(false);
-
-        return format.format(x);
+        return DoubleConversion.toFixed(x, fractionDigits);
     }
 
     /**
@@ -265,7 +261,7 @@ public final class NativeNumber extends ScriptObject {
             return "0";
         }
 
-        return fixExponent(String.format(Locale.US, "%." + p + "g", x), false);
+        return DoubleConversion.toPrecision(x, p);
     }
 
     /**
@@ -320,7 +316,7 @@ public final class NativeNumber extends ScriptObject {
      * @return Link to be invoked at call site.
      */
     public static GuardedInvocation lookupPrimitive(final LinkRequest request, final Object receiver) {
-        return PrimitiveLookup.lookupPrimitive(request, Number.class, new NativeNumber(((Number)receiver).doubleValue()), WRAPFILTER, PROTOFILTER);
+        return PrimitiveLookup.lookupPrimitive(request, NashornGuards.getNumberGuard(), new NativeNumber(((Number)receiver).doubleValue()), WRAPFILTER, PROTOFILTER);
     }
 
     @SuppressWarnings("unused")

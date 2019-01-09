@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,7 @@ import static jdk.nashorn.internal.runtime.Source.sourceFor;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.util.List;
-import jdk.internal.dynalink.support.Lookup;
+import jdk.dynalink.linker.support.Lookup;
 import jdk.nashorn.api.scripting.JSObject;
 import jdk.nashorn.internal.objects.annotations.Attribute;
 import jdk.nashorn.internal.objects.annotations.Constructor;
@@ -97,7 +97,6 @@ public final class NativeFunction {
     @Function(attributes = Attribute.NOT_ENUMERABLE)
     public static Object apply(final Object self, final Object thiz, final Object array) {
         checkCallable(self);
-
         final Object[] args = toApplyArgs(array);
 
         if (self instanceof ScriptFunction) {
@@ -131,7 +130,7 @@ public final class NativeFunction {
             return (Object[])array;
         } else if (array instanceof List) {
             final List<?> list = (List<?>)array;
-            return list.toArray(new Object[list.size()]);
+            return list.toArray(new Object[0]);
         } else if (array == null || array == UNDEFINED) {
             return ScriptRuntime.EMPTY_ARRAY;
         } else if (array instanceof JSObject) {

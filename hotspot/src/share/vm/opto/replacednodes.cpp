@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
  */
 
 #include "precompiled.hpp"
+#include "memory/resourceArea.hpp"
 #include "opto/cfgnode.hpp"
 #include "opto/phaseX.hpp"
 #include "opto/replacednodes.hpp"
@@ -91,13 +92,17 @@ void ReplacedNodes::reset() {
 }
 
 // Perfom node replacement (used when returning to caller)
-void ReplacedNodes::apply(Node* n) {
+void ReplacedNodes::apply(Node* n, uint idx) {
   if (is_empty()) {
     return;
   }
   for (int i = 0; i < _replaced_nodes->length(); i++) {
     ReplacedNode replaced = _replaced_nodes->at(i);
-    n->replace_edge(replaced.initial(), replaced.improved());
+    // Only apply if improved node was created in a callee to avoid
+    // issues with irreducible loops in the caller
+    if (replaced.improved()->_idx >= idx) {
+      n->replace_edge(replaced.initial(), replaced.improved());
+    }
   }
 }
 

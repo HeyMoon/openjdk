@@ -19,7 +19,6 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
 /**
@@ -27,8 +26,10 @@
  * @bug 8026775
  * @summary Uncommon trap blob did not bang all the stack shadow pages
  *
- * @run main/othervm UncommonTrapStackBang
- *
+ * @run main/othervm compiler.uncommontrap.UncommonTrapStackBang
+ */
+
+/*
  * Note: This test does not reproduce the problem with absolute
  * certainty. Empirically the bug reproduces on Windows some 80+% of
  * the time. Setting everything up to fail in 100% of the cases turns
@@ -55,6 +56,9 @@
  * which raises an exception on Windows when the stack bang in
  * StringBuilder is performed.
  */
+
+package compiler.uncommontrap;
+
 public class UncommonTrapStackBang extends Thread {
     class Foo { }
 

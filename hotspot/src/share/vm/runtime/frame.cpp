@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -49,9 +49,6 @@
 #include "runtime/stubRoutines.hpp"
 #include "runtime/thread.inline.hpp"
 #include "utilities/decoder.hpp"
-
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 RegisterMap::RegisterMap(JavaThread *thread, bool update_map) {
   _thread         = thread;
@@ -112,7 +109,7 @@ void RegisterMap::print_on(outputStream* st) const {
     if (src != NULL) {
 
       r->print_on(st);
-      st->print(" [" INTPTR_FORMAT "] = ", src);
+      st->print(" [" INTPTR_FORMAT "] = ", p2i(src));
       if (((uintptr_t)src & (sizeof(*src)-1)) != 0) {
         st->print_cr("<misaligned>");
       } else {
@@ -135,11 +132,11 @@ void RegisterMap::print() const {
 
 address frame::raw_pc() const {
   if (is_deoptimized_frame()) {
-    nmethod* nm = cb()->as_nmethod_or_null();
-    if (nm->is_method_handle_return(pc()))
-      return nm->deopt_mh_handler_begin() - pc_return_offset;
+    CompiledMethod* cm = cb()->as_compiled_method_or_null();
+    if (cm->is_method_handle_return(pc()))
+      return cm->deopt_mh_handler_begin() - pc_return_offset;
     else
-      return nm->deopt_handler_begin() - pc_return_offset;
+      return cm->deopt_handler_begin() - pc_return_offset;
   } else {
     return (pc() - pc_return_offset);
   }
@@ -186,8 +183,8 @@ bool frame::is_java_frame() const {
 
 bool frame::is_compiled_frame() const {
   if (_cb != NULL &&
-      _cb->is_nmethod() &&
-      ((nmethod*)_cb)->is_java_method()) {
+      _cb->is_compiled() &&
+      ((CompiledMethod*)_cb)->is_java_method()) {
     return true;
   }
   return false;
@@ -228,11 +225,24 @@ JavaCallWrapper* frame::entry_frame_call_wrapper_if_safe(JavaThread* thread) con
   return NULL;
 }
 
+bool frame::is_entry_frame_valid(JavaThread* thread) const {
+  // Validate the JavaCallWrapper an entry frame must have
+  address jcw = (address)entry_frame_call_wrapper();
+  bool jcw_safe = (jcw < thread->stack_base()) && (jcw > (address)fp()); // less than stack base
+  if (!jcw_safe) {
+    return false;
+  }
+
+  // Validate sp saved in the java frame anchor
+  JavaFrameAnchor* jfa = entry_frame_call_wrapper()->anchor();
+  return (jfa->last_Java_sp() > sp());
+}
+
 bool frame::should_be_deoptimized() const {
   if (_deopt_state == is_deoptimized ||
       !is_compiled_frame() ) return false;
-  assert(_cb != NULL && _cb->is_nmethod(), "must be an nmethod");
-  nmethod* nm = (nmethod *)_cb;
+  assert(_cb != NULL && _cb->is_compiled(), "must be an nmethod");
+  CompiledMethod* nm = (CompiledMethod *)_cb;
   if (TraceDependencies) {
     tty->print("checking (%s) ", nm->is_marked_for_deoptimization() ? "true" : "false");
     nm->print_value_on(tty);
@@ -249,7 +259,7 @@ bool frame::should_be_deoptimized() const {
 
 bool frame::can_be_deoptimized() const {
   if (!is_compiled_frame()) return false;
-  nmethod* nm = (nmethod*)_cb;
+  CompiledMethod* nm = (CompiledMethod*)_cb;
 
   if( !nm->can_be_deoptimized() )
     return false;
@@ -259,8 +269,7 @@ bool frame::can_be_deoptimized() const {
 
 void frame::deoptimize(JavaThread* thread) {
   // Schedule deoptimization of an nmethod activation with this frame.
-  assert(_cb != NULL && _cb->is_nmethod(), "must be");
-  nmethod* nm = (nmethod*)_cb;
+  assert(_cb != NULL && _cb->is_compiled(), "must be");
 
   // This is a fix for register window patching race
   if (NeedsDeoptSuspend && Thread::current() != thread) {
@@ -319,12 +328,13 @@ void frame::deoptimize(JavaThread* thread) {
 
   // If the call site is a MethodHandle call site use the MH deopt
   // handler.
-  address deopt = nm->is_method_handle_return(pc()) ?
-    nm->deopt_mh_handler_begin() :
-    nm->deopt_handler_begin();
+  CompiledMethod* cm = (CompiledMethod*) _cb;
+  address deopt = cm->is_method_handle_return(pc()) ?
+                        cm->deopt_mh_handler_begin() :
+                        cm->deopt_handler_begin();
 
   // Save the original pc before we patch in the new one
-  nm->set_original_pc(this, pc());
+  cm->set_original_pc(this, pc());
   patch_pc(thread, deopt);
 
 #ifdef ASSERT
@@ -397,6 +407,11 @@ Method* frame::interpreter_frame_method() const {
 void frame::interpreter_frame_set_method(Method* method) {
   assert(is_interpreted_frame(), "interpreted frame expected");
   *interpreter_frame_method_addr() = method;
+}
+
+void frame::interpreter_frame_set_mirror(oop mirror) {
+  assert(is_interpreted_frame(), "interpreted frame expected");
+  *interpreter_frame_mirror_addr() = mirror;
 }
 
 jint frame::interpreter_frame_bci() const {
@@ -494,9 +509,10 @@ void frame::print_value_on(outputStream* st, JavaThread *thread) const {
   NOT_PRODUCT(address begin = pc()-40;)
   NOT_PRODUCT(address end   = NULL;)
 
-  st->print("%s frame (sp=" INTPTR_FORMAT " unextended sp=" INTPTR_FORMAT, print_name(), sp(), unextended_sp());
+  st->print("%s frame (sp=" INTPTR_FORMAT " unextended sp=" INTPTR_FORMAT, print_name(), p2i(sp()), p2i(unextended_sp()));
   if (sp() != NULL)
-    st->print(", fp=" INTPTR_FORMAT ", real_fp=" INTPTR_FORMAT ", pc=" INTPTR_FORMAT, fp(), real_fp(), pc());
+    st->print(", fp=" INTPTR_FORMAT ", real_fp=" INTPTR_FORMAT ", pc=" INTPTR_FORMAT,
+              p2i(fp()), p2i(real_fp()), p2i(pc()));
 
   if (StubRoutines::contains(pc())) {
     st->print_cr(")");
@@ -569,15 +585,15 @@ void frame::interpreter_frame_print_on(outputStream* st) const {
     st->print_cr("]");
   }
   // monitor
-  st->print_cr(" - monitor[" INTPTR_FORMAT "]", interpreter_frame_monitor_begin());
+  st->print_cr(" - monitor[" INTPTR_FORMAT "]", p2i(interpreter_frame_monitor_begin()));
   // bcp
-  st->print(" - bcp    [" INTPTR_FORMAT "]", interpreter_frame_bcp());
+  st->print(" - bcp    [" INTPTR_FORMAT "]", p2i(interpreter_frame_bcp()));
   st->fill_to(23);
   st->print_cr("; @%d", interpreter_frame_bci());
   // locals
-  st->print_cr(" - locals [" INTPTR_FORMAT "]", interpreter_frame_local_at(0));
+  st->print_cr(" - locals [" INTPTR_FORMAT "]", p2i(interpreter_frame_local_at(0)));
   // method
-  st->print(" - method [" INTPTR_FORMAT "]", (address)interpreter_frame_method());
+  st->print(" - method [" INTPTR_FORMAT "]", p2i(interpreter_frame_method()));
   st->fill_to(23);
   st->print("; ");
   interpreter_frame_method()->print_name(st);
@@ -606,7 +622,7 @@ void frame::print_C_frame(outputStream* st, char* buf, int buflen, address pc) {
     while ((p2 = strstr(p1, os::file_separator())) != NULL) p1 = p2 + len;
     st->print("  [%s+0x%x]", p1, offset);
   } else {
-    st->print("  " PTR_FORMAT, pc);
+    st->print("  " PTR_FORMAT, p2i(pc));
   }
 
   // function name - os::dll_address_to_function_name() may return confusing
@@ -628,6 +644,7 @@ void frame::print_C_frame(outputStream* st, char* buf, int buflen, address pc) {
 //
 // First letter indicates type of the frame:
 //    J: Java frame (compiled)
+//    A: Java frame (aot compiled)
 //    j: Java frame (interpreted)
 //    V: VM frame (C/C++)
 //    v: Other frames running VM generated code (e.g. stubs, adapters, etc.)
@@ -644,29 +661,62 @@ void frame::print_on_error(outputStream* st, char* buf, int buflen, bool verbose
         m->name_and_sig_as_C_string(buf, buflen);
         st->print("j  %s", buf);
         st->print("+%d", this->interpreter_frame_bci());
+        ModuleEntry* module = m->method_holder()->module();
+        if (module->is_named()) {
+          module->name()->as_C_string(buf, buflen);
+          st->print(" %s", buf);
+          if (module->version() != NULL) {
+            module->version()->as_C_string(buf, buflen);
+            st->print("@%s", buf);
+          }
+        }
       } else {
-        st->print("j  " PTR_FORMAT, pc());
+        st->print("j  " PTR_FORMAT, p2i(pc()));
       }
     } else if (StubRoutines::contains(pc())) {
       StubCodeDesc* desc = StubCodeDesc::desc_for(pc());
       if (desc != NULL) {
         st->print("v  ~StubRoutines::%s", desc->name());
       } else {
-        st->print("v  ~StubRoutines::" PTR_FORMAT, pc());
+        st->print("v  ~StubRoutines::" PTR_FORMAT, p2i(pc()));
       }
     } else if (_cb->is_buffer_blob()) {
       st->print("v  ~BufferBlob::%s", ((BufferBlob *)_cb)->name());
-    } else if (_cb->is_nmethod()) {
-      nmethod* nm = (nmethod*)_cb;
-      Method* m = nm->method();
+    } else if (_cb->is_compiled()) {
+      CompiledMethod* cm = (CompiledMethod*)_cb;
+      Method* m = cm->method();
       if (m != NULL) {
+        if (cm->is_aot()) {
+          st->print("A %d ", cm->compile_id());
+        } else if (cm->is_nmethod()) {
+          nmethod* nm = cm->as_nmethod();
+          st->print("J %d%s", nm->compile_id(), (nm->is_osr_method() ? "%" : ""));
+          st->print(" %s", nm->compiler_name());
+        }
         m->name_and_sig_as_C_string(buf, buflen);
-        st->print("J %d%s %s %s (%d bytes) @ " PTR_FORMAT " [" PTR_FORMAT "+0x%x]",
-                  nm->compile_id(), (nm->is_osr_method() ? "%" : ""),
-                  ((nm->compiler() != NULL) ? nm->compiler()->name() : ""),
-                  buf, m->code_size(), _pc, _cb->code_begin(), _pc - _cb->code_begin());
+        st->print(" %s", buf);
+        ModuleEntry* module = m->method_holder()->module();
+        if (module->is_named()) {
+          module->name()->as_C_string(buf, buflen);
+          st->print(" %s", buf);
+          if (module->version() != NULL) {
+            module->version()->as_C_string(buf, buflen);
+            st->print("@%s", buf);
+          }
+        }
+        st->print(" (%d bytes) @ " PTR_FORMAT " [" PTR_FORMAT "+" INTPTR_FORMAT "]",
+                  m->code_size(), p2i(_pc), p2i(_cb->code_begin()), _pc - _cb->code_begin());
+#if INCLUDE_JVMCI
+        if (cm->is_nmethod()) {
+          nmethod* nm = cm->as_nmethod();
+          char* jvmciName = nm->jvmci_installed_code_name(buf, buflen);
+          if (jvmciName != NULL) {
+            st->print(" (%s)", jvmciName);
+          }
+        }
+#endif
       } else {
-        st->print("J  " PTR_FORMAT, pc());
+        st->print("J  " PTR_FORMAT, p2i(pc()));
       }
     } else if (_cb->is_runtime_stub()) {
       st->print("v  ~RuntimeStub::%s", ((RuntimeStub *)_cb)->name());
@@ -677,7 +727,7 @@ void frame::print_on_error(outputStream* st, char* buf, int buflen, bool verbose
     } else if (_cb->is_safepoint_stub()) {
       st->print("v  ~SafepointBlob");
     } else {
-      st->print("v  blob " PTR_FORMAT, pc());
+      st->print("v  blob " PTR_FORMAT, p2i(pc()));
     }
   } else {
     print_C_frame(st, buf, buflen, pc());
@@ -831,8 +881,7 @@ oop* frame::interpreter_callee_receiver_addr(Symbol* signature) {
 }
 
 
-void frame::oops_interpreted_do(OopClosure* f, CLDClosure* cld_f,
-    const RegisterMap* map, bool query_oop_map_cache) {
+void frame::oops_interpreted_do(OopClosure* f, const RegisterMap* map, bool query_oop_map_cache) {
   assert(is_interpreted_frame(), "Not an interpreted frame");
   assert(map != NULL, "map must be set");
   Thread *thread = Thread::current();
@@ -858,20 +907,15 @@ void frame::oops_interpreted_do(OopClosure* f, CLDClosure* cld_f,
     current->oops_do(f);
   }
 
-  // process fixed part
-  if (cld_f != NULL) {
-    // The method pointer in the frame might be the only path to the method's
-    // klass, and the klass needs to be kept alive while executing. The GCs
-    // don't trace through method pointers, so typically in similar situations
-    // the mirror or the class loader of the klass are installed as a GC root.
-    // To minimize the overhead of doing that here, we ask the GC to pass down a
-    // closure that knows how to keep klasses alive given a ClassLoaderData.
-    cld_f->do_cld(m->method_holder()->class_loader_data());
-  }
-
-  if (m->is_native() PPC32_ONLY(&& m->is_static())) {
+  if (m->is_native()) {
     f->do_oop(interpreter_frame_temp_oop_addr());
   }
+
+  // The method pointer in the frame might be the only path to the method's
+  // klass, and the klass needs to be kept alive while executing. The GCs
+  // don't trace through method pointers, so the mirror of the method's klass
+  // is installed as a GC root.
+  f->do_oop(interpreter_frame_mirror_addr());
 
   int max_locals = m->is_native() ? m->size_of_parameters() : m->max_locals();
 
@@ -998,7 +1042,8 @@ class CompiledArgumentOopFinder: public SignatureInfo {
   }
 };
 
-void frame::oops_compiled_arguments_do(Symbol* signature, bool has_receiver, bool has_appendix, const RegisterMap* reg_map, OopClosure* f) {
+void frame::oops_compiled_arguments_do(Symbol* signature, bool has_receiver, bool has_appendix,
+                                       const RegisterMap* reg_map, OopClosure* f) {
   ResourceMark rm;
   CompiledArgumentOopFinder finder(signature, has_receiver, has_appendix, f, *this, reg_map);
   finder.oops_do();
@@ -1022,7 +1067,7 @@ oop frame::retrieve_receiver(RegisterMap* reg_map) {
     return NULL;
   }
   oop r = *oop_adr;
-  assert(Universe::heap()->is_in_or_null(r), err_msg("bad receiver: " INTPTR_FORMAT " (" INTX_FORMAT ")", (void *) r, (void *) r));
+  assert(Universe::heap()->is_in_or_null(r), "bad receiver: " INTPTR_FORMAT " (" INTX_FORMAT ")", p2i(r), p2i(r));
   return r;
 }
 
@@ -1071,7 +1116,7 @@ void frame::oops_entry_do(OopClosure* f, const RegisterMap* map) {
 }
 
 
-void frame::oops_do_internal(OopClosure* f, CLDClosure* cld_f, CodeBlobClosure* cf, RegisterMap* map, bool use_interpreter_oop_map_cache) {
+void frame::oops_do_internal(OopClosure* f, CodeBlobClosure* cf, RegisterMap* map, bool use_interpreter_oop_map_cache) {
 #ifndef PRODUCT
   // simulate GC crash here to dump java thread in error report
   if (CrashGCForDumpingJavaThread) {
@@ -1080,7 +1125,7 @@ void frame::oops_do_internal(OopClosure* f, CLDClosure* cld_f, CodeBlobClosure* 
   }
 #endif
   if (is_interpreted_frame()) {
-    oops_interpreted_do(f, cld_f, map, use_interpreter_oop_map_cache);
+    oops_interpreted_do(f, map, use_interpreter_oop_map_cache);
   } else if (is_entry_frame()) {
     oops_entry_do(f, map);
   } else if (CodeCache::contains(pc())) {
@@ -1111,104 +1156,6 @@ void frame::metadata_do(void f(Metadata*)) {
   }
 }
 
-# ifdef ENABLE_ZAP_DEAD_LOCALS
-
-void frame::CheckValueClosure::do_oop(oop* p) {
-  if (CheckOopishValues && Universe::heap()->is_in_reserved(*p)) {
-    warning("value @ " INTPTR_FORMAT " looks oopish (" INTPTR_FORMAT ") (thread = " INTPTR_FORMAT ")", p, (address)*p, Thread::current());
-  }
-}
-frame::CheckValueClosure frame::_check_value;
-
-
-void frame::CheckOopClosure::do_oop(oop* p) {
-  if (*p != NULL && !(*p)->is_oop()) {
-    warning("value @ " INTPTR_FORMAT " should be an oop (" INTPTR_FORMAT ") (thread = " INTPTR_FORMAT ")", p, (address)*p, Thread::current());
- }
-}
-frame::CheckOopClosure frame::_check_oop;
-
-void frame::check_derived_oop(oop* base, oop* derived) {
-  _check_oop.do_oop(base);
-}
-
-
-void frame::ZapDeadClosure::do_oop(oop* p) {
-  if (TraceZapDeadLocals) tty->print_cr("zapping @ " INTPTR_FORMAT " containing " INTPTR_FORMAT, p, (address)*p);
-  *p = cast_to_oop<intptr_t>(0xbabebabe);
-}
-frame::ZapDeadClosure frame::_zap_dead;
-
-void frame::zap_dead_locals(JavaThread* thread, const RegisterMap* map) {
-  assert(thread == Thread::current(), "need to synchronize to do this to another thread");
-  // Tracing - part 1
-  if (TraceZapDeadLocals) {
-    ResourceMark rm(thread);
-    tty->print_cr("--------------------------------------------------------------------------------");
-    tty->print("Zapping dead locals in ");
-    print_on(tty);
-    tty->cr();
-  }
-  // Zapping
-       if (is_entry_frame      ()) zap_dead_entry_locals      (thread, map);
-  else if (is_interpreted_frame()) zap_dead_interpreted_locals(thread, map);
-  else if (is_compiled_frame()) zap_dead_compiled_locals   (thread, map);
-
-  else
-    // could be is_runtime_frame
-    // so remove error: ShouldNotReachHere();
-    ;
-  // Tracing - part 2
-  if (TraceZapDeadLocals) {
-    tty->cr();
-  }
-}
-
-
-void frame::zap_dead_interpreted_locals(JavaThread *thread, const RegisterMap* map) {
-  // get current interpreter 'pc'
-  assert(is_interpreted_frame(), "Not an interpreted frame");
-  Method* m   = interpreter_frame_method();
-  int       bci = interpreter_frame_bci();
-
-  int max_locals = m->is_native() ? m->size_of_parameters() : m->max_locals();
-
-  // process dynamic part
-  InterpreterFrameClosure value_blk(this, max_locals, m->max_stack(),
-                                    &_check_value);
-  InterpreterFrameClosure   oop_blk(this, max_locals, m->max_stack(),
-                                    &_check_oop  );
-  InterpreterFrameClosure  dead_blk(this, max_locals, m->max_stack(),
-                                    &_zap_dead   );
-
-  // get frame map
-  InterpreterOopMap mask;
-  m->mask_for(bci, &mask);
-  mask.iterate_all( &oop_blk, &value_blk, &dead_blk);
-}
-
-
-void frame::zap_dead_compiled_locals(JavaThread* thread, const RegisterMap* reg_map) {
-
-  ResourceMark rm(thread);
-  assert(_cb != NULL, "sanity check");
-  if (_cb->oop_maps() != NULL) {
-    OopMapSet::all_do(this, reg_map, &_check_oop, check_derived_oop, &_check_value);
-  }
-}
-
-
-void frame::zap_dead_entry_locals(JavaThread*, const RegisterMap*) {
-  if (TraceZapDeadLocals) warning("frame::zap_dead_entry_locals unimplemented");
-}
-
-
-void frame::zap_dead_deoptimized_locals(JavaThread*, const RegisterMap*) {
-  if (TraceZapDeadLocals) warning("frame::zap_dead_deoptimized_locals unimplemented");
-}
-
-# endif // ENABLE_ZAP_DEAD_LOCALS
-
 void frame::verify(const RegisterMap* map) {
   // for now make sure receiver type is correct
   if (is_interpreted_frame()) {
@@ -1220,8 +1167,10 @@ void frame::verify(const RegisterMap* map) {
       // make sure we have the right receiver type
     }
   }
-  COMPILER2_PRESENT(assert(DerivedPointerTable::is_empty(), "must be empty before verify");)
-  oops_do_internal(&VerifyOopClosure::verify_oop, NULL, NULL, (RegisterMap*)map, false);
+#if defined(COMPILER2) || INCLUDE_JVMCI
+  assert(DerivedPointerTable::is_empty(), "must be empty before verify");
+#endif
+  oops_do_internal(&VerifyOopClosure::verify_oop, NULL, (RegisterMap*)map, false);
 }
 
 
@@ -1318,10 +1267,12 @@ void frame::describe(FrameValues& values, int frame_no) {
     values.describe(-1, info_address, err_msg("#%d entry frame", frame_no), 2);
   } else if (is_compiled_frame()) {
     // For now just label the frame
-    nmethod* nm = cb()->as_nmethod_or_null();
+    CompiledMethod* cm = (CompiledMethod*)cb();
     values.describe(-1, info_address,
-                    FormatBuffer<1024>("#%d nmethod " INTPTR_FORMAT " for method %s%s", frame_no,
-                                       nm, nm->method()->name_and_sig_as_C_string(),
+                    FormatBuffer<1024>("#%d nmethod " INTPTR_FORMAT " for method %s%s%s", frame_no,
+                                       p2i(cm),
+                                       (cm->is_aot() ? "A ": "J "),
+                                       cm->method()->name_and_sig_as_C_string(),
                                        (_deopt_state == is_deoptimized) ?
                                        " (deoptimized)" :
                                        ((_deopt_state == unknown) ? " (state unknown)" : "")),
@@ -1331,7 +1282,7 @@ void frame::describe(FrameValues& values, int frame_no) {
     nmethod* nm = cb()->as_nmethod_or_null();
     values.describe(-1, info_address,
                     FormatBuffer<1024>("#%d nmethod " INTPTR_FORMAT " for native method %s", frame_no,
-                                       nm, nm->method()->name_and_sig_as_C_string()), 2);
+                                       p2i(nm), nm->method()->name_and_sig_as_C_string()), 2);
   } else {
     // provide default info if not handled before
     char *info = (char *) "special frame";
@@ -1388,8 +1339,8 @@ void FrameValues::validate() {
     if (prev.location == fv.location) {
       if (fv.owner != prev.owner) {
         tty->print_cr("overlapping storage");
-        tty->print_cr(" " INTPTR_FORMAT ": " INTPTR_FORMAT " %s", prev.location, *prev.location, prev.description);
-        tty->print_cr(" " INTPTR_FORMAT ": " INTPTR_FORMAT " %s", fv.location, *fv.location, fv.description);
+        tty->print_cr(" " INTPTR_FORMAT ": " INTPTR_FORMAT " %s", p2i(prev.location), *prev.location, prev.description);
+        tty->print_cr(" " INTPTR_FORMAT ": " INTPTR_FORMAT " %s", p2i(fv.location), *fv.location, fv.description);
         error = true;
       }
     } else {
@@ -1433,14 +1384,14 @@ void FrameValues::print(JavaThread* thread) {
   for (int i = max_index; i >= min_index; i--) {
     FrameValue fv = _values.at(i);
     while (cur > fv.location) {
-      tty->print_cr(" " INTPTR_FORMAT ": " INTPTR_FORMAT, cur, *cur);
+      tty->print_cr(" " INTPTR_FORMAT ": " INTPTR_FORMAT, p2i(cur), *cur);
       cur--;
     }
     if (last == fv.location) {
       const char* spacer = "          " LP64_ONLY("        ");
       tty->print_cr(" %s  %s %s", spacer, spacer, fv.description);
     } else {
-      tty->print_cr(" " INTPTR_FORMAT ": " INTPTR_FORMAT " %s", fv.location, *fv.location, fv.description);
+      tty->print_cr(" " INTPTR_FORMAT ": " INTPTR_FORMAT " %s", p2i(fv.location), *fv.location, fv.description);
       last = fv.location;
       cur--;
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,21 +32,31 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
+import java.net.URI;
 import java.nio.charset.Charset;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
+import java.nio.file.FileVisitResult;
+import java.nio.file.FileVisitor;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 import java.util.jar.JarFile;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Pack200;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import static java.nio.file.StandardCopyOption.*;
 import static java.nio.file.StandardOpenOption.*;
+
 
 /**
  *
@@ -84,7 +94,7 @@ class Utils {
         }
         File srcDir = new File(getVerifierDir(), "src");
         List<File> javaFileList = findFiles(srcDir, createFilter(JAVA_FILE_EXT));
-        File tmpFile = File.createTempFile("javac", ".tmp");
+        File tmpFile = File.createTempFile("javac", ".tmp", new File("."));
         XCLASSES.mkdirs();
         FileOutputStream fos = null;
         PrintStream ps = null;
@@ -101,6 +111,8 @@ class Utils {
 
         compiler("-d",
                 XCLASSES.getName(),
+                "--add-modules=jdk.jdeps",
+                "--add-exports=jdk.jdeps/com.sun.tools.classfile=ALL-UNNAMED",
                 "@" + tmpFile.getAbsolutePath());
 
         jar("cvfe",
@@ -137,6 +149,7 @@ class Utils {
         init();
         List<String> cmds = new ArrayList<String>();
         cmds.add(getJavaCmd());
+        cmds.add("--add-exports=jdk.jdeps/com.sun.tools.classfile=ALL-UNNAMED");
         cmds.add("-cp");
         cmds.add(VerifierJar.getName());
         cmds.add("sun.tools.pack.verify.Main");
@@ -196,6 +209,10 @@ class Utils {
                 Utils.createFilter(".idx")));
         toDelete.addAll(Utils.findFiles(new File("."),
                 Utils.createFilter(".gidx")));
+        toDelete.addAll(Utils.findFiles(new File("."),
+                Utils.createFilter(".tmp")));
+        toDelete.addAll(Utils.findFiles(new File("."),
+                Utils.createFilter(".class")));
         for (File f : toDelete) {
             f.delete();
         }
@@ -324,6 +341,9 @@ class Utils {
     private static void findFiles0(File startDir, List<File> list,
                                     FileFilter filter) throws IOException {
         File[] foundFiles = startDir.listFiles(filter);
+        if (foundFiles == null) {
+            return;
+        }
         list.addAll(Arrays.asList(foundFiles));
         File[] dirs = startDir.listFiles(DIR_FILTER);
         for (File dir : dirs) {
@@ -467,9 +487,15 @@ class Utils {
         }
         return out;
     }
+
+    static List<String> runExec(String... cmds) {
+        return runExec(Arrays.asList(cmds));
+    }
+
     static List<String> runExec(List<String> cmdsList) {
         return runExec(cmdsList, null);
     }
+
     static List<String> runExec(List<String> cmdsList, Map<String, String> penv) {
         ArrayList<String> alist = new ArrayList<String>();
         ProcessBuilder pb =
@@ -539,10 +565,6 @@ class Utils {
         return getAjavaCmd("jar");
     }
 
-    static String getJimageCmd() {
-        return getAjavaCmd("jimage");
-    }
-
     static String getAjavaCmd(String cmdStr) {
         File binDir = new File(JavaHome, "bin");
         File unpack200File = IsWindows
@@ -557,30 +579,88 @@ class Utils {
         return cmd;
     }
 
-    static File createRtJar() throws IOException {
-        File LibDir = new File(JavaHome, "lib");
-        File ModuleDir = new File(LibDir, "modules");
-        File BootModules = new File(ModuleDir, "bootmodules.jimage");
-        List<String> cmdList = new ArrayList<>();
-        cmdList.add(getJimageCmd());
-        cmdList.add("extract");
-        cmdList.add(BootModules.getAbsolutePath());
-        cmdList.add("--dir");
-        cmdList.add("out");
-        runExec(cmdList);
-
+    // used to get all classes
+    static File createRtJar() throws Exception {
         File rtJar = new File("rt.jar");
-        cmdList.clear();
-        cmdList.add(getJarCmd());
-        // cmdList.add("cvf"); too noisy
-        cmdList.add("cf");
-        cmdList.add(rtJar.getName());
-        cmdList.add("-C");
-        cmdList.add("out");
-        cmdList.add(".");
-        runExec(cmdList);
-
-        recursiveDelete(new File("out"));
+        new JrtToZip(".*\\.class", rtJar).run();
         return rtJar;
+    }
+
+    // used to select the contents
+    static File createRtJar(String pattern) throws Exception {
+        File rtJar = new File("rt.jar");
+        new JrtToZip(pattern, rtJar).run();
+        return rtJar;
+    }
+
+    /*
+     * A helper class to create a pseudo rt.jar.
+     */
+    static class JrtToZip {
+
+        final File outFile;
+        final Pattern pattern;
+
+        public static void main(String[] args) throws Exception {
+            new JrtToZip(args[0], new File(args[1])).run();
+        }
+
+        JrtToZip(String pattern, File outFile) throws Exception {
+            this.pattern = Pattern.compile(pattern);
+            this.outFile = outFile;
+        }
+
+        void run() throws Exception {
+            URI uri = URI.create("jar:" + outFile.toURI());
+            Map<String, String> env = new HashMap<>();
+            env.put("create", "true");
+            try (FileSystem zipfs = FileSystems.newFileSystem(uri, env)) {
+                toZipfs(zipfs);
+            }
+        }
+
+        void toZipfs(FileSystem zipfs) throws Exception {
+            FileSystem jrtfs = FileSystems.getFileSystem(URI.create("jrt:/"));
+            for (Path root : jrtfs.getRootDirectories()) {
+                Files.walkFileTree(root, new FileVisitor<Path>() {
+                    @Override
+                    public FileVisitResult preVisitDirectory(Path dir,
+                            BasicFileAttributes attrs) throws IOException {
+                        // ignore unneeded directory
+                        if (dir.startsWith("/packages"))
+                            return FileVisitResult.SKIP_SUBTREE;
+
+                        // pre-create required directories
+                        Path zpath = zipfs.getPath(dir.toString());
+                        Files.createDirectories(zpath);
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFile(Path file,
+                            BasicFileAttributes attrs) throws IOException {
+                        Matcher matcher = pattern.matcher(file.toString());
+                        if (matcher.matches()) {
+                            // System.out.println("x: " + file);
+                            Path zpath = zipfs.getPath(file.toString());
+                            Files.copy(file, zpath, REPLACE_EXISTING);
+                        }
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFileFailed(Path file,
+                            IOException exc) throws IOException {
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult postVisitDirectory(Path dir,
+                            IOException exc) throws IOException {
+                        return FileVisitResult.CONTINUE;
+                    }
+                });
+            }
+        }
     }
 }

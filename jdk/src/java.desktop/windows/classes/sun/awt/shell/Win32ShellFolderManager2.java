@@ -27,6 +27,7 @@ package sun.awt.shell;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import java.awt.image.BaseMultiResolutionImage;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -41,7 +42,6 @@ import java.util.stream.Stream;
 import static sun.awt.shell.Win32ShellFolder2.*;
 import sun.awt.OSInfo;
 import sun.awt.util.ThreadGroupUtils;
-import sun.misc.ManagedLocalsThread;
 // NOTE: This class supersedes Win32ShellFolderManager, which was removed
 //       from distribution after version 1.4.2.
 
@@ -117,13 +117,21 @@ final class Win32ShellFolderManager2 extends ShellFolderManager {
             return result;
         }
 
-        BufferedImage img = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+        final int[] iconBits = Win32ShellFolder2
+                .getStandardViewButton0(iconIndex, true);
+        if (iconBits != null) {
+            // icons are always square
+            final int size = (int) Math.sqrt(iconBits.length);
+            final BufferedImage img =
+                    new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+            img.setRGB(0, 0, size, size, iconBits, 0, size);
 
-        img.setRGB(0, 0, 16, 16, Win32ShellFolder2.getStandardViewButton0(iconIndex), 0, 16);
+            STANDARD_VIEW_BUTTONS[iconIndex] = (size == 16)
+                    ? img
+                    : new MultiResolutionIconImage(16, img);
+        }
 
-        STANDARD_VIEW_BUTTONS[iconIndex] = img;
-
-        return img;
+        return STANDARD_VIEW_BUTTONS[iconIndex];
     }
 
     // Special folders
@@ -225,24 +233,24 @@ final class Win32ShellFolderManager2 extends ShellFolderManager {
     private static File[] roots;
 
     /**
-     * @param key a <code>String</code>
+     * @param key a {@code String}
      *  "fileChooserDefaultFolder":
-     *    Returns a <code>File</code> - the default shellfolder for a new filechooser
+     *    Returns a {@code File} - the default shellfolder for a new filechooser
      *  "roots":
-     *    Returns a <code>File[]</code> - containing the root(s) of the displayable hierarchy
+     *    Returns a {@code File[]} - containing the root(s) of the displayable hierarchy
      *  "fileChooserComboBoxFolders":
-     *    Returns a <code>File[]</code> - an array of shellfolders representing the list to
+     *    Returns a {@code File[]} - an array of shellfolders representing the list to
      *    show by default in the file chooser's combobox
      *   "fileChooserShortcutPanelFolders":
-     *    Returns a <code>File[]</code> - an array of shellfolders representing well-known
+     *    Returns a {@code File[]} - an array of shellfolders representing well-known
      *    folders, such as Desktop, Documents, History, Network, Home, etc.
      *    This is used in the shortcut panel of the filechooser on Windows 2000
      *    and Windows Me.
      *  "fileChooserIcon <icon>":
-     *    Returns an <code>Image</code> - icon can be ListView, DetailsView, UpFolder, NewFolder or
+     *    Returns an {@code Image} - icon can be ListView, DetailsView, UpFolder, NewFolder or
      *    ViewMenu (Windows only).
      *  "optionPaneIcon iconName":
-     *    Returns an <code>Image</code> - icon from the system icon list
+     *    Returns an {@code Image} - icon from the system icon list
      *
      * @return An Object matching the key string.
      */
@@ -415,7 +423,7 @@ final class Win32ShellFolderManager2 extends ShellFolderManager {
     }
 
     /**
-     * Does <code>dir</code> represent a "computer" such as a node on the network, or
+     * Does {@code dir} represent a "computer" such as a node on the network, or
      * "My Computer" on the desktop.
      */
     public boolean isComputerNode(final File dir) {
@@ -524,8 +532,9 @@ final class Win32ShellFolderManager2 extends ShellFolderManager {
                 return null;
             });
             AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
-                Thread t = new ManagedLocalsThread(
-                        ThreadGroupUtils.getRootThreadGroup(), shutdownHook);
+                Thread t = new Thread(
+                        ThreadGroupUtils.getRootThreadGroup(), shutdownHook,
+                        "ShellFolder", 0, false);
                 Runtime.getRuntime().addShutdownHook(t);
                 return null;
             });
@@ -548,8 +557,9 @@ final class Win32ShellFolderManager2 extends ShellFolderManager {
                   * which will not get GCed before VM exit.
                   * Make its parent the top-level thread group.
                   */
-                Thread thread = new ManagedLocalsThread(
-                        ThreadGroupUtils.getRootThreadGroup(), comRun, name);
+                Thread thread = new Thread(
+                        ThreadGroupUtils.getRootThreadGroup(), comRun, name,
+                        0, false);
                 thread.setDaemon(true);
                 return thread;
             });

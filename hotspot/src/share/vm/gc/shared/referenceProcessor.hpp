@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -58,23 +58,13 @@ class AbstractRefProcTaskExecutor;
 class DiscoveredList {
 public:
   DiscoveredList() : _len(0), _compressed_head(0), _oop_head(NULL) { }
-  oop head() const     {
-     return UseCompressedOops ?  oopDesc::decode_heap_oop(_compressed_head) :
-                                _oop_head;
-  }
+  inline oop head() const;
   HeapWord* adr_head() {
     return UseCompressedOops ? (HeapWord*)&_compressed_head :
                                (HeapWord*)&_oop_head;
   }
-  void set_head(oop o) {
-    if (UseCompressedOops) {
-      // Must compress the head ptr.
-      _compressed_head = oopDesc::encode_heap_oop(o);
-    } else {
-      _oop_head = o;
-    }
-  }
-  bool   is_empty() const       { return head() == NULL; }
+  inline void set_head(oop o);
+  inline bool is_empty() const;
   size_t length()               { return _len; }
   void   set_length(size_t len) { _len = len;  }
   void   inc_length(size_t inc) { _len += inc; assert(_len > 0, "Error"); }
@@ -113,22 +103,7 @@ private:
 public:
   inline DiscoveredListIterator(DiscoveredList&    refs_list,
                                 OopClosure*        keep_alive,
-                                BoolObjectClosure* is_alive):
-    _refs_list(refs_list),
-    _prev_next(refs_list.adr_head()),
-    _prev(NULL),
-    _ref(refs_list.head()),
-#ifdef ASSERT
-    _first_seen(refs_list.head()),
-#endif
-#ifndef PRODUCT
-    _processed(0),
-    _removed(0),
-#endif
-    _next(NULL),
-    _keep_alive(keep_alive),
-    _is_alive(is_alive)
-{ }
+                                BoolObjectClosure* is_alive);
 
   // End Of List.
   inline bool has_next() const { return _ref != NULL; }
@@ -244,14 +219,13 @@ class ReferenceProcessor : public CHeapObj<mtGC> {
   DiscoveredList* _discoveredWeakRefs;
   DiscoveredList* _discoveredFinalRefs;
   DiscoveredList* _discoveredPhantomRefs;
-  DiscoveredList* _discoveredCleanerRefs;
 
  public:
-  static int number_of_subclasses_of_ref() { return (REF_CLEANER - REF_OTHER); }
+  static int number_of_subclasses_of_ref() { return (REF_PHANTOM - REF_OTHER); }
 
   uint num_q()                             { return _num_q; }
   uint max_num_q()                         { return _max_num_q; }
-  void set_active_mt_degree(uint v)        { _num_q = v; }
+  void set_active_mt_degree(uint v);
 
   DiscoveredList* discovered_refs()        { return _discovered_refs; }
 
@@ -263,13 +237,13 @@ class ReferenceProcessor : public CHeapObj<mtGC> {
   }
 
   // Process references with a certain reachability level.
-  size_t process_discovered_reflist(DiscoveredList               refs_lists[],
-                                    ReferencePolicy*             policy,
-                                    bool                         clear_referent,
-                                    BoolObjectClosure*           is_alive,
-                                    OopClosure*                  keep_alive,
-                                    VoidClosure*                 complete_gc,
-                                    AbstractRefProcTaskExecutor* task_executor);
+  void process_discovered_reflist(DiscoveredList               refs_lists[],
+                                  ReferencePolicy*             policy,
+                                  bool                         clear_referent,
+                                  BoolObjectClosure*           is_alive,
+                                  OopClosure*                  keep_alive,
+                                  VoidClosure*                 complete_gc,
+                                  AbstractRefProcTaskExecutor* task_executor);
 
   void process_phaseJNI(BoolObjectClosure* is_alive,
                         OopClosure*        keep_alive,
@@ -316,7 +290,7 @@ class ReferenceProcessor : public CHeapObj<mtGC> {
                       VoidClosure*       complete_gc);
 
   // Enqueue references with a certain reachability level
-  void enqueue_discovered_reflist(DiscoveredList& refs_list, HeapWord* pending_list_addr);
+  void enqueue_discovered_reflist(DiscoveredList& refs_list);
 
   // "Preclean" all the discovered reference lists
   // by removing references with strongly reachable referents.
@@ -331,14 +305,13 @@ class ReferenceProcessor : public CHeapObj<mtGC> {
                                       OopClosure*        keep_alive,
                                       VoidClosure*       complete_gc,
                                       YieldClosure*      yield,
-                                      GCTimer*           gc_timer,
-                                      GCId               gc_id);
+                                      GCTimer*           gc_timer);
 
   // Returns the name of the discovered reference list
   // occupying the i / _num_q slot.
   const char* list_name(uint i);
 
-  void enqueue_discovered_reflists(HeapWord* pending_list_addr, AbstractRefProcTaskExecutor* task_executor);
+  void enqueue_discovered_reflists(AbstractRefProcTaskExecutor* task_executor);
 
  protected:
   // "Preclean" the given discovered reference list
@@ -353,9 +326,11 @@ class ReferenceProcessor : public CHeapObj<mtGC> {
   // round-robin mod _num_q (not: _not_ mode _max_num_q)
   uint next_id() {
     uint id = _next_id;
+    assert(!_discovery_is_mt, "Round robin should only be used in serial discovery");
     if (++_next_id == _num_q) {
       _next_id = 0;
     }
+    assert(_next_id < _num_q, "_next_id %u _num_q %u _max_num_q %u", _next_id, _num_q, _max_num_q);
     return id;
   }
   DiscoveredList* get_discovered_list(ReferenceType rt);
@@ -365,7 +340,9 @@ class ReferenceProcessor : public CHeapObj<mtGC> {
   void clear_discovered_references(DiscoveredList& refs_list);
 
   // Calculate the number of jni handles.
-  unsigned int count_jni_refs();
+  size_t count_jni_refs();
+
+  void log_reflist_counts(DiscoveredList ref_lists[], uint active_length, size_t total_count) PRODUCT_RETURN;
 
   // Balances reference queues.
   void balance_queues(DiscoveredList ref_lists[]);
@@ -435,17 +412,19 @@ class ReferenceProcessor : public CHeapObj<mtGC> {
   // Discover a Reference object, using appropriate discovery criteria
   bool discover_reference(oop obj, ReferenceType rt);
 
+  // Has discovered references that need handling
+  bool has_discovered_references();
+
   // Process references found during GC (called by the garbage collector)
   ReferenceProcessorStats
   process_discovered_references(BoolObjectClosure*           is_alive,
                                 OopClosure*                  keep_alive,
                                 VoidClosure*                 complete_gc,
                                 AbstractRefProcTaskExecutor* task_executor,
-                                GCTimer *gc_timer,
-                                GCId    gc_id);
+                                GCTimer *gc_timer);
 
   // Enqueue references at end of GC (called by the garbage collector)
-  bool enqueue_discovered_references(AbstractRefProcTaskExecutor* task_executor = NULL);
+  void enqueue_discovered_references(AbstractRefProcTaskExecutor* task_executor = NULL);
 
   // If a discovery is in process that is being superceded, abandon it: all
   // the discovered lists will be empty, and all the objects on them will
@@ -634,11 +613,9 @@ class AbstractRefProcTaskExecutor::EnqueueTask {
 protected:
   EnqueueTask(ReferenceProcessor& ref_processor,
               DiscoveredList      refs_lists[],
-              HeapWord*           pending_list_addr,
               int                 n_queues)
     : _ref_processor(ref_processor),
       _refs_lists(refs_lists),
-      _pending_list_addr(pending_list_addr),
       _n_queues(n_queues)
   { }
 
@@ -648,7 +625,6 @@ public:
 protected:
   ReferenceProcessor& _ref_processor;
   DiscoveredList*     _refs_lists;
-  HeapWord*           _pending_list_addr;
   int                 _n_queues;
 };
 

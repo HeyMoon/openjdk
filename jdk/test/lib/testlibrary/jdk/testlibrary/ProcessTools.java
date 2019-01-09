@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,10 +27,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
-import java.lang.management.ManagementFactory;
-import java.lang.management.RuntimeMXBean;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -44,6 +40,12 @@ import java.util.function.Predicate;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
+
+/**
+ * @deprecated This class is deprecated. Use the one from
+ *             {@code <root>/test/lib/jdk/test/lib/process}
+ */
+@Deprecated
 public final class ProcessTools {
     private static final class LineForwarder extends StreamPumper.LinePump {
         private final PrintStream ps;
@@ -253,11 +255,8 @@ public final class ProcessTools {
      *
      * @return Process id
      */
-    public static int getProcessId() throws Exception {
-        RuntimeMXBean runtime = ManagementFactory.getRuntimeMXBean();
-        int pid = Integer.parseInt(runtime.getName().split("@")[0]);
-
-        return pid;
+    public static long getProcessId() {
+        return ProcessHandle.current().pid();
     }
 
     /**
@@ -341,21 +340,28 @@ public final class ProcessTools {
     }
 
     /**
-     * Executes a test jvm process, waits for it to finish and returns the process output.
-     * The default jvm options from jtreg, test.vm.opts and test.java.opts, are added.
+     * Executes a test java process, waits for it to finish and returns the process output.
+     * The default options from jtreg, test.vm.opts and test.java.opts, are added.
      * The java from the test.jdk is used to execute the command.
      *
      * The command line will be like:
      * {test.jdk}/bin/java {test.vm.opts} {test.java.opts} cmds
      *
-     * The jvm process will have exited before this method returns.
+     * The java process will have exited before this method returns.
      *
      * @param cmds User specifed arguments.
      * @return The output from the process.
      */
-    public static OutputAnalyzer executeTestJvm(String... cmds) throws Exception {
-        ProcessBuilder pb = createJavaProcessBuilder(Utils.addTestJavaOpts(cmds));
+    public static OutputAnalyzer executeTestJava(String... options) throws Exception {
+        ProcessBuilder pb = createJavaProcessBuilder(Utils.addTestJavaOpts(options));
         return executeProcess(pb);
+    }
+
+    /**
+     * @deprecated Use executeTestJava instead
+     */
+    public static OutputAnalyzer executeTestJvm(String... options) throws Exception {
+        return executeTestJava(options);
     }
 
     /**
@@ -365,11 +371,31 @@ public final class ProcessTools {
      * @return The {@linkplain OutputAnalyzer} instance wrapping the process.
      */
     public static OutputAnalyzer executeProcess(ProcessBuilder pb) throws Exception {
+        return executeProcess(pb, null);
+    }
+
+    /**
+     * Executes a process, pipe some text into its STDIN, waits for it
+     * to finish and returns the process output. The process will have exited
+     * before this method returns.
+     * @param pb The ProcessBuilder to execute.
+     * @param input The text to pipe into STDIN. Can be null.
+     * @return The {@linkplain OutputAnalyzer} instance wrapping the process.
+     */
+    public static OutputAnalyzer executeProcess(ProcessBuilder pb, String input)
+            throws Exception {
         OutputAnalyzer output = null;
         Process p = null;
         boolean failed = false;
         try {
             p = pb.start();
+            if (input != null) {
+                try (OutputStream os = p.getOutputStream();
+                        PrintStream ps = new PrintStream(os)) {
+                    ps.print(input);
+                    ps.flush();
+                }
+            }
             output = new OutputAnalyzer(p);
             p.waitFor();
 
@@ -397,7 +423,7 @@ public final class ProcessTools {
      * @param cmds The command line to execute.
      * @return The output from the process.
      */
-    public static OutputAnalyzer executeProcess(String... cmds) throws Throwable {
+    public static OutputAnalyzer executeProcess(String... cmds) throws Exception {
         return executeProcess(new ProcessBuilder(cmds));
     }
 
@@ -516,8 +542,8 @@ public final class ProcessTools {
         }
 
         @Override
-        public long getPid() {
-            return p.getPid();
+        public long pid() {
+            return p.pid();
         }
 
         @Override

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2015, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -29,10 +29,10 @@
 #include "memory/resourceArea.hpp"
 #include "runtime/java.hpp"
 #include "runtime/stubCodeGenerator.hpp"
+#include "utilities/macros.hpp"
 #include "vm_version_aarch64.hpp"
-#ifdef TARGET_OS_FAMILY_linux
-# include "os_linux.inline.hpp"
-#endif
+
+#include OS_HEADER_INLINE(os)
 
 #ifndef BUILTIN_SIM
 #include <sys/auxv.h>
@@ -43,6 +43,10 @@
 
 #ifndef HWCAP_AES
 #define HWCAP_AES   (1<<3)
+#endif
+
+#ifndef HWCAP_PMULL
+#define HWCAP_PMULL (1<<4)
 #endif
 
 #ifndef HWCAP_SHA1
@@ -57,14 +61,17 @@
 #define HWCAP_CRC32 (1<<7)
 #endif
 
+#ifndef HWCAP_ATOMICS
+#define HWCAP_ATOMICS (1<<8)
+#endif
+
 int VM_Version::_cpu;
 int VM_Version::_model;
 int VM_Version::_model2;
 int VM_Version::_variant;
 int VM_Version::_revision;
 int VM_Version::_stepping;
-int VM_Version::_cpuFeatures;
-const char*           VM_Version::_features_str = "";
+VM_Version::PsrInfo VM_Version::_psr_info   = { 0, };
 
 static BufferBlob* stub_blob;
 static const int stub_size = 550;
@@ -89,13 +96,19 @@ class VM_Version_StubGenerator: public StubCodeGenerator {
     __ c_stub_prolog(1, 0, MacroAssembler::ret_type_void);
 #endif
 
-    // void getPsrInfo(VM_Version::CpuidInfo* cpuid_info);
+    // void getPsrInfo(VM_Version::PsrInfo* psr_info);
 
     address entry = __ pc();
 
-    // TODO : redefine fields in CpuidInfo and generate
-    // code to fill them in
+    __ enter();
 
+    __ get_dczid_el0(rscratch1);
+    __ strw(rscratch1, Address(c_rarg0, in_bytes(VM_Version::dczid_el0_offset())));
+
+    __ get_ctr_el0(rscratch1);
+    __ strw(rscratch1, Address(c_rarg0, in_bytes(VM_Version::ctr_el0_offset())));
+
+    __ leave();
     __ ret(lr);
 
 #   undef __
@@ -112,20 +125,32 @@ void VM_Version::get_processor_features() {
   _supports_atomic_getset8 = true;
   _supports_atomic_getadd8 = true;
 
+  getPsrInfo_stub(&_psr_info);
+
+  int dcache_line = VM_Version::dcache_line_size();
+
   if (FLAG_IS_DEFAULT(AllocatePrefetchDistance))
-    FLAG_SET_DEFAULT(AllocatePrefetchDistance, 256);
+    FLAG_SET_DEFAULT(AllocatePrefetchDistance, 3*dcache_line);
   if (FLAG_IS_DEFAULT(AllocatePrefetchStepSize))
-    FLAG_SET_DEFAULT(AllocatePrefetchStepSize, 64);
-  FLAG_SET_DEFAULT(PrefetchScanIntervalInBytes, 256);
-  FLAG_SET_DEFAULT(PrefetchFieldsAhead, 256);
-  FLAG_SET_DEFAULT(PrefetchCopyIntervalInBytes, 256);
-  FLAG_SET_DEFAULT(UseSSE42Intrinsics, true);
+    FLAG_SET_DEFAULT(AllocatePrefetchStepSize, dcache_line);
+  if (FLAG_IS_DEFAULT(PrefetchScanIntervalInBytes))
+    FLAG_SET_DEFAULT(PrefetchScanIntervalInBytes, 3*dcache_line);
+  if (FLAG_IS_DEFAULT(PrefetchCopyIntervalInBytes))
+    FLAG_SET_DEFAULT(PrefetchCopyIntervalInBytes, 3*dcache_line);
+
+  if (PrefetchCopyIntervalInBytes != -1 &&
+       ((PrefetchCopyIntervalInBytes & 7) || (PrefetchCopyIntervalInBytes >= 32768))) {
+    warning("PrefetchCopyIntervalInBytes must be -1, or a multiple of 8 and < 32768");
+    PrefetchCopyIntervalInBytes &= ~7;
+    if (PrefetchCopyIntervalInBytes >= 32768)
+      PrefetchCopyIntervalInBytes = 32760;
+  }
 
   unsigned long auxv = getauxval(AT_HWCAP);
 
   char buf[512];
 
-  _cpuFeatures = auxv;
+  _features = auxv;
 
   int cpu_lines = 0;
   if (FILE *f = fopen("/proc/cpuinfo", "r")) {
@@ -150,12 +175,21 @@ void VM_Version::get_processor_features() {
   }
 
   // Enable vendor specific features
-  if (_cpu == CPU_CAVIUM && _variant == 0) _cpuFeatures |= CPU_DMB_ATOMICS;
-  if (_cpu == CPU_ARM && (_model == 0xd03 || _model2 == 0xd03)) _cpuFeatures |= CPU_A53MAC;
+  if (_cpu == CPU_CAVIUM) {
+    if (_variant == 0) _features |= CPU_DMB_ATOMICS;
+    if (FLAG_IS_DEFAULT(AvoidUnalignedAccesses)) {
+      FLAG_SET_DEFAULT(AvoidUnalignedAccesses, true);
+    }
+    if (FLAG_IS_DEFAULT(UseSIMDForMemoryOps)) {
+      FLAG_SET_DEFAULT(UseSIMDForMemoryOps, (_variant > 0));
+    }
+  }
+  if (_cpu == CPU_ARM && (_model == 0xd03 || _model2 == 0xd03)) _features |= CPU_A53MAC;
+  if (_cpu == CPU_ARM && (_model == 0xd07 || _model2 == 0xd07)) _features |= CPU_STXR_PREFETCH;
   // If an olde style /proc/cpuinfo (cpu_lines == 1) then if _model is an A57 (0xd07)
   // we assume the worst and assume we could be on a big little system and have
   // undisclosed A53 cores which we could be swapped to at any stage
-  if (_cpu == CPU_ARM && cpu_lines == 1 && _model == 0xd07) _cpuFeatures |= CPU_A53MAC;
+  if (_cpu == CPU_ARM && cpu_lines == 1 && _model == 0xd07) _features |= CPU_A53MAC;
 
   sprintf(buf, "0x%02x:0x%x:0x%03x:%d", _cpu, _variant, _model, _revision);
   if (_model2) sprintf(buf+strlen(buf), "(0x%03x)", _model2);
@@ -164,8 +198,9 @@ void VM_Version::get_processor_features() {
   if (auxv & HWCAP_AES)   strcat(buf, ", aes");
   if (auxv & HWCAP_SHA1)  strcat(buf, ", sha1");
   if (auxv & HWCAP_SHA2)  strcat(buf, ", sha256");
+  if (auxv & HWCAP_ATOMICS) strcat(buf, ", lse");
 
-  _features_str = os::strdup(buf);
+  _features_string = os::strdup(buf);
 
   if (FLAG_IS_DEFAULT(UseCRC32)) {
     UseCRC32 = (auxv & HWCAP_CRC32) != 0;
@@ -173,6 +208,25 @@ void VM_Version::get_processor_features() {
   if (UseCRC32 && (auxv & HWCAP_CRC32) == 0) {
     warning("UseCRC32 specified, but not supported on this CPU");
   }
+
+  if (FLAG_IS_DEFAULT(UseAdler32Intrinsics)) {
+    FLAG_SET_DEFAULT(UseAdler32Intrinsics, true);
+  }
+
+  if (UseVectorizedMismatchIntrinsic) {
+    warning("UseVectorizedMismatchIntrinsic specified, but not available on this CPU.");
+    FLAG_SET_DEFAULT(UseVectorizedMismatchIntrinsic, false);
+  }
+
+  if (auxv & HWCAP_ATOMICS) {
+    if (FLAG_IS_DEFAULT(UseLSE))
+      FLAG_SET_DEFAULT(UseLSE, true);
+  } else {
+    if (UseLSE) {
+      warning("UseLSE specified, but not supported on this CPU");
+    }
+  }
+
   if (auxv & HWCAP_AES) {
     UseAES = UseAES || FLAG_IS_DEFAULT(UseAES);
     UseAESIntrinsics =
@@ -190,9 +244,9 @@ void VM_Version::get_processor_features() {
     }
   }
 
-  if (UseGHASHIntrinsics) {
-    warning("GHASH intrinsics are not available on this CPU");
-    FLAG_SET_DEFAULT(UseGHASHIntrinsics, false);
+  if (UseAESCTRIntrinsics) {
+    warning("AES/CTR intrinsics are not available on this CPU");
+    FLAG_SET_DEFAULT(UseAESCTRIntrinsics, false);
   }
 
   if (FLAG_IS_DEFAULT(UseCRC32Intrinsics)) {
@@ -206,6 +260,10 @@ void VM_Version::get_processor_features() {
   } else if (UseCRC32CIntrinsics) {
     warning("CRC32C is not available on the CPU");
     FLAG_SET_DEFAULT(UseCRC32CIntrinsics, false);
+  }
+
+  if (FLAG_IS_DEFAULT(UseFMA)) {
+    FLAG_SET_DEFAULT(UseFMA, true);
   }
 
   if (auxv & (HWCAP_SHA1 | HWCAP_SHA2)) {
@@ -232,7 +290,7 @@ void VM_Version::get_processor_features() {
     }
   } else if (UseSHA256Intrinsics) {
     warning("Intrinsics for SHA-224 and SHA-256 crypto hash functions not available on this CPU.");
-    FLAG_SET_DEFAULT(UseSHA1Intrinsics, false);
+    FLAG_SET_DEFAULT(UseSHA256Intrinsics, false);
   }
 
   if (UseSHA512Intrinsics) {
@@ -242,6 +300,27 @@ void VM_Version::get_processor_features() {
 
   if (!(UseSHA1Intrinsics || UseSHA256Intrinsics || UseSHA512Intrinsics)) {
     FLAG_SET_DEFAULT(UseSHA, false);
+  }
+
+  if (auxv & HWCAP_PMULL) {
+    if (FLAG_IS_DEFAULT(UseGHASHIntrinsics)) {
+      FLAG_SET_DEFAULT(UseGHASHIntrinsics, true);
+    }
+  } else if (UseGHASHIntrinsics) {
+    warning("GHASH intrinsics are not available on this CPU");
+    FLAG_SET_DEFAULT(UseGHASHIntrinsics, false);
+  }
+
+  if (is_zva_enabled()) {
+    if (FLAG_IS_DEFAULT(UseBlockZeroing)) {
+      FLAG_SET_DEFAULT(UseBlockZeroing, true);
+    }
+    if (FLAG_IS_DEFAULT(BlockZeroingLowLimit)) {
+      FLAG_SET_DEFAULT(BlockZeroingLowLimit, 4 * VM_Version::zva_length());
+    }
+  } else if (UseBlockZeroing) {
+    warning("DC ZVA is not available on this CPU");
+    FLAG_SET_DEFAULT(UseBlockZeroing, false);
   }
 
   // This machine allows unaligned memory accesses
@@ -254,11 +333,18 @@ void VM_Version::get_processor_features() {
   }
 
   if (FLAG_IS_DEFAULT(UseBarriersForVolatile)) {
-    UseBarriersForVolatile = (_cpuFeatures & CPU_DMB_ATOMICS) != 0;
+    UseBarriersForVolatile = (_features & CPU_DMB_ATOMICS) != 0;
   }
 
   if (FLAG_IS_DEFAULT(UsePopCountInstruction)) {
     UsePopCountInstruction = true;
+  }
+
+  if (FLAG_IS_DEFAULT(UseMontgomeryMultiplyIntrinsic)) {
+    UseMontgomeryMultiplyIntrinsic = true;
+  }
+  if (FLAG_IS_DEFAULT(UseMontgomerySquareIntrinsic)) {
+    UseMontgomerySquareIntrinsic = true;
   }
 
 #ifdef COMPILER2

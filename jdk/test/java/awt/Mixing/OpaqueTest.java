@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,11 +23,11 @@
 
 /*
   @test
-  @bug 4811096
+  @key headful
+  @bug 4811096 8173409
   @summary Tests whether opaque and non-opaque components mix correctly
   @author anthony.petrov@...: area=awt.mixing
   @library ../regtesthelpers
-  @modules java.desktop/com.sun.awt
   @build Util
   @run main OpaqueTest
 */
@@ -43,7 +43,6 @@ import java.awt.*;
 import java.awt.event.*;
 import javax.swing.*;
 import test.java.awt.regtesthelpers.Util;
-import com.sun.awt.AWTUtilities;
 
 
 
@@ -124,12 +123,10 @@ public class OpaqueTest
         // flag value.
         for (int i = 0; i < 9; ++i) {
             if (i == 3) {
-                AWTUtilities.setComponentMixingCutoutShape(light,
-                        new Rectangle());
+                light.setMixingCutoutShape(new Rectangle());
             }
             if (i == 6) {
-                AWTUtilities.setComponentMixingCutoutShape(light,
-                        null);
+                light.setMixingCutoutShape(null);
             }
 
             robot.mousePress(InputEvent.BUTTON1_MASK);

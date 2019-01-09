@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,41 +26,24 @@
 #define SHARE_VM_C1_C1_GLOBALS_HPP
 
 #include "runtime/globals.hpp"
-#ifdef TARGET_ARCH_x86
-# include "c1_globals_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "c1_globals_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "c1_globals_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "c1_globals_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "c1_globals_aarch64.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_linux
-# include "c1_globals_linux.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_solaris
-# include "c1_globals_solaris.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_windows
-# include "c1_globals_windows.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_aix
-# include "c1_globals_aix.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_bsd
-# include "c1_globals_bsd.hpp"
-#endif
+#include "utilities/macros.hpp"
+
+#include CPU_HEADER(c1_globals)
+#include OS_HEADER(c1_globals)
 
 //
 // Defines all global flags used by the client compiler.
 //
-#define C1_FLAGS(develop, develop_pd, product, product_pd, diagnostic, notproduct, range, constraint) \
+#define C1_FLAGS(develop, \
+                 develop_pd, \
+                 product, \
+                 product_pd, \
+                 diagnostic, \
+                 diagnostic_pd, \
+                 notproduct, \
+                 range, \
+                 constraint, \
+                 writeable) \
                                                                             \
   /* Printing */                                                            \
   notproduct(bool, PrintC1Statistics, false,                                \
@@ -152,6 +135,7 @@
                                                                             \
   product(intx, ValueMapMaxLoopSize, 8,                                     \
           "maximum size of a loop optimized by global value numbering")     \
+          range(0, 128)                                                     \
                                                                             \
   develop(bool, EliminateBlocks, true,                                      \
           "Eliminate unneccessary basic blocks")                            \
@@ -175,7 +159,7 @@
   product(bool, InlineSynchronizedMethods, true,                            \
           "Inline synchronized methods")                                    \
                                                                             \
-  develop(bool, InlineNIOCheckIndex, true,                                  \
+  diagnostic(bool, InlineNIOCheckIndex, true,                               \
           "Intrinsify java.nio.Buffer.checkIndex")                          \
                                                                             \
   develop(bool, CanonicalizeNodes, true,                                    \
@@ -220,6 +204,7 @@
                                                                             \
   develop(intx, TraceLinearScanLevel, 0,                                    \
           "Debug levels for the linear scan allocator")                     \
+          range(0, 4)                                                       \
                                                                             \
   develop(bool, StressLinearScan, false,                                    \
           "scramble block order used by LinearScan (stress test)")          \
@@ -294,6 +279,7 @@
                                                                             \
   develop(intx, NMethodSizeLimit, (64*K)*wordSize,                          \
           "Maximum size of a compiled method.")                             \
+          range(0, max_jint)                                                \
                                                                             \
   develop(bool, TraceFPUStack, false,                                       \
           "Trace emulation of the FPU stack (intel only)")                  \
@@ -309,6 +295,7 @@
                                                                             \
   develop(intx, InstructionCountCutoff, 37000,                              \
           "If GraphBuilder adds this many instructions, bails out")         \
+          range(0, max_jint)                                                \
                                                                             \
   develop(bool, ComputeExactFPURegisterUsage, true,                         \
           "Compute additional live set for fpu registers to simplify fpu stack merge (Intel only)") \
@@ -337,9 +324,6 @@
   develop(bool, PrintCFGToFile, false,                                      \
           "print control flow graph to a separate file during compilation") \
                                                                             \
-  diagnostic(bool, C1PatchInvokeDynamic, true,                              \
-             "Patch invokedynamic appendix not known at compile time")      \
-                                                                            \
 // Read default values for c1 globals
 
 C1_FLAGS(DECLARE_DEVELOPER_FLAG, \
@@ -347,8 +331,10 @@ C1_FLAGS(DECLARE_DEVELOPER_FLAG, \
          DECLARE_PRODUCT_FLAG, \
          DECLARE_PD_PRODUCT_FLAG, \
          DECLARE_DIAGNOSTIC_FLAG, \
+         DECLARE_PD_DIAGNOSTIC_FLAG, \
          DECLARE_NOTPRODUCT_FLAG, \
          IGNORE_RANGE, \
-         IGNORE_CONSTRAINT)
+         IGNORE_CONSTRAINT, \
+         IGNORE_WRITEABLE)
 
 #endif // SHARE_VM_C1_C1_GLOBALS_HPP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -124,6 +124,8 @@ class FloatRegisterImpl: public AbstractRegisterImpl {
 
 };
 
+CONSTANT_REGISTER_DECLARATION(FloatRegister, fnoreg, (-1));
+
 // Use XMMRegister as shortcut
 class XMMRegisterImpl;
 typedef XMMRegisterImpl* XMMRegister;
@@ -162,9 +164,10 @@ class XMMRegisterImpl: public AbstractRegisterImpl {
   XMMRegister successor() const                          { return as_XMMRegister(encoding() + 1); }
 
   // accessors
-  int   encoding() const                          { assert(is_valid(), err_msg("invalid register (%d)", (int)(intptr_t)this )); return (intptr_t)this; }
+  int   encoding() const                          { assert(is_valid(), "invalid register (%d)", (int)(intptr_t)this ); return (intptr_t)this; }
   bool  is_valid() const                          { return 0 <= (intptr_t)this && (intptr_t)this < number_of_registers; }
   const char* name() const;
+  const char* sub_word_name(int offset) const;
 };
 
 
@@ -245,7 +248,7 @@ public:
   KRegister successor() const                          { return as_KRegister(encoding() + 1); }
 
   // accessors
-  int   encoding() const                          { assert(is_valid(), err_msg("invalid register (%d)", (int)(intptr_t)this)); return (intptr_t)this; }
+  int   encoding() const                          { assert(is_valid(), "invalid register (%d)", (int)(intptr_t)this); return (intptr_t)this; }
   bool  is_valid() const                          { return 0 <= (intptr_t)this && (intptr_t)this < number_of_registers; }
   const char* name() const;
 };

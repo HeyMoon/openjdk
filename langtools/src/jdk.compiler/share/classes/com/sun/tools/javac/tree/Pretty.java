@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@ package com.sun.tools.javac.tree;
 import java.io.*;
 
 import com.sun.source.tree.MemberReferenceTree.ReferenceMode;
+import com.sun.source.tree.ModuleTree.ModuleKind;
 import com.sun.tools.javac.code.*;
 import com.sun.tools.javac.tree.JCTree.*;
 import com.sun.tools.javac.util.*;
@@ -438,6 +439,96 @@ public class Pretty extends JCTree.Visitor {
         }
     }
 
+    @Override
+    public void visitModuleDef(JCModuleDecl tree) {
+        try {
+            printDocComment(tree);
+            printAnnotations(tree.mods.annotations);
+            if (tree.getModuleType() == ModuleKind.OPEN) {
+                print("open ");
+            }
+            print("module ");
+            printExpr(tree.qualId);
+            if (tree.directives == null) {
+                print(";");
+            } else {
+                printBlock(tree.directives);
+            }
+            println();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    @Override
+    public void visitExports(JCExports tree) {
+        try {
+            print("exports ");
+            printExpr(tree.qualid);
+            if (tree.moduleNames != null) {
+                print(" to ");
+                printExprs(tree.moduleNames);
+            }
+            print(";");
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    @Override
+    public void visitOpens(JCOpens tree) {
+        try {
+            print("opens ");
+            printExpr(tree.qualid);
+            if (tree.moduleNames != null) {
+                print(" to ");
+                printExprs(tree.moduleNames);
+            }
+            print(";");
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    @Override
+    public void visitProvides(JCProvides tree) {
+        try {
+            print("provides ");
+            printExpr(tree.serviceName);
+            print(" with ");
+            printExprs(tree.implNames);
+            print(";");
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    @Override
+    public void visitRequires(JCRequires tree) {
+        try {
+            print("requires ");
+            if (tree.isStaticPhase)
+                print("static ");
+            if (tree.isTransitive)
+                print("transitive ");
+            printExpr(tree.moduleName);
+            print(";");
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    @Override
+    public void visitUses(JCUses tree) {
+        try {
+            print("uses ");
+            printExpr(tree.qualid);
+            print(";");
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
     public void visitImport(JCImport tree) {
         try {
             print("import ");
@@ -655,8 +746,11 @@ public class Pretty extends JCTree.Visitor {
                     printExpr(tree.init.head);
                     for (List<JCStatement> l = tree.init.tail; l.nonEmpty(); l = l.tail) {
                         JCVariableDecl vdef = (JCVariableDecl)l.head;
-                        print(", " + vdef.name + " = ");
-                        printExpr(vdef.init);
+                        print(", " + vdef.name);
+                        if (vdef.init != null) {
+                            print(" = ");
+                            printExpr(vdef.init);
+                        }
                     }
                 } else {
                     printExprs(tree.init);
@@ -1411,7 +1505,7 @@ public class Pretty extends JCTree.Visitor {
 
     public void visitTree(JCTree tree) {
         try {
-            print("(UNKNOWN: " + tree + ")");
+            print("(UNKNOWN: " + tree.getTag() + ")");
             println();
         } catch (IOException e) {
             throw new UncheckedIOException(e);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 1997, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,14 +26,20 @@
 package java.applet;
 
 /**
- * The <code>AudioClip</code> interface is a simple abstraction for
- * playing a sound clip. Multiple <code>AudioClip</code> items can be
+ * The {@code AudioClip} interface is a simple abstraction for
+ * playing a sound clip. Multiple {@code AudioClip} items can be
  * playing at the same time, and the resulting sound is mixed
  * together to produce a composite.
  *
  * @author      Arthur van Hoff
  * @since       1.0
+ *
+ * @deprecated  The Applet API is deprecated. See the
+ * <a href="package-summary.html">java.applet package documentation</a>
+ * for further information.
  */
+
+@Deprecated(since = "9")
 public interface AudioClip {
     /**
      * Starts playing this audio clip. Each time this method is called,

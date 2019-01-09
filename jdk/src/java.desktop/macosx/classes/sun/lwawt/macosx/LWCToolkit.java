@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,8 @@
 
 package sun.lwawt.macosx;
 
+import com.apple.laf.AquaMenuBarUI;
+import java.awt.peer.TaskbarPeer;
 import java.awt.*;
 import java.awt.datatransfer.Clipboard;
 import java.awt.dnd.*;
@@ -42,6 +44,7 @@ import java.security.*;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.net.MalformedURLException;
+import javax.swing.UIManager;
 
 import sun.awt.*;
 import sun.awt.datatransfer.DataTransferer;
@@ -50,8 +53,6 @@ import sun.java2d.opengl.OGLRenderQueue;
 import sun.lwawt.*;
 import sun.lwawt.LWWindowPeer.PeerType;
 import sun.security.action.GetBooleanAction;
-
-import sun.util.CoreResourceBundleControl;
 
 @SuppressWarnings("serial") // JDK implementation class
 final class NamedCursor extends Cursor {
@@ -84,9 +85,7 @@ public final class LWCToolkit extends LWToolkit {
             public ResourceBundle run() {
                 ResourceBundle platformResources = null;
                 try {
-                    platformResources =
-                            ResourceBundle.getBundle("sun.awt.resources.awtosx",
-                                    CoreResourceBundleControl.getRBControlInstance());
+                    platformResources = ResourceBundle.getBundle("sun.awt.resources.awtosx");
                 } catch (MissingResourceException e) {
                     // No resource file; defaults will be used.
                 }
@@ -127,10 +126,10 @@ public final class LWCToolkit extends LWToolkit {
     /*
      * System colors with default initial values, overwritten by toolkit if system values differ and are available.
      */
-    private final static int NUM_APPLE_COLORS = 3;
-    public final static int KEYBOARD_FOCUS_COLOR = 0;
-    public final static int INACTIVE_SELECTION_BACKGROUND_COLOR = 1;
-    public final static int INACTIVE_SELECTION_FOREGROUND_COLOR = 2;
+    private static final int NUM_APPLE_COLORS = 3;
+    public static final int KEYBOARD_FOCUS_COLOR = 0;
+    public static final int INACTIVE_SELECTION_BACKGROUND_COLOR = 1;
+    public static final int INACTIVE_SELECTION_FOREGROUND_COLOR = 2;
     private static int[] appleColors = {
         0xFF808080, // keyboardFocusColor = Color.gray;
         0xFFC0C0C0, // secondarySelectedControlColor
@@ -298,6 +297,11 @@ public final class LWCToolkit extends LWToolkit {
     }
 
     @Override
+    public TaskbarPeer createTaskbarPeer(Taskbar target) {
+        return new CTaskbarPeer();
+    }
+
+    @Override
     public LWCursorManager getCursorManager() {
         return CCursorManager.getInstance();
     }
@@ -355,18 +359,6 @@ public final class LWCToolkit extends LWToolkit {
     }
 
     @Override
-    protected int getScreenHeight() {
-        return GraphicsEnvironment.getLocalGraphicsEnvironment()
-                .getDefaultScreenDevice().getDefaultConfiguration().getBounds().height;
-    }
-
-    @Override
-    protected int getScreenWidth() {
-        return GraphicsEnvironment.getLocalGraphicsEnvironment()
-                .getDefaultScreenDevice().getDefaultConfiguration().getBounds().width;
-    }
-
-    @Override
     protected void initializeDesktopProperties() {
         super.initializeDesktopProperties();
         Map <Object, Object> fontHints = new HashMap<>();
@@ -376,11 +368,11 @@ public final class LWCToolkit extends LWToolkit {
 
         // These DnD properties must be set, otherwise Swing ends up spewing NPEs
         // all over the place. The values came straight off of MToolkit.
-        desktopProperties.put("DnD.Autoscroll.initialDelay", new Integer(50));
-        desktopProperties.put("DnD.Autoscroll.interval", new Integer(50));
-        desktopProperties.put("DnD.Autoscroll.cursorHysteresis", new Integer(5));
+        desktopProperties.put("DnD.Autoscroll.initialDelay", Integer.valueOf(50));
+        desktopProperties.put("DnD.Autoscroll.interval", Integer.valueOf(50));
+        desktopProperties.put("DnD.Autoscroll.cursorHysteresis", Integer.valueOf(5));
 
-        desktopProperties.put("DnD.isDragImageSupported", new Boolean(true));
+        desktopProperties.put("DnD.isDragImageSupported", Boolean.TRUE);
 
         // Register DnD cursors
         desktopProperties.put("DnD.Cursor.CopyDrop", new NamedCursor("DnD.Cursor.CopyDrop"));
@@ -515,19 +507,20 @@ public final class LWCToolkit extends LWToolkit {
      * key for menu shortcuts.
      * <p>
      * Menu shortcuts, which are embodied in the
-     * <code>MenuShortcut</code> class, are handled by the
-     * <code>MenuBar</code> class.
+     * {@code MenuShortcut} class, are handled by the
+     * {@code MenuBar} class.
      * <p>
-     * By default, this method returns <code>Event.CTRL_MASK</code>.
+     * By default, this method returns {@code Event.CTRL_MASK}.
      * Toolkit implementations should override this method if the
      * <b>Control</b> key isn't the correct key for accelerators.
-     * @return    the modifier mask on the <code>Event</code> class
+     * @return    the modifier mask on the {@code Event} class
      *                 that is used for menu shortcuts on this toolkit.
      * @see       java.awt.MenuBar
      * @see       java.awt.MenuShortcut
      * @since     1.1
      */
     @Override
+    @SuppressWarnings("deprecation")
     public int getMenuShortcutKeyMask() {
         return Event.META_MASK;
     }
@@ -681,7 +674,7 @@ public final class LWCToolkit extends LWToolkit {
      * @param r a {@code Runnable} to execute
      * @param delay a delay in milliseconds
      */
-    native static void performOnMainThreadAfterDelay(Runnable r, long delay);
+    static native void performOnMainThreadAfterDelay(Runnable r, long delay);
 
 // DnD support
 
@@ -764,6 +757,7 @@ public final class LWCToolkit extends LWToolkit {
      * stroke.
      */
     @Override
+    @SuppressWarnings("deprecation")
     public int getFocusAcceleratorKeyMask() {
         return InputEvent.CTRL_MASK | InputEvent.ALT_MASK;
     }
@@ -773,6 +767,7 @@ public final class LWCToolkit extends LWToolkit {
      * printable character.
      */
     @Override
+    @SuppressWarnings("deprecation")
     public boolean isPrintableCharacterModifiersMask(int mods) {
         return ((mods & (InputEvent.META_MASK | InputEvent.CTRL_MASK)) == 0);
     }
@@ -932,5 +927,14 @@ public final class LWCToolkit extends LWToolkit {
     @Override
     protected PlatformWindow getPlatformWindowUnderMouse() {
         return CPlatformWindow.nativeGetTopmostPlatformWindowUnderMouse();
+    }
+
+    @Override
+    public void updateScreenMenuBarUI() {
+        if (AquaMenuBarUI.getScreenMenuBarProperty())  {
+            UIManager.put("MenuBarUI", "com.apple.laf.AquaMenuBarUI");
+        } else {
+            UIManager.put("MenuBarUI", null);
+        }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1994, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1994, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,9 +26,8 @@
 package java.io;
 
 import java.nio.channels.FileChannel;
-import java.util.concurrent.atomic.AtomicBoolean;
-import sun.misc.SharedSecrets;
-import sun.misc.JavaIOFileDescriptorAccess;
+import jdk.internal.misc.SharedSecrets;
+import jdk.internal.misc.JavaIOFileDescriptorAccess;
 import sun.nio.ch.FileChannelImpl;
 
 
@@ -37,7 +36,7 @@ import sun.nio.ch.FileChannelImpl;
  * <code>File</code> or to a <code>FileDescriptor</code>. Whether or not
  * a file is available or may be created depends upon the underlying
  * platform.  Some platforms, in particular, allow a file to be opened
- * for writing by only one <tt>FileOutputStream</tt> (or other
+ * for writing by only one {@code FileOutputStream} (or other
  * file-writing object) at a time.  In such situations the constructors in
  * this class will fail if the file involved is already open.
  *
@@ -77,7 +76,9 @@ class FileOutputStream extends OutputStream
      */
     private final String path;
 
-    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final Object closeLock = new Object();
+
+    private volatile boolean closed;
 
     /**
      * Creates a file output stream to write to the file with the
@@ -90,6 +91,10 @@ class FileOutputStream extends OutputStream
      * If the file exists but is a directory rather than a regular file, does
      * not exist but cannot be created, or cannot be opened for any other
      * reason then a <code>FileNotFoundException</code> is thrown.
+     * <p>
+     * @implSpec Invoking this constructor with the parameter {@code name} is
+     * equivalent to invoking {@link #FileOutputStream(String,boolean)
+     * new FileOutputStream(name, false)}.
      *
      * @param      name   the system-dependent filename
      * @exception  FileNotFoundException  if the file exists but is a directory
@@ -341,14 +346,21 @@ class FileOutputStream extends OutputStream
      * @spec JSR-51
      */
     public void close() throws IOException {
-        if (!closed.compareAndSet(false, true)) {
-            // if compareAndSet() returns false closed was already true
+        if (closed) {
             return;
+        }
+        synchronized (closeLock) {
+            if (closed) {
+                return;
+            }
+            closed = true;
         }
 
         FileChannel fc = channel;
         if (fc != null) {
-           fc.close();
+            // possible race with getChannel(), benign since
+            // FileChannel.close is final and idempotent
+            fc.close();
         }
 
         fd.closeAll(new Closeable() {
@@ -399,8 +411,10 @@ class FileOutputStream extends OutputStream
                 fc = this.channel;
                 if (fc == null) {
                     this.channel = fc = FileChannelImpl.open(fd, path, false, true, this);
-                    if (closed.get()) {
+                    if (closed) {
                         try {
+                            // possible race with close(), benign since
+                            // FileChannel.close is final and idempotent
                             fc.close();
                         } catch (IOException ioe) {
                             throw new InternalError(ioe); // should not happen
@@ -417,9 +431,18 @@ class FileOutputStream extends OutputStream
      * <code>close</code> method of this file output stream is
      * called when there are no more references to this stream.
      *
+     * @deprecated The {@code finalize} method has been deprecated.
+     * Subclasses that override {@code finalize} in order to perform cleanup
+     * should be modified to use alternative cleanup mechanisms and
+     * to remove the overriding {@code finalize} method.
+     * When overriding the {@code finalize} method, its implementation must explicitly
+     * ensure that {@code super.finalize()} is invoked as described in {@link Object#finalize}.
+     * See the specification for {@link Object#finalize()} for further
+     * information about migration options.
      * @exception  IOException  if an I/O error occurs.
      * @see        java.io.FileInputStream#close()
      */
+    @Deprecated(since="9")
     protected void finalize() throws IOException {
         if (fd != null) {
             if (fd == FileDescriptor.out || fd == FileDescriptor.err) {

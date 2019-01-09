@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,21 +21,28 @@
  * questions.
  */
 
-/**
+/*
  * @test
  * @bug 6273877 6322208 6275523
- * @summary make sure we can access the NSS softtoken KeyStore and use a private key
+ * @summary make sure we can access the NSS softtoken KeyStore
+ *          and use a private key
  * @author Andreas Sterbenz
  * @library ..
+ * @modules jdk.crypto.cryptoki
  * @run main/othervm GetPrivateKey
- * @key randomness
+ * @run main/othervm GetPrivateKey sm policy
  */
 
-import java.util.*;
-
-import java.security.*;
-import java.security.KeyStore.*;
-import java.security.cert.*;
+import java.io.File;
+import java.security.KeyStore;
+import java.security.PrivateKey;
+import java.security.Provider;
+import java.security.Security;
+import java.security.Signature;
+import java.security.cert.X509Certificate;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.TreeSet;
 
 public class GetPrivateKey extends SecmodTest {
 
@@ -49,18 +56,24 @@ public class GetPrivateKey extends SecmodTest {
 
         System.out.println(p);
         Security.addProvider(p);
-        KeyStore ks = KeyStore.getInstance("PKCS11", p);
+
+        if (args.length > 1 && "sm".equals(args[0])) {
+            System.setProperty("java.security.policy",
+                    BASE + File.separator + args[1]);
+            System.setSecurityManager(new SecurityManager());
+        }
+
+        KeyStore ks = KeyStore.getInstance(PKCS11, p);
         ks.load(null, password);
-        Collection<String> aliases = new TreeSet<String>(Collections.list(ks.aliases()));
+        Collection<String> aliases = new TreeSet<>(
+                Collections.list(ks.aliases()));
         System.out.println("entries: " + aliases.size());
         System.out.println(aliases);
 
         PrivateKey privateKey = (PrivateKey)ks.getKey(keyAlias, password);
         System.out.println(privateKey);
 
-        byte[] data = new byte[1024];
-        Random random = new Random();
-        random.nextBytes(data);
+        byte[] data = generateData(1024);
 
         System.out.println("Signing...");
         Signature signature = Signature.getInstance("MD5withRSA");
@@ -68,7 +81,8 @@ public class GetPrivateKey extends SecmodTest {
         signature.update(data);
         byte[] sig = signature.sign();
 
-        X509Certificate[] chain = (X509Certificate[])ks.getCertificateChain(keyAlias);
+        X509Certificate[] chain =
+                (X509Certificate[]) ks.getCertificateChain(keyAlias);
         signature.initVerify(chain[0].getPublicKey());
         signature.update(data);
         boolean ok = signature.verify(sig);

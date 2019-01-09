@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,12 +25,13 @@
 #include "precompiled.hpp"
 #include "classfile/classLoader.hpp"
 #include "classfile/javaClasses.hpp"
+#include "gc/shared/allocTracer.hpp"
+#include "gc/shared/gcId.hpp"
 #include "gc/shared/gcLocker.inline.hpp"
 #include "gc/shared/genCollectedHeap.hpp"
 #include "gc/shared/vmGCOperations.hpp"
+#include "logging/log.hpp"
 #include "memory/oopFactory.hpp"
-#include "oops/instanceKlass.hpp"
-#include "oops/instanceRefKlass.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/init.hpp"
 #include "runtime/interfaceSupport.hpp"
@@ -39,6 +40,7 @@
 #include "utilities/preserveException.hpp"
 #if INCLUDE_ALL_GCS
 #include "gc/g1/g1CollectedHeap.inline.hpp"
+#include "gc/g1/g1Policy.hpp"
 #endif // INCLUDE_ALL_GCS
 
 VM_GC_Operation::~VM_GC_Operation() {
@@ -60,17 +62,6 @@ void VM_GC_Operation::notify_gc_end() {
   HS_DTRACE_WORKAROUND_TAIL_CALL_BUG();
 }
 
-void VM_GC_Operation::acquire_pending_list_lock() {
-  // we may enter this with pending exception set
-  InstanceRefKlass::acquire_pending_list_lock(&_pending_list_basic_lock);
-}
-
-
-void VM_GC_Operation::release_and_notify_pending_list_lock() {
-
-  InstanceRefKlass::release_and_notify_pending_list_lock(&_pending_list_basic_lock);
-}
-
 // Allocations may fail in several threads at about the same time,
 // resulting in multiple gc requests.  We only want to do one of them.
 // In case a GC locker is active and the need for a GC is already signaled,
@@ -81,10 +72,10 @@ bool VM_GC_Operation::skip_operation() const {
   if (_full && skip) {
     skip = (_full_gc_count_before != Universe::heap()->total_full_collections());
   }
-  if (!skip && GC_locker::is_active_and_needs_gc()) {
+  if (!skip && GCLocker::is_active_and_needs_gc()) {
     skip = Universe::heap()->is_maximal_no_gc();
     assert(!(skip && (_gc_cause == GCCause::_gc_locker)),
-           "GC_locker cannot be active when initiating GC");
+           "GCLocker cannot be active when initiating GC");
   }
   return skip;
 }
@@ -103,16 +94,13 @@ bool VM_GC_Operation::doit_prologue() {
               proper_unit_for_byte_size(NewSize)));
   }
 
-  acquire_pending_list_lock();
   // If the GC count has changed someone beat us to the collection
-  // Get the Heap_lock after the pending_list_lock.
   Heap_lock->lock();
 
   // Check invocations
   if (skip_operation()) {
     // skip collection
     Heap_lock->unlock();
-    release_and_notify_pending_list_lock();
     _prologue_succeeded = false;
   } else {
     _prologue_succeeded = true;
@@ -123,9 +111,10 @@ bool VM_GC_Operation::doit_prologue() {
 
 void VM_GC_Operation::doit_epilogue() {
   assert(Thread::current()->is_Java_thread(), "just checking");
-  // Release the Heap_lock first.
+  if (Universe::has_reference_pending_list()) {
+    Heap_lock->notify_all();
+  }
   Heap_lock->unlock();
-  release_and_notify_pending_list_lock();
 }
 
 bool VM_GC_HeapInspection::skip_operation() const {
@@ -133,7 +122,7 @@ bool VM_GC_HeapInspection::skip_operation() const {
 }
 
 bool VM_GC_HeapInspection::collect() {
-  if (GC_locker::is_active()) {
+  if (GCLocker::is_active()) {
     return false;
   }
   Universe::heap()->collect_as_vm_thread(GCCause::_heap_inspection);
@@ -143,7 +132,7 @@ bool VM_GC_HeapInspection::collect() {
 void VM_GC_HeapInspection::doit() {
   HandleMark hm;
   Universe::heap()->ensure_parsability(false); // must happen, even if collection does
-                                               // not happen (e.g. due to GC_locker)
+                                               // not happen (e.g. due to GCLocker)
                                                // or _full_gc being false
   if (_full_gc) {
     if (!collect()) {
@@ -157,7 +146,7 @@ void VM_GC_HeapInspection::doit() {
       // be about to attempt holds value for us only
       // if it happens now and not if it happens in the eventual
       // future.
-      warning("GC locker is held; pre-dump GC was skipped");
+      log_warning(gc)("GC locker is held; pre-dump GC was skipped");
     }
   }
   HeapInspection inspect(_csv_format, _print_help, _print_class_stats,
@@ -174,7 +163,7 @@ void VM_GenCollectForAllocation::doit() {
   _result = gch->satisfy_failed_allocation(_word_size, _tlab);
   assert(gch->is_in_reserved_or_null(_result), "result not in heap");
 
-  if (_result == NULL && GC_locker::is_active_and_needs_gc()) {
+  if (_result == NULL && GCLocker::is_active_and_needs_gc()) {
     set_gc_locked();
   }
 }
@@ -185,6 +174,18 @@ void VM_GenCollectFull::doit() {
   GenCollectedHeap* gch = GenCollectedHeap::heap();
   GCCauseSetter gccs(gch, _gc_cause);
   gch->do_full_collection(gch->must_clear_all_soft_refs(), _max_generation);
+}
+
+VM_CollectForMetadataAllocation::VM_CollectForMetadataAllocation(ClassLoaderData* loader_data,
+                                                                 size_t size,
+                                                                 Metaspace::MetadataType mdtype,
+                                                                 uint gc_count_before,
+                                                                 uint full_gc_count_before,
+                                                                 GCCause::Cause gc_cause)
+    : VM_GC_Operation(gc_count_before, gc_cause, full_gc_count_before, true),
+      _loader_data(loader_data), _size(size), _mdtype(mdtype), _result(NULL) {
+  assert(_size != 0, "An allocation should always be requested with this operation.");
+  AllocTracer::send_allocation_requiring_gc_event(_size * HeapWordSize, GCId::peek());
 }
 
 // Returns true iff concurrent GCs unloads metadata.
@@ -216,16 +217,6 @@ bool VM_CollectForMetadataAllocation::initiate_concurrent_GC() {
   return false;
 }
 
-static void log_metaspace_alloc_failure_for_concurrent_GC() {
-  if (Verbose && PrintGCDetails) {
-    if (UseConcMarkSweepGC) {
-      gclog_or_tty->print_cr("\nCMS full GC for Metaspace");
-    } else if (UseG1GC) {
-      gclog_or_tty->print_cr("\nG1 full GC for Metaspace");
-    }
-  }
-}
-
 void VM_CollectForMetadataAllocation::doit() {
   SvcGCMarker sgcm(SvcGCMarker::FULL);
 
@@ -249,7 +240,7 @@ void VM_CollectForMetadataAllocation::doit() {
       return;
     }
 
-    log_metaspace_alloc_failure_for_concurrent_GC();
+    log_debug(gc)("%s full GC for Metaspace", UseConcMarkSweepGC ? "CMS" : "G1");
   }
 
   // Don't clear the soft refs yet.
@@ -271,23 +262,24 @@ void VM_CollectForMetadataAllocation::doit() {
     return;
   }
 
-  // If expansion failed, do a last-ditch collection and try allocating
-  // again.  A last-ditch collection will clear softrefs.  This
-  // behavior is similar to the last-ditch collection done for perm
-  // gen when it was full and a collection for failed allocation
-  // did not free perm gen space.
-  heap->collect_as_vm_thread(GCCause::_last_ditch_collection);
+  // If expansion failed, do a collection clearing soft references.
+  heap->collect_as_vm_thread(GCCause::_metadata_GC_clear_soft_refs);
   _result = _loader_data->metaspace_non_null()->allocate(_size, _mdtype);
   if (_result != NULL) {
     return;
   }
 
-  if (Verbose && PrintGCDetails) {
-    gclog_or_tty->print_cr("\nAfter Metaspace GC failed to allocate size "
-                           SIZE_FORMAT, _size);
-  }
+  log_debug(gc)("After Metaspace GC failed to allocate size " SIZE_FORMAT, _size);
 
-  if (GC_locker::is_active_and_needs_gc()) {
+  if (GCLocker::is_active_and_needs_gc()) {
     set_gc_locked();
+  }
+}
+
+VM_CollectForAllocation::VM_CollectForAllocation(size_t word_size, uint gc_count_before, GCCause::Cause cause)
+    : VM_GC_Operation(gc_count_before, cause), _result(NULL), _word_size(word_size) {
+  // Only report if operation was really caused by an allocation.
+  if (_word_size != 0) {
+    AllocTracer::send_allocation_requiring_gc_event(_word_size * HeapWordSize, GCId::peek());
   }
 }

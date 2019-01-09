@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -57,8 +57,6 @@ import java.awt.image.ImageProducer;
 import java.awt.image.VolatileImage;
 import java.awt.peer.ComponentPeer;
 import java.awt.peer.ContainerPeer;
-import java.lang.reflect.*;
-import java.security.*;
 import java.util.Collection;
 import java.util.Objects;
 import java.util.Set;
@@ -158,7 +156,9 @@ public class XComponentPeer extends XWindow implements ComponentPeer, DropTarget
         XComponentPeer newPeer = (XComponentPeer)newNativeParent;
         XToolkit.awtLock();
         try {
-            XlibWrapper.XReparentWindow(XToolkit.getDisplay(), getWindow(), newPeer.getContentWindow(), x, y);
+            XlibWrapper.XReparentWindow(XToolkit.getDisplay(),
+                                        getWindow(), newPeer.getContentWindow(),
+                                        scaleUp(x), scaleUp(y));
             parentWindow = newPeer;
         } finally {
             XToolkit.awtUnlock();
@@ -210,7 +210,7 @@ public class XComponentPeer extends XWindow implements ComponentPeer, DropTarget
      * Descendants should use this method to determine whether or not native window
      * has focus.
      */
-    final public boolean hasFocus() {
+    public final boolean hasFocus() {
         return bHasFocus;
     }
 
@@ -239,53 +239,15 @@ public class XComponentPeer extends XWindow implements ComponentPeer, DropTarget
         return false;
     }
 
-    private static Class<?> seClass;
-    private static Constructor<?> seCtor;
-
-    final static AWTEvent wrapInSequenced(AWTEvent event) {
-        try {
-            if (seClass == null) {
-                seClass = Class.forName("java.awt.SequencedEvent");
-            }
-
-            if (seCtor == null) {
-                seCtor = AccessController.doPrivileged(new
-                    PrivilegedExceptionAction<Constructor<?>>() {
-                        public Constructor<?> run() throws Exception {
-                            Constructor<?> ctor = seClass.getConstructor(
-                                new Class<?>[] { AWTEvent.class });
-                            ctor.setAccessible(true);
-                            return ctor;
-                        }
-                    });
-            }
-
-            return (AWTEvent) seCtor.newInstance(new Object[] { event });
-        }
-        catch (ClassNotFoundException e) {
-            throw new NoClassDefFoundError("java.awt.SequencedEvent.");
-        }
-        catch (PrivilegedActionException ex) {
-            throw new NoClassDefFoundError("java.awt.SequencedEvent.");
-        }
-        catch (InstantiationException e) {
-            assert false;
-        }
-        catch (IllegalAccessException e) {
-            assert false;
-        }
-        catch (InvocationTargetException e) {
-            assert false;
-        }
-
-        return null;
+    static final AWTEvent wrapInSequenced(AWTEvent event) {
+        return AWTAccessor.getSequencedEventAccessor().create(event);
     }
 
     // TODO: consider moving it to KeyboardFocusManagerPeerImpl
     @SuppressWarnings("deprecation")
-    final public boolean requestFocus(Component lightweightChild, boolean temporary,
+    public final boolean requestFocus(Component lightweightChild, boolean temporary,
                                       boolean focusedWindowChangeAllowed, long time,
-                                      CausedFocusEvent.Cause cause)
+                                      FocusEvent.Cause cause)
     {
         if (XKeyboardFocusManagerPeer.
             processSynchronousLightweightTransfer(target, lightweightChild, temporary,
@@ -525,7 +487,7 @@ public class XComponentPeer extends XWindow implements ComponentPeer, DropTarget
 //                       WindowEvent wfg = new WindowEvent(parentWindow, WindowEvent.WINDOW_GAINED_FOCUS);
 //                       parentWindow.dispatchEvent(wfg);
 //                   }
-                  XKeyboardFocusManagerPeer.requestFocusFor(target, CausedFocusEvent.Cause.MOUSE_EVENT);
+                  XKeyboardFocusManagerPeer.requestFocusFor(target, FocusEvent.Cause.MOUSE_EVENT);
               }
               break;
         }
@@ -678,7 +640,7 @@ public class XComponentPeer extends XWindow implements ComponentPeer, DropTarget
      * Gets the font metrics for the specified font.
      * @param font the font for which font metrics is to be
      *      obtained
-     * @return the font metrics for <code>font</code>
+     * @return the font metrics for {@code font}
      * @see       #getFont
      * @see       java.awt.peer.ComponentPeer#getFontMetrics(Font)
      * @see       Toolkit#getFontMetrics(Font)
@@ -722,8 +684,8 @@ public class XComponentPeer extends XWindow implements ComponentPeer, DropTarget
 
     /*
      * The method changes the cursor.
-     * @param cursor - a new cursor to change to.
-     * @param ignoreSubComponents - if {@code true} is passed then
+     * @param cursor  a new cursor to change to.
+     * @param ignoreSubComponents   if {@code true} is passed then
      *                              the new cursor will be installed on window.
      *                              if {@code false} is passed then
      *                              subsequent components will try to handle
@@ -1394,6 +1356,12 @@ public class XComponentPeer extends XWindow implements ComponentPeer, DropTarget
             XToolkit.awtLock();
             try {
                 if (shape != null) {
+
+                    int scale = getScale();
+                    if (scale != 1) {
+                        shape = shape.getScaledRegion(scale, scale);
+                    }
+
                     XlibWrapper.SetRectangularShape(
                             XToolkit.getDisplay(),
                             getWindow(),

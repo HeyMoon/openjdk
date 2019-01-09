@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,14 +33,20 @@ import java.util.List;
 import java.util.concurrent.*;
 
 public class CompileTheWorld {
+    // in case when a static constructor changes System::out and System::err
+    // we hold these values of output streams
+    static PrintStream OUT = System.out;
+    static final PrintStream ERR = System.err;
     /**
-     * Entry point. Compiles classes in {@code args}, or all classes in
-     * boot-classpath if args is empty
+     * Entry point. Compiles classes in {@code paths}
      *
-     * @param args paths to jar/zip, dir contains classes, or to .lst file
-     *             contains list of classes to compile
+     * @param paths paths to jar/zip, dir contains classes, or to .lst file
+     *              contains list of classes to compile
      */
-    public static void main(String[] args) {
+    public static void main(String[] paths) {
+        if (paths.length == 0) {
+            throw new IllegalArgumentException("Expect a path to a compile target.");
+        }
         String logfile = Utils.LOG_FILE;
         PrintStream os = null;
         if (logfile != null) {
@@ -50,8 +56,10 @@ public class CompileTheWorld {
             }
         }
         if (os != null) {
-            System.setOut(os);
+            OUT = os;
         }
+
+        boolean passed = false;
 
         try {
             try {
@@ -62,12 +70,6 @@ public class CompileTheWorld {
             } catch (java.lang.NoClassDefFoundError e) {
                 // compact1, compact2 support
             }
-            String[] paths = args;
-            boolean skipRtJar = false;
-            if (args.length == 0) {
-                paths = getDefaultPaths();
-                skipRtJar = true;
-            }
             ExecutorService executor = createExecutor();
             long start = System.currentTimeMillis();
             try {
@@ -75,23 +77,19 @@ public class CompileTheWorld {
                 for (int i = 0, n = paths.length; i < n
                         && !PathHandler.isFinished(); ++i) {
                     path = paths[i];
-                    if (skipRtJar && i > 0 && isRtJar(path)) {
-                        // rt.jar is not first, so skip it
-                        continue;
-                    }
                     PathHandler.create(path, executor).process();
                 }
             } finally {
                 await(executor);
             }
-            System.out.printf("Done (%d classes, %d methods, %d ms)%n",
-                    Compiler.getClassCount(),
+            CompileTheWorld.OUT.printf("Done (%d classes, %d methods, %d ms)%n",
+                    PathHandler.getClassCount(),
                     Compiler.getMethodCount(),
                     System.currentTimeMillis() - start);
+            passed = true;
         } finally {
-            if (os != null) {
-                os.close();
-            }
+            // <clinit> might have started new threads
+            System.exit(passed ? 0 : 1);
         }
     }
 
@@ -111,13 +109,6 @@ public class CompileTheWorld {
         return result;
     }
 
-    private static String[] getDefaultPaths() {
-        String property = System.getProperty("sun.boot.class.path");
-        System.out.println(
-                "# use 'sun.boot.class.path' as args: " + property);
-        return Utils.PATH_SEPARATOR.split(property);
-    }
-
     private static void await(ExecutorService executor) {
         executor.shutdown();
         while (!executor.isTerminated()) {
@@ -128,10 +119,6 @@ public class CompileTheWorld {
                 break;
             }
         }
-    }
-
-    private static boolean isRtJar(String path) {
-        return Utils.endsWithIgnoreCase(path, File.separator + "rt.jar");
     }
 
     private static class CurrentThreadExecutor extends AbstractExecutorService {

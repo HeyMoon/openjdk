@@ -38,12 +38,12 @@ import java.security.AccessController;
 import java.security.PrivilegedAction;
 import sun.awt.SunToolkit;
 import sun.awt.AppContext;
-import sun.misc.ManagedLocalsThread;
 
 /**
  * A frame to show the applet tag in.
  */
 @SuppressWarnings("serial") // JDK-implementation class
+@Deprecated(since = "9")
 final class TextFrame extends Frame {
 
     /**
@@ -92,6 +92,7 @@ final class TextFrame extends Frame {
 /**
  * Lets us construct one using unix-style one shot behaviors.
  */
+@Deprecated(since = "9")
 final class StdAppletViewerFactory implements AppletViewerFactory {
 
     @Override
@@ -117,8 +118,13 @@ final class StdAppletViewerFactory implements AppletViewerFactory {
  * <a href="../../../docs/tooldocs/appletviewertags.html">AppletViewer Tags</a>.
  * (The document named appletviewertags.html in the JDK's docs/tooldocs directory,
  *  once the JDK docs have been installed.)
+ *
+ * @deprecated The Applet API is deprecated. See the
+ * <a href="../../java/applet/package-summary.html"> java.applet package
+ * documentation</a> for further information.
  */
-@SuppressWarnings("serial") // JDK implementation class
+@SuppressWarnings({"serial"}) // JDK-implementation class
+@Deprecated(since = "9")
 public class AppletViewer extends Frame implements AppletContext, Printable {
 
     /**
@@ -147,7 +153,7 @@ public class AppletViewer extends Frame implements AppletContext, Printable {
      */
     AppletViewerFactory factory;
 
-
+    @Deprecated(since = "9")
     private final class UserActionListener implements ActionListener {
         @Override
         public void actionPerformed(ActionEvent evt) {
@@ -158,7 +164,6 @@ public class AppletViewer extends Frame implements AppletContext, Printable {
     /**
      * Create the applet viewer.
      */
-    @SuppressWarnings("deprecation")
     public AppletViewer(int x, int y, URL doc, Hashtable<String, String> atts,
                         PrintStream statusMsgStream, AppletViewerFactory factory) {
         this.factory = factory;
@@ -221,6 +226,7 @@ public class AppletViewer extends Frame implements AppletContext, Printable {
             }
         };
 
+        @Deprecated(since = "9")
         class AppletEventListener implements AppletListener
         {
             final Frame frame;
@@ -854,7 +860,7 @@ public class AppletViewer extends Frame implements AppletContext, Printable {
         //
         final AppletPanel p = panel;
 
-        new ManagedLocalsThread(new Runnable()
+        new Thread(null, new Runnable()
         {
             @Override
             public void run()
@@ -867,7 +873,8 @@ public class AppletViewer extends Frame implements AppletContext, Printable {
                     appletSystemExit();
                 }
             }
-        }).start();
+        },
+        "AppletCloser", 0, false).start();
     }
 
     /**
@@ -890,7 +897,7 @@ public class AppletViewer extends Frame implements AppletContext, Printable {
         // spawn a new thread to avoid blocking the event queue
         // when calling appletShutdown.
         //
-        new ManagedLocalsThread(new Runnable()
+        new Thread(null, new Runnable()
         {
             @Override
             public void run()
@@ -901,7 +908,8 @@ public class AppletViewer extends Frame implements AppletContext, Printable {
                 }
                 appletSystemExit();
             }
-        }).start();
+        },
+         "AppletQuit", 0, false).start();
     }
 
     /**
@@ -1081,7 +1089,7 @@ public class AppletViewer extends Frame implements AppletContext, Printable {
 
     static String encoding = null;
 
-    static private Reader makeReader(InputStream is) {
+    private static Reader makeReader(InputStream is) {
         if (encoding != null) {
             try {
                 return new BufferedReader(new InputStreamReader(is, encoding));

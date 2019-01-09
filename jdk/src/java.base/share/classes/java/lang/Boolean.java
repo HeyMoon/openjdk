@@ -79,13 +79,16 @@ public final class Boolean implements java.io.Serializable,
      * Allocates a {@code Boolean} object representing the
      * {@code value} argument.
      *
-     * <p><b>Note: It is rarely appropriate to use this constructor.
-     * Unless a <i>new</i> instance is required, the static factory
-     * {@link #valueOf(boolean)} is generally a better choice. It is
-     * likely to yield significantly better space and time performance.</b>
-     *
      * @param   value   the value of the {@code Boolean}.
+     *
+     * @deprecated
+     * It is rarely appropriate to use this constructor. The static factory
+     * {@link #valueOf(boolean)} is generally a better choice, as it is
+     * likely to yield significantly better space and time performance.
+     * Also consider using the final fields {@link #TRUE} and {@link #FALSE}
+     * if possible.
      */
+    @Deprecated(since="9")
     public Boolean(boolean value) {
         this.value = value;
     }
@@ -94,15 +97,18 @@ public final class Boolean implements java.io.Serializable,
      * Allocates a {@code Boolean} object representing the value
      * {@code true} if the string argument is not {@code null}
      * and is equal, ignoring case, to the string {@code "true"}.
-     * Otherwise, allocate a {@code Boolean} object representing the
-     * value {@code false}. Examples:<p>
-     * {@code new Boolean("True")} produces a {@code Boolean} object
-     * that represents {@code true}.<br>
-     * {@code new Boolean("yes")} produces a {@code Boolean} object
-     * that represents {@code false}.
+     * Otherwise, allocates a {@code Boolean} object representing the
+     * value {@code false}.
      *
      * @param   s   the string to be converted to a {@code Boolean}.
+     *
+     * @deprecated
+     * It is rarely appropriate to use this constructor.
+     * Use {@link #parseBoolean(String)} to convert a string to a
+     * {@code boolean} primitive, or use {@link #valueOf(String)}
+     * to convert a string to a {@code Boolean} object.
      */
+    @Deprecated(since="9")
     public Boolean(String s) {
         this(parseBoolean(s));
     }
@@ -111,7 +117,9 @@ public final class Boolean implements java.io.Serializable,
      * Parses the string argument as a boolean.  The {@code boolean}
      * returned represents the value {@code true} if the string argument
      * is not {@code null} and is equal, ignoring case, to the string
-     * {@code "true"}. <p>
+     * {@code "true"}.
+     * Otherwise, a false value is returned, including for a null
+     * argument.<p>
      * Example: {@code Boolean.parseBoolean("True")} returns {@code true}.<br>
      * Example: {@code Boolean.parseBoolean("yes")} returns {@code false}.
      *
@@ -159,6 +167,8 @@ public final class Boolean implements java.io.Serializable,
      * specified string.  The {@code Boolean} returned represents a
      * true value if the string argument is not {@code null}
      * and is equal, ignoring case, to the string {@code "true"}.
+     * Otherwise, a false value is returned, including for a null
+     * argument.
      *
      * @param   s   a string.
      * @return  the {@code Boolean} value represented by the string.
@@ -235,14 +245,12 @@ public final class Boolean implements java.io.Serializable,
 
     /**
      * Returns {@code true} if and only if the system property named
-     * by the argument exists and is equal to the string {@code
-     * "true"}. (Beginning with version 1.0.2 of the Java&trade;
-     * platform, the test of this string is case insensitive.) A
-     * system property is accessible through {@code getProperty}, a
-     * method defined by the {@code System} class.
-     * <p>
-     * If there is no property with the specified name, or if the specified
-     * name is empty or null, then {@code false} is returned.
+     * by the argument exists and is equal to, ignoring case, the
+     * string {@code "true"}.
+     * A system property is accessible through {@code getProperty}, a
+     * method defined by the {@code System} class.  <p> If there is no
+     * property with the specified name, or if the specified name is
+     * empty or null, then {@code false} is returned.
      *
      * @param   name   the system property name.
      * @return  the {@code boolean} value of the system property.

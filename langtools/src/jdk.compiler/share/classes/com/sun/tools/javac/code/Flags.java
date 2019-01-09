@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -107,12 +107,13 @@ public class Flags {
     public static final int ACC_SUPER    = 0x0020;
     public static final int ACC_BRIDGE   = 0x0040;
     public static final int ACC_VARARGS  = 0x0080;
+    public static final int ACC_MODULE   = 0x8000;
 
     /*****************************************
      * Internal compiler flags (no bits in the lower 16).
      *****************************************/
 
-    /** Flag is set if symbol is deprecated.
+    /** Flag is set if symbol is deprecated.  See also DEPRECATED_REMOVAL.
      */
     public static final int DEPRECATED   = 1<<17;
 
@@ -126,15 +127,14 @@ public class Flags {
      */
     public static final int BLOCK            = 1<<20;
 
-    /** Flag is set for compiler-generated abstract methods that implement
-     *  an interface method (Miranda methods).
+    /** Flag bit 21 is available. (used earlier to tag compiler-generated abstract methods that implement
+     *  an interface method (Miranda methods)).
      */
-    public static final int IPROXY           = 1<<21;
 
     /** Flag is set for nested classes that do not access instance members
      *  or `this' of an outer class and therefore don't need to be passed
      *  a this$n reference.  This value is currently set only for anonymous
-     *  classes in superclass constructor calls and only for pre 1.4 targets.
+     *  classes in superclass constructor calls.
      *  todo: use this value for optimizing away this$n parameters in
      *  other cases.
      */
@@ -220,11 +220,7 @@ public class Flags {
      */
     public static final long UNION = 1L<<39;
 
-    /**
-     * Flag that marks a special kind of bridge method (the ones that
-     * come from restricted supertype bounds).
-     */
-    public static final long OVERRIDE_BRIDGE = 1L<<40;
+    // Flag bit (1L << 40) is available.
 
     /**
      * Flag that marks an 'effectively final' local variable.
@@ -281,6 +277,36 @@ public class Flags {
      * Flag to control recursion in TransTypes
      */
     public static final long TYPE_TRANSLATED = 1L<<50;
+
+    /**
+     * Flag to indicate class symbol is for module-info
+     */
+    public static final long MODULE = 1L<<51;
+
+    /**
+     * Flag to indicate the given ModuleSymbol is an automatic module.
+     */
+    public static final long AUTOMATIC_MODULE = 1L<<52;
+
+    /**
+     * Flag to indicate the given ModuleSymbol is a system module.
+     */
+    public static final long SYSTEM_MODULE = 1L<<53;
+
+    /**
+     * Flag to indicate the given symbol has a @Deprecated annotation.
+     */
+    public static final long DEPRECATED_ANNOTATION = 1L<<54;
+
+    /**
+     * Flag to indicate the given symbol has been deprecated and marked for removal.
+     */
+    public static final long DEPRECATED_REMOVAL = 1L<<55;
+
+    /**
+     * Flag to indicate the given PackageSymbol contains any non-.java and non-.class resources.
+     */
+    public static final long HAS_RESOURCE = 1L<<56;
 
     /** Modifier masks.
      */
@@ -366,7 +392,6 @@ public class Flags {
         BLOCK(Flags.BLOCK),
         ENUM(Flags.ENUM),
         MANDATED(Flags.MANDATED),
-        IPROXY(Flags.IPROXY),
         NOOUTERTHIS(Flags.NOOUTERTHIS),
         EXISTS(Flags.EXISTS),
         COMPOUND(Flags.COMPOUND),
@@ -383,7 +408,6 @@ public class Flags {
         HYPOTHETICAL(Flags.HYPOTHETICAL),
         PROPRIETARY(Flags.PROPRIETARY),
         UNION(Flags.UNION),
-        OVERRIDE_BRIDGE(Flags.OVERRIDE_BRIDGE),
         EFFECTIVELY_FINAL(Flags.EFFECTIVELY_FINAL),
         CLASH(Flags.CLASH),
         AUXILIARY(Flags.AUXILIARY),
@@ -392,7 +416,13 @@ public class Flags {
         SIGNATURE_POLYMORPHIC(Flags.SIGNATURE_POLYMORPHIC),
         THROWS(Flags.THROWS),
         LAMBDA_METHOD(Flags.LAMBDA_METHOD),
-        TYPE_TRANSLATED(Flags.TYPE_TRANSLATED);
+        TYPE_TRANSLATED(Flags.TYPE_TRANSLATED),
+        MODULE(Flags.MODULE),
+        AUTOMATIC_MODULE(Flags.AUTOMATIC_MODULE),
+        SYSTEM_MODULE(Flags.SYSTEM_MODULE),
+        DEPRECATED_ANNOTATION(Flags.DEPRECATED_ANNOTATION),
+        DEPRECATED_REMOVAL(Flags.DEPRECATED_REMOVAL),
+        HAS_RESOURCE(Flags.HAS_RESOURCE);
 
         Flag(long flag) {
             this.value = flag;

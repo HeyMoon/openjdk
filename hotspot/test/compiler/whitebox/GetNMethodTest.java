@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -19,25 +19,30 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
-
-import sun.hotspot.code.BlobType;
-import sun.hotspot.code.NMethod;
-import jdk.test.lib.Asserts;
 
 /*
  * @test GetNMethodTest
  * @bug 8038240
- * @library /testlibrary /../../test/lib
- * @modules java.management
- * @build GetNMethodTest
- * @run main ClassFileInstaller sun.hotspot.WhiteBox
- *                              sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main/othervm -Xbootclasspath/a:. -Xmixed -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:CompileCommand=compileonly,SimpleTestCase$Helper::* GetNMethodTest
  * @summary testing of WB::getNMethod()
- * @author igor.ignatyev@oracle.com
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ *          java.management
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *                                sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @run main/othervm -Xbootclasspath/a:. -Xmixed -XX:+UnlockDiagnosticVMOptions
+ *                   -XX:+WhiteBoxAPI -XX:-UseCounterDecay
+ *                   -XX:CompileCommand=compileonly,compiler.whitebox.SimpleTestCaseHelper::*
+ *                   compiler.whitebox.GetNMethodTest
  */
+
+package compiler.whitebox;
+
+import jdk.test.lib.Asserts;
+import sun.hotspot.code.BlobType;
+import sun.hotspot.code.NMethod;
+
 public class GetNMethodTest extends CompilerWhiteBoxTest {
     public static void main(String[] args) throws Exception {
         CompilerWhiteBoxTest.main(GetNMethodTest::new, args);

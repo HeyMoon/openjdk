@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,11 @@
 
 #include "classfile/classLoaderData.hpp"
 #include "classfile/javaClasses.hpp"
+#include "oops/oop.inline.hpp"
+
+unsigned int ClassLoaderData::identity_hash() const {
+  return _class_loader == NULL ? 0 : _class_loader->identity_hash();
+}
 
 inline ClassLoaderData* ClassLoaderData::class_loader_data_or_null(oop loader) {
   if (loader == NULL) {
@@ -40,7 +45,7 @@ inline ClassLoaderData* ClassLoaderData::class_loader_data(oop loader) {
 
 
 inline ClassLoaderData *ClassLoaderDataGraph::find_or_create(Handle loader, TRAPS) {
-  assert(loader() != NULL,"Must be a class loader");
+  guarantee(loader() != NULL && loader()->is_oop(), "Loader must be oop");
   // Gets the class loader data out of the java/lang/ClassLoader object, if non-null
   // it's already in the loader_data, so no need to add
   ClassLoaderData* loader_data= java_lang_ClassLoader::loader_data(loader());

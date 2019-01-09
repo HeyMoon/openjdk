@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,20 +25,8 @@
 #ifndef SHARE_VM_UTILITIES_BITMAP_INLINE_HPP
 #define SHARE_VM_UTILITIES_BITMAP_INLINE_HPP
 
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "utilities/bitMap.hpp"
-
-#ifdef ASSERT
-inline void BitMap::verify_index(idx_t index) const {
-  assert(index < _size, "BitMap index out of bounds");
-}
-
-inline void BitMap::verify_range(idx_t beg_index, idx_t end_index) const {
-  assert(beg_index <= end_index, "BitMap range error");
-  // Note that [0,0) and [size,size) are both valid ranges.
-  if (end_index != _size) verify_index(end_index);
-}
-#endif // #ifdef ASSERT
 
 inline void BitMap::set_bit(idx_t bit) {
   verify_index(bit);
@@ -105,7 +93,7 @@ inline void BitMap::set_range(idx_t beg, idx_t end, RangeSizeHint hint) {
 }
 
 inline void BitMap::clear_range(idx_t beg, idx_t end, RangeSizeHint hint) {
-  if (hint == small_range && end - beg == 1) {
+  if (end - beg == 1) {
     clear_bit(beg);
   } else {
     if (hint == large_range) {
@@ -133,17 +121,17 @@ inline void BitMap::set_range_of_words(idx_t beg, idx_t end) {
   for (idx_t i = beg; i < end; ++i) map[i] = ~(bm_word_t)0;
 }
 
-
-inline void BitMap::clear_range_of_words(idx_t beg, idx_t end) {
-  bm_word_t* map = _map;
+inline void BitMap::clear_range_of_words(bm_word_t* map, idx_t beg, idx_t end) {
   for (idx_t i = beg; i < end; ++i) map[i] = 0;
 }
 
+inline void BitMap::clear_range_of_words(idx_t beg, idx_t end) {
+  clear_range_of_words(_map, beg, end);
+}
 
 inline void BitMap::clear() {
   clear_range_of_words(0, size_in_words());
 }
-
 
 inline void BitMap::par_clear_range(idx_t beg, idx_t end, RangeSizeHint hint) {
   if (hint == small_range && end - beg == 1) {
@@ -344,8 +332,39 @@ inline BitMap::idx_t BitMap::get_next_zero_offset(idx_t l_offset,
   return get_next_zero_offset_inline(l_offset, r_offset);
 }
 
-inline void BitMap2D::clear() {
-  _map.clear();
+inline bool BitMap2D::is_valid_index(idx_t slot_index, idx_t bit_within_slot_index) {
+  verify_bit_within_slot_index(bit_within_slot_index);
+  return (bit_index(slot_index, bit_within_slot_index) < size_in_bits());
+}
+
+inline bool BitMap2D::at(idx_t slot_index, idx_t bit_within_slot_index) const {
+  verify_bit_within_slot_index(bit_within_slot_index);
+  return _map.at(bit_index(slot_index, bit_within_slot_index));
+}
+
+inline void BitMap2D::set_bit(idx_t slot_index, idx_t bit_within_slot_index) {
+  verify_bit_within_slot_index(bit_within_slot_index);
+  _map.set_bit(bit_index(slot_index, bit_within_slot_index));
+}
+
+inline void BitMap2D::clear_bit(idx_t slot_index, idx_t bit_within_slot_index) {
+  verify_bit_within_slot_index(bit_within_slot_index);
+  _map.clear_bit(bit_index(slot_index, bit_within_slot_index));
+}
+
+inline void BitMap2D::at_put(idx_t slot_index, idx_t bit_within_slot_index, bool value) {
+  verify_bit_within_slot_index(bit_within_slot_index);
+  _map.at_put(bit_index(slot_index, bit_within_slot_index), value);
+}
+
+inline void BitMap2D::at_put_grow(idx_t slot_index, idx_t bit_within_slot_index, bool value) {
+  verify_bit_within_slot_index(bit_within_slot_index);
+
+  idx_t bit = bit_index(slot_index, bit_within_slot_index);
+  if (bit >= _map.size()) {
+    _map.resize(2 * MAX2(_map.size(), bit));
+  }
+  _map.at_put(bit, value);
 }
 
 #endif // SHARE_VM_UTILITIES_BITMAP_INLINE_HPP

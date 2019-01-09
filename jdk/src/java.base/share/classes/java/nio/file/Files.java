@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -76,6 +76,8 @@ import java.util.Spliterators;
 import java.util.function.BiPredicate;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
+
+import sun.nio.fs.AbstractFileSystemProvider;
 
 /**
  * This class consists exclusively of static methods that operate on files,
@@ -231,8 +233,12 @@ public final class Files {
      * <p> In the addition to {@code READ} and {@code WRITE}, the following
      * options may be present:
      *
-     * <table border=1 cellpadding=5 summary="Options">
+     * <table class="striped">
+     * <caption style="display:none">Options</caption>
+     * <thead>
      * <tr> <th>Option</th> <th>Description</th> </tr>
+     * </thead>
+     * <tbody>
      * <tr>
      *   <td> {@link StandardOpenOption#APPEND APPEND} </td>
      *   <td> If this option is present then the file is opened for writing and
@@ -292,6 +298,7 @@ public final class Files {
      *   href="package-summary.html#integrity"> Synchronized I/O file
      *   integrity</a>). </td>
      * </tr>
+     * </tbody>
      * </table>
      *
      * <p> An implementation may also support additional implementation specific
@@ -1033,7 +1040,7 @@ public final class Files {
      *          if an I/O error occurs
      * @throws  SecurityException
      *          In the case of the default provider, and a security manager
-     *          is installed, it denies {@link LinkPermission}<tt>("symbolic")</tt>
+     *          is installed, it denies {@link LinkPermission}{@code ("symbolic")}
      *          or its {@link SecurityManager#checkWrite(String) checkWrite}
      *          method denies write access to the path of the symbolic link.
      */
@@ -1078,7 +1085,7 @@ public final class Files {
      *          if an I/O error occurs
      * @throws  SecurityException
      *          In the case of the default provider, and a security manager
-     *          is installed, it denies {@link LinkPermission}<tt>("hard")</tt>
+     *          is installed, it denies {@link LinkPermission}{@code ("hard")}
      *          or its {@link SecurityManager#checkWrite(String) checkWrite}
      *          method denies write access to either the link or the
      *          existing file.
@@ -1186,8 +1193,12 @@ public final class Files {
      *
      * <p> The {@code options} parameter may include any of the following:
      *
-     * <table border=1 cellpadding=5 summary="">
+     * <table class="striped">
+     * <caption style="display:none">Options</caption>
+     * <thead>
      * <tr> <th>Option</th> <th>Description</th> </tr>
+     * </thead>
+     * <tbody>
      * <tr>
      *   <td> {@link StandardCopyOption#REPLACE_EXISTING REPLACE_EXISTING} </td>
      *   <td> If the target file exists, then the target file is replaced if it
@@ -1213,6 +1224,7 @@ public final class Files {
      *     new link. In other words, the {@code COPY_ATTRIBUTES} option may be
      *     ignored when copying a symbolic link. </td>
      * </tr>
+     * </tbody>
      * </table>
      *
      * <p> An implementation of this interface may support additional
@@ -1304,8 +1316,12 @@ public final class Files {
      *
      * <p> The {@code options} parameter may include any of the following:
      *
-     * <table border=1 cellpadding=5 summary="">
+     * <table class="striped">
+     * <caption style="display:none">Options</caption>
+     * <thead>
      * <tr> <th>Option</th> <th>Description</th> </tr>
+     * </thead>
+     * <tbody>
      * <tr>
      *   <td> {@link StandardCopyOption#REPLACE_EXISTING REPLACE_EXISTING} </td>
      *   <td> If the target file exists, then the target file is replaced if it
@@ -1324,6 +1340,7 @@ public final class Files {
      *     example, when the target location is on a different {@code FileStore}
      *     and would require that the file be copied, or target location is
      *     associated with a different provider to this object. </td>
+     * </tbody>
      * </table>
      *
      * <p> An implementation of this interface may support additional
@@ -1455,8 +1472,8 @@ public final class Files {
      *          In the case of the default provider, and a security manager is
      *          installed, the {@link SecurityManager#checkRead(String) checkRead}
      *          method is invoked to check read access to the file, and in
-     *          addition it checks {@link RuntimePermission}<tt>
-     *          ("getFileStoreAttributes")</tt>
+     *          addition it checks
+     *          {@link RuntimePermission}{@code ("getFileStoreAttributes")}
      */
     public static FileStore getFileStore(Path path) throws IOException {
         return provider(path).getFileStore(path);
@@ -1579,9 +1596,8 @@ public final class Files {
      * list of file type detectors. Installed file type detectors are loaded
      * using the service-provider loading facility defined by the {@link ServiceLoader}
      * class. Installed file type detectors are loaded using the system class
-     * loader. If the system class loader cannot be found then the extension class
-     * loader is used; If the extension class loader cannot be found then the
-     * bootstrap class loader is used. File type detectors are typically installed
+     * loader. If the system class loader cannot be found then the platform class
+     * loader is used. File type detectors are typically installed
      * by placing them in a JAR file on the application class path,
      * the JAR file contains a provider-configuration file
      * named {@code java.nio.file.spi.FileTypeDetector} in the resource directory
@@ -1898,7 +1914,7 @@ public final class Files {
      * many file systems.
      *
      * <p> The <i>attribute-list</i> component is a comma separated list of
-     * zero or more names of attributes to read. If the list contains the value
+     * one or more names of attributes to read. If the list contains the value
      * {@code "*"} then all attributes are read. Attributes that are not supported
      * are ignored and will not be present in the returned map. It is
      * implementation specific if all attributes are read as an atomic operation
@@ -1908,7 +1924,9 @@ public final class Files {
      * attributes} parameter:
      *
      * <blockquote>
-     * <table border="0" summary="Possible values">
+     * <table class="borderless">
+     * <caption style="display:none">Possible values</caption>
+     * <tbody>
      * <tr>
      *   <td> {@code "*"} </td>
      *   <td> Read all {@link BasicFileAttributes basic-file-attributes}. </td>
@@ -1926,6 +1944,7 @@ public final class Files {
      *   <td> {@code "posix:permissions,owner,size"} </td>
      *   <td> Reads the POSIX file permissions, owner, and file size. </td>
      * </tr>
+     * </tbody>
      * </table>
      * </blockquote>
      *
@@ -1948,7 +1967,7 @@ public final class Files {
      * @throws  UnsupportedOperationException
      *          if the attribute view is not available
      * @throws  IllegalArgumentException
-     *          if no attributes are specified or an unrecognized attributes is
+     *          if no attributes are specified or an unrecognized attribute is
      *          specified
      * @throws  IOException
      *          if an I/O error occurs
@@ -1995,7 +2014,8 @@ public final class Files {
      *          if an I/O error occurs
      * @throws  SecurityException
      *          In the case of the default provider, a security manager is
-     *          installed, and it denies {@link RuntimePermission}<tt>("accessUserInformation")</tt>
+     *          installed, and it denies
+     *          {@link RuntimePermission}{@code ("accessUserInformation")}
      *          or its {@link SecurityManager#checkRead(String) checkRead} method
      *          denies read access to the file.
      */
@@ -2032,7 +2052,8 @@ public final class Files {
      *          if an I/O error occurs
      * @throws  SecurityException
      *          In the case of the default provider, and a security manager is
-     *          installed, it denies {@link RuntimePermission}<tt>("accessUserInformation")</tt>
+     *          installed, it denies
+     *          {@link RuntimePermission}{@code ("accessUserInformation")}
      *          or its {@link SecurityManager#checkWrite(String) checkWrite}
      *          method denies write access to the file.
      */
@@ -2069,7 +2090,8 @@ public final class Files {
      *          if an I/O error occurs
      * @throws  SecurityException
      *          In the case of the default provider, and a security manager is
-     *          installed, it denies {@link RuntimePermission}<tt>("accessUserInformation")</tt>
+     *          installed, it denies
+     *          {@link RuntimePermission}{@code ("accessUserInformation")}
      *          or its {@link SecurityManager#checkRead(String) checkRead} method
      *          denies read access to the file.
      */
@@ -2112,7 +2134,8 @@ public final class Files {
      *          if an I/O error occurs
      * @throws  SecurityException
      *          In the case of the default provider, and a security manager is
-     *          installed, it denies {@link RuntimePermission}<tt>("accessUserInformation")</tt>
+     *          installed, it denies
+     *          {@link RuntimePermission}{@code ("accessUserInformation")}
      *          or its {@link SecurityManager#checkWrite(String) checkWrite}
      *          method denies write access to the file.
      *
@@ -2190,6 +2213,12 @@ public final class Files {
      *          method denies read access to the file.
      */
     public static boolean isDirectory(Path path, LinkOption... options) {
+        if (options.length == 0) {
+            FileSystemProvider provider = provider(path);
+            if (provider instanceof AbstractFileSystemProvider)
+                return ((AbstractFileSystemProvider)provider).isDirectory(path);
+        }
+
         try {
             return readAttributes(path, BasicFileAttributes.class, options).isDirectory();
         } catch (IOException ioe) {
@@ -2227,6 +2256,12 @@ public final class Files {
      *          method denies read access to the file.
      */
     public static boolean isRegularFile(Path path, LinkOption... options) {
+        if (options.length == 0) {
+            FileSystemProvider provider = provider(path);
+            if (provider instanceof AbstractFileSystemProvider)
+                return ((AbstractFileSystemProvider)provider).isRegularFile(path);
+        }
+
         try {
             return readAttributes(path, BasicFileAttributes.class, options).isRegularFile();
         } catch (IOException ioe) {
@@ -2382,6 +2417,12 @@ public final class Files {
      * @see #notExists
      */
     public static boolean exists(Path path, LinkOption... options) {
+        if (options.length == 0) {
+            FileSystemProvider provider = provider(path);
+            if (provider instanceof AbstractFileSystemProvider)
+                return ((AbstractFileSystemProvider)provider).exists(path);
+        }
+
         try {
             if (followLinks(options)) {
                 provider(path).checkAccess(path);
@@ -3267,8 +3308,8 @@ public final class Files {
      * a size of {@code 0}. All bytes in the byte array are written to the file.
      * The method ensures that the file is closed when all bytes have been
      * written (or an I/O error or other runtime exception is thrown). If an I/O
-     * error occurs then it may do so after the file has created or truncated,
-     * or after some bytes have been written to the file.
+     * error occurs then it may do so after the file has been created or
+     * truncated, or after some bytes have been written to the file.
      *
      * <p> <b>Usage example</b>: By default the method creates a new file or
      * overwrites an existing file. Suppose you instead want to append bytes
@@ -3337,7 +3378,8 @@ public final class Files {
      * a size of {@code 0}. The method ensures that the file is closed when all
      * lines have been written (or an I/O error or other runtime exception is
      * thrown). If an I/O error occurs then it may do so after the file has
-     * created or truncated, or after some bytes have been written to the file.
+     * been created or truncated, or after some bytes have been written to the
+     * file.
      *
      * @param   path
      *          the path to the file
@@ -3835,7 +3877,9 @@ public final class Files {
             // Obtaining the size from the FileChannel is much faster
             // than obtaining using path.toFile().length()
             long length = fc.size();
-            if (length <= Integer.MAX_VALUE) {
+            // FileChannel.size() may in certain circumstances return zero
+            // for a non-zero length file so disallow this case.
+            if (length > 0 && length <= Integer.MAX_VALUE) {
                 Spliterator<String> s = new FileChannelLinesSpliterator(fc, cs, 0, (int) length);
                 return StreamSupport.stream(s, false)
                         .onClose(Files.asUncheckedRunnable(fc));

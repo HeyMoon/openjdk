@@ -3,13 +3,14 @@
  * DO NOT REMOVE OR ALTER!
  */
 /*
- * Copyright 1999-2005 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,9 +18,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * $Id: XPATHErrorResources_sv.java /st_wptg_1.8.0.0.0jdk/2 2013/09/16 06:50:58 gmolloy Exp $
- */
+
 package com.sun.org.apache.xpath.internal.res;
 
 import java.util.ListResourceBundle;
@@ -93,6 +92,7 @@ public class XPATHErrorResources_sv extends ListResourceBundle
   public static final String ER_CURRENT_TAKES_NO_ARGS =
          "ER_CURRENT_TAKES_NO_ARGS";
   public static final String ER_DOCUMENT_REPLACED = "ER_DOCUMENT_REPLACED";
+  public static final String ER_CONTEXT_CAN_NOT_BE_NULL = "ER_CONTEXT_CAN_NOT_BE_NULL";
   public static final String ER_CONTEXT_HAS_NO_OWNERDOC =
          "ER_CONTEXT_HAS_NO_OWNERDOC";
   public static final String ER_LOCALNAME_HAS_TOO_MANY_ARGS =
@@ -368,6 +368,9 @@ public static final String ER_IGNORABLE_WHITESPACE_NOT_HANDLED =
   { ER_DOCUMENT_REPLACED,
       "Implementeringen av funktionen document() har inte ersatts av com.sun.org.apache.xalan.internal.xslt.FuncDocument!"},
 
+  { ER_CONTEXT_CAN_NOT_BE_NULL,
+      "Kontexten kan inte vara null n\u00E4r \u00E5tg\u00E4rden \u00E4r kontextberoende."},
+
   { ER_CONTEXT_HAS_NO_OWNERDOC,
       "context har inget \u00E4gardokument!"},
 
@@ -483,7 +486,7 @@ public static final String ER_IGNORABLE_WHITESPACE_NOT_HANDLED =
       "FEL! Hittade inte ENDOP efter OP_LOCATIONPATH"},
 
   { ER_ERROR_OCCURED,
-     "Fel intr\u00E4ffade!"},
+     "Ett fel har intr\u00E4ffat!"},
 
   { ER_ILLEGAL_VARIABLE_REFERENCE,
       "VariableReference angiven f\u00F6r variabel som \u00E4r utanf\u00F6r kontext eller som saknar definition! Namn = {0}"},
@@ -828,7 +831,7 @@ public static final String ER_IGNORABLE_WHITESPACE_NOT_HANDLED =
   // Warnings...
 
   { WG_LOCALE_NAME_NOT_HANDLED,
-      "spr\u00E5knamnet i funktionen format-number har \u00E4nnu inte hanterats!"},
+      "spr\u00E5kkonventionsnamnet i funktionen format-number har \u00E4nnu inte hanterats!"},
 
   { WG_PROPERTY_NOT_SUPPORTED,
       "XSL-egenskapen st\u00F6ds inte: {0}"},
@@ -874,8 +877,8 @@ public static final String ER_IGNORABLE_WHITESPACE_NOT_HANDLED =
   { "version", ">>>>>>> Xalan version "},
   { "version2", "<<<<<<<"},
   { "yes", "ja"},
-  { "line", "Rad #"},
-  { "column", "Kolumn #"},
+  { "line", "Rad nr"},
+  { "column", "Kolumn nr"},
   { "xsldone", "XSLProcessor: utf\u00F6rd"},
   { "xpath_option", "xpath-alternativ: "},
   { "optionIN", "   [-in inputXMLURL]"},

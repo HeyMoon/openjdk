@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,8 @@ package com.sun.tools.javac.tree;
 
 import java.util.Iterator;
 
+import com.sun.source.tree.ModuleTree.ModuleKind;
+import com.sun.source.tree.Tree.Kind;
 import com.sun.tools.javac.code.*;
 import com.sun.tools.javac.code.Symbol.*;
 import com.sun.tools.javac.code.Type.*;
@@ -125,6 +127,7 @@ public class TreeMaker implements JCTree.Factory {
             Assert.check(node instanceof JCClassDecl
                 || node instanceof JCPackageDecl
                 || node instanceof JCImport
+                || node instanceof JCModuleDecl
                 || node instanceof JCSkip
                 || node instanceof JCErroneous
                 || (node instanceof JCExpressionStatement
@@ -282,7 +285,7 @@ public class TreeMaker implements JCTree.Factory {
     }
 
     public JCTry Try(JCBlock body, List<JCCatch> catchers, JCBlock finalizer) {
-        return Try(List.<JCTree>nil(), body, catchers, finalizer);
+        return Try(List.nil(), body, catchers, finalizer);
     }
 
     public JCTry Try(List<JCTree> resources,
@@ -492,7 +495,7 @@ public class TreeMaker implements JCTree.Factory {
     }
 
     public JCTypeParameter TypeParameter(Name name, List<JCExpression> bounds) {
-        return TypeParameter(name, bounds, List.<JCAnnotation>nil());
+        return TypeParameter(name, bounds, List.nil());
     }
 
     public JCTypeParameter TypeParameter(Name name, List<JCExpression> bounds, List<JCAnnotation> annos) {
@@ -533,7 +536,50 @@ public class TreeMaker implements JCTree.Factory {
     }
 
     public JCModifiers Modifiers(long flags) {
-        return Modifiers(flags, List.<JCAnnotation>nil());
+        return Modifiers(flags, List.nil());
+    }
+
+    @Override
+    public JCModuleDecl ModuleDef(JCModifiers mods, ModuleKind kind,
+            JCExpression qualid, List<JCDirective> directives) {
+        JCModuleDecl tree = new JCModuleDecl(mods, kind, qualid, directives);
+        tree.pos = pos;
+        return tree;
+    }
+
+    @Override
+    public JCExports Exports(JCExpression qualId, List<JCExpression> moduleNames) {
+        JCExports tree = new JCExports(qualId, moduleNames);
+        tree.pos = pos;
+        return tree;
+    }
+
+    @Override
+    public JCOpens Opens(JCExpression qualId, List<JCExpression> moduleNames) {
+        JCOpens tree = new JCOpens(qualId, moduleNames);
+        tree.pos = pos;
+        return tree;
+    }
+
+    @Override
+    public JCProvides Provides(JCExpression serviceName, List<JCExpression> implNames) {
+        JCProvides tree = new JCProvides(serviceName, implNames);
+        tree.pos = pos;
+        return tree;
+    }
+
+    @Override
+    public JCRequires Requires(boolean isTransitive, boolean isStaticPhase, JCExpression qualId) {
+        JCRequires tree = new JCRequires(isTransitive, isStaticPhase, qualId);
+        tree.pos = pos;
+        return tree;
+    }
+
+    @Override
+    public JCUses Uses(JCExpression qualId) {
+        JCUses tree = new JCUses(qualId);
+        tree.pos = pos;
+        return tree;
     }
 
     public JCAnnotatedType AnnotatedType(List<JCAnnotation> annotations, JCExpression underlyingType) {
@@ -543,7 +589,7 @@ public class TreeMaker implements JCTree.Factory {
     }
 
     public JCErroneous Erroneous() {
-        return Erroneous(List.<JCTree>nil());
+        return Erroneous(List.nil());
     }
 
     public JCErroneous Erroneous(List<? extends JCTree> errs) {
@@ -552,7 +598,7 @@ public class TreeMaker implements JCTree.Factory {
         return tree;
     }
 
-    public LetExpr LetExpr(List<JCVariableDecl> defs, JCTree expr) {
+    public LetExpr LetExpr(List<JCVariableDecl> defs, JCExpression expr) {
         LetExpr tree = new LetExpr(defs, expr);
         tree.pos = pos;
         return tree;
@@ -567,13 +613,13 @@ public class TreeMaker implements JCTree.Factory {
     {
         return ClassDef(mods,
                         names.empty,
-                        List.<JCTypeParameter>nil(),
+                        List.nil(),
                         null,
-                        List.<JCExpression>nil(),
+                        List.nil(),
                         defs);
     }
 
-    public LetExpr LetExpr(JCVariableDecl def, JCTree expr) {
+    public LetExpr LetExpr(JCVariableDecl def, JCExpression expr) {
         LetExpr tree = new LetExpr(List.of(def), expr);
         tree.pos = pos;
         return tree;
@@ -628,6 +674,12 @@ public class TreeMaker implements JCTree.Factory {
         return Ident(new VarSymbol(FINAL, names._this, t, t.tsym));
     }
 
+    /** Create a tree representing qualified `this' given its type
+     */
+    public JCExpression QualThis(Type t) {
+        return Select(Type(t), new VarSymbol(FINAL, names._this, t, t.tsym));
+    }
+
     /** Create a tree representing a class literal.
      */
     public JCExpression ClassLiteral(ClassSymbol clazz) {
@@ -662,7 +714,7 @@ public class TreeMaker implements JCTree.Factory {
      * Create a no-arg method invocation from a method tree
      */
     public JCMethodInvocation App(JCExpression meth) {
-        return Apply(null, meth, List.<JCExpression>nil()).setType(meth.type.getReturnType());
+        return Apply(null, meth, List.nil()).setType(meth.type.getReturnType());
     }
 
     /** Create a method invocation from a method tree and a list of argument trees.
@@ -851,7 +903,7 @@ public class TreeMaker implements JCTree.Factory {
             ListBuffer<JCExpression> elems = new ListBuffer<>();
             for (int i = 0; i < array.values.length; i++)
                 elems.append(translate(array.values[i]));
-            result = NewArray(null, List.<JCExpression>nil(), elems.toList()).setType(array.type);
+            result = NewArray(null, List.nil(), elems.toList()).setType(array.type);
         }
         JCExpression translate(Attribute a) {
             a.accept(this);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@
 #include "runtime/frame.inline.hpp"
 #include "runtime/interfaceSupport.hpp"
 #include "runtime/os.hpp"
+#include "utilities/macros.hpp"
 #include "utilities/vmError.hpp"
 
 #include <signal.h>
@@ -38,8 +39,6 @@
 #include <semaphore.h>
 #include <signal.h>
 
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
-
 // Todo: provide a os::get_max_process_id() or similar. Number of processes
 // may have been configured, can be read more accurately from proc fs etc.
 #ifndef MAX_PID
@@ -49,6 +48,12 @@ PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 // Check core dump limit and report possible place where core can be found
 void os::check_dump_limit(char* buffer, size_t bufferSize) {
+  if (!FLAG_IS_DEFAULT(CreateCoredumpOnCrash) && !CreateCoredumpOnCrash) {
+    jio_snprintf(buffer, bufferSize, "CreateCoredumpOnCrash is disabled from command line");
+    VMError::record_coredump_status(buffer, false);
+    return;
+  }
+
   int n;
   struct rlimit rlim;
   bool success;
@@ -88,10 +93,6 @@ void os::check_dump_limit(char* buffer, size_t bufferSize) {
 }
 
 int os::get_native_stack(address* stack, int frames, int toSkip) {
-#ifdef _NMT_NOINLINE_
-  toSkip++;
-#endif
-
   int frame_idx = 0;
   int num_of_frames;  // number of frames captured
   frame fr = os::current_frame();
@@ -179,6 +180,18 @@ char* os::reserve_memory_aligned(size_t size, size_t alignment) {
   return aligned_base;
 }
 
+int os::log_vsnprintf(char* buf, size_t len, const char* fmt, va_list args) {
+    return vsnprintf(buf, len, fmt, args);
+}
+
+int os::get_fileno(FILE* fp) {
+  return NOT_AIX(::)fileno(fp);
+}
+
+struct tm* os::gmtime_pd(const time_t* clock, struct tm*  res) {
+  return gmtime_r(clock, res);
+}
+
 void os::Posix::print_load_average(outputStream* st) {
   st->print("load average:");
   double loadavg[3];
@@ -194,30 +207,30 @@ void os::Posix::print_rlimit_info(outputStream* st) {
   st->print(" STACK ");
   getrlimit(RLIMIT_STACK, &rlim);
   if (rlim.rlim_cur == RLIM_INFINITY) st->print("infinity");
-  else st->print("%uk", rlim.rlim_cur >> 10);
+  else st->print("%luk", rlim.rlim_cur >> 10);
 
   st->print(", CORE ");
   getrlimit(RLIMIT_CORE, &rlim);
   if (rlim.rlim_cur == RLIM_INFINITY) st->print("infinity");
-  else st->print("%uk", rlim.rlim_cur >> 10);
+  else st->print("%luk", rlim.rlim_cur >> 10);
 
   // Isn't there on solaris
-#if !defined(TARGET_OS_FAMILY_solaris) && !defined(TARGET_OS_FAMILY_aix)
+#if !defined(SOLARIS) && !defined(AIX)
   st->print(", NPROC ");
   getrlimit(RLIMIT_NPROC, &rlim);
   if (rlim.rlim_cur == RLIM_INFINITY) st->print("infinity");
-  else st->print("%d", rlim.rlim_cur);
+  else st->print("%lu", rlim.rlim_cur);
 #endif
 
   st->print(", NOFILE ");
   getrlimit(RLIMIT_NOFILE, &rlim);
   if (rlim.rlim_cur == RLIM_INFINITY) st->print("infinity");
-  else st->print("%d", rlim.rlim_cur);
+  else st->print("%lu", rlim.rlim_cur);
 
   st->print(", AS ");
   getrlimit(RLIMIT_AS, &rlim);
   if (rlim.rlim_cur == RLIM_INFINITY) st->print("infinity");
-  else st->print("%uk", rlim.rlim_cur >> 10);
+  else st->print("%luk", rlim.rlim_cur >> 10);
   st->cr();
 }
 
@@ -234,6 +247,13 @@ void os::Posix::print_uname_info(outputStream* st) {
   st->print("%s ", name.version);
   st->print("%s", name.machine);
   st->cr();
+}
+
+bool os::get_host_name(char* buf, size_t buflen) {
+  struct utsname name;
+  uname(&name);
+  jio_snprintf(buf, buflen, "%s", name.nodename);
+  return true;
 }
 
 bool os::has_allocatable_memory_limit(julong* limit) {
@@ -308,6 +328,14 @@ FILE* os::open(int fd, const char* mode) {
   return ::fdopen(fd, mode);
 }
 
+void os::flockfile(FILE* fp) {
+  ::flockfile(fp);
+}
+
+void os::funlockfile(FILE* fp) {
+  ::funlockfile(fp);
+}
+
 // Builds a platform dependent Agent_OnLoad_<lib_name> function name
 // which is used to find statically linked in agents.
 // Parameters:
@@ -327,13 +355,13 @@ char* os::build_agent_function_name(const char *sym_name, const char *lib_name,
   const char *start;
 
   if (lib_name != NULL) {
-    len = name_len = strlen(lib_name);
+    name_len = strlen(lib_name);
     if (is_absolute_path) {
       // Need to strip path, prefix and suffix
       if ((start = strrchr(lib_name, *os::file_separator())) != NULL) {
         lib_name = ++start;
       }
-      if (len <= (prefix_len + suffix_len)) {
+      if (strlen(lib_name) <= (prefix_len + suffix_len)) {
         return NULL;
       }
       lib_name += prefix_len;
@@ -482,166 +510,171 @@ bool os::is_interrupted(Thread* thread, bool clear_interrupted) {
   return interrupted;
 }
 
-// Returned string is a constant. For unknown signals "UNKNOWN" is returned.
-const char* os::Posix::get_signal_name(int sig, char* out, size_t outlen) {
 
-  static const struct {
-    int sig; const char* name;
-  }
-  info[] =
+
+static const struct {
+  int sig; const char* name;
+}
+ g_signal_info[] =
   {
-    {  SIGABRT,     "SIGABRT" },
+  {  SIGABRT,     "SIGABRT" },
 #ifdef SIGAIO
-    {  SIGAIO,      "SIGAIO" },
+  {  SIGAIO,      "SIGAIO" },
 #endif
-    {  SIGALRM,     "SIGALRM" },
+  {  SIGALRM,     "SIGALRM" },
 #ifdef SIGALRM1
-    {  SIGALRM1,    "SIGALRM1" },
+  {  SIGALRM1,    "SIGALRM1" },
 #endif
-    {  SIGBUS,      "SIGBUS" },
+  {  SIGBUS,      "SIGBUS" },
 #ifdef SIGCANCEL
-    {  SIGCANCEL,   "SIGCANCEL" },
+  {  SIGCANCEL,   "SIGCANCEL" },
 #endif
-    {  SIGCHLD,     "SIGCHLD" },
+  {  SIGCHLD,     "SIGCHLD" },
 #ifdef SIGCLD
-    {  SIGCLD,      "SIGCLD" },
+  {  SIGCLD,      "SIGCLD" },
 #endif
-    {  SIGCONT,     "SIGCONT" },
+  {  SIGCONT,     "SIGCONT" },
 #ifdef SIGCPUFAIL
-    {  SIGCPUFAIL,  "SIGCPUFAIL" },
+  {  SIGCPUFAIL,  "SIGCPUFAIL" },
 #endif
 #ifdef SIGDANGER
-    {  SIGDANGER,   "SIGDANGER" },
+  {  SIGDANGER,   "SIGDANGER" },
 #endif
 #ifdef SIGDIL
-    {  SIGDIL,      "SIGDIL" },
+  {  SIGDIL,      "SIGDIL" },
 #endif
 #ifdef SIGEMT
-    {  SIGEMT,      "SIGEMT" },
+  {  SIGEMT,      "SIGEMT" },
 #endif
-    {  SIGFPE,      "SIGFPE" },
+  {  SIGFPE,      "SIGFPE" },
 #ifdef SIGFREEZE
-    {  SIGFREEZE,   "SIGFREEZE" },
+  {  SIGFREEZE,   "SIGFREEZE" },
 #endif
 #ifdef SIGGFAULT
-    {  SIGGFAULT,   "SIGGFAULT" },
+  {  SIGGFAULT,   "SIGGFAULT" },
 #endif
 #ifdef SIGGRANT
-    {  SIGGRANT,    "SIGGRANT" },
+  {  SIGGRANT,    "SIGGRANT" },
 #endif
-    {  SIGHUP,      "SIGHUP" },
-    {  SIGILL,      "SIGILL" },
-    {  SIGINT,      "SIGINT" },
+  {  SIGHUP,      "SIGHUP" },
+  {  SIGILL,      "SIGILL" },
+  {  SIGINT,      "SIGINT" },
 #ifdef SIGIO
-    {  SIGIO,       "SIGIO" },
+  {  SIGIO,       "SIGIO" },
 #endif
 #ifdef SIGIOINT
-    {  SIGIOINT,    "SIGIOINT" },
+  {  SIGIOINT,    "SIGIOINT" },
 #endif
 #ifdef SIGIOT
-  // SIGIOT is there for BSD compatibility, but on most Unices just a
-  // synonym for SIGABRT. The result should be "SIGABRT", not
-  // "SIGIOT".
-  #if (SIGIOT != SIGABRT )
-    {  SIGIOT,      "SIGIOT" },
-  #endif
+// SIGIOT is there for BSD compatibility, but on most Unices just a
+// synonym for SIGABRT. The result should be "SIGABRT", not
+// "SIGIOT".
+#if (SIGIOT != SIGABRT )
+  {  SIGIOT,      "SIGIOT" },
+#endif
 #endif
 #ifdef SIGKAP
-    {  SIGKAP,      "SIGKAP" },
+  {  SIGKAP,      "SIGKAP" },
 #endif
-    {  SIGKILL,     "SIGKILL" },
+  {  SIGKILL,     "SIGKILL" },
 #ifdef SIGLOST
-    {  SIGLOST,     "SIGLOST" },
+  {  SIGLOST,     "SIGLOST" },
 #endif
 #ifdef SIGLWP
-    {  SIGLWP,      "SIGLWP" },
+  {  SIGLWP,      "SIGLWP" },
 #endif
 #ifdef SIGLWPTIMER
-    {  SIGLWPTIMER, "SIGLWPTIMER" },
+  {  SIGLWPTIMER, "SIGLWPTIMER" },
 #endif
 #ifdef SIGMIGRATE
-    {  SIGMIGRATE,  "SIGMIGRATE" },
+  {  SIGMIGRATE,  "SIGMIGRATE" },
 #endif
 #ifdef SIGMSG
-    {  SIGMSG,      "SIGMSG" },
+  {  SIGMSG,      "SIGMSG" },
 #endif
-    {  SIGPIPE,     "SIGPIPE" },
+  {  SIGPIPE,     "SIGPIPE" },
 #ifdef SIGPOLL
-    {  SIGPOLL,     "SIGPOLL" },
+  {  SIGPOLL,     "SIGPOLL" },
 #endif
 #ifdef SIGPRE
-    {  SIGPRE,      "SIGPRE" },
+  {  SIGPRE,      "SIGPRE" },
 #endif
-    {  SIGPROF,     "SIGPROF" },
+  {  SIGPROF,     "SIGPROF" },
 #ifdef SIGPTY
-    {  SIGPTY,      "SIGPTY" },
+  {  SIGPTY,      "SIGPTY" },
 #endif
 #ifdef SIGPWR
-    {  SIGPWR,      "SIGPWR" },
+  {  SIGPWR,      "SIGPWR" },
 #endif
-    {  SIGQUIT,     "SIGQUIT" },
+  {  SIGQUIT,     "SIGQUIT" },
 #ifdef SIGRECONFIG
-    {  SIGRECONFIG, "SIGRECONFIG" },
+  {  SIGRECONFIG, "SIGRECONFIG" },
 #endif
 #ifdef SIGRECOVERY
-    {  SIGRECOVERY, "SIGRECOVERY" },
+  {  SIGRECOVERY, "SIGRECOVERY" },
 #endif
 #ifdef SIGRESERVE
-    {  SIGRESERVE,  "SIGRESERVE" },
+  {  SIGRESERVE,  "SIGRESERVE" },
 #endif
 #ifdef SIGRETRACT
-    {  SIGRETRACT,  "SIGRETRACT" },
+  {  SIGRETRACT,  "SIGRETRACT" },
 #endif
 #ifdef SIGSAK
-    {  SIGSAK,      "SIGSAK" },
+  {  SIGSAK,      "SIGSAK" },
 #endif
-    {  SIGSEGV,     "SIGSEGV" },
+  {  SIGSEGV,     "SIGSEGV" },
 #ifdef SIGSOUND
-    {  SIGSOUND,    "SIGSOUND" },
+  {  SIGSOUND,    "SIGSOUND" },
 #endif
-    {  SIGSTOP,     "SIGSTOP" },
-    {  SIGSYS,      "SIGSYS" },
+#ifdef SIGSTKFLT
+  {  SIGSTKFLT,    "SIGSTKFLT" },
+#endif
+  {  SIGSTOP,     "SIGSTOP" },
+  {  SIGSYS,      "SIGSYS" },
 #ifdef SIGSYSERROR
-    {  SIGSYSERROR, "SIGSYSERROR" },
+  {  SIGSYSERROR, "SIGSYSERROR" },
 #endif
 #ifdef SIGTALRM
-    {  SIGTALRM,    "SIGTALRM" },
+  {  SIGTALRM,    "SIGTALRM" },
 #endif
-    {  SIGTERM,     "SIGTERM" },
+  {  SIGTERM,     "SIGTERM" },
 #ifdef SIGTHAW
-    {  SIGTHAW,     "SIGTHAW" },
+  {  SIGTHAW,     "SIGTHAW" },
 #endif
-    {  SIGTRAP,     "SIGTRAP" },
+  {  SIGTRAP,     "SIGTRAP" },
 #ifdef SIGTSTP
-    {  SIGTSTP,     "SIGTSTP" },
+  {  SIGTSTP,     "SIGTSTP" },
 #endif
-    {  SIGTTIN,     "SIGTTIN" },
-    {  SIGTTOU,     "SIGTTOU" },
+  {  SIGTTIN,     "SIGTTIN" },
+  {  SIGTTOU,     "SIGTTOU" },
 #ifdef SIGURG
-    {  SIGURG,      "SIGURG" },
+  {  SIGURG,      "SIGURG" },
 #endif
-    {  SIGUSR1,     "SIGUSR1" },
-    {  SIGUSR2,     "SIGUSR2" },
+  {  SIGUSR1,     "SIGUSR1" },
+  {  SIGUSR2,     "SIGUSR2" },
 #ifdef SIGVIRT
-    {  SIGVIRT,     "SIGVIRT" },
+  {  SIGVIRT,     "SIGVIRT" },
 #endif
-    {  SIGVTALRM,   "SIGVTALRM" },
+  {  SIGVTALRM,   "SIGVTALRM" },
 #ifdef SIGWAITING
-    {  SIGWAITING,  "SIGWAITING" },
+  {  SIGWAITING,  "SIGWAITING" },
 #endif
 #ifdef SIGWINCH
-    {  SIGWINCH,    "SIGWINCH" },
+  {  SIGWINCH,    "SIGWINCH" },
 #endif
 #ifdef SIGWINDOW
-    {  SIGWINDOW,   "SIGWINDOW" },
+  {  SIGWINDOW,   "SIGWINDOW" },
 #endif
-    {  SIGXCPU,     "SIGXCPU" },
-    {  SIGXFSZ,     "SIGXFSZ" },
+  {  SIGXCPU,     "SIGXCPU" },
+  {  SIGXFSZ,     "SIGXFSZ" },
 #ifdef SIGXRES
-    {  SIGXRES,     "SIGXRES" },
+  {  SIGXRES,     "SIGXRES" },
 #endif
-    { -1, NULL }
-  };
+  { -1, NULL }
+};
+
+// Returned string is a constant. For unknown signals "UNKNOWN" is returned.
+const char* os::Posix::get_signal_name(int sig, char* out, size_t outlen) {
 
   const char* ret = NULL;
 
@@ -659,9 +692,9 @@ const char* os::Posix::get_signal_name(int sig, char* out, size_t outlen) {
 #endif
 
   if (sig > 0) {
-    for (int idx = 0; info[idx].sig != -1; idx ++) {
-      if (info[idx].sig == sig) {
-        ret = info[idx].name;
+    for (int idx = 0; g_signal_info[idx].sig != -1; idx ++) {
+      if (g_signal_info[idx].sig == sig) {
+        ret = g_signal_info[idx].name;
         break;
       }
     }
@@ -682,6 +715,25 @@ const char* os::Posix::get_signal_name(int sig, char* out, size_t outlen) {
   return out;
 }
 
+int os::Posix::get_signal_number(const char* signal_name) {
+  char tmp[30];
+  const char* s = signal_name;
+  if (s[0] != 'S' || s[1] != 'I' || s[2] != 'G') {
+    jio_snprintf(tmp, sizeof(tmp), "SIG%s", signal_name);
+    s = tmp;
+  }
+  for (int idx = 0; g_signal_info[idx].sig != -1; idx ++) {
+    if (strcmp(g_signal_info[idx].name, s) == 0) {
+      return g_signal_info[idx].sig;
+    }
+  }
+  return -1;
+}
+
+int os::get_signal_number(const char* signal_name) {
+  return os::Posix::get_signal_number(signal_name);
+}
+
 // Returns true if signal number is valid.
 bool os::Posix::is_valid_signal(int sig) {
   // MacOS not really POSIX compliant: sigaddset does not return
@@ -698,6 +750,21 @@ bool os::Posix::is_valid_signal(int sig) {
   }
   return true;
 #endif
+}
+
+// Returns:
+// NULL for an invalid signal number
+// "SIG<num>" for a valid but unknown signal number
+// signal name otherwise.
+const char* os::exception_name(int sig, char* buf, size_t size) {
+  if (!os::Posix::is_valid_signal(sig)) {
+    return NULL;
+  }
+  const char* const name = os::Posix::get_signal_name(sig, buf, size);
+  if (strcmp(name, "UNKNOWN") == 0) {
+    jio_snprintf(buf, size, "SIG%d", sig);
+  }
+  return buf;
 }
 
 #define NUM_IMPORTANT_SIGS 32
@@ -742,7 +809,11 @@ const char* os::Posix::describe_sa_flags(int flags, char* buffer, size_t size) {
   strncpy(buffer, "none", size);
 
   const struct {
-    int i;
+    // NB: i is an unsigned int here because SA_RESETHAND is on some
+    // systems 0x80000000, which is implicitly unsigned.  Assignining
+    // it to an int field would be an overflow in unsigned-to-signed
+    // conversion.
+    unsigned int i;
     const char* s;
   } flaginfo [] = {
     { SA_NOCLDSTOP, "SA_NOCLDSTOP" },
@@ -826,6 +897,21 @@ static bool get_signal_code_description(const siginfo_t* si, enum_sigcode_desc_t
 #if defined(IA64) && !defined(AIX)
     { SIGSEGV, SEGV_PSTKOVF, "SEGV_PSTKOVF", "Paragraph stack overflow" },
 #endif
+#if defined(__sparc) && defined(SOLARIS)
+// define Solaris Sparc M7 ADI SEGV signals
+#if !defined(SEGV_ACCADI)
+#define SEGV_ACCADI 3
+#endif
+    { SIGSEGV, SEGV_ACCADI,  "SEGV_ACCADI",  "ADI not enabled for mapped object." },
+#if !defined(SEGV_ACCDERR)
+#define SEGV_ACCDERR 4
+#endif
+    { SIGSEGV, SEGV_ACCDERR, "SEGV_ACCDERR", "ADI disrupting exception." },
+#if !defined(SEGV_ACCPERR)
+#define SEGV_ACCPERR 5
+#endif
+    { SIGSEGV, SEGV_ACCPERR, "SEGV_ACCPERR", "ADI precise exception." },
+#endif // defined(__sparc) && defined(SOLARIS)
     { SIGBUS,  BUS_ADRALN,   "BUS_ADRALN",   "Invalid address alignment." },
     { SIGBUS,  BUS_ADRERR,   "BUS_ADRERR",   "Nonexistent physical address." },
     { SIGBUS,  BUS_OBJERR,   "BUS_OBJERR",   "Object-specific hardware error." },
@@ -916,50 +1002,215 @@ static bool get_signal_code_description(const siginfo_t* si, enum_sigcode_desc_t
   return true;
 }
 
-// A POSIX conform, platform-independend siginfo print routine.
-// Short print out on one line.
-void os::Posix::print_siginfo_brief(outputStream* os, const siginfo_t* si) {
+void os::print_siginfo(outputStream* os, const void* si0) {
+
+  const siginfo_t* const si = (const siginfo_t*) si0;
+
   char buf[20];
-  os->print("siginfo: ");
+  os->print("siginfo:");
 
   if (!si) {
-    os->print("<null>");
+    os->print(" <null>");
     return;
   }
 
-  // See print_siginfo_full() for details.
   const int sig = si->si_signo;
 
-  os->print("si_signo: %d (%s)", sig, os::Posix::get_signal_name(sig, buf, sizeof(buf)));
+  os->print(" si_signo: %d (%s)", sig, os::Posix::get_signal_name(sig, buf, sizeof(buf)));
 
   enum_sigcode_desc_t ed;
-  if (get_signal_code_description(si, &ed)) {
-    os->print(", si_code: %d (%s)", si->si_code, ed.s_name);
-  } else {
-    os->print(", si_code: %d (unknown)", si->si_code);
-  }
+  get_signal_code_description(si, &ed);
+  os->print(", si_code: %d (%s)", si->si_code, ed.s_name);
 
   if (si->si_errno) {
     os->print(", si_errno: %d", si->si_errno);
   }
 
-  const int me = (int) ::getpid();
-  const int pid = (int) si->si_pid;
+  // Output additional information depending on the signal code.
 
+  // Note: Many implementations lump si_addr, si_pid, si_uid etc. together as unions,
+  // so it depends on the context which member to use. For synchronous error signals,
+  // we print si_addr, unless the signal was sent by another process or thread, in
+  // which case we print out pid or tid of the sender.
   if (si->si_code == SI_USER || si->si_code == SI_QUEUE) {
-    if (IS_VALID_PID(pid) && pid != me) {
-      os->print(", sent from pid: %d (uid: %d)", pid, (int) si->si_uid);
+    const pid_t pid = si->si_pid;
+    os->print(", si_pid: %ld", (long) pid);
+    if (IS_VALID_PID(pid)) {
+      const pid_t me = getpid();
+      if (me == pid) {
+        os->print(" (current process)");
+      }
+    } else {
+      os->print(" (invalid)");
+    }
+    os->print(", si_uid: %ld", (long) si->si_uid);
+    if (sig == SIGCHLD) {
+      os->print(", si_status: %d", si->si_status);
     }
   } else if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL ||
              sig == SIGTRAP || sig == SIGFPE) {
-    os->print(", si_addr: " PTR_FORMAT, si->si_addr);
+    os->print(", si_addr: " PTR_FORMAT, p2i(si->si_addr));
 #ifdef SIGPOLL
   } else if (sig == SIGPOLL) {
-    os->print(", si_band: " PTR64_FORMAT, (uint64_t)si->si_band);
+    os->print(", si_band: %ld", si->si_band);
 #endif
-  } else if (sig == SIGCHLD) {
-    os->print_cr(", si_pid: %d, si_uid: %d, si_status: %d", (int) si->si_pid, si->si_uid, si->si_status);
   }
+
+}
+
+int os::Posix::unblock_thread_signal_mask(const sigset_t *set) {
+  return pthread_sigmask(SIG_UNBLOCK, set, NULL);
+}
+
+address os::Posix::ucontext_get_pc(const ucontext_t* ctx) {
+#if defined(AIX)
+   return Aix::ucontext_get_pc(ctx);
+#elif defined(BSD)
+   return Bsd::ucontext_get_pc(ctx);
+#elif defined(LINUX)
+   return Linux::ucontext_get_pc(ctx);
+#elif defined(SOLARIS)
+   return Solaris::ucontext_get_pc(ctx);
+#else
+   VMError::report_and_die("unimplemented ucontext_get_pc");
+#endif
+}
+
+void os::Posix::ucontext_set_pc(ucontext_t* ctx, address pc) {
+#if defined(AIX)
+   Aix::ucontext_set_pc(ctx, pc);
+#elif defined(BSD)
+   Bsd::ucontext_set_pc(ctx, pc);
+#elif defined(LINUX)
+   Linux::ucontext_set_pc(ctx, pc);
+#elif defined(SOLARIS)
+   Solaris::ucontext_set_pc(ctx, pc);
+#else
+   VMError::report_and_die("unimplemented ucontext_get_pc");
+#endif
+}
+
+char* os::Posix::describe_pthread_attr(char* buf, size_t buflen, const pthread_attr_t* attr) {
+  size_t stack_size = 0;
+  size_t guard_size = 0;
+  int detachstate = 0;
+  pthread_attr_getstacksize(attr, &stack_size);
+  pthread_attr_getguardsize(attr, &guard_size);
+  // Work around linux NPTL implementation error, see also os::create_thread() in os_linux.cpp.
+  LINUX_ONLY(stack_size -= guard_size);
+  pthread_attr_getdetachstate(attr, &detachstate);
+  jio_snprintf(buf, buflen, "stacksize: " SIZE_FORMAT "k, guardsize: " SIZE_FORMAT "k, %s",
+    stack_size / 1024, guard_size / 1024,
+    (detachstate == PTHREAD_CREATE_DETACHED ? "detached" : "joinable"));
+  return buf;
+}
+
+// Check minimum allowable stack sizes for thread creation and to initialize
+// the java system classes, including StackOverflowError - depends on page
+// size.
+// The space needed for frames during startup is platform dependent. It
+// depends on word size, platform calling conventions, C frame layout and
+// interpreter/C1/C2 design decisions. Therefore this is given in a
+// platform (os/cpu) dependent constant.
+// To this, space for guard mechanisms is added, which depends on the
+// page size which again depends on the concrete system the VM is running
+// on. Space for libc guard pages is not included in this size.
+jint os::Posix::set_minimum_stack_sizes() {
+  _java_thread_min_stack_allowed = _java_thread_min_stack_allowed +
+                                   JavaThread::stack_guard_zone_size() +
+                                   JavaThread::stack_shadow_zone_size();
+
+  _java_thread_min_stack_allowed = align_size_up(_java_thread_min_stack_allowed, vm_page_size());
+
+  size_t stack_size_in_bytes = ThreadStackSize * K;
+  if (stack_size_in_bytes != 0 &&
+      stack_size_in_bytes < _java_thread_min_stack_allowed) {
+    // The '-Xss' and '-XX:ThreadStackSize=N' options both set
+    // ThreadStackSize so we go with "Java thread stack size" instead
+    // of "ThreadStackSize" to be more friendly.
+    tty->print_cr("\nThe Java thread stack size specified is too small. "
+                  "Specify at least " SIZE_FORMAT "k",
+                  _java_thread_min_stack_allowed / K);
+    return JNI_ERR;
+  }
+
+  // Make the stack size a multiple of the page size so that
+  // the yellow/red zones can be guarded.
+  JavaThread::set_stack_size_at_create(round_to(stack_size_in_bytes, vm_page_size()));
+
+  // Reminder: a compiler thread is a Java thread.
+  _compiler_thread_min_stack_allowed = _compiler_thread_min_stack_allowed +
+                                       JavaThread::stack_guard_zone_size() +
+                                       JavaThread::stack_shadow_zone_size();
+
+  _compiler_thread_min_stack_allowed = align_size_up(_compiler_thread_min_stack_allowed, vm_page_size());
+
+  stack_size_in_bytes = CompilerThreadStackSize * K;
+  if (stack_size_in_bytes != 0 &&
+      stack_size_in_bytes < _compiler_thread_min_stack_allowed) {
+    tty->print_cr("\nThe CompilerThreadStackSize specified is too small. "
+                  "Specify at least " SIZE_FORMAT "k",
+                  _compiler_thread_min_stack_allowed / K);
+    return JNI_ERR;
+  }
+
+  _vm_internal_thread_min_stack_allowed = align_size_up(_vm_internal_thread_min_stack_allowed, vm_page_size());
+
+  stack_size_in_bytes = VMThreadStackSize * K;
+  if (stack_size_in_bytes != 0 &&
+      stack_size_in_bytes < _vm_internal_thread_min_stack_allowed) {
+    tty->print_cr("\nThe VMThreadStackSize specified is too small. "
+                  "Specify at least " SIZE_FORMAT "k",
+                  _vm_internal_thread_min_stack_allowed / K);
+    return JNI_ERR;
+  }
+  return JNI_OK;
+}
+
+// Called when creating the thread.  The minimum stack sizes have already been calculated
+size_t os::Posix::get_initial_stack_size(ThreadType thr_type, size_t req_stack_size) {
+  size_t stack_size;
+  if (req_stack_size == 0) {
+    stack_size = default_stack_size(thr_type);
+  } else {
+    stack_size = req_stack_size;
+  }
+
+  switch (thr_type) {
+  case os::java_thread:
+    // Java threads use ThreadStackSize which default value can be
+    // changed with the flag -Xss
+    if (req_stack_size == 0 && JavaThread::stack_size_at_create() > 0) {
+      // no requested size and we have a more specific default value
+      stack_size = JavaThread::stack_size_at_create();
+    }
+    stack_size = MAX2(stack_size,
+                      _java_thread_min_stack_allowed);
+    break;
+  case os::compiler_thread:
+    if (req_stack_size == 0 && CompilerThreadStackSize > 0) {
+      // no requested size and we have a more specific default value
+      stack_size = (size_t)(CompilerThreadStackSize * K);
+    }
+    stack_size = MAX2(stack_size,
+                      _compiler_thread_min_stack_allowed);
+    break;
+  case os::vm_thread:
+  case os::pgc_thread:
+  case os::cgc_thread:
+  case os::watcher_thread:
+  default:  // presume the unknown thr_type is a VM internal
+    if (req_stack_size == 0 && VMThreadStackSize > 0) {
+      // no requested size and we have a more specific default value
+      stack_size = (size_t)(VMThreadStackSize * K);
+    }
+
+    stack_size = MAX2(stack_size,
+                      _vm_internal_thread_min_stack_allowed);
+    break;
+  }
+
+  return stack_size;
 }
 
 os::WatcherThreadCrashProtection::WatcherThreadCrashProtection() {
@@ -1018,10 +1269,11 @@ void os::WatcherThreadCrashProtection::check_crash_protection(int sig,
   }
 }
 
-#define check_with_errno(check_type, cond, msg)                                      \
-  do {                                                                               \
-    int err = errno;                                                                 \
-    check_type(cond, err_msg("%s; error='%s' (errno=%d)", msg, strerror(err), err)); \
+#define check_with_errno(check_type, cond, msg)                             \
+  do {                                                                      \
+    int err = errno;                                                        \
+    check_type(cond, "%s; error='%s' (errno=%s)", msg, os::strerror(err),   \
+               os::errno_name(err));                                        \
 } while (false)
 
 #define assert_with_errno(cond, msg)    check_with_errno(assert, cond, msg)
@@ -1070,7 +1322,7 @@ bool PosixSemaphore::trywait() {
   return ret == 0;
 }
 
-bool PosixSemaphore::timedwait(const struct timespec ts) {
+bool PosixSemaphore::timedwait(struct timespec ts) {
   while (true) {
     int result = sem_timedwait(&_semaphore, &ts);
     if (result == 0) {

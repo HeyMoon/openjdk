@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -303,7 +303,7 @@ public:
     // completed(), which is desirable since a region must be claimed before it
     // can be completed.
     bool available() const { return _dc_and_los < dc_one; }
-    bool claimed() const   { return _dc_and_los >= dc_claimed; }
+    bool claimed()   const { return _dc_and_los >= dc_claimed; }
     bool completed() const { return _dc_and_los >= dc_completed; }
 
     // These are not atomic.
@@ -347,7 +347,7 @@ public:
     HeapWord*            _partial_obj_addr;
     region_sz_t          _partial_obj_size;
     region_sz_t volatile _dc_and_los;
-    bool                 _blocks_filled;
+    bool        volatile _blocks_filled;
 
 #ifdef ASSERT
     size_t               _blocks_filled_count;   // Number of block table fills.
@@ -451,10 +451,10 @@ public:
   HeapWord* partial_obj_end(size_t region_idx) const;
 
   // Return the location of the object after compaction.
-  HeapWord* calc_new_pointer(HeapWord* addr);
+  HeapWord* calc_new_pointer(HeapWord* addr, ParCompactionManager* cm);
 
-  HeapWord* calc_new_pointer(oop p) {
-    return calc_new_pointer((HeapWord*) p);
+  HeapWord* calc_new_pointer(oop p, ParCompactionManager* cm) {
+    return calc_new_pointer((HeapWord*) p, cm);
   }
 
 #ifdef  ASSERT
@@ -498,7 +498,9 @@ ParallelCompactData::RegionData::destination_count() const
 inline bool
 ParallelCompactData::RegionData::blocks_filled() const
 {
-  return _blocks_filled;
+  bool result = _blocks_filled;
+  OrderAccess::acquire();
+  return result;
 }
 
 #ifdef ASSERT
@@ -512,6 +514,7 @@ ParallelCompactData::RegionData::blocks_filled_count() const
 inline void
 ParallelCompactData::RegionData::set_blocks_filled()
 {
+  OrderAccess::release();
   _blocks_filled = true;
   // Debug builds count the number of times the table was filled.
   DEBUG_ONLY(Atomic::inc_ptr(&_blocks_filled_count));
@@ -628,8 +631,8 @@ ParallelCompactData::region_offset(const HeapWord* addr) const
 inline size_t
 ParallelCompactData::addr_to_region_idx(const HeapWord* addr) const
 {
-  assert(addr >= _region_start, "bad addr");
-  assert(addr <= _region_end, "bad addr");
+  assert(addr >= _region_start, "bad addr " PTR_FORMAT " _region_start " PTR_FORMAT, p2i(addr), p2i(_region_start));
+  assert(addr <= _region_end, "bad addr " PTR_FORMAT " _region_end " PTR_FORMAT, p2i(addr), p2i(_region_end));
   return pointer_delta(addr, _region_start) >> Log2RegionSize;
 }
 
@@ -934,22 +937,35 @@ class PSParallelCompact : AllStatic {
 
   class AdjustPointerClosure: public ExtendedOopClosure {
    public:
+    AdjustPointerClosure(ParCompactionManager* cm) {
+      assert(cm != NULL, "associate ParCompactionManage should not be NULL");
+      _cm = cm;
+    }
     template <typename T> void do_oop_nv(T* p);
     virtual void do_oop(oop* p);
     virtual void do_oop(narrowOop* p);
 
     // This closure provides its own oop verification code.
     debug_only(virtual bool should_verify_oops() { return false; })
+   private:
+    ParCompactionManager* _cm;
   };
 
   class AdjustKlassClosure : public KlassClosure {
    public:
+    AdjustKlassClosure(ParCompactionManager* cm) {
+      assert(cm != NULL, "associate ParCompactionManage should not be NULL");
+      _cm = cm;
+    }
     void do_klass(Klass* klass);
+   private:
+    ParCompactionManager* _cm;
   };
 
   friend class AdjustPointerClosure;
   friend class AdjustKlassClosure;
   friend class RefProcTaskProxy;
+  friend class PSParallelCompactTest;
 
  private:
   static STWGCTimer           _gc_timer;
@@ -963,9 +979,6 @@ class PSParallelCompact : AllStatic {
   static ParallelCompactData  _summary_data;
   static IsAliveClosure       _is_alive_closure;
   static SpaceInfo            _space_info[last_space_id];
-  static bool                 _print_phases;
-  static AdjustPointerClosure _adjust_pointer_closure;
-  static AdjustKlassClosure   _adjust_klass_closure;
 
   // Reference processing (used in ...follow_contents)
   static ReferenceProcessor*  _ref_processor;
@@ -979,7 +992,6 @@ class PSParallelCompact : AllStatic {
   static bool   _dwl_initialized;
 #endif  // #ifdef ASSERT
 
-
  public:
   static ParallelOldTracer* gc_tracer() { return &_gc_tracer; }
 
@@ -987,13 +999,10 @@ class PSParallelCompact : AllStatic {
 
   static void initialize_space_info();
 
-  // Return true if details about individual phases should be printed.
-  static inline bool print_phases();
-
   // Clear the marking bitmap and summary data that cover the specified space.
   static void clear_data_covering_space(SpaceId id);
 
-  static void pre_compact(PreGCValues* pre_gc_values);
+  static void pre_compact();
   static void post_compact();
 
   // Mark live objects
@@ -1057,42 +1066,21 @@ class PSParallelCompact : AllStatic {
   // non-empty.
   static void fill_dense_prefix_end(SpaceId id);
 
-  // Clear the summary data source_region field for the specified addresses.
-  static void clear_source_region(HeapWord* beg_addr, HeapWord* end_addr);
-
-#ifndef PRODUCT
-  // Routines to provoke splitting a young gen space (ParallelOldGCSplitALot).
-
-  // Fill the region [start, start + words) with live object(s).  Only usable
-  // for the old and permanent generations.
-  static void fill_with_live_objects(SpaceId id, HeapWord* const start,
-                                     size_t words);
-  // Include the new objects in the summary data.
-  static void summarize_new_objects(SpaceId id, HeapWord* start);
-
-  // Add live objects to a survivor space since it's rare that both survivors
-  // are non-empty.
-  static void provoke_split_fill_survivor(SpaceId id);
-
-  // Add live objects and/or choose the dense prefix to provoke splitting.
-  static void provoke_split(bool & maximum_compaction);
-#endif
-
   static void summarize_spaces_quick();
   static void summarize_space(SpaceId id, bool maximum_compaction);
   static void summary_phase(ParCompactionManager* cm, bool maximum_compaction);
 
   // Adjust addresses in roots.  Does not adjust addresses in heap.
-  static void adjust_roots();
+  static void adjust_roots(ParCompactionManager* cm);
 
-  DEBUG_ONLY(static void write_block_fill_histogram(outputStream* const out);)
+  DEBUG_ONLY(static void write_block_fill_histogram();)
 
   // Move objects to new locations.
   static void compact_perm(ParCompactionManager* cm);
   static void compact();
 
   // Add available regions to the stack and draining tasks to the task queue.
-  static void enqueue_region_draining_tasks(GCTaskQueue* q,
+  static void prepare_region_draining_tasks(GCTaskQueue* q,
                                             uint parallel_gc_threads);
 
   // Add dense prefix update tasks to the task queue.
@@ -1114,6 +1102,13 @@ class PSParallelCompact : AllStatic {
   // Reset time since last full gc
   static void reset_millis_since_last_gc();
 
+#ifndef PRODUCT
+  // Print generic summary data
+  static void print_generic_summary_data(ParallelCompactData& summary_data,
+                                         HeapWord* const beg_addr,
+                                         HeapWord* const end_addr);
+#endif  // #ifndef PRODUCT
+
  public:
 
   PSParallelCompact();
@@ -1129,10 +1124,6 @@ class PSParallelCompact : AllStatic {
   static bool initialize();
 
   // Closure accessors
-  static PSParallelCompact::AdjustPointerClosure* adjust_pointer_closure() {
-    return &_adjust_pointer_closure;
-  }
-  static KlassClosure* adjust_klass_closure()      { return (KlassClosure*)&_adjust_klass_closure; }
   static BoolObjectClosure* is_alive_closure()     { return (BoolObjectClosure*)&_is_alive_closure; }
 
   // Public accessors
@@ -1147,7 +1138,7 @@ class PSParallelCompact : AllStatic {
   static inline bool mark_obj(oop obj);
   static inline bool is_marked(oop obj);
 
-  template <class T> static inline void adjust_pointer(T* p);
+  template <class T> static inline void adjust_pointer(T* p, ParCompactionManager* cm);
 
   // Compaction support.
   // Return true if p is in the range [beg_addr, end_addr).
@@ -1262,22 +1253,8 @@ class PSParallelCompact : AllStatic {
 #endif  // #ifdef ASSERT
 };
 
-inline bool PSParallelCompact::mark_obj(oop obj) {
-  const int obj_size = obj->size();
-  if (mark_bitmap()->mark_obj(obj, obj_size)) {
-    _summary_data.add_obj(obj, obj_size);
-    return true;
-  } else {
-    return false;
-  }
-}
-
 inline bool PSParallelCompact::is_marked(oop obj) {
   return mark_bitmap()->is_marked(obj);
-}
-
-inline bool PSParallelCompact::print_phases() {
-  return _print_phases;
 }
 
 inline double PSParallelCompact::normal_distribution(double density) {
@@ -1410,9 +1387,8 @@ class UpdateOnlyClosure: public ParMarkBitMapClosure {
   inline void do_addr(HeapWord* addr);
 };
 
-class FillClosure: public ParMarkBitMapClosure
-{
-public:
+class FillClosure: public ParMarkBitMapClosure {
+ public:
   FillClosure(ParCompactionManager* cm, PSParallelCompact::SpaceId space_id) :
     ParMarkBitMapClosure(PSParallelCompact::mark_bitmap(), cm),
     _start_array(PSParallelCompact::start_array(space_id))
@@ -1421,17 +1397,9 @@ public:
            "cannot use FillClosure in the young gen");
   }
 
-  virtual IterationStatus do_addr(HeapWord* addr, size_t size) {
-    CollectedHeap::fill_with_objects(addr, size);
-    HeapWord* const end = addr + size;
-    do {
-      _start_array->allocate_block(addr);
-      addr += oop(addr)->size();
-    } while (addr < end);
-    return ParMarkBitMap::incomplete;
-  }
+  virtual IterationStatus do_addr(HeapWord* addr, size_t size);
 
-private:
+ private:
   ObjectStartArray* const _start_array;
 };
 

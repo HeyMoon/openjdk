@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,22 +34,23 @@ import java.util.logging.Level;
 import java.util.logging.LogManager;
 import java.util.logging.Logger;
 import java.util.logging.LoggingPermission;
-import sun.misc.JavaAWTAccess;
-import sun.misc.SharedSecrets;
+import jdk.internal.misc.JavaAWTAccess;
+import jdk.internal.misc.SharedSecrets;
 
 /**
  * @test
  * @bug 8030850
  * @summary Tests that setting .level=FINEST for the root logger in logging
  *      configuration file does work.
- * @modules java.base/sun.misc
+ * @modules java.base/jdk.internal.misc
+ *          java.logging
  * @run main/othervm RootLevelInConfigFile
  *
  * @author danielfuchs
  */
 public class RootLevelInConfigFile {
 
-    public final static String CONFIG_FILE_KEY = "java.util.logging.config.file";
+    public static final String CONFIG_FILE_KEY = "java.util.logging.config.file";
 
     public static void main(String[] args) throws IOException {
         System.setProperty(CONFIG_FILE_KEY,
@@ -181,7 +182,7 @@ public class RootLevelInConfigFile {
             perms.add(new PropertyPermission("java.util.logging.config.class","read"));
             perms.add(new PropertyPermission("java.util.logging.config.file","read"));
             perms.add(new FilePermission(configFile, "read"));
-            perms.add(new RuntimePermission("accessClassInPackage.sun.misc"));
+            perms.add(new RuntimePermission("accessClassInPackage.jdk.internal.misc"));
         }
 
         @Override

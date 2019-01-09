@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -235,9 +235,9 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
     }
 
     /**
-     * Invoked by <code>installUI</code> to create
+     * Invoked by {@code installUI} to create
      * a layout manager object to manage
-     * the <code>JTabbedPane</code>.
+     * the {@code JTabbedPane}.
      *
      * @return a layout manager object
      *
@@ -515,13 +515,14 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
     /**
      * Adds the specified mnemonic at the specified index.
      */
+    @SuppressWarnings("deprecation")
     private void addMnemonic(final int index, final int mnemonic) {
         if (mnemonicToIndexMap == null) {
             initMnemonics();
         }
         // [2165820] Mac OS X change: mnemonics need to be triggered with ctrl-option, not just option.
         mnemonicInputMap.put(KeyStroke.getKeyStroke(mnemonic, Event.ALT_MASK | Event.CTRL_MASK), "setSelectedIndex");
-        mnemonicToIndexMap.put(new Integer(mnemonic), new Integer(index));
+        mnemonicToIndexMap.put(Integer.valueOf(mnemonic), Integer.valueOf(index));
     }
 
     /**
@@ -536,7 +537,7 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
 
     /**
      * Sets the tab the mouse is over by location. This is a cover method
-     * for <code>setRolloverTab(tabForCoordinate(x, y, false))</code>.
+     * for {@code setRolloverTab(tabForCoordinate(x, y, false))}.
      */
     private void setRolloverTab(final int x, final int y) {
         // NOTE:
@@ -547,8 +548,8 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
     }
 
     /**
-     * Sets the tab the mouse is currently over to <code>index</code>.
-     * <code>index</code> will be -1 if the mouse is no longer over any
+     * Sets the tab the mouse is currently over to {@code index}.
+     * {@code index} will be -1 if the mouse is no longer over any
      * tab. No checking is done to ensure the passed in index identifies a
      * valid tab.
      *
@@ -676,7 +677,7 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
 
     /**
      * Returns the amount the baseline is offset by.  This is typically
-     * the same as <code>getTabLabelShiftY</code>.
+     * the same as {@code getTabLabelShiftY}.
      *
      * @return amount to offset the baseline by
      * @since 1.6
@@ -765,10 +766,10 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
     /**
      * Paints the tabs in the tab area.
      * Invoked by paint().
-     * The graphics parameter must be a valid <code>Graphics</code>
+     * The graphics parameter must be a valid {@code Graphics}
      * object.  Tab placement may be either:
-     * <code>JTabbedPane.TOP</code>, <code>JTabbedPane.BOTTOM</code>,
-     * <code>JTabbedPane.LEFT</code>, or <code>JTabbedPane.RIGHT</code>.
+     * {@code JTabbedPane.TOP}, {@code JTabbedPane.BOTTOM},
+     * {@code JTabbedPane.LEFT}, or {@code JTabbedPane.RIGHT}.
      * The selected index must be a valid tabbed pane tab index (0 to
      * tab count - 1, inclusive) or -1 if no tab is currently selected.
      * The handling of invalid parameters is unspecified.
@@ -1406,7 +1407,7 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
      * designated Rectangle object (rather than instantiating and returning
      * a new Rectangle each time). The tab index parameter must be a valid
      * tabbed pane tab index (0 to tab count - 1, inclusive).  The destination
-     * rectangle parameter must be a valid <code>Rectangle</code> instance.
+     * rectangle parameter must be a valid {@code Rectangle} instance.
      * The handling of invalid parameters is unspecified.
      *
      * @param tabIndex the index of the tab
@@ -2011,20 +2012,20 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
     }
 
     private static class Actions extends UIAction {
-        final static String NEXT = "navigateNext";
-        final static String PREVIOUS = "navigatePrevious";
-        final static String RIGHT = "navigateRight";
-        final static String LEFT = "navigateLeft";
-        final static String UP = "navigateUp";
-        final static String DOWN = "navigateDown";
-        final static String PAGE_UP = "navigatePageUp";
-        final static String PAGE_DOWN = "navigatePageDown";
-        final static String REQUEST_FOCUS = "requestFocus";
-        final static String REQUEST_FOCUS_FOR_VISIBLE = "requestFocusForVisibleComponent";
-        final static String SET_SELECTED = "setSelectedIndex";
-        final static String SELECT_FOCUSED = "selectTabWithFocus";
-        final static String SCROLL_FORWARD = "scrollTabsForwardAction";
-        final static String SCROLL_BACKWARD = "scrollTabsBackwardAction";
+        static final String NEXT = "navigateNext";
+        static final String PREVIOUS = "navigatePrevious";
+        static final String RIGHT = "navigateRight";
+        static final String LEFT = "navigateLeft";
+        static final String UP = "navigateUp";
+        static final String DOWN = "navigateDown";
+        static final String PAGE_UP = "navigatePageUp";
+        static final String PAGE_DOWN = "navigatePageDown";
+        static final String REQUEST_FOCUS = "requestFocus";
+        static final String REQUEST_FOCUS_FOR_VISIBLE = "requestFocusForVisibleComponent";
+        static final String SET_SELECTED = "setSelectedIndex";
+        static final String SELECT_FOCUSED = "selectTabWithFocus";
+        static final String SCROLL_FORWARD = "scrollTabsForwardAction";
+        static final String SCROLL_BACKWARD = "scrollTabsBackwardAction";
 
         Actions(final String key) {
             super(key);
@@ -2084,7 +2085,7 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
                     if (mnemonic >= 'a' && mnemonic <= 'z') {
                         mnemonic -= ('a' - 'A');
                     }
-                    final Integer index = ui.mnemonicToIndexMap.get(new Integer(mnemonic));
+                    final Integer index = ui.mnemonicToIndexMap.get(Integer.valueOf(mnemonic));
                     if (index != null && pane.isEnabledAt(index.intValue())) {
                         pane.setSelectedIndex(index.intValue());
                     }
@@ -2183,50 +2184,21 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
         }
 
         protected int preferredTabAreaHeight(final int tabPlacement, final int width) {
-            final FontMetrics metrics = getFontMetrics();
             final int tabCount = tabPane.getTabCount();
             int total = 0;
             if (tabCount > 0) {
-                int rows = 1;
-                int x = 0;
-
                 final int maxTabHeight = calculateMaxTabHeight(tabPlacement);
-
-                for (int i = 0; i < tabCount; i++) {
-                    final int tabWidth = calculateTabWidth(tabPlacement, i, metrics);
-
-                    if (x != 0 && x + tabWidth > width) {
-                        rows++;
-                        x = 0;
-                    }
-                    x += tabWidth;
-                }
-                total = calculateTabAreaHeight(tabPlacement, rows, maxTabHeight);
+                total = calculateTabAreaHeight(tabPlacement, 1, maxTabHeight);
             }
             return total;
         }
 
         protected int preferredTabAreaWidth(final int tabPlacement, final int height) {
-            final FontMetrics metrics = getFontMetrics();
             final int tabCount = tabPane.getTabCount();
             int total = 0;
             if (tabCount > 0) {
-                int columns = 1;
-                int y = 0;
-                final int fontHeight = metrics.getHeight();
-
                 maxTabWidth = calculateMaxTabWidth(tabPlacement);
-
-                for (int i = 0; i < tabCount; i++) {
-                    final int tabHeight = calculateTabHeight(tabPlacement, i, fontHeight);
-
-                    if (y != 0 && y + tabHeight > height) {
-                        columns++;
-                        y = 0;
-                    }
-                    y += tabHeight;
-                }
-                total = calculateTabAreaWidth(tabPlacement, columns, maxTabWidth);
+                total = calculateTabAreaWidth(tabPlacement, 1, maxTabWidth);
             }
             return total;
         }
@@ -3717,7 +3689,7 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
 
     /**
      * An ActionMap that populates its contents as necessary. The
-     * contents are populated by invoking the <code>loadActionMap</code>
+     * contents are populated by invoking the {@code loadActionMap}
      * method on the passed in Object.
      *
      * @version 1.6, 11/17/05
@@ -3726,14 +3698,14 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
     @SuppressWarnings("serial") // Superclass is not serializable across versions
     static class LazyActionMap extends ActionMapUIResource {
         /**
-         * Object to invoke <code>loadActionMap</code> on. This may be
+         * Object to invoke {@code loadActionMap} on. This may be
          * a Class object.
          */
         private transient Object _loader;
 
         /**
          * Installs an ActionMap that will be populated by invoking the
-         * <code>loadActionMap</code> method on the specified Class
+         * {@code loadActionMap} method on the specified Class
          * when necessary.
          * <p>
          * This should be used if the ActionMap can be shared.
@@ -3755,12 +3727,11 @@ public class AquaTabbedPaneCopyFromBasicUI extends TabbedPaneUI implements Swing
 
         /**
          * Returns an ActionMap that will be populated by invoking the
-         * <code>loadActionMap</code> method on the specified Class
+         * {@code loadActionMap} method on the specified Class
          * when necessary.
          * <p>
          * This should be used if the ActionMap can be shared.
          *
-         * @param c JComponent to install the ActionMap on.
          * @param loaderClass Class object that gets loadActionMap invoked
          *                    on.
          * @param defaultsKey Key to use to defaults table to check for

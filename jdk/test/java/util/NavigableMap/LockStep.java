@@ -228,8 +228,8 @@ public class LockStep {
         if (maybe(4) && s instanceof Serializable) {
             try {
                 equal2(s, serialClone(s));
-            } catch(RuntimeException uhoh) {
-                if(!(uhoh.getCause() instanceof NotSerializableException)) {
+            } catch (RuntimeException uhoh) {
+                if (!(uhoh.getCause() instanceof NotSerializableException)) {
                     throw uhoh;
                 }
             }
@@ -534,8 +534,8 @@ public class LockStep {
         }
     }
 
-    static abstract class MapFrobber { abstract void frob(NavigableMap m); }
-    static abstract class SetFrobber { abstract void frob(NavigableSet m); }
+    abstract static class MapFrobber { abstract void frob(NavigableMap m); }
+    abstract static class SetFrobber { abstract void frob(NavigableSet m); }
 
     static MapFrobber randomAdder(NavigableMap m) {
         final Integer k = unusedKey(m);
@@ -753,7 +753,7 @@ public class LockStep {
 
         List<NavigableMap> maps = Arrays.asList(m1, m2);
         for (NavigableMap m : maps) testEmptyMap(m);
-        final Set<Integer> ints = new HashSet<Integer>();
+        final Set<Integer> ints = new HashSet<>();
         while (ints.size() < size)
             ints.add(rnd.nextInt(1024));
         final Integer[] elts = ints.toArray(new Integer[size]);
@@ -795,7 +795,7 @@ public class LockStep {
 
         List<NavigableSet> sets = Arrays.asList(s1, s2);
         for (NavigableSet s : sets) testEmptySet(s);
-        final Set<Integer> ints = new HashSet<Integer>();
+        final Set<Integer> ints = new HashSet<>();
         while (ints.size() < size)
             ints.add(rnd.nextInt(1024));
         final Integer[] elts = ints.toArray(new Integer[size]);

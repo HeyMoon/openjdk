@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,15 +25,15 @@
  * @key gc
  * @bug 8032771
  * @summary Test silent verification.
- * @library /testlibrary
- * @modules java.base/sun.misc
- *          java.management
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  */
 
-import jdk.test.lib.OutputAnalyzer;
-import jdk.test.lib.ProcessTools;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 import java.util.ArrayList;
 import java.util.Collections;
+import jdk.test.lib.Utils;
 
 class RunSystemGC {
   public static void main(String args[]) throws Exception {
@@ -43,24 +43,16 @@ class RunSystemGC {
 
 
 public class TestVerifySilently {
-  private static String[] getTestJavaOpts() {
-    String testVmOptsStr = System.getProperty("test.java.opts");
-    if (!testVmOptsStr.isEmpty()) {
-      return testVmOptsStr.split(" ");
-    } else {
-      return new String[] {};
-    }
-  }
 
   private static OutputAnalyzer runTest(boolean verifySilently) throws Exception {
     ArrayList<String> vmOpts = new ArrayList();
 
-    Collections.addAll(vmOpts, getTestJavaOpts());
+    Collections.addAll(vmOpts, Utils.getFilteredTestJavaOpts("-Xlog.*"));
     Collections.addAll(vmOpts, new String[] {"-XX:+UnlockDiagnosticVMOptions",
                                              "-XX:+VerifyDuringStartup",
                                              "-XX:+VerifyBeforeGC",
                                              "-XX:+VerifyAfterGC",
-                                             "-XX:" + (verifySilently ? "+":"-") + "VerifySilently",
+                                             (verifySilently ? "-Xlog:gc":"-Xlog:gc+verify=debug"),
                                              RunSystemGC.class.getName()});
     ProcessBuilder pb =
       ProcessTools.createJavaProcessBuilder(vmOpts.toArray(new String[vmOpts.size()]));
@@ -76,11 +68,11 @@ public class TestVerifySilently {
     OutputAnalyzer output;
 
     output = runTest(false);
-    output.shouldContain("[Verifying");
+    output.shouldContain("Verifying");
     output.shouldHaveExitValue(0);
 
     output = runTest(true);
-    output.shouldNotContain("[Verifying");
+    output.shouldNotContain("Verifying");
     output.shouldHaveExitValue(0);
   }
 }

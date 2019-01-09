@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2009, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,12 +23,9 @@
  * questions.
  */
 
-/*
- * Copyright (c) 2009, 2013, by Oracle Corporation. All Rights Reserved.
- */
-
 package javax.xml.stream;
 
+import com.sun.xml.internal.stream.XMLOutputFactoryImpl;
 import javax.xml.transform.Result;
 
 /**
@@ -38,15 +36,9 @@ import javax.xml.transform.Result;
  * Each property varies in the level of support required by each implementation.
  * The level of support required is described in the 'Required' column.
  *
- *     <table border="2" rules="all" cellpadding="4">
+ *     <table class="striped">
+ *     <caption>Configuration Parameters</caption>
  *     <thead>
- *      <tr>
- *        <th align="center" colspan="2">
- *          Configuration parameters
- *        </th>
- *      </tr>
- *    </thead>
- *    <tbody>
  *      <tr>
  *        <th>Property Name</th>
  *        <th>Behavior</th>
@@ -54,6 +46,8 @@ import javax.xml.transform.Result;
  *        <th>Default Value</th>
  *        <th>Required</th>
  *              </tr>
+ *    </thead>
+ *    <tbody>
  *         <tr><td>javax.xml.stream.isRepairingNamespaces</td><td>defaults prefixes
  *                 on the output side</td><td>Boolean</td><td>False</td><td>Yes</td></tr>
  *      </tbody>
@@ -120,6 +114,19 @@ public abstract class XMLOutputFactory {
 
   protected XMLOutputFactory(){}
 
+   /**
+   * Creates a new instance of the {@code XMLOutputFactory} builtin
+   * system-default implementation.
+   *
+   * @return A new instance of the {@code XMLOutputFactory} builtin
+   *         system-default implementation.
+   *
+   * @since 9
+   */
+  public static XMLOutputFactory newDefaultFactory() {
+      return new XMLOutputFactoryImpl();
+  }
+
   /**
    * Creates a new instance of the factory in exactly the same manner as the
    * {@link #newFactory()} method.
@@ -175,7 +182,8 @@ public abstract class XMLOutputFactory {
    * </li>
    * <li>
    *   <p>
-   *   Otherwise, the system-default implementation is returned.
+   *   Otherwise, the {@linkplain #newDefaultFactory() system-default}
+   *   implementation is returned.
    * </li>
    * </ul>
    * <p>
@@ -210,6 +218,7 @@ public abstract class XMLOutputFactory {
    *              Use the new method {@link #newFactory(java.lang.String,
    *              java.lang.ClassLoader)} instead.
    */
+  @Deprecated(since="1.7")
   public static XMLInputFactory newInstance(String factoryId,
           ClassLoader classLoader)
           throws FactoryConfigurationError {

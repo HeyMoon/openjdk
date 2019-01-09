@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,8 +34,10 @@ import java.util.Map;
  * @bug 8010939
  * @summary check for deadlock between findLogger() and drainLoggerRefQueueBounded()
  * @author jim.gish@oracle.com
+ * @modules java.logging
+ *          java.management
  * @build DrainFindDeadlockTest
- * @run main/othervm/timeout=10 DrainFindDeadlockTest
+ * @run main/othervm DrainFindDeadlockTest
  * @key randomness
  */
 
@@ -47,14 +49,14 @@ import java.util.Map;
  */
 public class DrainFindDeadlockTest {
     private LogManager mgr = LogManager.getLogManager();
-    private final static int MAX_ITERATIONS = 100;
+    private static final int MAX_ITERATIONS = 100;
 
     // Get a ThreadMXBean so we can check for deadlock.  N.B. this may
     // not be supported on all platforms, which means we will have to
     // resort to the traditional test timeout method. However, if
     // we have the support we'll get the deadlock details if one
     // is detected.
-    private final static ThreadMXBean threadMXBean =
+    private static final ThreadMXBean threadMXBean =
             ManagementFactory.getThreadMXBean();
     private final boolean threadMXBeanDeadlockSupported =
             threadMXBean.isSynchronizerUsageSupported();
@@ -109,9 +111,13 @@ public class DrainFindDeadlockTest {
         public void run() {
             System.out.println("Running " + Thread.currentThread().getName());
 
-            for (int i=0; i < MAX_ITERATIONS; i++) {
-                logger = Logger.getLogger("DrainFindDeadlockTest"+i);
-                DrainFindDeadlockTest.randomDelay();
+            try {
+                for (int i=0; i < MAX_ITERATIONS; i++) {
+                    logger = Logger.getLogger("DrainFindDeadlockTest"+i);
+                    DrainFindDeadlockTest.randomDelay();
+                }
+            } finally {
+                System.out.println("Completed " + Thread.currentThread().getName());
             }
         }
     }
@@ -120,13 +126,17 @@ public class DrainFindDeadlockTest {
         @Override
         public void run() {
             System.out.println("Running " + Thread.currentThread().getName());
-            for (int i=0; i < MAX_ITERATIONS; i++) {
-                try {
-                    mgr.readConfiguration();
-                } catch (IOException | SecurityException ex) {
-                    throw new RuntimeException("FAILED: test setup problem", ex);
+            try {
+                for (int i=0; i < MAX_ITERATIONS; i++) {
+                    try {
+                        mgr.readConfiguration();
+                    } catch (IOException | SecurityException ex) {
+                        throw new RuntimeException("FAILED: test setup problem", ex);
+                    }
+                    DrainFindDeadlockTest.randomDelay();
                 }
-                DrainFindDeadlockTest.randomDelay();
+            } finally {
+                System.out.println("Completed " + Thread.currentThread().getName());
             }
         }
     }
@@ -185,12 +195,16 @@ public class DrainFindDeadlockTest {
         @Override
         public void run() {
             System.out.println("Running " + Thread.currentThread().getName());
-            for (int i=0; i < MAX_ITERATIONS*2; i++) {
-                checkState(t1, t2);
-                try {
-                    Thread.sleep(10);
-                } catch (InterruptedException ex) {
-                };
+            try {
+                for (int i=0; i < MAX_ITERATIONS*2; i++) {
+                    checkState(t1, t2);
+                    try {
+                        Thread.sleep(10);
+                    } catch (InterruptedException ex) {
+                    }
+                }
+            } finally {
+                System.out.println("Completed " + Thread.currentThread().getName());
             }
         }
     }

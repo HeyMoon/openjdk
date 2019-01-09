@@ -19,7 +19,6 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
 /**
@@ -43,7 +42,7 @@ import static java.lang.invoke.MethodHandles.*;
 import static java.lang.invoke.MethodType.*;
 
 public class CallSiteTest {
-    private final static Class<?> CLASS = CallSiteTest.class;
+    private static final Class<?> CLASS = CallSiteTest.class;
 
     private static CallSite mcs;
     private static CallSite vcs;
@@ -66,9 +65,9 @@ public class CallSiteTest {
         testVolatileCallSite();
     }
 
-    private final static int N = Integer.MAX_VALUE / 100;
-    private final static int RESULT1 = 762786192;
-    private final static int RESULT2 = -21474836;
+    private static final int N = Integer.MAX_VALUE / 100;
+    private static final int RESULT1 = 762786192;
+    private static final int RESULT2 = -21474836;
 
     private static void assertEquals(int expected, int actual) {
         if (expected != actual)

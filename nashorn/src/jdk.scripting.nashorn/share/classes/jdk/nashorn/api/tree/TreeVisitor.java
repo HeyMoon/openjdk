@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,7 @@ package jdk.nashorn.api.tree;
  * Classes implementing this interface are used to operate
  * on a tree when the kind of tree is unknown at compile time.
  * When a visitor is passed to an tree's {@link Tree#accept
- * accept} method, the <tt>visit<i>XYZ</i></tt> method most applicable
+ * accept} method, the <code>visit<i>Xyz</i></code> method most applicable
  * to that tree is invoked.
  *
  * <p> Classes implementing this interface may or may not throw a
@@ -51,9 +51,8 @@ package jdk.nashorn.api.tree;
  *            methods.  Use {@code Void} for visitors that do not need an
  *            additional parameter.
  *
- * @since 1.9
+ * @since 9
  */
-@jdk.Exported
 public interface TreeVisitor<R,P> {
     /**
      * Visit assignment tree.
@@ -117,6 +116,24 @@ public interface TreeVisitor<R,P> {
      * @return value from the visitor
      */
     R visitCatch(CatchTree node, P p);
+
+    /**
+     * Visit class statement tree.
+     *
+     * @param node node being visited
+     * @param p extra parameter passed to the visitor
+     * @return value from the visitor
+     */
+    R visitClassDeclaration(ClassDeclarationTree node, P p);
+
+    /**
+     * Visit class expression tree.
+     *
+     * @param node node being visited
+     * @param p extra parameter passed to the visitor
+     * @return value from the visitor
+     */
+    R visitClassExpression(ClassExpressionTree node, P p);
 
     /**
      * Visit conditional expression tree.
@@ -191,6 +208,15 @@ public interface TreeVisitor<R,P> {
     R visitForInLoop(ForInLoopTree node, P p);
 
     /**
+     * Visit for..of statement tree.
+     *
+     * @param node node being visited
+     * @param p extra parameter passed to the visitor
+     * @return value from the visitor
+     */
+    R visitForOfLoop(ForOfLoopTree node, P p);
+
+    /**
      * Visit function call expression tree.
      *
      * @param node node being visited
@@ -217,7 +243,7 @@ public interface TreeVisitor<R,P> {
      */
     R visitFunctionExpression(FunctionExpressionTree node, P p);
 
-        /**
+    /**
      * Visit identifier tree.
      *
      * @param node node being visited
@@ -335,6 +361,15 @@ public interface TreeVisitor<R,P> {
     R visitRegExpLiteral(RegExpLiteralTree node, P p);
 
     /**
+     * Visit template literal tree.
+     *
+     * @param node node being visited
+     * @param p extra parameter passed to the visitor
+     * @return value from the visitor
+     */
+    R visitTemplateLiteral(TemplateLiteralTree node, P p);
+
+    /**
      * Visit an empty statement tree.
      *
      * @param node node being visited
@@ -342,6 +377,15 @@ public interface TreeVisitor<R,P> {
      * @return value from the visitor
      */
     R visitEmptyStatement(EmptyStatementTree node, P p);
+
+    /**
+     * Visit 'spread' expression tree.
+     *
+     * @param node node being visited
+     * @param p extra parameter passed to the visitor
+     * @return value from the visitor
+     */
+    R visitSpread(SpreadTree node, P p);
 
     /**
      * Visit 'switch' statement tree.
@@ -369,6 +413,33 @@ public interface TreeVisitor<R,P> {
      * @return value from the visitor
      */
     R visitCompilationUnit(CompilationUnitTree node, P p);
+
+    /**
+     * Visit Module tree.
+     *
+     * @param node node being visited
+     * @param p extra parameter passed to the visitor
+     * @return value from the visitor
+     */
+    R visitModule(ModuleTree node, P p);
+
+    /**
+     * Visit Module ExportEntry tree.
+     *
+     * @param node node being visited
+     * @param p extra parameter passed to the visitor
+     * @return value from the visitor
+     */
+    R visitExportEntry(ExportEntryTree node, P p);
+
+    /**
+     * Visit Module ImportEntry tree.
+     *
+     * @param node node being visited
+     * @param p extra parameter passed to the visitor
+     * @return value from the visitor
+     */
+    R visitImportEntry(ImportEntryTree node, P p);
 
     /**
      * Visit 'try' statement tree.
@@ -423,6 +494,15 @@ public interface TreeVisitor<R,P> {
      * @return value from the visitor
      */
     R visitWith(WithTree node, P p);
+
+    /**
+     * Visit 'yield' expression tree.
+     *
+     * @param node node being visited
+     * @param p extra parameter passed to the visitor
+     * @return value from the visitor
+     */
+    R visitYield(YieldTree node, P p);
 
     /**
      * Visit unknown expression/statement tree. This fallback will be

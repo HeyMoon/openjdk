@@ -23,9 +23,11 @@
 
 /*
  * @test
+ * @key headful
  * @bug 6263446
  * @summary Tests that double-clicking to edit a cell doesn't select the content.
  * @author Shannon Hickey
+ * @modules java.desktop/javax.swing.tree:open
  * @run main bug6263446
  */
 import java.awt.*;

@@ -261,23 +261,7 @@ public class GlyphView extends View implements TabableView, Cloneable {
         if (painter == null) {
             if (defaultPainter == null) {
                 // the classname should probably come from a property file.
-                String classname = "javax.swing.text.GlyphPainter1";
-                try {
-                    Class<?> c;
-                    ClassLoader loader = getClass().getClassLoader();
-                    if (loader != null) {
-                        c = loader.loadClass(classname);
-                    } else {
-                        c = Class.forName(classname);
-                    }
-                    Object o = c.newInstance();
-                    if (o instanceof GlyphPainter) {
-                        defaultPainter = (GlyphPainter) o;
-                    }
-                } catch (Throwable e) {
-                    throw new StateInvariantError("GlyphView: Can't load glyph painter: "
-                                                  + classname);
-                }
+                defaultPainter = new GlyphPainter1();
             }
             setGlyphPainter(defaultPainter.getPainter(this, getStartOffset(),
                                                       getEndOffset()));
@@ -1153,7 +1137,7 @@ public class GlyphView extends View implements TabableView, Cloneable {
      *
      * @since 1.3
      */
-    public static abstract class GlyphPainter {
+    public abstract static class GlyphPainter {
 
         /**
          * Determine the span the glyphs given a start location

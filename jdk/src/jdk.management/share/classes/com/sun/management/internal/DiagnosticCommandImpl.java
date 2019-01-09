@@ -259,9 +259,20 @@ public class DiagnosticCommandImpl extends NotificationEmitterSupport
                     && signature[0] != null
                     && signature[0].compareTo(strArrayClassName) == 0)) {
                 return w.execute((String[]) params[0]);
+            } else {
+                throw new ReflectionException(
+                    new NoSuchMethodException(actionName
+                    + ": mismatched signature "
+                    + (signature != null ? Arrays.toString(signature) : "[]")
+                    + " or parameters"));
             }
+        } else {
+            throw new ReflectionException(
+                new NoSuchMethodException("Method " + actionName
+                + " with signature "
+                + (signature != null ? Arrays.toString(signature) : "[]")
+                + " not found"));
         }
-        throw new ReflectionException(new NoSuchMethodException(actionName));
     }
 
     private static String transform(String name) {
@@ -343,7 +354,7 @@ public class DiagnosticCommandImpl extends NotificationEmitterSupport
                                                    "Diagnostic Framework Notification");
             }
         }
-        return notifInfo;
+        return notifInfo.clone();
     }
 
     private static long seqNumber = 0;

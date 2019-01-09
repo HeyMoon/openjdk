@@ -32,6 +32,7 @@
 #include "gc/shared/genOopClosures.inline.hpp"
 #include "gc/shared/generationSpec.hpp"
 #include "gc/shared/space.hpp"
+#include "logging/log.hpp"
 #include "memory/allocation.inline.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/java.hpp"
@@ -42,7 +43,7 @@
 
 TenuredGeneration::TenuredGeneration(ReservedSpace rs,
                                      size_t initial_byte_size,
-                                     GenRemSet* remset) :
+                                     CardTableRS* remset) :
   CardGeneration(rs, initial_byte_size, remset)
 {
   HeapWord* bottom = (HeapWord*) _virtual_space.low();
@@ -57,8 +58,7 @@ TenuredGeneration::TenuredGeneration(ReservedSpace rs,
   // initialize performance counters
 
   const char* gen_name = "old";
-  GenCollectorPolicy* gcp = (GenCollectorPolicy*) GenCollectedHeap::heap()->collector_policy();
-
+  GenCollectorPolicy* gcp = GenCollectedHeap::heap()->gen_policy();
   // Generation Counters -- generation 1, 1 subspace
   _gen_counters = new GenerationCounters(gen_name, 1, 1,
       gcp->min_old_size(), gcp->max_old_size(), &_virtual_space);
@@ -82,42 +82,28 @@ bool TenuredGeneration::should_collect(bool  full,
   // why it returns what it returns (without re-evaluating the conditionals
   // in case they aren't idempotent), so I'm doing it this way.
   // DeMorgan says it's okay.
-  bool result = false;
-  if (!result && full) {
-    result = true;
-    if (PrintGC && Verbose) {
-      gclog_or_tty->print_cr("TenuredGeneration::should_collect: because"
-                    " full");
-    }
+  if (full) {
+    log_trace(gc)("TenuredGeneration::should_collect: because full");
+    return true;
   }
-  if (!result && should_allocate(size, is_tlab)) {
-    result = true;
-    if (PrintGC && Verbose) {
-      gclog_or_tty->print_cr("TenuredGeneration::should_collect: because"
-                    " should_allocate(" SIZE_FORMAT ")",
-                    size);
-    }
+  if (should_allocate(size, is_tlab)) {
+    log_trace(gc)("TenuredGeneration::should_collect: because should_allocate(" SIZE_FORMAT ")", size);
+    return true;
   }
   // If we don't have very much free space.
   // XXX: 10000 should be a percentage of the capacity!!!
-  if (!result && free() < 10000) {
-    result = true;
-    if (PrintGC && Verbose) {
-      gclog_or_tty->print_cr("TenuredGeneration::should_collect: because"
-                    " free(): " SIZE_FORMAT,
-                    free());
-    }
+  if (free() < 10000) {
+    log_trace(gc)("TenuredGeneration::should_collect: because free(): " SIZE_FORMAT, free());
+    return true;
   }
-  // If we had to expand to accommodate promotions from younger generations
-  if (!result && _capacity_at_prologue < capacity()) {
-    result = true;
-    if (PrintGC && Verbose) {
-      gclog_or_tty->print_cr("TenuredGeneration::should_collect: because"
-                    "_capacity_at_prologue: " SIZE_FORMAT " < capacity(): " SIZE_FORMAT,
-                    _capacity_at_prologue, capacity());
-    }
+  // If we had to expand to accommodate promotions from the young generation
+  if (_capacity_at_prologue < capacity()) {
+    log_trace(gc)("TenuredGeneration::should_collect: because_capacity_at_prologue: " SIZE_FORMAT " < capacity(): " SIZE_FORMAT,
+        _capacity_at_prologue, capacity());
+    return true;
   }
-  return result;
+
+  return false;
 }
 
 void TenuredGeneration::compute_new_size() {
@@ -130,8 +116,8 @@ void TenuredGeneration::compute_new_size() {
   CardGeneration::compute_new_size();
 
   assert(used() == used_after_gc && used_after_gc <= capacity(),
-         err_msg("used: " SIZE_FORMAT " used_after_gc: " SIZE_FORMAT
-         " capacity: " SIZE_FORMAT, used(), used_after_gc, capacity()));
+         "used: " SIZE_FORMAT " used_after_gc: " SIZE_FORMAT
+         " capacity: " SIZE_FORMAT, used(), used_after_gc, capacity());
 }
 
 void TenuredGeneration::update_gc_stats(Generation* current_generation,
@@ -140,11 +126,11 @@ void TenuredGeneration::update_gc_stats(Generation* current_generation,
   // that are of interest at this point.
   bool current_is_young = GenCollectedHeap::heap()->is_young_gen(current_generation);
   if (!full && current_is_young) {
-    // Calculate size of data promoted from the younger generations
+    // Calculate size of data promoted from the young generation
     // before doing the collection.
     size_t used_before_gc = used();
 
-    // If the younger gen collections were skipped, then the
+    // If the young gen collection was skipped, then the
     // number of promoted bytes will be 0 and adding it to the
     // average will incorrectly lessen the average.  It is, however,
     // also possible that no promotion was needed.
@@ -166,13 +152,10 @@ bool TenuredGeneration::promotion_attempt_is_safe(size_t max_promotion_in_bytes)
   size_t available = max_contiguous_available();
   size_t av_promo  = (size_t)gc_stats()->avg_promoted()->padded_average();
   bool   res = (available >= av_promo) || (available >= max_promotion_in_bytes);
-  if (PrintGC && Verbose) {
-    gclog_or_tty->print_cr(
-      "Tenured: promo attempt is%s safe: available(" SIZE_FORMAT ") %s av_promo(" SIZE_FORMAT "),"
-      "max_promo(" SIZE_FORMAT ")",
-      res? "":" not", available, res? ">=":"<",
-      av_promo, max_promotion_in_bytes);
-  }
+
+  log_trace(gc)("Tenured: promo attempt is%s safe: available(" SIZE_FORMAT ") %s av_promo(" SIZE_FORMAT "), max_promo(" SIZE_FORMAT ")",
+    res? "":" not", available, res? ">=":"<", av_promo, max_promotion_in_bytes);
+
   return res;
 }
 
@@ -193,7 +176,11 @@ void TenuredGeneration::collect(bool   full,
   SerialOldTracer* gc_tracer = GenMarkSweep::gc_tracer();
   gc_tracer->report_gc_start(gch->gc_cause(), gc_timer->gc_start());
 
+  gch->pre_full_gc_dump(gc_timer);
+
   GenMarkSweep::invoke_at_safepoint(ref_processor(), clear_all_soft_refs);
+
+  gch->post_full_gc_dump(gc_timer);
 
   gc_timer->register_gc_end();
 

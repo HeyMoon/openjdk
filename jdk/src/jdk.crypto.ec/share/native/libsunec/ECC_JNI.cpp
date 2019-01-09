@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 
 #include <jni.h>
+#include "jni_util.h"
 #include "impl/ecc_impl.h"
 
 #define ILLEGAL_STATE_EXCEPTION "java/lang/IllegalStateException"
@@ -34,6 +35,11 @@
 #define KEY_EXCEPTION   "java/security/KeyException"
 
 extern "C" {
+
+/*
+ * Declare library specific JNI_Onload entry if static build
+ */
+DEF_STATIC_JNI_OnLoad
 
 /*
  * Throws an arbitrary Java exception.
@@ -190,7 +196,7 @@ cleanup:
  */
 JNIEXPORT jbyteArray
 JNICALL Java_sun_security_ec_ECDSASignature_signDigest
-  (JNIEnv *env, jclass clazz, jbyteArray digest, jbyteArray privateKey, jbyteArray encodedParams, jbyteArray seed)
+  (JNIEnv *env, jclass clazz, jbyteArray digest, jbyteArray privateKey, jbyteArray encodedParams, jbyteArray seed, jint timing)
 {
     jbyte* pDigestBuffer = NULL;
     jint jDigestLength = env->GetArrayLength(digest);
@@ -250,7 +256,7 @@ JNICALL Java_sun_security_ec_ECDSASignature_signDigest
 
     // Sign the digest (using the supplied seed)
     if (ECDSA_SignDigest(&privKey, &signature_item, &digest_item,
-        (unsigned char *) pSeedBuffer, jSeedLength, 0) != SECSuccess) {
+        (unsigned char *) pSeedBuffer, jSeedLength, 0, timing) != SECSuccess) {
         ThrowException(env, KEY_EXCEPTION);
         goto cleanup;
     }

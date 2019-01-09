@@ -173,9 +173,7 @@ void CodeBlobCollector::collect() {
   _global_code_blobs = new (ResourceObj::C_HEAP, mtInternal) GrowableArray<JvmtiCodeBlobDesc*>(50,true);
 
   // iterate over the stub code descriptors and put them in the list first.
-  int index = 0;
-  StubCodeDesc* desc;
-  while ((desc = StubCodeDesc::desc_for_index(++index)) != NULL) {
+  for (StubCodeDesc* desc = StubCodeDesc::first(); desc != NULL; desc = StubCodeDesc::next(desc)) {
     _global_code_blobs->append(new JvmtiCodeBlobDesc(desc->name(), desc->begin(), desc->end()));
   }
 
@@ -266,7 +264,7 @@ void JvmtiCodeBlobEvents::build_jvmti_addr_location_map(nmethod *nm,
 
     address scopes_data = nm->scopes_data_begin();
     for( pcd = nm->scopes_pcs_begin(); pcd < nm->scopes_pcs_end(); ++pcd ) {
-      ScopeDesc sc0(nm, pcd->scope_decode_offset(), pcd->should_reexecute(), pcd->return_oop());
+      ScopeDesc sc0(nm, pcd->scope_decode_offset(), pcd->should_reexecute(), pcd->rethrow_exception(), pcd->return_oop());
       ScopeDesc *sd  = &sc0;
       while( !sd->is_top() ) { sd = sd->sender(); }
       int bci = sd->bci();

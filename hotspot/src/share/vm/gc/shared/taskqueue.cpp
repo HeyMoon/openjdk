@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,8 @@
 #include "precompiled.hpp"
 #include "gc/shared/taskqueue.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "logging/log.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/os.hpp"
 #include "runtime/thread.inline.hpp"
 #include "utilities/debug.hpp"
@@ -92,20 +93,20 @@ void TaskQueueStats::print(outputStream* stream, unsigned int width) const
 void TaskQueueStats::verify() const
 {
   assert(get(push) == get(pop) + get(steal),
-         err_msg("push=" SIZE_FORMAT " pop=" SIZE_FORMAT " steal=" SIZE_FORMAT,
-                 get(push), get(pop), get(steal)));
+         "push=" SIZE_FORMAT " pop=" SIZE_FORMAT " steal=" SIZE_FORMAT,
+         get(push), get(pop), get(steal));
   assert(get(pop_slow) <= get(pop),
-         err_msg("pop_slow=" SIZE_FORMAT " pop=" SIZE_FORMAT,
-                 get(pop_slow), get(pop)));
+         "pop_slow=" SIZE_FORMAT " pop=" SIZE_FORMAT,
+         get(pop_slow), get(pop));
   assert(get(steal) <= get(steal_attempt),
-         err_msg("steal=" SIZE_FORMAT " steal_attempt=" SIZE_FORMAT,
-                 get(steal), get(steal_attempt)));
+         "steal=" SIZE_FORMAT " steal_attempt=" SIZE_FORMAT,
+         get(steal), get(steal_attempt));
   assert(get(overflow) == 0 || get(push) != 0,
-         err_msg("overflow=" SIZE_FORMAT " push=" SIZE_FORMAT,
-                 get(overflow), get(push)));
+         "overflow=" SIZE_FORMAT " push=" SIZE_FORMAT,
+         get(overflow), get(push));
   assert(get(overflow_max_len) == 0 || get(overflow) != 0,
-         err_msg("overflow_max_len=" SIZE_FORMAT " overflow=" SIZE_FORMAT,
-                 get(overflow_max_len), get(overflow)));
+         "overflow_max_len=" SIZE_FORMAT " overflow=" SIZE_FORMAT,
+         get(overflow_max_len), get(overflow));
 }
 #endif // ASSERT
 #endif // TASKQUEUE_STATS
@@ -212,11 +213,8 @@ ParallelTaskTerminator::offer_termination(TerminatorTerminator* terminator) {
 #endif
         }
       } else {
-        if (PrintGCDetails && Verbose) {
-         gclog_or_tty->print_cr("ParallelTaskTerminator::offer_termination() "
-           "thread " PTR_FORMAT " sleeps after %u yields",
-           p2i(Thread::current()), yield_count);
-        }
+        log_develop_trace(gc, task)("ParallelTaskTerminator::offer_termination() thread " PTR_FORMAT " sleeps after %u yields",
+                                    p2i(Thread::current()), yield_count);
         yield_count = 0;
         // A sleep will cause this processor to seek work on another processor's
         // runqueue, if it has nothing else to run (as opposed to the yield
@@ -240,7 +238,7 @@ ParallelTaskTerminator::offer_termination(TerminatorTerminator* terminator) {
 
 #ifdef TRACESPINNING
 void ParallelTaskTerminator::print_termination_counts() {
-  gclog_or_tty->print_cr("ParallelTaskTerminator Total yields: %u"
+  log_trace(gc, task)("ParallelTaskTerminator Total yields: %u"
     " Total spins: %u Total peeks: %u",
     total_yields(),
     total_spins(),
@@ -258,8 +256,8 @@ void ParallelTaskTerminator::reset_for_reuse() {
 
 #ifdef ASSERT
 bool ObjArrayTask::is_valid() const {
-  return _obj != NULL && _obj->is_objArray() && _index > 0 &&
-    _index < objArrayOop(_obj)->length();
+  return _obj != NULL && _obj->is_objArray() && _index >= 0 &&
+      _index < objArrayOop(_obj)->length();
 }
 #endif // ASSERT
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,6 +33,9 @@ import java.security.InvalidParameterException;
 import java.security.ProviderException;
 import java.util.HashMap;
 import java.util.Arrays;
+import java.util.Map;
+
+import static sun.security.util.SecurityConstants.PROVIDER_VER;
 
 /**
  * A Cryptographic Service Provider for the Microsoft Crypto API.
@@ -124,7 +127,7 @@ public final class SunMSCAPI extends Provider {
     }
 
     public SunMSCAPI() {
-        super("SunMSCAPI", 1.9d, INFO);
+        super("SunMSCAPI", PROVIDER_VER, INFO);
 
         final Provider p = this;
         AccessController.doPrivileged(new PrivilegedAction<Void>() {
@@ -132,8 +135,11 @@ public final class SunMSCAPI extends Provider {
                 /*
                  * Secure random
                  */
+                HashMap<String, String> srattrs = new HashMap<>(1);
+                srattrs.put("ThreadSafe", "true");
                 putService(new ProviderService(p, "SecureRandom",
-                           "Windows-PRNG", "sun.security.mscapi.PRNG"));
+                           "Windows-PRNG", "sun.security.mscapi.PRNG",
+                           null, srattrs));
 
                 /*
                  * Key store
@@ -182,7 +188,7 @@ public final class SunMSCAPI extends Provider {
                  * Key Pair Generator engines
                  */
                 attrs.clear();
-                attrs.put("KeySize", "1024");
+                attrs.put("KeySize", "16384");
                 putService(new ProviderService(p, "KeyPairGenerator",
                            "RSA", "sun.security.mscapi.RSAKeyPairGenerator",
                            null, attrs));

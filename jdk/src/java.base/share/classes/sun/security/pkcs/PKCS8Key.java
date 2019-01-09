@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,6 +32,7 @@ import java.security.Key;
 import java.security.KeyRep;
 import java.security.PrivateKey;
 import java.security.KeyFactory;
+import java.security.MessageDigest;
 import java.security.Security;
 import java.security.Provider;
 import java.security.InvalidKeyException;
@@ -39,7 +40,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 
-import sun.misc.HexDumpEncoder;
+import sun.security.util.HexDumpEncoder;
 import sun.security.x509.*;
 import sun.security.util.*;
 
@@ -218,11 +219,10 @@ public class PKCS8Key implements PrivateKey {
                 }
             }
 
-            Object      inst = null;
+            @SuppressWarnings("deprecation")
+            Object      inst = (keyClass != null) ? keyClass.newInstance() : null;
             PKCS8Key    result;
 
-            if (keyClass != null)
-                inst = keyClass.newInstance();
             if (inst instanceof PKCS8Key) {
                 result = (PKCS8Key) inst;
                 result.algid = algid;
@@ -420,18 +420,9 @@ public class PKCS8Key implements PrivateKey {
             // that encoding
             byte[] b2 = ((Key)object).getEncoded();
 
-            // do the comparison
-            int i;
-            if (b1.length != b2.length)
-                return false;
-            for (i = 0; i < b1.length; i++) {
-                if (b1[i] != b2[i]) {
-                    return false;
-                }
-            }
-            return true;
+            // time-constant comparison
+            return MessageDigest.isEqual(b1, b2);
         }
-
         return false;
     }
 

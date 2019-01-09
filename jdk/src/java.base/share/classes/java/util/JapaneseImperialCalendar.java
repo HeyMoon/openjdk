@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -1037,14 +1037,16 @@ class JapaneseImperialCalendar extends Calendar {
                 }
                 if (size < eras.length) {
                     int baseStyle = getBaseStyle(style);
-                    for (int i = size; i < eras.length; i++) {
-                        Era era = eras[i];
-                        if (baseStyle == ALL_STYLES || baseStyle == SHORT
-                                || baseStyle == NARROW_FORMAT) {
-                            names.put(era.getAbbreviation(), i);
-                        }
-                        if (baseStyle == ALL_STYLES || baseStyle == LONG) {
-                            names.put(era.getName(), i);
+                    for (int i = 0; i < eras.length; i++) {
+                        if (!names.values().contains(i)) {
+                            Era era = eras[i];
+                            if (baseStyle == ALL_STYLES || baseStyle == SHORT
+                                    || baseStyle == NARROW_FORMAT) {
+                                names.put(era.getAbbreviation(), i);
+                            }
+                            if (baseStyle == ALL_STYLES || baseStyle == LONG) {
+                                names.put(era.getName(), i);
+                            }
                         }
                     }
                 }
@@ -1551,7 +1553,7 @@ class JapaneseImperialCalendar extends Calendar {
      * The fixed date corresponding to jdate. If the value is
      * Long.MIN_VALUE, the fixed date value is unknown.
      */
-    transient private long cachedFixedDate = Long.MIN_VALUE;
+    private transient long cachedFixedDate = Long.MIN_VALUE;
 
     /**
      * Converts the time value (millisecond offset from the <a

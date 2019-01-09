@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,7 +23,7 @@
  */
 
 #include "precompiled.hpp"
-#include "code/codeCacheExtensions.hpp"
+#include "logging/log.hpp"
 #include "memory/universe.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/arguments.hpp"
@@ -31,6 +31,10 @@
 
 const char* Abstract_VM_Version::_s_vm_release = Abstract_VM_Version::vm_release();
 const char* Abstract_VM_Version::_s_internal_vm_info_string = Abstract_VM_Version::internal_vm_info_string();
+
+uint64_t Abstract_VM_Version::_features = 0;
+const char* Abstract_VM_Version::_features_string = "";
+
 bool Abstract_VM_Version::_supports_cx8 = false;
 bool Abstract_VM_Version::_supports_atomic_getset4 = false;
 bool Abstract_VM_Version::_supports_atomic_getset8 = false;
@@ -38,80 +42,46 @@ bool Abstract_VM_Version::_supports_atomic_getadd4 = false;
 bool Abstract_VM_Version::_supports_atomic_getadd8 = false;
 unsigned int Abstract_VM_Version::_logical_processors_per_package = 1U;
 unsigned int Abstract_VM_Version::_L1_data_cache_line_size = 0;
-int Abstract_VM_Version::_reserve_for_allocation_prefetch = 0;
 
-#ifndef HOTSPOT_RELEASE_VERSION
-  #error HOTSPOT_RELEASE_VERSION must be defined
-#endif
-
-#ifndef JDK_MAJOR_VERSION
-  #error JDK_MAJOR_VERSION must be defined
-#endif
-#ifndef JDK_MINOR_VERSION
-  #error JDK_MINOR_VERSION must be defined
-#endif
-#ifndef JDK_MICRO_VERSION
-  #error JDK_MICRO_VERSION must be defined
-#endif
-#ifndef JDK_BUILD_NUMBER
-  #error JDK_BUILD_NUMBER must be defined
+#ifndef HOTSPOT_VERSION_STRING
+  #error HOTSPOT_VERSION_STRING must be defined
 #endif
 
-#ifndef JRE_RELEASE_VERSION
-  #error JRE_RELEASE_VERSION must be defined
+#ifndef VERSION_MAJOR
+  #error VERSION_MAJOR must be defined
+#endif
+#ifndef VERSION_MINOR
+  #error VERSION_MINOR must be defined
+#endif
+#ifndef VERSION_SECURITY
+  #error VERSION_SECURITY must be defined
+#endif
+#ifndef VERSION_PATCH
+  #error VERSION_PATCH must be defined
+#endif
+#ifndef VERSION_BUILD
+  #error VERSION_BUILD must be defined
 #endif
 
-// NOTE: Builds within Visual Studio do not define the build target in
-//       HOTSPOT_RELEASE_VERSION, so it must be done here
-#if defined(VISUAL_STUDIO_BUILD) && !defined(PRODUCT)
-  #ifndef HOTSPOT_BUILD_TARGET
-    #error HOTSPOT_BUILD_TARGET must be defined
-  #endif
-  #define VM_RELEASE HOTSPOT_RELEASE_VERSION "-" HOTSPOT_BUILD_TARGET
-#else
-  #define VM_RELEASE HOTSPOT_RELEASE_VERSION
+#ifndef VERSION_STRING
+  #error VERSION_STRING must be defined
 #endif
 
-// HOTSPOT_RELEASE_VERSION follows the JDK release version naming convention
-// <major_ver>.<minor_ver>.<micro_ver>[-<identifier>][-<debug_target>][-b<nn>]
-int Abstract_VM_Version::_vm_major_version = 0;
-int Abstract_VM_Version::_vm_minor_version = 0;
-int Abstract_VM_Version::_vm_micro_version = 0;
-int Abstract_VM_Version::_vm_build_number = 0;
-bool Abstract_VM_Version::_initialized = false;
+#ifndef DEBUG_LEVEL
+  #error DEBUG_LEVEL must be defined
+#endif
+
+#define VM_RELEASE HOTSPOT_VERSION_STRING
+
+// HOTSPOT_VERSION_STRING equals the JDK VERSION_STRING (unless overridden
+// in a standalone build).
+int Abstract_VM_Version::_vm_major_version = VERSION_MAJOR;
+int Abstract_VM_Version::_vm_minor_version = VERSION_MINOR;
+int Abstract_VM_Version::_vm_security_version = VERSION_SECURITY;
+int Abstract_VM_Version::_vm_patch_version = VERSION_PATCH;
+int Abstract_VM_Version::_vm_build_number = VERSION_BUILD;
 unsigned int Abstract_VM_Version::_parallel_worker_threads = 0;
 bool Abstract_VM_Version::_parallel_worker_threads_initialized = false;
-
-#ifdef ASSERT
-static void assert_digits(const char * s, const char * message) {
-  for (int i = 0; s[i] != '\0'; i++) {
-    assert(isdigit(s[i]), message);
-  }
-}
-#endif
-
-static void set_version_field(int * version_field, const char * version_str,
-                              const char * const assert_msg) {
-  if (version_str != NULL && *version_str != '\0') {
-    DEBUG_ONLY(assert_digits(version_str, assert_msg));
-    *version_field = atoi(version_str);
-  }
-}
-
-void Abstract_VM_Version::initialize() {
-  if (_initialized) {
-    return;
-  }
-
-  set_version_field(&_vm_major_version, JDK_MAJOR_VERSION, "bad major version");
-  set_version_field(&_vm_minor_version, JDK_MINOR_VERSION, "bad minor version");
-  set_version_field(&_vm_micro_version, JDK_MICRO_VERSION, "bad micro version");
-  int offset = (JDK_BUILD_NUMBER != NULL && JDK_BUILD_NUMBER[0] == 'b') ? 1 : 0;
-  set_version_field(&_vm_build_number, &JDK_BUILD_NUMBER[offset],
-                    "bad build number");
-
-  _initialized = true;
-}
 
 #if defined(_LP64)
   #define VMLP "64-Bit "
@@ -139,7 +109,7 @@ void Abstract_VM_Version::initialize() {
 #ifndef HOTSPOT_VM_DISTRO
   #error HOTSPOT_VM_DISTRO must be defined
 #endif
-#define VMNAME HOTSPOT_VM_DISTRO " " VMLP EMBEDDED_ONLY("Embedded ") VMTYPE " VM"
+#define VMNAME HOTSPOT_VM_DISTRO " " VMLP VMTYPE " VM"
 
 const char* Abstract_VM_Version::vm_name() {
   return VMNAME;
@@ -156,15 +126,37 @@ const char* Abstract_VM_Version::vm_vendor() {
 
 
 const char* Abstract_VM_Version::vm_info_string() {
-  if (CodeCacheExtensions::use_pregenerated_interpreter()) {
-    return "interpreted mode, pregenerated";
-  }
   switch (Arguments::mode()) {
     case Arguments::_int:
       return UseSharedSpaces ? "interpreted mode, sharing" : "interpreted mode";
     case Arguments::_mixed:
-      return UseSharedSpaces ? "mixed mode, sharing"       :  "mixed mode";
+      if (UseSharedSpaces) {
+        if (UseAOT) {
+          return "mixed mode, aot, sharing";
+#ifdef TIERED
+        } else if(is_client_compilation_mode_vm()) {
+          return "mixed mode, emulated-client, sharing";
+#endif
+        } else {
+          return "mixed mode, sharing";
+         }
+      } else {
+        if (UseAOT) {
+          return "mixed mode, aot";
+#ifdef TIERED
+        } else if(is_client_compilation_mode_vm()) {
+          return "mixed mode, emulated-client";
+#endif
+        } else {
+          return "mixed mode";
+        }
+      }
     case Arguments::_comp:
+#ifdef TIERED
+      if (is_client_compilation_mode_vm()) {
+         return UseSharedSpaces ? "compiled mode, emulated-client, sharing" : "compiled mode, emulated-client";
+      }
+#endif
       return UseSharedSpaces ? "compiled mode, sharing"    : "compiled mode";
   };
   ShouldNotReachHere();
@@ -182,7 +174,7 @@ const char* Abstract_VM_Version::vm_release() {
 //       fatal error handlers. if the crash is in native thread,
 //       stringStream cannot get resource allocated and will SEGV.
 const char* Abstract_VM_Version::jre_release_version() {
-  return JRE_RELEASE_VERSION;
+  return VERSION_STRING;
 }
 
 #define OS       LINUX_ONLY("linux")             \
@@ -194,15 +186,21 @@ const char* Abstract_VM_Version::jre_release_version() {
 #ifndef CPU
 #ifdef ZERO
 #define CPU      ZERO_LIBARCH
+#elif defined(PPC64)
+#if defined(VM_LITTLE_ENDIAN)
+#define CPU      "ppc64le"
 #else
-#define CPU      IA32_ONLY("x86")                \
-                 IA64_ONLY("ia64")               \
+#define CPU      "ppc64"
+#endif // PPC64
+#else
+#define CPU      AARCH64_ONLY("aarch64")         \
                  AMD64_ONLY("amd64")             \
-                 PPC64_ONLY("ppc64")             \
-                 AARCH64_ONLY("aarch64")         \
+                 IA32_ONLY("x86")                \
+                 IA64_ONLY("ia64")               \
+                 S390_ONLY("s390")               \
                  SPARC_ONLY("sparc")
-#endif // ZERO
-#endif
+#endif // !ZERO
+#endif // !CPU
 
 const char *Abstract_VM_Version::vm_platform_string() {
   return OS "-" CPU;
@@ -239,6 +237,8 @@ const char* Abstract_VM_Version::internal_vm_info_string() {
         #define HOTSPOT_BUILD_COMPILER "Sun Studio 12u1"
       #elif __SUNPRO_CC == 0x5120
         #define HOTSPOT_BUILD_COMPILER "Sun Studio 12u3"
+      #elif __SUNPRO_CC == 0x5130
+        #define HOTSPOT_BUILD_COMPILER "Sun Studio 12u4"
       #else
         #define HOTSPOT_BUILD_COMPILER "unknown Workshop:" XSTR(__SUNPRO_CC)
       #endif
@@ -262,19 +262,33 @@ const char* Abstract_VM_Version::internal_vm_info_string() {
     #define FLOAT_ARCH_STR XSTR(FLOAT_ARCH)
   #endif
 
-  return VMNAME " (" VM_RELEASE ") for " OS "-" CPU FLOAT_ARCH_STR
-         " JRE (" JRE_RELEASE_VERSION "), built on " __DATE__ " " __TIME__
-         " by " XSTR(HOTSPOT_BUILD_USER) " with " HOTSPOT_BUILD_COMPILER;
+  #define INTERNAL_VERSION_SUFFIX VM_RELEASE ")" \
+         " for " OS "-" CPU FLOAT_ARCH_STR \
+         " JRE (" VERSION_STRING "), built on " __DATE__ " " __TIME__ \
+         " by " XSTR(HOTSPOT_BUILD_USER) " with " HOTSPOT_BUILD_COMPILER
+
+  return strcmp(DEBUG_LEVEL, "release") == 0
+      ? VMNAME " (" INTERNAL_VERSION_SUFFIX
+      : VMNAME " (" DEBUG_LEVEL " " INTERNAL_VERSION_SUFFIX;
 }
 
 const char *Abstract_VM_Version::vm_build_user() {
   return HOTSPOT_BUILD_USER;
 }
 
+const char *Abstract_VM_Version::jdk_debug_level() {
+  return DEBUG_LEVEL;
+}
+
+const char *Abstract_VM_Version::printable_jdk_debug_level() {
+  // Debug level is not printed for "release" builds
+  return strcmp(DEBUG_LEVEL, "release") == 0 ? "" : DEBUG_LEVEL " ";
+}
+
 unsigned int Abstract_VM_Version::jvm_version() {
   return ((Abstract_VM_Version::vm_major_version() & 0xFF) << 24) |
          ((Abstract_VM_Version::vm_minor_version() & 0xFF) << 16) |
-         ((Abstract_VM_Version::vm_micro_version() & 0xFF) << 8) |
+         ((Abstract_VM_Version::vm_security_version() & 0xFF) << 8) |
          (Abstract_VM_Version::vm_build_number() & 0xFF);
 }
 
@@ -282,12 +296,12 @@ unsigned int Abstract_VM_Version::jvm_version() {
 void VM_Version_init() {
   VM_Version::initialize();
 
-#ifndef PRODUCT
-  if (PrintMiscellaneous && Verbose) {
-    char buf[512];
-    os::print_cpu_info(tty, buf, sizeof(buf));
+  if (log_is_enabled(Info, os, cpu)) {
+    char buf[1024];
+    ResourceMark rm;
+    outputStream* log = Log(os, cpu)::info_stream();
+    os::print_cpu_info(log, buf, sizeof(buf));
   }
-#endif
 }
 
 unsigned int Abstract_VM_Version::nof_parallel_worker_threads(
@@ -296,16 +310,28 @@ unsigned int Abstract_VM_Version::nof_parallel_worker_threads(
                                                       unsigned int switch_pt) {
   if (FLAG_IS_DEFAULT(ParallelGCThreads)) {
     assert(ParallelGCThreads == 0, "Default ParallelGCThreads is not 0");
+    unsigned int threads;
     // For very large machines, there are diminishing returns
     // for large numbers of worker threads.  Instead of
     // hogging the whole system, use a fraction of the workers for every
     // processor after the first 8.  For example, on a 72 cpu machine
     // and a chosen fraction of 5/8
     // use 8 + (72 - 8) * (5/8) == 48 worker threads.
-    unsigned int ncpus = (unsigned int) os::active_processor_count();
-    return (ncpus <= switch_pt) ?
-           ncpus :
-          (switch_pt + ((ncpus - switch_pt) * num) / den);
+    unsigned int ncpus = (unsigned int) os::initial_active_processor_count();
+    threads = (ncpus <= switch_pt) ?
+             ncpus :
+             (switch_pt + ((ncpus - switch_pt) * num) / den);
+#ifndef _LP64
+    // On 32-bit binaries the virtual address space available to the JVM
+    // is usually limited to 2-3 GB (depends on the platform).
+    // Do not use up address space with too many threads (stacks and per-thread
+    // data). Note that x86 apps running on Win64 have 2 stacks per thread.
+    // GC may more generally scale down threads by max heap size (etc), but the
+    // consequences of over-provisioning threads are higher on 32-bit JVMS,
+    // so add hard limit here:
+    threads = MIN2(threads, (2*switch_pt));
+#endif
+    return threads;
   } else {
     return ParallelGCThreads;
   }

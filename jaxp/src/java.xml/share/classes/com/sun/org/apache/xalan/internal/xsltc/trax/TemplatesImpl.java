@@ -1,15 +1,15 @@
 /*
- * reserved comment block
- * DO NOT REMOVE OR ALTER!
+ * Copyright (c) 2007, 2017, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright 2001-2004 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -28,22 +28,39 @@ import com.sun.org.apache.xalan.internal.utils.ObjectFactory;
 import com.sun.org.apache.xalan.internal.utils.SecuritySupport;
 import com.sun.org.apache.xalan.internal.xsltc.DOM;
 import com.sun.org.apache.xalan.internal.xsltc.Translet;
+import com.sun.org.apache.xalan.internal.xsltc.compiler.Constants;
 import com.sun.org.apache.xalan.internal.xsltc.compiler.util.ErrorMsg;
 import com.sun.org.apache.xalan.internal.xsltc.runtime.AbstractTranslet;
-import com.sun.org.apache.xalan.internal.xsltc.runtime.Hashtable;
 import java.io.IOException;
+import java.io.NotSerializableException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.io.ObjectStreamField;
 import java.io.Serializable;
+import java.lang.RuntimePermission;
+import java.lang.module.Configuration;
+import java.lang.module.ModuleDescriptor;
+import java.lang.module.ModuleFinder;
+import java.lang.module.ModuleReference;
+import java.lang.module.ModuleReader;
 import java.security.AccessController;
+import java.security.CodeSigner;
+import java.security.CodeSource;
+import java.security.PermissionCollection;
 import java.security.PrivilegedAction;
+import java.security.ProtectionDomain;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
 import javax.xml.XMLConstants;
 import javax.xml.transform.Templates;
 import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerConfigurationException;
 import javax.xml.transform.URIResolver;
+
 
 /**
  * @author Morten Jorgensen
@@ -89,7 +106,7 @@ public final class TemplatesImpl implements Templates, Serializable {
     /**
      * Contains the list of auxiliary class definitions.
      */
-    private Hashtable _auxClasses = null;
+    private transient Map<String, Class<?>> _auxClasses = null;
 
     /**
      * Output properties of this translet.
@@ -122,27 +139,48 @@ public final class TemplatesImpl implements Templates, Serializable {
      */
     private transient TransformerFactoryImpl _tfactory = null;
 
-    private boolean _useServicesMechanism;
+    /**
+     * A flag to determine whether the Service Mechanism is used
+     */
+    private transient boolean _useServicesMechanism;
 
     /**
      * protocols allowed for external references set by the stylesheet processing instruction, Import and Include element.
      */
-    private String _accessExternalStylesheet = XalanConstants.EXTERNAL_ACCESS_DEFAULT;
+    private transient String _accessExternalStylesheet = XalanConstants.EXTERNAL_ACCESS_DEFAULT;
+
+    /**
+     * @serialField _name String The Name of the main class
+     * @serialField _bytecodes byte[][] Class definition
+     * @serialField _class Class[] The translet class definition(s).
+     * @serialField _transletIndex int The index of the main translet class
+     * @serialField _outputProperties Properties Output properties of this translet.
+     * @serialField _indentNumber int Number of spaces to add for output indentation.
+     */
+    private static final ObjectStreamField[] serialPersistentFields =
+        new ObjectStreamField[] {
+            new ObjectStreamField("_name", String.class),
+            new ObjectStreamField("_bytecodes", byte[][].class),
+            new ObjectStreamField("_class", Class[].class),
+            new ObjectStreamField("_transletIndex", int.class),
+            new ObjectStreamField("_outputProperties", Properties.class),
+            new ObjectStreamField("_indentNumber", int.class),
+        };
 
     static final class TransletClassLoader extends ClassLoader {
+        private final Map<String, Class<?>> _loadedExternalExtensionFunctions;
 
-        private final Map<String,Class> _loadedExternalExtensionFunctions;
-
-        TransletClassLoader(ClassLoader parent) {
-            super(parent);
+         TransletClassLoader(ClassLoader parent) {
+             super(parent);
             _loadedExternalExtensionFunctions = null;
         }
 
-        TransletClassLoader(ClassLoader parent,Map<String, Class> mapEF) {
+        TransletClassLoader(ClassLoader parent, Map<String, Class<?>> mapEF) {
             super(parent);
             _loadedExternalExtensionFunctions = mapEF;
         }
 
+        @Override
         public Class<?> loadClass(String name) throws ClassNotFoundException {
             Class<?> ret = null;
             // The _loadedExternalExtensionFunctions will be empty when the
@@ -154,13 +192,17 @@ public final class TemplatesImpl implements Templates, Serializable {
                 ret = super.loadClass(name);
             }
             return ret;
-        }
+         }
 
         /**
          * Access to final protected superclass member from outer class.
          */
         Class defineClass(final byte[] b) {
             return defineClass(null, b, 0, b.length);
+        }
+
+        Class defineClass(final byte[] b, ProtectionDomain pd) {
+            return defineClass(null, b, 0, b.length, pd);
         }
     }
 
@@ -181,7 +223,7 @@ public final class TemplatesImpl implements Templates, Serializable {
     /**
      * Create an XSLTC template object from the translet class definition(s).
      */
-    protected TemplatesImpl(Class[] transletClasses, String transletName,
+    protected TemplatesImpl(Class<?>[] transletClasses, String transletName,
         Properties outputProperties, int indentNumber,
         TransformerFactoryImpl tfactory)
     {
@@ -214,6 +256,7 @@ public final class TemplatesImpl implements Templates, Serializable {
      *  if yes then we need to deserialize the URIResolver
      *  Fix for bugzilla bug 22438
      */
+    @SuppressWarnings("unchecked")
     private void  readObject(ObjectInputStream is)
       throws IOException, ClassNotFoundException
     {
@@ -226,7 +269,16 @@ public final class TemplatesImpl implements Templates, Serializable {
             }
         }
 
-        is.defaultReadObject();
+        // We have to read serialized fields first.
+        ObjectInputStream.GetField gf = is.readFields();
+        _name = (String)gf.get("_name", null);
+        _bytecodes = (byte[][])gf.get("_bytecodes", null);
+        _class = (Class[])gf.get("_class", null);
+        _transletIndex = gf.get("_transletIndex", -1);
+
+        _outputProperties = (Properties)gf.get("_outputProperties", null);
+        _indentNumber = gf.get("_indentNumber", 0);
+
         if (is.readBoolean()) {
             _uriResolver = (URIResolver) is.readObject();
         }
@@ -242,7 +294,22 @@ public final class TemplatesImpl implements Templates, Serializable {
      */
     private void writeObject(ObjectOutputStream os)
         throws IOException, ClassNotFoundException {
-        os.defaultWriteObject();
+        if (_auxClasses != null) {
+            //throw with the same message as when Hashtable was used for compatibility.
+            throw new NotSerializableException(
+                    "com.sun.org.apache.xalan.internal.xsltc.runtime.Hashtable");
+        }
+
+        // Write serialized fields
+        ObjectOutputStream.PutField pf = os.putFields();
+        pf.put("_name", _name);
+        pf.put("_bytecodes", _bytecodes);
+        pf.put("_class", _class);
+        pf.put("_transletIndex", _transletIndex);
+        pf.put("_outputProperties", _outputProperties);
+        pf.put("_indentNumber", _indentNumber);
+        os.writeFields();
+
         if (_uriResolver instanceof Serializable) {
             os.writeBoolean(true);
             os.writeObject((Serializable) _uriResolver);
@@ -336,6 +403,50 @@ public final class TemplatesImpl implements Templates, Serializable {
         return _name;
     }
 
+
+    /**
+     * Creates a module layer with one module that is defined to the given class
+     * loader.
+     */
+    private Module createModule(ModuleDescriptor descriptor, ClassLoader loader) {
+        String mn = descriptor.name();
+
+        ModuleReference mref = new ModuleReference(descriptor, null) {
+            @Override
+            public ModuleReader open() {
+                throw new UnsupportedOperationException();
+            }
+        };
+
+        ModuleFinder finder = new ModuleFinder() {
+            @Override
+            public Optional<ModuleReference> find(String name) {
+                if (name.equals(mn)) {
+                    return Optional.of(mref);
+                } else {
+                    return Optional.empty();
+                }
+            }
+            @Override
+            public Set<ModuleReference> findAll() {
+                return Set.of(mref);
+            }
+        };
+
+        ModuleLayer bootLayer = ModuleLayer.boot();
+
+        Configuration cf = bootLayer.configuration()
+                .resolve(finder, ModuleFinder.of(), Set.of(mn));
+
+        PrivilegedAction<ModuleLayer> pa = () -> bootLayer.defineModules(cf, name -> loader);
+        ModuleLayer layer = AccessController.doPrivileged(pa);
+
+        Module m = layer.findModule(mn).get();
+        assert m.getLayer() == layer;
+
+        return m;
+    }
+
     /**
      * Defines the translet class and auxiliary classes.
      * Returns a reference to the Class object that defines the main class
@@ -360,11 +471,44 @@ public final class TemplatesImpl implements Templates, Serializable {
             _class = new Class[classCount];
 
             if (classCount > 1) {
-                _auxClasses = new Hashtable();
+                _auxClasses = new HashMap<>();
             }
 
+            // create a module for the translet
+
+            String mn = "jdk.translet";
+
+            String pn = _tfactory.getPackageName();
+            assert pn != null && pn.length() > 0;
+
+            ModuleDescriptor descriptor =
+                ModuleDescriptor.newModule(mn, Set.of(ModuleDescriptor.Modifier.SYNTHETIC))
+                                .requires("java.xml")
+                                .exports(pn, Set.of("java.xml"))
+                                .build();
+
+            Module m = createModule(descriptor, loader);
+
+            // the module needs access to runtime classes
+            Module thisModule = TemplatesImpl.class.getModule();
+            // the module also needs permission to access each package
+            // that is exported to it
+            PermissionCollection perms =
+                new RuntimePermission("*").newPermissionCollection();
+            Arrays.asList(Constants.PKGS_USED_BY_TRANSLET_CLASSES).forEach(p -> {
+                thisModule.addExports(p, m);
+                perms.add(new RuntimePermission("accessClassInPackage." + p));
+            });
+
+            CodeSource codeSource = new CodeSource(null, (CodeSigner[])null);
+            ProtectionDomain pd = new ProtectionDomain(codeSource, perms,
+                                                       loader, null);
+
+            // java.xml needs to instantiate the translet class
+            thisModule.addReads(m);
+
             for (int i = 0; i < classCount; i++) {
-                _class[i] = loader.defineClass(_bytecodes[i]);
+                _class[i] = loader.defineClass(_bytecodes[i], pd);
                 final Class superClass = _class[i].getSuperclass();
 
                 // Check if this is the main class
@@ -383,11 +527,11 @@ public final class TemplatesImpl implements Templates, Serializable {
         }
         catch (ClassFormatError e) {
             ErrorMsg err = new ErrorMsg(ErrorMsg.TRANSLET_CLASS_ERR, _name);
-            throw new TransformerConfigurationException(err.toString());
+            throw new TransformerConfigurationException(err.toString(), e);
         }
         catch (LinkageError e) {
             ErrorMsg err = new ErrorMsg(ErrorMsg.TRANSLET_OBJECT_ERR, _name);
-            throw new TransformerConfigurationException(err.toString());
+            throw new TransformerConfigurationException(err.toString(), e);
         }
     }
 

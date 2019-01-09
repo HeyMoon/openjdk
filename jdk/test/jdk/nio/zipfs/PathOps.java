@@ -31,11 +31,12 @@ import java.nio.file.Path;
 /**
  *
  * @test
- * @bug 8038500 8040059
+ * @bug 8038500 8040059 8139956 8146754 8172921
  * @summary Tests path operations for zip provider.
  *
  * @run main PathOps
  * @run main/othervm/java.security.policy=test.policy PathOps
+ * @modules jdk.zipfs
  */
 
 public class PathOps {
@@ -47,15 +48,15 @@ public class PathOps {
     private Path path;
     private Exception exc;
 
-    private PathOps(String s) {
+    private PathOps(String first, String... more) {
         out.println();
-        input = s;
+        input = first;
         try {
-            path = fs.getPath(s);
-            out.format("%s -> %s", s, path);
+            path = fs.getPath(first, more);
+            out.format("%s -> %s", first, path);
         } catch (Exception x) {
             exc = x;
-            out.format("%s -> %s", s, x);
+            out.format("%s -> %s", first, x);
         }
         out.println();
     }
@@ -179,6 +180,20 @@ public class PathOps {
         return this;
     }
 
+    PathOps resolvePath(String other, String expected) {
+        out.format("test resolve %s\n", other);
+        checkPath();
+        check(path.resolve(fs.getPath(other)), expected);
+        return this;
+    }
+
+    PathOps resolveSibling(String other, String expected) {
+        out.format("test resolveSibling %s\n", other);
+        checkPath();
+        check(path.resolveSibling(other), expected);
+        return this;
+    }
+
     PathOps relativize(String other, String expected) {
         out.format("test relativize %s\n", other);
         checkPath();
@@ -224,6 +239,10 @@ public class PathOps {
         return new PathOps(s);
     }
 
+    static PathOps test(String first, String... more) {
+        return new PathOps(first, more);
+    }
+
     // -- PathOpss --
 
     static void header(String s) {
@@ -234,6 +253,26 @@ public class PathOps {
 
     static void doPathOpTests() {
         header("Path operations");
+
+        // construction
+        test("/")
+            .string("/");
+        test("/", "")
+            .string("/");
+        test("/", "foo")
+            .string("/foo");
+        test("/", "/foo")
+            .string("/foo");
+        test("/", "foo/")
+            .string("/foo");
+        test("foo", "bar", "gus")
+            .string("foo/bar/gus");
+        test("")
+            .string("");
+        test("", "/")
+            .string("/");
+        test("", "foo", "", "bar", "", "/gus")
+            .string("foo/bar/gus");
 
         // all components
         test("/a/b/c")
@@ -323,7 +362,6 @@ public class PathOps {
             .ends("foo/bar/")
             .ends("foo/bar");
 
-
         // elements
         test("a/b/c")
             .element(0,"a")
@@ -343,16 +381,86 @@ public class PathOps {
         // resolve
         test("/tmp")
             .resolve("foo", "/tmp/foo")
-            .resolve("/foo", "/foo");
+            .resolve("/foo", "/foo")
+            .resolve("", "/tmp");
         test("tmp")
             .resolve("foo", "tmp/foo")
+            .resolve("/foo", "/foo")
+            .resolve("", "tmp");
+        test("")
+            .resolve("", "")
+            .resolve("foo", "foo")
             .resolve("/foo", "/foo");
+        test("/")
+            .resolve("", "/")
+            .resolve("foo", "/foo")
+            .resolve("/foo", "/foo")
+            .resolve("/foo/", "/foo");
+
+        // resolve(Path)
+        test("/tmp")
+            .resolvePath("foo", "/tmp/foo")
+            .resolvePath("/foo", "/foo")
+            .resolvePath("", "/tmp");
+        test("tmp")
+            .resolvePath("foo", "tmp/foo")
+            .resolvePath("/foo", "/foo")
+            .resolvePath("", "tmp");
+        test("")
+            .resolvePath("", "")
+            .resolvePath("foo", "foo")
+            .resolvePath("/foo", "/foo");
+        test("/")
+            .resolvePath("", "/")
+            .resolvePath("foo", "/foo")
+            .resolvePath("/foo", "/foo")
+            .resolvePath("/foo/", "/foo");
+
+        // resolveSibling
+        test("foo")
+            .resolveSibling("bar", "bar")
+            .resolveSibling("/bar", "/bar")
+            .resolveSibling("", "");
+        test("foo/bar")
+            .resolveSibling("gus", "foo/gus")
+            .resolveSibling("/gus", "/gus")
+            .resolveSibling("", "foo");
+        test("/foo")
+            .resolveSibling("gus", "/gus")
+            .resolveSibling("/gus", "/gus")
+            .resolveSibling("", "/");
+        test("/foo/bar")
+            .resolveSibling("gus", "/foo/gus")
+            .resolveSibling("/gus", "/gus")
+            .resolveSibling("", "/foo");
+        test("")
+            .resolveSibling("foo", "foo")
+            .resolveSibling("/foo", "/foo")
+            .resolve("", "");
 
         // relativize
         test("/a/b/c")
             .relativize("/a/b/c", "")
             .relativize("/a/b/c/d/e", "d/e")
-            .relativize("/a/x", "../../x");
+            .relativize("/a/x", "../../x")
+            .relativize("/x", "../../../x");
+        test("a/b/c")
+            .relativize("a/b/c/d", "d")
+            .relativize("a/x", "../../x")
+            .relativize("x", "../../../x")
+            .relativize("", "../../..");
+        test("")
+            .relativize("a", "a")
+            .relativize("a/b/c", "a/b/c")
+            .relativize("", "");
+        test("/")
+            .relativize("/a", "a")
+            .relativize("/a/c", "a/c");
+        // 8146754
+        test("/tmp/path")
+            .relativize("/tmp/path/a.txt", "a.txt");
+        test("/tmp/path/")
+            .relativize("/tmp/path/a.txt", "a.txt");
 
         // normalize
         test("/")
@@ -415,7 +523,16 @@ public class PathOps {
         // isSameFile
         test("/fileDoesNotExist")
             .isSameFile("/fileDoesNotExist");
-    }
+
+        // 8139956
+        out.println("check getNameCount");
+        int nc = fs.getPath("/").relativize(fs.getPath("/")).getNameCount();
+        if (nc != 1) {
+            out.format("\tExpected: 1\n");
+            out.format("\tActual: %d\n",  nc);
+            throw new RuntimeException("getNameCount of empty path failed");
+        }
+     }
 
     static void npes() {
         header("NullPointerException");

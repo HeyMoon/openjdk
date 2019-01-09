@@ -23,6 +23,7 @@
  */
 
 #include "precompiled.hpp"
+#include "memory/metaspaceShared.hpp"
 #include "runtime/frame.inline.hpp"
 #include "runtime/thread.inline.hpp"
 
@@ -47,7 +48,7 @@ bool JavaThread::pd_get_top_frame(frame* fr_addr, void* ucontext, bool isInJava)
 
   // If we have a last_Java_frame, then we should use it even if
   // isInJava == true.  It should be more reliable than CONTEXT info.
-  if (jt->has_last_Java_frame()) {
+  if (jt->has_last_Java_frame() && jt->frame_anchor()->walkable()) {
     *fr_addr = jt->pd_last_frame();
     return true;
   }
@@ -72,10 +73,18 @@ bool JavaThread::pd_get_top_frame(frame* fr_addr, void* ucontext, bool isInJava)
       return false;
     }
 
+#if INCLUDE_CDS
+    if (UseSharedSpaces && MetaspaceShared::is_in_shared_region(addr.pc(), MetaspaceShared::md)) {
+      // In the middle of a trampoline call. Bail out for safety.
+      // This happens rarely so shouldn't affect profiling.
+      return false;
+    }
+#endif
+
     frame ret_frame(ret_sp, ret_fp, addr.pc());
     if (!ret_frame.safe_for_sender(jt)) {
-#ifdef COMPILER2
-      // C2 uses ebp as a general register see if NULL fp helps
+#if defined(COMPILER2) || INCLUDE_JVMCI
+      // C2 and JVMCI use ebp as a general register see if NULL fp helps
       frame ret_frame2(ret_sp, NULL, addr.pc());
       if (!ret_frame2.safe_for_sender(jt)) {
         // nothing else to try if the frame isn't good
@@ -85,7 +94,7 @@ bool JavaThread::pd_get_top_frame(frame* fr_addr, void* ucontext, bool isInJava)
 #else
       // nothing else to try if the frame isn't good
       return false;
-#endif /* COMPILER2 */
+#endif /* COMPILER2 || INCLUDE_JVMCI */
     }
     *fr_addr = ret_frame;
     return true;

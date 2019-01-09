@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,8 +35,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
-import com.sun.nio.file.ExtendedWatchEventModifier;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 import static sun.nio.fs.WindowsNativeDispatcher.*;
 import static sun.nio.fs.WindowsConstants.*;
@@ -48,7 +47,7 @@ import static sun.nio.fs.WindowsConstants.*;
 class WindowsWatchService
     extends AbstractWatchService
 {
-    private final static int WAKEUP_COMPLETION_KEY = 0;
+    private static final int WAKEUP_COMPLETION_KEY = 0;
 
     // background thread to service I/O completion port
     private final Poller poller;
@@ -113,6 +112,10 @@ class WindowsWatchService
         // completion key (used to map I/O completion to WatchKey)
         private int completionKey;
 
+        // flag indicates that ReadDirectoryChangesW failed
+        // and overlapped I/O operation wasn't started
+        private boolean errorStartingOverlapped;
+
         WindowsWatchKey(Path dir,
                         AbstractWatchService watcher,
                         FileKey fileKey)
@@ -175,6 +178,14 @@ class WindowsWatchService
             return completionKey;
         }
 
+        void setErrorStartingOverlapped(boolean value) {
+            errorStartingOverlapped = value;
+        }
+
+        boolean isErrorStartingOverlapped() {
+            return errorStartingOverlapped;
+        }
+
         // Invalidate the key, assumes that resources have been released
         void invalidate() {
             ((WindowsWatchService)watcher()).poller.releaseResources(this);
@@ -182,6 +193,7 @@ class WindowsWatchService
             buffer = null;
             countAddress = 0;
             overlappedAddress = 0;
+            errorStartingOverlapped = false;
         }
 
         @Override
@@ -242,7 +254,7 @@ class WindowsWatchService
      * Background thread to service I/O completion port.
      */
     private static class Poller extends AbstractPoller {
-        private final static Unsafe UNSAFE = Unsafe.getUnsafe();
+        private static final Unsafe UNSAFE = Unsafe.getUnsafe();
 
         /*
          * typedef struct _OVERLAPPED {
@@ -329,14 +341,16 @@ class WindowsWatchService
 
             // FILE_TREE modifier allowed
             for (WatchEvent.Modifier modifier: modifiers) {
-                if (modifier == ExtendedWatchEventModifier.FILE_TREE) {
+                if (ExtendedOptions.FILE_TREE.matches(modifier)) {
                     watchSubtree = true;
                 } else {
                     if (modifier == null)
                         return new NullPointerException();
-                    if (modifier instanceof com.sun.nio.file.SensitivityWatchEventModifier)
-                        continue; // ignore
-                    return new UnsupportedOperationException("Modifier not supported");
+                    if (!ExtendedOptions.SENSITIVITY_HIGH.matches(modifier) &&
+                            !ExtendedOptions.SENSITIVITY_MEDIUM.matches(modifier) &&
+                            !ExtendedOptions.SENSITIVITY_LOW.matches(modifier)) {
+                        return new UnsupportedOperationException("Modifier not supported");
+                    }
                 }
             }
 
@@ -455,15 +469,17 @@ class WindowsWatchService
          * resources.
          */
         private void releaseResources(WindowsWatchKey key) {
-            try {
-                CancelIo(key.handle());
-                GetOverlappedResult(key.handle(), key.overlappedAddress());
-            } catch (WindowsException expected) {
-                // expected as I/O operation has been cancelled
+            if (!key.isErrorStartingOverlapped()) {
+                try {
+                    CancelIo(key.handle());
+                    GetOverlappedResult(key.handle(), key.overlappedAddress());
+                } catch (WindowsException expected) {
+                    // expected as I/O operation has been cancelled
+                }
             }
             CloseHandle(key.handle());
             closeAttachedEvent(key.overlappedAddress());
-            key.buffer().cleaner().clean();
+            key.buffer().free();
         }
 
         /**
@@ -628,6 +644,7 @@ class WindowsWatchService
                     } catch (WindowsException x) {
                         // no choice but to cancel key
                         criticalError = true;
+                        key.setErrorStartingOverlapped(true);
                     }
                 }
                 if (criticalError) {

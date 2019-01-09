@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 #include "interpreter/interpreter.hpp"
 #include "memory/heapInspection.hpp"
 #include "memory/metadataFactory.hpp"
+#include "memory/resourceArea.hpp"
 #include "oops/constMethod.hpp"
 #include "oops/method.hpp"
 
@@ -49,7 +50,7 @@ ConstMethod::ConstMethod(int byte_code_size,
                          MethodType method_type,
                          int size) {
 
-  No_Safepoint_Verifier no_safepoint;
+  NoSafepointVerifier no_safepoint;
   init_fingerprint();
   set_constants(NULL);
   set_stackmap_data(NULL);
@@ -65,6 +66,7 @@ ConstMethod::ConstMethod(int byte_code_size,
   set_max_locals(0);
   set_method_idnum(0);
   set_size_of_parameters(0);
+  set_result_type(T_VOID);
 }
 
 // Accessor that copies to metadata.
@@ -144,7 +146,7 @@ int ConstMethod::size(int code_size,
 
   int extra_words = align_size_up(extra_bytes, BytesPerWord) / BytesPerWord;
   assert(extra_words == extra_bytes/BytesPerWord, "should already be aligned");
-  return align_object_size(header_size() + extra_words);
+  return align_metadata_size(header_size() + extra_words);
 }
 
 Method* ConstMethod::method() const {
@@ -366,23 +368,36 @@ AnnotationArray** ConstMethod::default_annotations_addr() const {
   return (AnnotationArray**)constMethod_end() - offset;
 }
 
+Array<u1>* copy_annotations(ClassLoaderData* loader_data, AnnotationArray* from, TRAPS) {
+  int length = from->length();
+  Array<u1>* a = MetadataFactory::new_array<u1>(loader_data, length, 0, CHECK_NULL);
+  memcpy((void*)a->adr_at(0), (void*)from->adr_at(0), length);
+  return a;
+}
+
 // copy annotations from 'cm' to 'this'
-void ConstMethod::copy_annotations_from(ConstMethod* cm) {
+// Must make copy because these are deallocated with their constMethod, if redefined.
+void ConstMethod::copy_annotations_from(ClassLoaderData* loader_data, ConstMethod* cm, TRAPS) {
+  Array<u1>* a;
   if (cm->has_method_annotations()) {
     assert(has_method_annotations(), "should be allocated already");
-    set_method_annotations(cm->method_annotations());
+    a = copy_annotations(loader_data, cm->method_annotations(), CHECK);
+    set_method_annotations(a);
   }
   if (cm->has_parameter_annotations()) {
     assert(has_parameter_annotations(), "should be allocated already");
-    set_parameter_annotations(cm->parameter_annotations());
+    a = copy_annotations(loader_data, cm->parameter_annotations(), CHECK);
+    set_parameter_annotations(a);
   }
   if (cm->has_type_annotations()) {
     assert(has_type_annotations(), "should be allocated already");
-    set_type_annotations(cm->type_annotations());
+    a = copy_annotations(loader_data, cm->type_annotations(), CHECK);
+    set_type_annotations(a);
   }
   if (cm->has_default_annotations()) {
     assert(has_default_annotations(), "should be allocated already");
-    set_default_annotations(cm->default_annotations());
+    a = copy_annotations(loader_data, cm->default_annotations(), CHECK);
+    set_default_annotations(a);
   }
 }
 
@@ -392,8 +407,12 @@ void ConstMethod::print_on(outputStream* st) const {
   ResourceMark rm;
   assert(is_constMethod(), "must be constMethod");
   st->print_cr("%s", internal_name());
-  st->print(" - method:       " INTPTR_FORMAT " ", p2i((address)method()));
-  method()->print_value_on(st); st->cr();
+  Method* m = method();
+  st->print(" - method:       " INTPTR_FORMAT " ", p2i((address)m));
+  if (m != NULL) {
+    m->print_value_on(st);
+  }
+  st->cr();
   if (has_stackmap_table()) {
     st->print(" - stackmap data:       ");
     stackmap_data()->print_value_on(st);
@@ -406,7 +425,12 @@ void ConstMethod::print_on(outputStream* st) const {
 void ConstMethod::print_value_on(outputStream* st) const {
   assert(is_constMethod(), "must be constMethod");
   st->print(" const part of method " );
-  method()->print_value_on(st);
+  Method* m = method();
+  if (m != NULL) {
+    m->print_value_on(st);
+  } else {
+    st->print("NULL");
+  }
 }
 
 #if INCLUDE_SERVICES
@@ -446,7 +470,7 @@ void ConstMethod::verify_on(outputStream* st) {
 
   // Verification can occur during oop construction before the method or
   // other fields have been initialized.
-  guarantee(method()->is_method(), "should be method");
+  guarantee(method() != NULL && method()->is_method(), "should be method");
 
   address m_end = (address)((intptr_t) this + size());
   address compressed_table_start = code_end();
@@ -492,6 +516,6 @@ void ConstMethod::verify_on(outputStream* st) {
       uncompressed_table_start = (u2*) m_end;
   }
   int gap = (intptr_t) uncompressed_table_start - (intptr_t) compressed_table_end;
-  int max_gap = align_object_size(1)*BytesPerWord;
+  int max_gap = align_metadata_size(1)*BytesPerWord;
   guarantee(gap >= 0 && gap < max_gap, "invalid method layout");
 }

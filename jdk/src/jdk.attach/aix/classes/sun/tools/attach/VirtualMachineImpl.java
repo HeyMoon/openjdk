@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2008, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2015 SAP AG. All rights reserved.
+ * Copyright (c) 2015 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -76,20 +76,29 @@ public class VirtualMachineImpl extends HotSpotVirtualMachine {
                 sendQuitTo(pid);
 
                 // give the target VM time to start the attach mechanism
-                int i = 0;
-                long delay = 200;
-                int retries = (int)(attachTimeout() / delay);
+                final int delay_step = 100;
+                final long timeout = attachTimeout();
+                long time_spend = 0;
+                long delay = 0;
                 do {
+                    // Increase timeout on each attempt to reduce polling
+                    delay += delay_step;
                     try {
                         Thread.sleep(delay);
                     } catch (InterruptedException x) { }
                     path = findSocketFile(pid);
-                    i++;
-                } while (i <= retries && path == null);
+
+                    time_spend += delay;
+                    if (time_spend > timeout/2 && path == null) {
+                        // Send QUIT again to give target VM the last chance to react
+                        sendQuitTo(pid);
+                    }
+                } while (time_spend <= timeout && path == null);
                 if (path == null) {
                     throw new AttachNotSupportedException(
-                        "Unable to open socket file: target process not responding " +
-                        "or HotSpot VM not loaded");
+                        String.format("Unable to open socket file %s: " +
+                          "target process %d doesn't respond within %dms " +
+                          "or HotSpot VM not loaded", f.getPath(), pid, time_spend));
                 }
             } finally {
                 f.delete();
@@ -205,13 +214,14 @@ public class VirtualMachineImpl extends HotSpotVirtualMachine {
             // Special-case the "load" command so that the right exception is
             // thrown.
             if (cmd.equals("load")) {
-                throw new AgentLoadException("Failed to load agent library");
+                String msg = "Failed to load agent library";
+                if (!message.isEmpty())
+                    msg += ": " + message;
+                throw new AgentLoadException(msg);
             } else {
-                if (message == null) {
-                    throw new AttachOperationFailedException("Command failed in target VM");
-                } else {
-                    throw new AttachOperationFailedException(message);
-                }
+                if (message.isEmpty())
+                    message = "Command failed in target VM";
+                throw new AttachOperationFailedException(message);
             }
         }
 

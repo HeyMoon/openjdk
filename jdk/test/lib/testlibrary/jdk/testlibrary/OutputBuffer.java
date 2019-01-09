@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,11 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
+/**
+ * @deprecated This class is deprecated. Use the one from
+ *             {@code <root>/test/lib/jdk/test/lib/process}
+ */
+@Deprecated
 class OutputBuffer {
     private static class OutputBufferException extends RuntimeException {
         private static final long serialVersionUID = 8528687792643129571L;

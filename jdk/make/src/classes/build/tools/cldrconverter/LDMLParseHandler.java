@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@ package build.tools.cldrconverter;
 
 import java.io.File;
 import java.io.IOException;
+import java.text.DateFormatSymbols;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -289,6 +290,9 @@ class LDMLParseHandler extends AbstractLDMLHandler<Object> {
             case "narrow":
                 pushStringArrayEntry(qName, attributes, "narrow.AmPmMarkers/" + getContainerKey(), 2);
                 break;
+            case "abbreviated":
+                pushStringArrayEntry(qName, attributes, "abbreviated.AmPmMarkers/" + getContainerKey(), 2);
+                break;
             default:
                 pushIgnoredContainer(qName);
                 break;
@@ -413,6 +417,12 @@ class LDMLParseHandler extends AbstractLDMLHandler<Object> {
         case "timeZoneNames":
             pushContainer(qName, attributes);
             break;
+        case "hourFormat":
+            pushStringEntry(qName, attributes, "timezone.hourFormat");
+            break;
+        case "gmtFormat":
+            pushStringEntry(qName, attributes, "timezone.gmtFormat");
+            break;
         case "zone":
             {
                 String tzid = attributes.getValue("type"); // Olson tz id
@@ -455,6 +465,15 @@ class LDMLParseHandler extends AbstractLDMLHandler<Object> {
                 // for FormatData
                 // copy string for later assembly into NumberPatterns
                 pushStringEntry(qName, attributes, "NumberPatterns/decimal");
+            } else {
+                pushIgnoredContainer(qName);
+            }
+            break;
+        case "currencyFormatLength":
+            if (attributes.getValue("type") == null) {
+                // skipping type="short" data
+                // for FormatData
+                pushContainer(qName, attributes);
             } else {
                 pushIgnoredContainer(qName);
             }
@@ -749,7 +768,7 @@ class LDMLParseHandler extends AbstractLDMLHandler<Object> {
                 keyName = "narrow.AmPmMarkers/" + context;
                 break;
             case "abbreviated":
-                keyName = "";
+                keyName = "abbreviated.AmPmMarkers/" + context;
                 break;
             }
             break;
@@ -785,10 +804,10 @@ class LDMLParseHandler extends AbstractLDMLHandler<Object> {
         return keyName;
     }
 
-    private String getTarget(String qName, String path, String calType, String context, String width) {
-        // qName
+    private String getTarget(String path, String calType, String context, String width) {
+        // Target qName
         int lastSlash = path.lastIndexOf('/');
-        qName = path.substring(lastSlash+1);
+        String qName = path.substring(lastSlash+1);
         int bracket = qName.indexOf('[');
         if (bracket != -1) {
             qName = qName.substring(0, bracket);
@@ -884,7 +903,7 @@ class LDMLParseHandler extends AbstractLDMLHandler<Object> {
                     String[] tmp = keyName.split(",", 3);
                     String calType = currentCalendarType.lname();
                     String src = calType+"."+tmp[0];
-                    String target = getTarget(containerqName,
+                    String target = getTarget(
                                 entry.getKey(),
                                 calType,
                                 tmp[1].length()>0 ? tmp[1] : currentContext,
@@ -900,6 +919,12 @@ class LDMLParseHandler extends AbstractLDMLHandler<Object> {
                 Entry<?> entry = (Entry<?>) currentContainer;
                 Object value = entry.getValue();
                 if (value != null) {
+                    String key = entry.getKey();
+                    // Tweak for MonthNames for the root locale, Needed for
+                    // SimpleDateFormat.format()/parse() roundtrip.
+                    if (id.equals("root") && key.startsWith("MonthNames")) {
+                        value = new DateFormatSymbols(Locale.US).getShortMonths();
+                    }
                     put(entry.getKey(), value);
                 }
             }

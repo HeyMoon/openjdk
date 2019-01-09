@@ -1,13 +1,13 @@
 /*
- * reserved comment block
- * DO NOT REMOVE OR ALTER!
+ * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright 2000-2002,2004,2005 The Apache Software Foundation.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *      http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -20,13 +20,17 @@
 
 package com.sun.org.apache.xerces.internal.impl.xpath;
 
-import java.util.Vector;
-
 import com.sun.org.apache.xerces.internal.util.SymbolTable;
-import com.sun.org.apache.xerces.internal.util.XMLSymbols;
 import com.sun.org.apache.xerces.internal.util.XMLChar;
+import com.sun.org.apache.xerces.internal.util.XMLSymbols;
 import com.sun.org.apache.xerces.internal.xni.NamespaceContext;
 import com.sun.org.apache.xerces.internal.xni.QName;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Bare minimum XPath parser.
@@ -46,20 +50,18 @@ public class XPath {
 
     private static final boolean DEBUG_XPATH_PARSE = DEBUG_ALL || false;
 
-    private static final boolean DEBUG_ANY = DEBUG_XPATH_PARSE;
-
     //
     // Data
     //
 
     /** Expression. */
-    protected String fExpression;
+    protected final String fExpression;
 
     /** Symbol table. */
-    protected SymbolTable fSymbolTable;
+    protected final SymbolTable fSymbolTable;
 
     /** Location paths. */
-    protected LocationPath[] fLocationPaths;
+    protected final LocationPath[] fLocationPaths;
 
     //
     // Constructors
@@ -71,7 +73,7 @@ public class XPath {
         throws XPathException {
         fExpression = xpath;
         fSymbolTable = symbolTable;
-        parseExpression(context);
+        fLocationPaths = parseExpression(context);
     } // <init>(String,SymbolTable,NamespaceContext)
 
     //
@@ -100,15 +102,14 @@ public class XPath {
     //
 
     /** Returns a string representation of this object. */
+    @Override
     public String toString() {
-        StringBuffer buf=new StringBuffer();
-        for (int  i=0;i<fLocationPaths.length;i++){
-            if (i>0){
-                buf.append("|");
-            }
-            buf.append(fLocationPaths[i].toString());
-        }
-        return buf.toString();
+        final List<LocationPath> l = Arrays.asList(fLocationPaths);
+        final String s = l.stream()
+                .map(aPath -> aPath.toString())
+                .collect(Collectors.joining("|"));
+
+        return s;
     } // toString():String
 
     //
@@ -131,12 +132,12 @@ public class XPath {
      * to build a {@link LocationPath} object from the accumulated
      * {@link Step}s.
      */
-    private LocationPath buildLocationPath( Vector stepsVector ) throws XPathException {
+    private LocationPath buildLocationPath( ArrayList<Step> stepsVector ) throws XPathException {
         int size = stepsVector.size();
         check(size!=0);
         Step[] steps = new Step[size];
-        stepsVector.copyInto(steps);
-        stepsVector.removeAllElements();
+        steps = stepsVector.toArray(steps);
+        stepsVector.clear();
 
         return new LocationPath(steps);
     }
@@ -145,7 +146,7 @@ public class XPath {
      * This method is implemented by using the XPathExprScanner and
      * examining the list of tokens that it returns.
      */
-    private void parseExpression(final NamespaceContext context)
+    private LocationPath[] parseExpression(final NamespaceContext context)
         throws XPathException {
 
         // tokens
@@ -183,8 +184,8 @@ public class XPath {
             throw new XPathException("c-general-xpath");
 
         //fTokens.dumpTokens();
-        Vector stepsVector = new Vector();
-        Vector locationPathsVector= new Vector();
+        ArrayList<Step> stepsVector = new ArrayList<>();
+        ArrayList<LocationPath> locationPathsVector= new ArrayList<>();
 
         // true when the next token should be 'Step' (as defined in
         // the production rule [3] of XML Schema P1 section 3.11.6
@@ -193,26 +194,37 @@ public class XPath {
         // this is to make sure we can detect a token list like
         // 'abc' '/' '/' 'def' 'ghi'
         boolean expectingStep = true;
-        boolean expectingDoubleColon = false;
 
-        while(xtokens.hasMore()) {
+        while (xtokens.hasMore()) {
             final int token = xtokens.nextToken();
 
             switch (token) {
                 case  XPath.Tokens.EXPRTOKEN_OPERATOR_UNION :{
                     check(!expectingStep);
-                    locationPathsVector.addElement(buildLocationPath(stepsVector));
+                    locationPathsVector.add(buildLocationPath(stepsVector));
                     expectingStep=true;
                     break;
                 }
-
                 case XPath.Tokens.EXPRTOKEN_ATSIGN: {
                     check(expectingStep);
                     Step step = new Step(
                             new Axis(Axis.ATTRIBUTE),
                             parseNodeTest(xtokens.nextToken(),xtokens,context));
-                    stepsVector.addElement(step);
+                    stepsVector.add(step);
                     expectingStep=false;
+                    break;
+                }
+                case XPath.Tokens.EXPRTOKEN_AXISNAME_ATTRIBUTE: {
+                    check(expectingStep);
+                    // If we got here we're expecting attribute::
+                    if (xtokens.nextToken() != XPath.Tokens.EXPRTOKEN_DOUBLE_COLON) {
+                        throw new XPathException("c-general-xpath");
+                    }
+                    Step step = new Step(
+                            new Axis(Axis.ATTRIBUTE),
+                            parseNodeTest(xtokens.nextToken(),xtokens,context));
+                    stepsVector.add(step);
+                    expectingStep = false;
                     break;
                 }
                 case XPath.Tokens.EXPRTOKEN_NAMETEST_ANY:
@@ -222,11 +234,23 @@ public class XPath {
                     Step step = new Step(
                             new Axis(Axis.CHILD),
                             parseNodeTest(token,xtokens,context));
-                    stepsVector.addElement(step);
+                    stepsVector.add(step);
                     expectingStep=false;
                     break;
                 }
-
+                case XPath.Tokens.EXPRTOKEN_AXISNAME_CHILD: {
+                    check(expectingStep);
+                    // If we got here we're expecting child::
+                    if (xtokens.nextToken() != XPath.Tokens.EXPRTOKEN_DOUBLE_COLON) {
+                        throw new XPathException("c-general-xpath");
+                    }
+                    Step step = new Step(
+                            new Axis(Axis.CHILD),
+                            parseNodeTest(xtokens.nextToken(),xtokens,context));
+                    stepsVector.add(step);
+                    expectingStep = false;
+                    break;
+                }
                 case XPath.Tokens.EXPRTOKEN_PERIOD: {
                     check(expectingStep);
                     expectingStep=false;
@@ -236,12 +260,12 @@ public class XPath {
                     // This amounts to shorten "a/././b/./c" to "a/b/c".
                     // Also, the matcher fails to work correctly if XPath
                     // has those redundant dots.
-                    if (stepsVector.size()==0) {
+                    if (stepsVector.isEmpty()) {
                         // build step
                         Axis axis = new Axis(Axis.SELF);
                         NodeTest nodeTest = new NodeTest(NodeTest.NODE);
                         Step step = new Step(axis, nodeTest);
-                        stepsVector.addElement(step);
+                        stepsVector.add(step);
 
                         if( xtokens.hasMore()
                          && xtokens.peekToken() == XPath.Tokens.EXPRTOKEN_OPERATOR_DOUBLE_SLASH){
@@ -252,17 +276,22 @@ public class XPath {
                             axis = new Axis(Axis.DESCENDANT);
                             nodeTest = new NodeTest(NodeTest.NODE);
                             step = new Step(axis, nodeTest);
-                            stepsVector.addElement(step);
+                            stepsVector.add(step);
                             expectingStep=true;
                         }
                     }
                     break;
                 }
-
                 case XPath.Tokens.EXPRTOKEN_OPERATOR_DOUBLE_SLASH:{
-                    // this cannot appear in arbitrary position.
+                    // this cannot appear in an arbitrary position.
                     // it is only allowed right after '.' when
                     // '.' is the first token of a location path.
+                    throw new XPathException("c-general-xpath");
+                }
+                case XPath.Tokens.EXPRTOKEN_DOUBLE_COLON: {
+                    // :: cannot appear in an arbitrary position.
+                    // We only expect this token if the xpath
+                    // contains child:: or attribute::
                     throw new XPathException("c-general-xpath");
                 }
                 case XPath.Tokens.EXPRTOKEN_OPERATOR_SLASH: {
@@ -270,49 +299,18 @@ public class XPath {
                     expectingStep=true;
                     break;
                 }
-                case XPath.Tokens.EXPRTOKEN_AXISNAME_ATTRIBUTE: {
-                     check(expectingStep);
-                     expectingDoubleColon = true;
-
-                     if (xtokens.nextToken() == XPath.Tokens.EXPRTOKEN_DOUBLE_COLON){
-                         Step step = new Step(
-                         new Axis(Axis.ATTRIBUTE),
-                                 parseNodeTest(xtokens.nextToken(),xtokens,context));
-                         stepsVector.addElement(step);
-                         expectingStep=false;
-                         expectingDoubleColon = false;
-                     }
-                     break;
-                }
-                case XPath.Tokens.EXPRTOKEN_AXISNAME_CHILD:{
-                    check(expectingStep);
-                    expectingDoubleColon = true;
-                    break;
-                }
-                case XPath.Tokens.EXPRTOKEN_DOUBLE_COLON :{
-                    check(expectingStep);
-                    check(expectingDoubleColon);
-                    expectingDoubleColon = false;
-                    break;
-                }
                 default:
                     // we should have covered all the tokens that we can possibly see.
-                    throw new XPathException("c-general-xpath");
-           }
+                    throw new InternalError();
+            }
         }
 
         check(!expectingStep);
 
-        locationPathsVector.addElement(buildLocationPath(stepsVector));
+        locationPathsVector.add(buildLocationPath(stepsVector));
 
-        // save location path
-        fLocationPaths=new LocationPath[locationPathsVector.size()];
-        locationPathsVector.copyInto(fLocationPaths);
-
-
-        if (DEBUG_XPATH_PARSE) {
-            System.out.println(">>> "+fLocationPaths);
-        }
+        // return location path
+        return locationPathsVector.toArray(new LocationPath[locationPathsVector.size()]);
 
     } // parseExpression(SymbolTable,NamespaceContext)
 
@@ -377,7 +375,7 @@ public class XPath {
         //
 
         /** List of steps. */
-        public Step[] steps;
+        public final Step[] steps;
 
         //
         // Constructors
@@ -444,10 +442,10 @@ public class XPath {
         //
 
         /** Axis. */
-        public Axis axis;
+        public final Axis axis;
 
         /** Node test. */
-        public NodeTest nodeTest;
+        public final NodeTest nodeTest;
 
         //
         // Constructors
@@ -524,7 +522,7 @@ public class XPath {
         //
 
         /** Axis type. */
-        public short type;
+        public final short type;
 
         //
         // Constructors
@@ -593,7 +591,7 @@ public class XPath {
         //
 
         /** Node test type. */
-        public short type;
+        public final short type;
 
         /** Node qualified name. */
         public final QName name = new QName();
@@ -855,13 +853,13 @@ public class XPath {
         private int[] fTokens = new int[INITIAL_TOKEN_COUNT];
         private int fTokenCount = 0;    // for writing
 
-        private SymbolTable fSymbolTable;
+        private final SymbolTable fSymbolTable;
 
         // REVISIT: Code something better here. -Ac
-        private java.util.Hashtable fSymbolMapping = new java.util.Hashtable();
+        private final Map<String, Integer> fSymbolMapping = new HashMap<>();
 
         // REVISIT: Code something better here. -Ac
-        private java.util.Hashtable fTokenNames = new java.util.Hashtable();
+        private final Map<Integer, String> fTokenNames = new HashMap<>();
 
         /**
          * Current position in the token list.
@@ -882,57 +880,57 @@ public class XPath {
                 "self",
             };
             for (int i = 0; i < symbols.length; i++) {
-                fSymbolMapping.put(fSymbolTable.addSymbol(symbols[i]), new Integer(i));
+                fSymbolMapping.put(fSymbolTable.addSymbol(symbols[i]), i);
             }
-            fTokenNames.put(new Integer(EXPRTOKEN_OPEN_PAREN), "EXPRTOKEN_OPEN_PAREN");
-            fTokenNames.put(new Integer(EXPRTOKEN_CLOSE_PAREN), "EXPRTOKEN_CLOSE_PAREN");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPEN_BRACKET), "EXPRTOKEN_OPEN_BRACKET");
-            fTokenNames.put(new Integer(EXPRTOKEN_CLOSE_BRACKET), "EXPRTOKEN_CLOSE_BRACKET");
-            fTokenNames.put(new Integer(EXPRTOKEN_PERIOD), "EXPRTOKEN_PERIOD");
-            fTokenNames.put(new Integer(EXPRTOKEN_DOUBLE_PERIOD), "EXPRTOKEN_DOUBLE_PERIOD");
-            fTokenNames.put(new Integer(EXPRTOKEN_ATSIGN), "EXPRTOKEN_ATSIGN");
-            fTokenNames.put(new Integer(EXPRTOKEN_COMMA), "EXPRTOKEN_COMMA");
-            fTokenNames.put(new Integer(EXPRTOKEN_DOUBLE_COLON), "EXPRTOKEN_DOUBLE_COLON");
-            fTokenNames.put(new Integer(EXPRTOKEN_NAMETEST_ANY), "EXPRTOKEN_NAMETEST_ANY");
-            fTokenNames.put(new Integer(EXPRTOKEN_NAMETEST_NAMESPACE), "EXPRTOKEN_NAMETEST_NAMESPACE");
-            fTokenNames.put(new Integer(EXPRTOKEN_NAMETEST_QNAME), "EXPRTOKEN_NAMETEST_QNAME");
-            fTokenNames.put(new Integer(EXPRTOKEN_NODETYPE_COMMENT), "EXPRTOKEN_NODETYPE_COMMENT");
-            fTokenNames.put(new Integer(EXPRTOKEN_NODETYPE_TEXT), "EXPRTOKEN_NODETYPE_TEXT");
-            fTokenNames.put(new Integer(EXPRTOKEN_NODETYPE_PI), "EXPRTOKEN_NODETYPE_PI");
-            fTokenNames.put(new Integer(EXPRTOKEN_NODETYPE_NODE), "EXPRTOKEN_NODETYPE_NODE");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_AND), "EXPRTOKEN_OPERATOR_AND");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_OR), "EXPRTOKEN_OPERATOR_OR");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_MOD), "EXPRTOKEN_OPERATOR_MOD");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_DIV), "EXPRTOKEN_OPERATOR_DIV");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_MULT), "EXPRTOKEN_OPERATOR_MULT");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_SLASH), "EXPRTOKEN_OPERATOR_SLASH");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_DOUBLE_SLASH), "EXPRTOKEN_OPERATOR_DOUBLE_SLASH");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_UNION), "EXPRTOKEN_OPERATOR_UNION");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_PLUS), "EXPRTOKEN_OPERATOR_PLUS");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_MINUS), "EXPRTOKEN_OPERATOR_MINUS");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_EQUAL), "EXPRTOKEN_OPERATOR_EQUAL");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_NOT_EQUAL), "EXPRTOKEN_OPERATOR_NOT_EQUAL");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_LESS), "EXPRTOKEN_OPERATOR_LESS");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_LESS_EQUAL), "EXPRTOKEN_OPERATOR_LESS_EQUAL");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_GREATER), "EXPRTOKEN_OPERATOR_GREATER");
-            fTokenNames.put(new Integer(EXPRTOKEN_OPERATOR_GREATER_EQUAL), "EXPRTOKEN_OPERATOR_GREATER_EQUAL");
-            fTokenNames.put(new Integer(EXPRTOKEN_FUNCTION_NAME), "EXPRTOKEN_FUNCTION_NAME");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_ANCESTOR), "EXPRTOKEN_AXISNAME_ANCESTOR");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_ANCESTOR_OR_SELF), "EXPRTOKEN_AXISNAME_ANCESTOR_OR_SELF");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_ATTRIBUTE), "EXPRTOKEN_AXISNAME_ATTRIBUTE");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_CHILD), "EXPRTOKEN_AXISNAME_CHILD");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_DESCENDANT), "EXPRTOKEN_AXISNAME_DESCENDANT");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_DESCENDANT_OR_SELF), "EXPRTOKEN_AXISNAME_DESCENDANT_OR_SELF");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_FOLLOWING), "EXPRTOKEN_AXISNAME_FOLLOWING");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_FOLLOWING_SIBLING), "EXPRTOKEN_AXISNAME_FOLLOWING_SIBLING");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_NAMESPACE), "EXPRTOKEN_AXISNAME_NAMESPACE");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_PARENT), "EXPRTOKEN_AXISNAME_PARENT");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_PRECEDING), "EXPRTOKEN_AXISNAME_PRECEDING");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_PRECEDING_SIBLING), "EXPRTOKEN_AXISNAME_PRECEDING_SIBLING");
-            fTokenNames.put(new Integer(EXPRTOKEN_AXISNAME_SELF), "EXPRTOKEN_AXISNAME_SELF");
-            fTokenNames.put(new Integer(EXPRTOKEN_LITERAL), "EXPRTOKEN_LITERAL");
-            fTokenNames.put(new Integer(EXPRTOKEN_NUMBER), "EXPRTOKEN_NUMBER");
-            fTokenNames.put(new Integer(EXPRTOKEN_VARIABLE_REFERENCE), "EXPRTOKEN_VARIABLE_REFERENCE");
+            fTokenNames.put(EXPRTOKEN_OPEN_PAREN, "EXPRTOKEN_OPEN_PAREN");
+            fTokenNames.put(EXPRTOKEN_CLOSE_PAREN, "EXPRTOKEN_CLOSE_PAREN");
+            fTokenNames.put(EXPRTOKEN_OPEN_BRACKET, "EXPRTOKEN_OPEN_BRACKET");
+            fTokenNames.put(EXPRTOKEN_CLOSE_BRACKET, "EXPRTOKEN_CLOSE_BRACKET");
+            fTokenNames.put(EXPRTOKEN_PERIOD, "EXPRTOKEN_PERIOD");
+            fTokenNames.put(EXPRTOKEN_DOUBLE_PERIOD, "EXPRTOKEN_DOUBLE_PERIOD");
+            fTokenNames.put(EXPRTOKEN_ATSIGN, "EXPRTOKEN_ATSIGN");
+            fTokenNames.put(EXPRTOKEN_COMMA, "EXPRTOKEN_COMMA");
+            fTokenNames.put(EXPRTOKEN_DOUBLE_COLON, "EXPRTOKEN_DOUBLE_COLON");
+            fTokenNames.put(EXPRTOKEN_NAMETEST_ANY, "EXPRTOKEN_NAMETEST_ANY");
+            fTokenNames.put(EXPRTOKEN_NAMETEST_NAMESPACE, "EXPRTOKEN_NAMETEST_NAMESPACE");
+            fTokenNames.put(EXPRTOKEN_NAMETEST_QNAME, "EXPRTOKEN_NAMETEST_QNAME");
+            fTokenNames.put(EXPRTOKEN_NODETYPE_COMMENT, "EXPRTOKEN_NODETYPE_COMMENT");
+            fTokenNames.put(EXPRTOKEN_NODETYPE_TEXT, "EXPRTOKEN_NODETYPE_TEXT");
+            fTokenNames.put(EXPRTOKEN_NODETYPE_PI, "EXPRTOKEN_NODETYPE_PI");
+            fTokenNames.put(EXPRTOKEN_NODETYPE_NODE, "EXPRTOKEN_NODETYPE_NODE");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_AND, "EXPRTOKEN_OPERATOR_AND");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_OR, "EXPRTOKEN_OPERATOR_OR");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_MOD, "EXPRTOKEN_OPERATOR_MOD");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_DIV, "EXPRTOKEN_OPERATOR_DIV");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_MULT, "EXPRTOKEN_OPERATOR_MULT");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_SLASH, "EXPRTOKEN_OPERATOR_SLASH");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_DOUBLE_SLASH, "EXPRTOKEN_OPERATOR_DOUBLE_SLASH");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_UNION, "EXPRTOKEN_OPERATOR_UNION");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_PLUS, "EXPRTOKEN_OPERATOR_PLUS");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_MINUS, "EXPRTOKEN_OPERATOR_MINUS");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_EQUAL, "EXPRTOKEN_OPERATOR_EQUAL");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_NOT_EQUAL, "EXPRTOKEN_OPERATOR_NOT_EQUAL");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_LESS, "EXPRTOKEN_OPERATOR_LESS");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_LESS_EQUAL, "EXPRTOKEN_OPERATOR_LESS_EQUAL");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_GREATER, "EXPRTOKEN_OPERATOR_GREATER");
+            fTokenNames.put(EXPRTOKEN_OPERATOR_GREATER_EQUAL, "EXPRTOKEN_OPERATOR_GREATER_EQUAL");
+            fTokenNames.put(EXPRTOKEN_FUNCTION_NAME, "EXPRTOKEN_FUNCTION_NAME");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_ANCESTOR, "EXPRTOKEN_AXISNAME_ANCESTOR");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_ANCESTOR_OR_SELF, "EXPRTOKEN_AXISNAME_ANCESTOR_OR_SELF");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_ATTRIBUTE, "EXPRTOKEN_AXISNAME_ATTRIBUTE");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_CHILD, "EXPRTOKEN_AXISNAME_CHILD");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_DESCENDANT, "EXPRTOKEN_AXISNAME_DESCENDANT");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_DESCENDANT_OR_SELF, "EXPRTOKEN_AXISNAME_DESCENDANT_OR_SELF");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_FOLLOWING, "EXPRTOKEN_AXISNAME_FOLLOWING");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_FOLLOWING_SIBLING, "EXPRTOKEN_AXISNAME_FOLLOWING_SIBLING");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_NAMESPACE, "EXPRTOKEN_AXISNAME_NAMESPACE");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_PARENT, "EXPRTOKEN_AXISNAME_PARENT");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_PRECEDING, "EXPRTOKEN_AXISNAME_PRECEDING");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_PRECEDING_SIBLING, "EXPRTOKEN_AXISNAME_PRECEDING_SIBLING");
+            fTokenNames.put(EXPRTOKEN_AXISNAME_SELF, "EXPRTOKEN_AXISNAME_SELF");
+            fTokenNames.put(EXPRTOKEN_LITERAL, "EXPRTOKEN_LITERAL");
+            fTokenNames.put(EXPRTOKEN_NUMBER, "EXPRTOKEN_NUMBER");
+            fTokenNames.put(EXPRTOKEN_VARIABLE_REFERENCE, "EXPRTOKEN_VARIABLE_REFERENCE");
         }
 
         //
@@ -946,16 +944,21 @@ public class XPath {
 //        }
 //
         public String getTokenString(int token) {
-            return (String)fTokenNames.get(new Integer(token));
+            return fTokenNames.get(token);
         }
 
         public void addToken(String tokenStr) {
-            Integer tokenInt = (Integer)fTokenNames.get(tokenStr);
+            Integer tokenInt = null;
+            for (Map.Entry<Integer, String> entry : fTokenNames.entrySet()) {
+                if (entry.getValue().equals(tokenStr)) {
+                    tokenInt = entry.getKey();
+                }
+            }
             if (tokenInt == null) {
-                tokenInt = new Integer(fTokenNames.size());
+                tokenInt = fTokenNames.size();
                 fTokenNames.put(tokenInt, tokenStr);
             }
-            addToken(tokenInt.intValue());
+            addToken(tokenInt);
         }
 
         public void addToken(int token) {
@@ -1882,6 +1885,10 @@ public class XPath {
                         tokens.addToken(nameHandle);
                     }
                     break;
+                default:
+                    // CHARTYPE_INVALID or CHARTYPE_OTHER
+                    // We're not expecting to find either of these in a valid expression.
+                    return false;
                 }
             }
             if (XPath.Tokens.DUMP_TOKENS) {

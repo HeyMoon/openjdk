@@ -19,7 +19,6 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
 /**
@@ -35,7 +34,7 @@ import java.lang.reflect.Method;
 import java.util.Arrays;
 
 public class GetUnsafeTest {
-    final static String NAME = "sun.misc.Unsafe";
+    static final String NAME = "sun.misc.Unsafe";
 
     private static boolean isTestFailed = false;
 

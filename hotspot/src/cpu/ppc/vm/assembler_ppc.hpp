@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,10 +31,37 @@
 // Address is an abstraction used to represent a memory location
 // as used in assembler instructions.
 // PPC instructions grok either baseReg + indexReg or baseReg + disp.
-// So far we do not use this as simplification by this class is low
-// on PPC with its simple addressing mode. Use RegisterOrConstant to
-// represent an offset.
 class Address VALUE_OBJ_CLASS_SPEC {
+ private:
+  Register _base;         // Base register.
+  Register _index;        // Index register.
+  intptr_t _disp;         // Displacement.
+
+ public:
+  Address(Register b, Register i, address d = 0)
+    : _base(b), _index(i), _disp((intptr_t)d) {
+    assert(i == noreg || d == 0, "can't have both");
+  }
+
+  Address(Register b, address d = 0)
+    : _base(b), _index(noreg), _disp((intptr_t)d) {}
+
+  Address(Register b, intptr_t d)
+    : _base(b), _index(noreg), _disp(d) {}
+
+  Address(Register b, RegisterOrConstant roc)
+    : _base(b), _index(noreg), _disp(0) {
+    if (roc.is_constant()) _disp = roc.as_constant(); else _index = roc.as_register();
+  }
+
+  Address()
+    : _base(noreg), _index(noreg), _disp(0) {}
+
+  // accessors
+  Register base()  const { return _base; }
+  Register index() const { return _index; }
+  int      disp()  const { return (int)_disp; }
+  bool     is_const() const { return _base == noreg && _index == noreg; }
 };
 
 class AddressLiteral VALUE_OBJ_CLASS_SPEC {
@@ -164,10 +191,14 @@ struct FunctionDescriptor VALUE_OBJ_CLASS_SPEC {
 };
 #endif
 
+
+// The PPC Assembler: Pure assembler doing NO optimizations on the
+// instruction level; i.e., what you write is what you get. The
+// Assembler is generating code into a CodeBuffer.
+
 class Assembler : public AbstractAssembler {
  protected:
   // Displacement routines
-  static void print_instruction(int inst);
   static int  patched_branch(int dest_pos, int inst, int inst_pos);
   static int  branch_destination(int inst, int pos);
 
@@ -429,16 +460,15 @@ class Assembler : public AbstractAssembler {
     FCTIWZ_OPCODE  = (63u << OPCODE_SHIFT |   15u << 1),
     FRSP_OPCODE    = (63u << OPCODE_SHIFT |   12u << 1),
 
-    // WARNING: using fmadd results in a non-compliant vm. Some floating
-    // point tck tests will fail.
-    FMADD_OPCODE   = (59u << OPCODE_SHIFT |   29u << 1),
-    DMADD_OPCODE   = (63u << OPCODE_SHIFT |   29u << 1),
-    FMSUB_OPCODE   = (59u << OPCODE_SHIFT |   28u << 1),
-    DMSUB_OPCODE   = (63u << OPCODE_SHIFT |   28u << 1),
-    FNMADD_OPCODE  = (59u << OPCODE_SHIFT |   31u << 1),
-    DNMADD_OPCODE  = (63u << OPCODE_SHIFT |   31u << 1),
-    FNMSUB_OPCODE  = (59u << OPCODE_SHIFT |   30u << 1),
-    DNMSUB_OPCODE  = (63u << OPCODE_SHIFT |   30u << 1),
+    // Fused multiply-accumulate instructions.
+    FMADD_OPCODE   = (63u << OPCODE_SHIFT |   29u << 1),
+    FMADDS_OPCODE  = (59u << OPCODE_SHIFT |   29u << 1),
+    FMSUB_OPCODE   = (63u << OPCODE_SHIFT |   28u << 1),
+    FMSUBS_OPCODE  = (59u << OPCODE_SHIFT |   28u << 1),
+    FNMADD_OPCODE  = (63u << OPCODE_SHIFT |   31u << 1),
+    FNMADDS_OPCODE = (59u << OPCODE_SHIFT |   31u << 1),
+    FNMSUB_OPCODE  = (63u << OPCODE_SHIFT |   30u << 1),
+    FNMSUBS_OPCODE = (59u << OPCODE_SHIFT |   30u << 1),
 
     LFD_OPCODE     = (50u << OPCODE_SHIFT |   00u << 1),
     LFDU_OPCODE    = (51u << OPCODE_SHIFT |   00u << 1),
@@ -471,6 +501,12 @@ class Assembler : public AbstractAssembler {
     STVXL_OPCODE   = (31u << OPCODE_SHIFT |  487u << 1),
     LVSL_OPCODE    = (31u << OPCODE_SHIFT |    6u << 1),
     LVSR_OPCODE    = (31u << OPCODE_SHIFT |   38u << 1),
+
+    // Vector-Scalar (VSX) instruction support.
+    LXVD2X_OPCODE  = (31u << OPCODE_SHIFT |  844u << 1),
+    STXVD2X_OPCODE = (31u << OPCODE_SHIFT |  972u << 1),
+    MTVSRD_OPCODE  = (31u << OPCODE_SHIFT |  179u << 1),
+    MFVSRD_OPCODE  = (31u << OPCODE_SHIFT |   51u << 1),
 
     // Vector Permute and Formatting
     VPKPX_OPCODE   = (4u  << OPCODE_SHIFT |  782u     ),
@@ -593,6 +629,7 @@ class Assembler : public AbstractAssembler {
     VNOR_OPCODE    = (4u  << OPCODE_SHIFT | 1284u     ),
     VOR_OPCODE     = (4u  << OPCODE_SHIFT | 1156u     ),
     VXOR_OPCODE    = (4u  << OPCODE_SHIFT | 1220u     ),
+    VRLD_OPCODE    = (4u  << OPCODE_SHIFT |  196u     ),
     VRLB_OPCODE    = (4u  << OPCODE_SHIFT |    4u     ),
     VRLW_OPCODE    = (4u  << OPCODE_SHIFT |  132u     ),
     VRLH_OPCODE    = (4u  << OPCODE_SHIFT |   68u     ),
@@ -670,9 +707,13 @@ class Assembler : public AbstractAssembler {
     TW_OPCODE      = (31u << OPCODE_SHIFT |    4u << 1),
 
     // Atomics.
+    LBARX_OPCODE   = (31u << OPCODE_SHIFT |   52u << 1),
+    LHARX_OPCODE   = (31u << OPCODE_SHIFT |  116u << 1),
     LWARX_OPCODE   = (31u << OPCODE_SHIFT |   20u << 1),
     LDARX_OPCODE   = (31u << OPCODE_SHIFT |   84u << 1),
     LQARX_OPCODE   = (31u << OPCODE_SHIFT |  276u << 1),
+    STBCX_OPCODE   = (31u << OPCODE_SHIFT |  694u << 1),
+    STHCX_OPCODE   = (31u << OPCODE_SHIFT |  726u << 1),
     STWCX_OPCODE   = (31u << OPCODE_SHIFT |  150u << 1),
     STDCX_OPCODE   = (31u << OPCODE_SHIFT |  214u << 1),
     STQCX_OPCODE   = (31u << OPCODE_SHIFT |  182u << 1)
@@ -839,11 +880,8 @@ class Assembler : public AbstractAssembler {
 
   enum Predict { pt = 1, pn = 0 }; // pt = predict taken
 
-  // instruction must start at passed address
+  // Instruction must start at passed address.
   static int instr_len(unsigned char *instr) { return BytesPerInstWord; }
-
-  // instruction must be left-justified in argument
-  static int instr_len(unsigned long instr)  { return BytesPerInstWord; }
 
   // longest instructions
   static int instr_maxlen() { return BytesPerInstWord; }
@@ -851,29 +889,29 @@ class Assembler : public AbstractAssembler {
   // Test if x is within signed immediate range for nbits.
   static bool is_simm(int x, unsigned int nbits) {
     assert(0 < nbits && nbits < 32, "out of bounds");
-    const int   min      = -( ((int)1) << nbits-1 );
-    const int   maxplus1 =  ( ((int)1) << nbits-1 );
+    const int   min      = -(((int)1) << nbits-1);
+    const int   maxplus1 =  (((int)1) << nbits-1);
     return min <= x && x < maxplus1;
   }
 
   static bool is_simm(jlong x, unsigned int nbits) {
     assert(0 < nbits && nbits < 64, "out of bounds");
-    const jlong min      = -( ((jlong)1) << nbits-1 );
-    const jlong maxplus1 =  ( ((jlong)1) << nbits-1 );
+    const jlong min      = -(((jlong)1) << nbits-1);
+    const jlong maxplus1 =  (((jlong)1) << nbits-1);
     return min <= x && x < maxplus1;
   }
 
-  // Test if x is within unsigned immediate range for nbits
+  // Test if x is within unsigned immediate range for nbits.
   static bool is_uimm(int x, unsigned int nbits) {
     assert(0 < nbits && nbits < 32, "out of bounds");
-    const int   maxplus1 = ( ((int)1) << nbits );
-    return 0 <= x && x < maxplus1;
+    const unsigned int maxplus1 = (((unsigned int)1) << nbits);
+    return (unsigned int)x < maxplus1;
   }
 
   static bool is_uimm(jlong x, unsigned int nbits) {
     assert(0 < nbits && nbits < 64, "out of bounds");
-    const jlong maxplus1 =  ( ((jlong)1) << nbits );
-    return 0 <= x && x < maxplus1;
+    const julong maxplus1 = (((julong)1) << nbits);
+    return (julong)x < maxplus1;
   }
 
  protected:
@@ -1056,6 +1094,19 @@ class Assembler : public AbstractAssembler {
   static int vrs(   VectorRegister r)  { return  vrs(r->encoding());}
   static int vrt(   VectorRegister r)  { return  vrt(r->encoding());}
 
+  // Support Vector-Scalar (VSX) instructions.
+  static int vsra(      int         x)  { return  opp_u_field(x,            15, 11); }
+  static int vsrb(      int         x)  { return  opp_u_field(x,            20, 16); }
+  static int vsrc(      int         x)  { return  opp_u_field(x,            25, 21); }
+  static int vsrs(      int         x)  { return  opp_u_field(x,            10,  6); }
+  static int vsrt(      int         x)  { return  opp_u_field(x,            10,  6); }
+
+  static int vsra(   VectorSRegister r)  { return  vsra(r->encoding());}
+  static int vsrb(   VectorSRegister r)  { return  vsrb(r->encoding());}
+  static int vsrc(   VectorSRegister r)  { return  vsrc(r->encoding());}
+  static int vsrs(   VectorSRegister r)  { return  vsrs(r->encoding());}
+  static int vsrt(   VectorSRegister r)  { return  vsrt(r->encoding());}
+
   static int vsplt_uim( int        x)  { return  opp_u_field(x,             15, 12); } // for vsplt* instructions
   static int vsplti_sim(int        x)  { return  opp_u_field(x,             15, 11); } // for vsplti* instructions
   static int vsldoi_shb(int        x)  { return  opp_u_field(x,             25, 22); } // for vsldoi instruction
@@ -1196,6 +1247,8 @@ class Assembler : public AbstractAssembler {
   inline void mullw_( Register d, Register a, Register b);
   inline void mulhw(  Register d, Register a, Register b);
   inline void mulhw_( Register d, Register a, Register b);
+  inline void mulhwu( Register d, Register a, Register b);
+  inline void mulhwu_(Register d, Register a, Register b);
   inline void mulhd(  Register d, Register a, Register b);
   inline void mulhd_( Register d, Register a, Register b);
   inline void mulhdu( Register d, Register a, Register b);
@@ -1376,8 +1429,11 @@ class Assembler : public AbstractAssembler {
   inline void orc(    Register a, Register s, Register b);
   inline void orc_(   Register a, Register s, Register b);
   inline void extsb(  Register a, Register s);
+  inline void extsb_( Register a, Register s);
   inline void extsh(  Register a, Register s);
+  inline void extsh_( Register a, Register s);
   inline void extsw(  Register a, Register s);
+  inline void extsw_( Register a, Register s);
 
   // extended mnemonics
   inline void nop();
@@ -1496,6 +1552,10 @@ class Assembler : public AbstractAssembler {
   inline void ld(   Register d, int si16,    Register s1);
   inline void ldu(  Register d, int si16,    Register s1);
 
+  // For convenience. Load pointer into d from b+s1.
+  inline void ld_ptr(Register d, int b, Register s1);
+  DEBUG_ONLY(inline void ld_ptr(Register d, ByteSize b, Register s1);)
+
   //  PPC 1, section 3.3.3 Fixed-Point Store Instructions
   inline void stwx( Register d, Register s1, Register s2);
   inline void stw(  Register d, int si16,    Register s1);
@@ -1513,6 +1573,9 @@ class Assembler : public AbstractAssembler {
   inline void std(  Register d, int si16,    Register s1);
   inline void stdu( Register d, int si16,    Register s1);
   inline void stdux(Register s, Register a,  Register b);
+
+  inline void st_ptr(Register d, int si16,    Register s1);
+  DEBUG_ONLY(inline void st_ptr(Register d, ByteSize b, Register s1);)
 
   // PPC 1, section 3.3.13 Move To/From System Register Instructions
   inline void mtlr( Register s1);
@@ -1741,13 +1804,19 @@ class Assembler : public AbstractAssembler {
   inline void waitrsv(); // >=Power7
 
   // atomics
+  inline void lbarx_unchecked(Register d, Register a, Register b, int eh1 = 0); // >=Power 8
+  inline void lharx_unchecked(Register d, Register a, Register b, int eh1 = 0); // >=Power 8
   inline void lwarx_unchecked(Register d, Register a, Register b, int eh1 = 0);
   inline void ldarx_unchecked(Register d, Register a, Register b, int eh1 = 0);
-  inline void lqarx_unchecked(Register d, Register a, Register b, int eh1 = 0);
+  inline void lqarx_unchecked(Register d, Register a, Register b, int eh1 = 0); // >=Power 8
   inline bool lxarx_hint_exclusive_access();
+  inline void lbarx(  Register d, Register a, Register b, bool hint_exclusive_access = false);
+  inline void lharx(  Register d, Register a, Register b, bool hint_exclusive_access = false);
   inline void lwarx(  Register d, Register a, Register b, bool hint_exclusive_access = false);
   inline void ldarx(  Register d, Register a, Register b, bool hint_exclusive_access = false);
   inline void lqarx(  Register d, Register a, Register b, bool hint_exclusive_access = false);
+  inline void stbcx_( Register s, Register a, Register b);
+  inline void sthcx_( Register s, Register a, Register b);
   inline void stwcx_( Register s, Register a, Register b);
   inline void stdcx_( Register s, Register a, Register b);
   inline void stqcx_( Register s, Register a, Register b);
@@ -1767,6 +1836,8 @@ class Assembler : public AbstractAssembler {
   inline void smt_yield();
   inline void smt_mdoio();
   inline void smt_mdoom();
+  // >= Power8
+  inline void smt_miso();
 
   // trap instructions
   inline void twi_0(Register a); // for load with acquire semantics use load+twi_0+isync (trap can't occur)
@@ -1866,6 +1937,26 @@ class Assembler : public AbstractAssembler {
   inline void fdiv_( FloatRegister d, FloatRegister a, FloatRegister b);
   inline void fdivs( FloatRegister d, FloatRegister a, FloatRegister b);
   inline void fdivs_(FloatRegister d, FloatRegister a, FloatRegister b);
+
+  // Fused multiply-accumulate instructions.
+  // WARNING: Use only when rounding between the 2 parts is not desired.
+  // Some floating point tck tests will fail if used incorrectly.
+  inline void fmadd(   FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fmadd_(  FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fmadds(  FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fmadds_( FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fmsub(   FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fmsub_(  FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fmsubs(  FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fmsubs_( FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fnmadd(  FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fnmadd_( FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fnmadds( FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fnmadds_(FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fnmsub(  FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fnmsub_( FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fnmsubs( FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
+  inline void fnmsubs_(FloatRegister d, FloatRegister a, FloatRegister c, FloatRegister b);
 
   // PPC 1, section 4.6.6 Floating-Point Rounding and Conversion Instructions
   inline void frsp(  FloatRegister d, FloatRegister b);
@@ -2012,6 +2103,7 @@ class Assembler : public AbstractAssembler {
   inline void vnor(     VectorRegister d, VectorRegister a, VectorRegister b);
   inline void vor(      VectorRegister d, VectorRegister a, VectorRegister b);
   inline void vxor(     VectorRegister d, VectorRegister a, VectorRegister b);
+  inline void vrld(     VectorRegister d, VectorRegister a, VectorRegister b);
   inline void vrlb(     VectorRegister d, VectorRegister a, VectorRegister b);
   inline void vrlw(     VectorRegister d, VectorRegister a, VectorRegister b);
   inline void vrlh(     VectorRegister d, VectorRegister a, VectorRegister b);
@@ -2027,6 +2119,14 @@ class Assembler : public AbstractAssembler {
   // Vector Floating-Point not implemented yet
   inline void mtvscr(   VectorRegister b);
   inline void mfvscr(   VectorRegister d);
+
+  // Vector-Scalar (VSX) instructions.
+  inline void lxvd2x(   VectorSRegister d, Register a);
+  inline void lxvd2x(   VectorSRegister d, Register a, Register b);
+  inline void stxvd2x(  VectorSRegister d, Register a);
+  inline void stxvd2x(  VectorSRegister d, Register a, Register b);
+  inline void mtvrd(    VectorRegister  d, Register a);
+  inline void mfvrd(    Register        a, VectorRegister d);
 
   // AES (introduced with Power 8)
   inline void vcipher(     VectorRegister d, VectorRegister a, VectorRegister b);
@@ -2107,12 +2207,18 @@ class Assembler : public AbstractAssembler {
   inline void dcbtstct(Register s2, int ct);
 
   // Atomics: use ra0mem to disallow R0 as base.
+  inline void lbarx_unchecked(Register d, Register b, int eh1);
+  inline void lharx_unchecked(Register d, Register b, int eh1);
   inline void lwarx_unchecked(Register d, Register b, int eh1);
   inline void ldarx_unchecked(Register d, Register b, int eh1);
   inline void lqarx_unchecked(Register d, Register b, int eh1);
+  inline void lbarx( Register d, Register b, bool hint_exclusive_access);
+  inline void lharx( Register d, Register b, bool hint_exclusive_access);
   inline void lwarx( Register d, Register b, bool hint_exclusive_access);
   inline void ldarx( Register d, Register b, bool hint_exclusive_access);
   inline void lqarx( Register d, Register b, bool hint_exclusive_access);
+  inline void stbcx_(Register s, Register b);
+  inline void sthcx_(Register s, Register b);
   inline void stwcx_(Register s, Register b);
   inline void stdcx_(Register s, Register b);
   inline void stqcx_(Register s, Register b);
@@ -2157,7 +2263,8 @@ class Assembler : public AbstractAssembler {
   void add( Register d, RegisterOrConstant roc, Register s1);
   void subf(Register d, RegisterOrConstant roc, Register s1);
   void cmpd(ConditionRegister d, RegisterOrConstant roc, Register s1);
-
+  // Load pointer d from s1+roc.
+  void ld_ptr(Register d, RegisterOrConstant roc, Register s1 = noreg) { ld(d, roc, s1); }
 
   // Emit several instructions to load a 64 bit constant. This issues a fixed
   // instruction pattern so that the constant can be patched later on.
@@ -2168,6 +2275,7 @@ class Assembler : public AbstractAssembler {
   inline void load_const(Register d, void* a,           Register tmp = noreg);
   inline void load_const(Register d, Label& L,          Register tmp = noreg);
   inline void load_const(Register d, AddressLiteral& a, Register tmp = noreg);
+  inline void load_const32(Register d, int i); // load signed int (patchable)
 
   // Load a 64 bit constant, optimized, not identifyable.
   // Tmp can be used to increase ILP. Set return_simm16_rest = true to get a

@@ -34,7 +34,7 @@ import jdk.nashorn.internal.ir.UnaryNode;
  * Like NodeVisitor but navigating further into operators.
  * @param <T> Lexical context class for this NodeOperatorVisitor
  */
-public class NodeOperatorVisitor<T extends LexicalContext> extends NodeVisitor<T> {
+public abstract class NodeOperatorVisitor<T extends LexicalContext> extends NodeVisitor<T> {
     /**
      * Constructor
      *
@@ -45,7 +45,7 @@ public class NodeOperatorVisitor<T extends LexicalContext> extends NodeVisitor<T
     }
 
     @Override
-    public final boolean enterUnaryNode(final UnaryNode unaryNode) {
+    public boolean enterUnaryNode(final UnaryNode unaryNode) {
         switch (unaryNode.tokenType()) {
         case ADD:
             return enterADD(unaryNode);
@@ -133,8 +133,8 @@ public class NodeOperatorVisitor<T extends LexicalContext> extends NodeVisitor<T
             return enterASSIGN_SHR(binaryNode);
         case ASSIGN_SUB:
             return enterASSIGN_SUB(binaryNode);
-        case BIND:
-            return enterBIND(binaryNode);
+        case ARROW:
+            return enterARROW(binaryNode);
         case BIT_AND:
             return enterBIT_AND(binaryNode);
         case BIT_OR:
@@ -217,8 +217,8 @@ public class NodeOperatorVisitor<T extends LexicalContext> extends NodeVisitor<T
             return leaveASSIGN_SHR(binaryNode);
         case ASSIGN_SUB:
             return leaveASSIGN_SUB(binaryNode);
-        case BIND:
-            return leaveBIND(binaryNode);
+        case ARROW:
+            return leaveARROW(binaryNode);
         case BIT_AND:
             return leaveBIT_AND(binaryNode);
         case BIT_OR:
@@ -735,22 +735,22 @@ public class NodeOperatorVisitor<T extends LexicalContext> extends NodeVisitor<T
     }
 
     /**
-     * Binary enter - callback for entering a bind operator
+     * Binary enter - callback for entering a arrow operator
      *
      * @param  binaryNode the node
      * @return true if traversal should continue and node children be traversed, false otherwise
      */
-    public boolean enterBIND(final BinaryNode binaryNode) {
+    public boolean enterARROW(final BinaryNode binaryNode) {
         return enterDefault(binaryNode);
     }
 
     /**
-     * Binary leave - callback for leaving a bind operator
+     * Binary leave - callback for leaving a arrow operator
      *
      * @param  binaryNode the node
      * @return processed node, which will replace the original one, or the original node
      */
-    public Node leaveBIND(final BinaryNode binaryNode) {
+    public Node leaveARROW(final BinaryNode binaryNode) {
         return leaveDefault(binaryNode);
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@ package com.sun.tools.javac.main;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.net.URL;
 import java.nio.file.NoSuchFileException;
@@ -41,6 +42,8 @@ import com.sun.tools.javac.api.BasicJavacTask;
 import com.sun.tools.javac.file.CacheFSInfo;
 import com.sun.tools.javac.file.BaseFileManager;
 import com.sun.tools.javac.file.JavacFileManager;
+import com.sun.tools.javac.jvm.Target;
+import com.sun.tools.javac.main.CommandLine.UnmatchedQuote;
 import com.sun.tools.javac.platform.PlatformDescription;
 import com.sun.tools.javac.processing.AnnotationProcessingError;
 import com.sun.tools.javac.util.*;
@@ -60,9 +63,13 @@ public class Main {
      */
     String ownName;
 
+    /** The writer to use for normal output.
+     */
+    PrintWriter stdOut;
+
     /** The writer to use for diagnostic output.
      */
-    PrintWriter out;
+    PrintWriter stdErr;
 
     /** The log to use for diagnostic output.
      */
@@ -74,6 +81,7 @@ public class Main {
      */
     boolean apiMode;
 
+    private static final String ENV_OPT_NAME = "JDK_JAVAC_OPTIONS";
 
     /** Result codes.
      */
@@ -100,7 +108,7 @@ public class Main {
      * @param name the name of this tool
      */
     public Main(String name) {
-        this(name, new PrintWriter(System.err, true));
+        this.ownName = name;
     }
 
     /**
@@ -110,7 +118,19 @@ public class Main {
      */
     public Main(String name, PrintWriter out) {
         this.ownName = name;
-        this.out = out;
+        this.stdOut = this.stdErr = out;
+    }
+
+    /**
+     * Construct a compiler instance.
+     * @param name the name of this tool
+     * @param out a stream to which to write expected output
+     * @param err a stream to which to write diagnostic output
+     */
+    public Main(String name, PrintWriter out, PrintWriter err) {
+        this.ownName = name;
+        this.stdOut = out;
+        this.stdErr = err;
     }
 
     /** Report a usage error.
@@ -141,8 +161,12 @@ public class Main {
         JavacFileManager.preRegister(context); // can't create it until Log has been set up
         Result result = compile(args, context);
         if (fileManager instanceof JavacFileManager) {
-            // A fresh context was created above, so jfm must be a JavacFileManager
-            ((JavacFileManager)fileManager).close();
+            try {
+                // A fresh context was created above, so jfm must be a JavacFileManager
+                ((JavacFileManager)fileManager).close();
+            } catch (IOException ex) {
+                bugMessage(ex);
+            }
         }
         return result;
     }
@@ -155,21 +179,36 @@ public class Main {
      * @return the result of the compilation
      */
     public Result compile(String[] argv, Context context) {
-        context.put(Log.outKey, out);
+        if (stdOut != null) {
+            context.put(Log.outKey, stdOut);
+        }
+
+        if (stdErr != null) {
+            context.put(Log.errKey, stdErr);
+        }
+
         log = Log.instance(context);
 
         if (argv.length == 0) {
-            Option.HELP.process(new OptionHelper.GrumpyHelper(log) {
+            OptionHelper h = new OptionHelper.GrumpyHelper(log) {
                 @Override
                 public String getOwnName() { return ownName; }
                 @Override
                 public void put(String name, String value) { }
-            }, "-help");
+            };
+            try {
+                Option.HELP.process(h, "-help");
+            } catch (Option.InvalidValueException ignore) {
+            }
             return Result.CMDERR;
         }
 
+        // prefix argv with contents of environment variable and expand @-files
         try {
-            argv = CommandLine.parse(argv);
+            argv = CommandLine.parse(ENV_OPT_NAME, argv);
+        } catch (UnmatchedQuote ex) {
+            error("err.unmatched.quote", ex.variableName);
+            return Result.CMDERR;
         } catch (FileNotFoundException | NoSuchFileException e) {
             warning("err.file.not.found", e.getMessage());
             return Result.SYSERR;
@@ -201,11 +240,13 @@ public class Main {
         if (batchMode)
             CacheFSInfo.preRegister(context);
 
+        boolean ok = true;
+
         // init file manager
         fileManager = context.get(JavaFileManager.class);
         if (fileManager instanceof BaseFileManager) {
             ((BaseFileManager) fileManager).setContext(context); // reinit with options
-            ((BaseFileManager) fileManager).handleOptions(args.getDeferredFileManagerOptions());
+            ok &= ((BaseFileManager) fileManager).handleOptions(args.getDeferredFileManagerOptions());
         }
 
         // handle this here so it works even if no other options given
@@ -216,15 +257,15 @@ public class Main {
             showClass(showClass);
         }
 
-        boolean ok = args.validate();
+        ok &= args.validate();
         if (!ok || log.nerrors > 0)
             return Result.CMDERR;
 
         if (args.isEmpty())
             return Result.OK;
 
-        // init Depeendencies
-        if (options.isSet("completionDeps")) {
+        // init Dependencies
+        if (options.isSet("debug.completionDeps")) {
             Dependencies.GraphDependencies.preRegister(context);
         }
 
@@ -233,6 +274,13 @@ public class Main {
         if (!pluginOpts.isEmpty() || context.get(PlatformDescription.class) != null) {
             BasicJavacTask t = (BasicJavacTask) BasicJavacTask.instance(context);
             t.initPlugins(pluginOpts);
+        }
+
+        // init multi-release jar handling
+        if (fileManager.isSupportedOption(Option.MULTIRELEASE.primaryName) == 1) {
+            Target target = Target.instance(context);
+            List<String> list = List.of(target.multiReleaseValue());
+            fileManager.handleOption(Option.MULTIRELEASE.primaryName, list.iterator());
         }
 
         // init JavaCompiler
@@ -251,7 +299,7 @@ public class Main {
         }
 
         try {
-            comp.compile(args.getFileObjects(), args.getClassNames(), null);
+            comp.compile(args.getFileObjects(), args.getClassNames(), null, List.nil());
 
             if (log.expectDiagKeys != null) {
                 if (log.expectDiagKeys.isEmpty()) {
@@ -345,28 +393,28 @@ public class Main {
     void showClass(String className) {
         PrintWriter pw = log.getWriter(WriterKind.NOTICE);
         pw.println("javac: show class: " + className);
+
         URL url = getClass().getResource('/' + className.replace('.', '/') + ".class");
-        if (url == null)
-            pw.println("  class not found");
-        else {
+        if (url != null) {
             pw.println("  " + url);
-            try {
-                final String algorithm = "MD5";
-                byte[] digest;
-                MessageDigest md = MessageDigest.getInstance(algorithm);
-                try (DigestInputStream in = new DigestInputStream(url.openStream(), md)) {
-                    byte[] buf = new byte[8192];
-                    int n;
-                    do { n = in.read(buf); } while (n > 0);
-                    digest = md.digest();
-                }
-                StringBuilder sb = new StringBuilder();
-                for (byte b: digest)
-                    sb.append(String.format("%02x", b));
-                pw.println("  " + algorithm + " checksum: " + sb);
-            } catch (NoSuchAlgorithmException | IOException e) {
-                pw.println("  cannot compute digest: " + e);
+        }
+
+        try (InputStream in = getClass().getResourceAsStream('/' + className.replace('.', '/') + ".class")) {
+            final String algorithm = "MD5";
+            byte[] digest;
+            MessageDigest md = MessageDigest.getInstance(algorithm);
+            try (DigestInputStream din = new DigestInputStream(in, md)) {
+                byte[] buf = new byte[8192];
+                int n;
+                do { n = din.read(buf); } while (n > 0);
+                digest = md.digest();
             }
+            StringBuilder sb = new StringBuilder();
+            for (byte b: digest)
+                sb.append(String.format("%02x", b));
+            pw.println("  " + algorithm + " checksum: " + sb);
+        } catch (NoSuchAlgorithmException | IOException e) {
+            pw.println("  cannot compute digest: " + e);
         }
     }
 

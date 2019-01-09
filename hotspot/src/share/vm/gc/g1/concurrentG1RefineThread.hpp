@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,14 +31,14 @@
 class CardTableEntryClosure;
 class ConcurrentG1Refine;
 
-// The G1 Concurrent Refinement Thread (could be several in the future).
-
+// One or more G1 Concurrent Refinement Threads may be active if concurrent
+// refinement is in progress.
 class ConcurrentG1RefineThread: public ConcurrentGCThread {
   friend class VMStructs;
   friend class G1CollectedHeap;
 
   double _vtime_start;  // Initial virtual time.
-  double _vtime_accum;  // Initial virtual time.
+  double _vtime_accum;  // Accumulated virtual time.
   uint _worker_id;
   uint _worker_id_offset;
 
@@ -53,14 +53,10 @@ class ConcurrentG1RefineThread: public ConcurrentGCThread {
   // The closure applied to completed log buffers.
   CardTableEntryClosure* _refine_closure;
 
-  int _thread_threshold_step;
-  // This thread activation threshold
-  int _threshold;
-  // This thread deactivation threshold
-  int _deactivation_threshold;
+  // This thread's activation/deactivation thresholds
+  size_t _activation_threshold;
+  size_t _deactivation_threshold;
 
-  void sample_young_list_rs_lengths();
-  void run_young_rs_sampling();
   void wait_for_completed_buffers();
 
   void set_active(bool x) { _active = x; }
@@ -68,22 +64,25 @@ class ConcurrentG1RefineThread: public ConcurrentGCThread {
   void activate();
   void deactivate();
 
+  bool is_primary() { return (_worker_id == 0); }
+
+  void run_service();
+  void stop_service();
+
 public:
-  virtual void run();
   // Constructor
   ConcurrentG1RefineThread(ConcurrentG1Refine* cg1r, ConcurrentG1RefineThread* next,
                            CardTableEntryClosure* refine_closure,
-                           uint worker_id_offset, uint worker_id);
+                           uint worker_id_offset, uint worker_id,
+                           size_t activate, size_t deactivate);
 
-  void initialize();
+  void update_thresholds(size_t activate, size_t deactivate);
+  size_t activation_threshold() const { return _activation_threshold; }
 
   // Total virtual time so far.
   double vtime_accum() { return _vtime_accum; }
 
   ConcurrentG1Refine* cg1r() { return _cg1r;     }
-
-  // shutdown
-  void stop();
 };
 
 #endif // SHARE_VM_GC_G1_CONCURRENTG1REFINETHREAD_HPP

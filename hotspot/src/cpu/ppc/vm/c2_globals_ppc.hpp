@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,7 +39,7 @@ define_pd_global(bool, PreferInterpreterNativeStubs, false);
 define_pd_global(bool, ProfileTraps,                 true);
 define_pd_global(bool, UseOnStackReplacement,        true);
 define_pd_global(bool, ProfileInterpreter,           true);
-define_pd_global(bool, TieredCompilation,            false);
+define_pd_global(bool, TieredCompilation,            true);
 define_pd_global(intx, CompileThreshold,             10000);
 
 define_pd_global(intx, OnStackReplacePercentage,     140);
@@ -54,12 +54,15 @@ define_pd_global(intx, RegisterCostAreaRatio,        16000);
 define_pd_global(bool, UseTLAB,                      true);
 define_pd_global(bool, ResizeTLAB,                   true);
 define_pd_global(intx, LoopUnrollLimit,              60);
+define_pd_global(intx, LoopPercentProfileLimit,      10);
 
 // Peephole and CISC spilling both break the graph, and so make the
 // scheduler sick.
 define_pd_global(bool, OptoPeephole,                 false);
 define_pd_global(bool, UseCISCSpill,                 false);
 define_pd_global(bool, OptoBundling,                 false);
+define_pd_global(bool, OptoRegScheduling,            false);
+define_pd_global(bool, SuperWordLoopUnrollAnalysis,  false);
 // GL:
 // Detected a problem with unscaled compressed oops and
 // narrow_oop_use_complex_address() == false.
@@ -76,6 +79,7 @@ define_pd_global(bool, OptoBundling,                 false);
 //   loc = x.f
 //   NullCheck loc
 define_pd_global(bool, OptoScheduling,               false);
+define_pd_global(bool, IdealizeClearArrayNode,       true);
 
 define_pd_global(intx, InitialCodeCacheSize,         2048*K); // Integral multiple of CodeCacheExpansionSize
 define_pd_global(intx, ReservedCodeCacheSize,        256*M);

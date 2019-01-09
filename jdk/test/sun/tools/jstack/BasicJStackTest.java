@@ -29,10 +29,8 @@ import jdk.testlibrary.ProcessTools;
 
 /*
  * @test
- * @bug 6260070
  * @summary Unit test for jstack utility
  * @library /lib/testlibrary
- * @modules java.management
  * @build jdk.testlibrary.*
  * @run main BasicJStackTest
  */
@@ -63,7 +61,7 @@ public class BasicJStackTest {
                 launcher.addToolArg(toolArg);
             }
         }
-        launcher.addToolArg(Integer.toString(ProcessTools.getProcessId()));
+        launcher.addToolArg(Long.toString(ProcessTools.getProcessId()));
 
         processBuilder.command(launcher.getCommand());
         System.out.println(Arrays.toString(processBuilder.command().toArray()).replace(",", ""));

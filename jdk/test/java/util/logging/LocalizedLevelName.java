@@ -28,6 +28,7 @@ import java.util.logging.*;
  * @test
  * @bug 8016127 8024131
  * @summary test logging.properties localized
+ * @modules java.logging/sun.util.logging.resources:open
  * @run main/othervm LocalizedLevelName
  */
 
@@ -97,7 +98,10 @@ public class LocalizedLevelName {
 
     private static final String RBNAME = "sun.util.logging.resources.logging";
     private static String getLocalizedMessage(Locale locale, String key) {
-        ResourceBundle rb = ResourceBundle.getBundle(RBNAME, locale);
+        // this test verifies if the logging.properties in the java.logging module
+        // is localized.
+        Module module = java.util.logging.Level.class.getModule();
+        ResourceBundle rb = ResourceBundle.getBundle(RBNAME, locale, module);
         return rb.getString(key);
     }
 }

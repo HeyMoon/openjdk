@@ -27,17 +27,19 @@
  * Defines charsets, decoders, and encoders, for translating between
  * bytes and Unicode characters.
  *
- * <blockquote><table cellspacing=1 cellpadding=0 summary="Summary of charsets, decoders, and encoders in this package">
- *  <tr><th align="left">Class name</th><th align="left">Description</th></tr>
- *   <tr><td valign=top>{@link java.nio.charset.Charset}</td>
+ * <blockquote><table class="borderless">
+ *     <caption style="display:none">Summary of charsets, decoders, and encoders in this package</caption>
+ *  <tr><th style="text-align:left">Class name</th>
+ *      <th style="text-align:left"><th>DescriptiPath
+ *   <tr><td style="vertical-align:top">{@link java.nio.charset.Charset}</td>
  *       <td>A named mapping between characters<br>and bytes</td></tr>
- *   <tr><td valign=top>{@link java.nio.charset.CharsetDecoder}</td>
+ *   <tr><td style="vertical-align:top">{@link java.nio.charset.CharsetDecoder}</td>
  *       <td>Decodes bytes into characters</td></tr>
- *   <tr><td valign=top>{@link java.nio.charset.CharsetEncoder}&nbsp;&nbsp;</td>
+ *   <tr><td style="vertical-align:top">{@link java.nio.charset.CharsetEncoder}</td>
  *       <td>Encodes characters into bytes</td></tr>
- *   <tr><td valign=top>{@link java.nio.charset.CoderResult}&nbsp;&nbsp;</td>
+ *   <tr><td style="vertical-align:top">{@link java.nio.charset.CoderResult}</td>
  *       <td>Describes coder results</td></tr>
- *   <tr><td valign=top>{@link java.nio.charset.CodingErrorAction}&nbsp;&nbsp;</td>
+ *   <tr><td style="vertical-align:top">{@link java.nio.charset.CodingErrorAction}</td>
  *       <td>Describes actions to take when<br>coding errors are detected</td></tr>
  *
  * </table></blockquote>
@@ -74,10 +76,10 @@
  *
  * <p> Support for new charsets can be made available via the
  * interface defined in the {@link
- * java.nio.charset.spi.CharsetProvider} class in the <tt>{@link
- * java.nio.charset.spi}</tt> package.
+ * java.nio.charset.spi.CharsetProvider} class in the {@link
+ * java.nio.charset.spi} package.
  *
- * <p> Unless otherwise noted, passing a <tt>null</tt> argument to a
+ * <p> Unless otherwise noted, passing a {@code null} argument to a
  * constructor or method in any class or interface in this package
  * will cause a {@link java.lang.NullPointerException
  * NullPointerException} to be thrown.

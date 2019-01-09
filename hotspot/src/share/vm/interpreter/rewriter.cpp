@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -54,8 +54,10 @@ void Rewriter::compute_index_maps() {
         add_resolved_references_entry(i);
         break;
       case JVM_CONSTANT_Utf8:
-        if (_pool->symbol_at(i) == vmSymbols::java_lang_invoke_MethodHandle())
+        if (_pool->symbol_at(i) == vmSymbols::java_lang_invoke_MethodHandle() ||
+            _pool->symbol_at(i) == vmSymbols::java_lang_invoke_VarHandle()) {
           saw_mh_symbol = true;
+        }
         break;
     }
   }
@@ -63,11 +65,12 @@ void Rewriter::compute_index_maps() {
   // Record limits of resolved reference map for constant pool cache indices
   record_map_limits();
 
-  guarantee((int)_cp_cache_map.length()-1 <= (int)((u2)-1),
+  guarantee((int) _cp_cache_map.length() - 1 <= (int) ((u2)-1),
             "all cp cache indexes fit in a u2");
 
-  if (saw_mh_symbol)
-    _method_handle_invokers.initialize(length, (int)0);
+  if (saw_mh_symbol) {
+    _method_handle_invokers.at_grow(length, 0);
+  }
 }
 
 // Unrewrite the bytecodes if an error occurs.
@@ -191,7 +194,7 @@ void Rewriter::maybe_rewrite_invokehandle(address opc, int cp_index, int cache_i
       assert(_pool->tag_at(cp_index).is_method(), "wrong index");
       // Determine whether this is a signature-polymorphic method.
       if (cp_index >= _method_handle_invokers.length())  return;
-      int status = _method_handle_invokers[cp_index];
+      int status = _method_handle_invokers.at(cp_index);
       assert(status >= -1 && status <= 1, "oob tri-state");
       if (status == 0) {
         if (_pool->klass_ref_at_noresolve(cp_index) == vmSymbols::java_lang_invoke_MethodHandle() &&
@@ -200,10 +203,16 @@ void Rewriter::maybe_rewrite_invokehandle(address opc, int cp_index, int cache_i
           // we may need a resolved_refs entry for the appendix
           add_invokedynamic_resolved_references_entries(cp_index, cache_index);
           status = +1;
+        } else if (_pool->klass_ref_at_noresolve(cp_index) == vmSymbols::java_lang_invoke_VarHandle() &&
+                   MethodHandles::is_signature_polymorphic_name(SystemDictionary::VarHandle_klass(),
+                                                                _pool->name_ref_at(cp_index))) {
+          // we may need a resolved_refs entry for the appendix
+          add_invokedynamic_resolved_references_entries(cp_index, cache_index);
+          status = +1;
         } else {
           status = -1;
         }
-        _method_handle_invokers[cp_index] = status;
+        _method_handle_invokers.at(cp_index) = status;
       }
       // We use a special internal bytecode for such methods (if non-static).
       // The basic reason for this is that such methods need an extra "appendix" argument
@@ -279,7 +288,7 @@ void Rewriter::patch_invokedynamic_bytecodes() {
       // add delta to each.
       int resolved_index = _patch_invokedynamic_refs->at(i);
       for (int entry = 0; entry < ConstantPoolCacheEntry::_indy_resolved_references_entries; entry++) {
-        assert(_invokedynamic_references_map[resolved_index+entry] == cache_index,
+        assert(_invokedynamic_references_map.at(resolved_index + entry) == cache_index,
              "should be the same index");
         _invokedynamic_references_map.at_put(resolved_index+entry,
                                              cache_index + delta);
@@ -340,7 +349,7 @@ void Rewriter::scan_method(Method* method, bool reverse, bool* invokespecial_err
     // We cannot tolerate a GC in this block, because we've
     // cached the bytecodes in 'code_base'. If the Method*
     // moves, the bytecodes will also move.
-    No_Safepoint_Verifier nsv;
+    NoSafepointVerifier nsv;
     Bytecodes::Code c;
 
     // Bytecodes and their length
@@ -397,10 +406,45 @@ void Rewriter::scan_method(Method* method, bool reverse, bool* invokespecial_err
           break;
         }
 
+        case Bytecodes::_putstatic      :
+        case Bytecodes::_putfield       : {
+          if (!reverse) {
+            // Check if any final field of the class given as parameter is modified
+            // outside of initializer methods of the class. Fields that are modified
+            // are marked with a flag. For marked fields, the compilers do not perform
+            // constant folding (as the field can be changed after initialization).
+            //
+            // The check is performed after verification and only if verification has
+            // succeeded. Therefore, the class is guaranteed to be well-formed.
+            InstanceKlass* klass = method->method_holder();
+            u2 bc_index = Bytes::get_Java_u2(bcp + prefix_length + 1);
+            constantPoolHandle cp(method->constants());
+            Symbol* ref_class_name = cp->klass_name_at(cp->klass_ref_index_at(bc_index));
+
+            if (klass->name() == ref_class_name) {
+              Symbol* field_name = cp->name_ref_at(bc_index);
+              Symbol* field_sig = cp->signature_ref_at(bc_index);
+
+              fieldDescriptor fd;
+              if (klass->find_field(field_name, field_sig, &fd) != NULL) {
+                if (fd.access_flags().is_final()) {
+                  if (fd.access_flags().is_static()) {
+                    if (!method->is_static_initializer()) {
+                      fd.set_has_initialized_final_update(true);
+                    }
+                  } else {
+                    if (!method->is_object_initializer()) {
+                      fd.set_has_initialized_final_update(true);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        // fall through
         case Bytecodes::_getstatic      : // fall through
-        case Bytecodes::_putstatic      : // fall through
         case Bytecodes::_getfield       : // fall through
-        case Bytecodes::_putfield       : // fall through
         case Bytecodes::_invokevirtual  : // fall through
         case Bytecodes::_invokestatic   :
         case Bytecodes::_invokeinterface:
@@ -509,10 +553,17 @@ void Rewriter::rewrite(instanceKlassHandle klass, TRAPS) {
   // (That's all, folks.)
 }
 
-Rewriter::Rewriter(instanceKlassHandle klass, constantPoolHandle cpool, Array<Method*>* methods, TRAPS)
+Rewriter::Rewriter(instanceKlassHandle klass, const constantPoolHandle& cpool, Array<Method*>* methods, TRAPS)
   : _klass(klass),
     _pool(cpool),
-    _methods(methods)
+    _methods(methods),
+    _cp_map(cpool->length()),
+    _cp_cache_map(cpool->length() / 2),
+    _reference_map(cpool->length()),
+    _resolved_references_map(cpool->length() / 2),
+    _invokedynamic_references_map(cpool->length() / 2),
+    _method_handle_invokers(cpool->length()),
+    _invokedynamic_cp_cache_map(cpool->length() / 4)
 {
 
   // Rewrite bytecodes - exception here exits.

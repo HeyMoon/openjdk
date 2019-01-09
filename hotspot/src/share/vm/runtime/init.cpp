@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,7 @@
 
 #include "precompiled.hpp"
 #include "classfile/stringTable.hpp"
-#include "code/codeCacheExtensions.hpp"
+#include "classfile/symbolTable.hpp"
 #include "code/icBuffer.hpp"
 #include "gc/shared/collectedHeap.hpp"
 #include "interpreter/bytecodes.hpp"
@@ -46,11 +46,12 @@ void eventlog_init();
 void mutex_init();
 void chunkpool_init();
 void perfMemory_init();
+void SuspendibleThreadSet_init() NOT_ALL_GCS_RETURN;
 
 // Initialization done by Java thread in init_globals()
 void management_init();
 void bytecodes_init();
-void classLoader_init();
+void classLoader_init1();
 void compilationPolicy_init();
 void codeCache_init();
 void VM_Version_init();
@@ -71,7 +72,8 @@ void vmStructs_init();
 void vtableStubs_init();
 void InlineCacheBuffer_init();
 void compilerOracle_init();
-void compileBroker_init();
+bool compileBroker_init();
+void dependencyContext_init();
 
 // Initialization after compiler initialization
 bool universe_post_init();  // must happen after compiler_init
@@ -83,7 +85,6 @@ void stubRoutines_init2(); // note: StubRoutines need 2-phase init
 // during VM shutdown
 void perfMemory_exit();
 void ostream_exit();
-bool image_decompressor_init();
 
 void vm_init_globals() {
   check_ThreadShadow();
@@ -92,6 +93,7 @@ void vm_init_globals() {
   mutex_init();
   chunkpool_init();
   perfMemory_init();
+  SuspendibleThreadSet_init();
 }
 
 
@@ -99,32 +101,24 @@ jint init_globals() {
   HandleMark hm;
   management_init();
   bytecodes_init();
-  classLoader_init();
+  classLoader_init1();
   compilationPolicy_init();
   codeCache_init();
-  CodeCacheExtensions::initialize();
   VM_Version_init();
-  CodeCacheExtensions::complete_step(CodeCacheExtensionsSteps::VMVersion);
   os_init_globals();
   stubRoutines_init1();
-  CodeCacheExtensions::complete_step(CodeCacheExtensionsSteps::StubRoutines1);
   jint status = universe_init();  // dependent on codeCache_init and
                                   // stubRoutines_init1 and metaspace_init.
   if (status != JNI_OK)
     return status;
 
-  CodeCacheExtensions::complete_step(CodeCacheExtensionsSteps::Universe);
   interpreter_init();  // before any methods loaded
-  CodeCacheExtensions::complete_step(CodeCacheExtensionsSteps::Interpreter);
   invocationCounter_init();  // before any methods loaded
   marksweep_init();
   accessFlags_init();
   templateTable_init();
   InterfaceSupport_init();
   SharedRuntime::generate_stubs();
-  if (!image_decompressor_init()) {
-    return JNI_ERR;
-  }
   universe2_init();  // dependent on codeCache_init and stubRoutines_init1
   referenceProcessor_init();
   jni_handles_init();
@@ -135,7 +129,11 @@ jint init_globals() {
   vtableStubs_init();
   InlineCacheBuffer_init();
   compilerOracle_init();
-  compileBroker_init();
+  dependencyContext_init();
+
+  if (!compileBroker_init()) {
+    return JNI_EINVAL;
+  }
   VMRegImpl::set_regName();
 
   if (!universe_post_init()) {
@@ -143,7 +141,7 @@ jint init_globals() {
   }
   javaClasses_init();   // must happen after vtable initialization
   stubRoutines_init2(); // note: StubRoutines need 2-phase init
-  CodeCacheExtensions::complete_step(CodeCacheExtensionsSteps::StubRoutines2);
+  MethodHandles::generate_adapters();
 
 #if INCLUDE_NMT
   // Solaris stack is walkable only after stubRoutines are set up.
@@ -157,7 +155,6 @@ jint init_globals() {
     CommandLineFlags::printFlags(tty, false, PrintFlagsRanges);
   }
 
-  CodeCacheExtensions::complete_step(CodeCacheExtensionsSteps::InitGlobals);
   return JNI_OK;
 }
 
@@ -179,8 +176,7 @@ void exit_globals() {
   }
 }
 
-
-static bool _init_completed = false;
+static volatile bool _init_completed = false;
 
 bool is_init_completed() {
   return _init_completed;

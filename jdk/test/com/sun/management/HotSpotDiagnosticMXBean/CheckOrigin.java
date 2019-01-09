@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -61,15 +61,22 @@ public class CheckOrigin {
 
             ProcessBuilder pb = ProcessTools.
                 createJavaProcessBuilder(
+                    "--add-exports", "jdk.attach/sun.tools.attach=ALL-UNNAMED",
                     "-XX:+UseConcMarkSweepGC",  // this will cause UseParNewGC to be FLAG_SET_ERGO
-                    "-XX:+PrintGCDetails",
+                    "-XX:+UseCodeAging",
+                    "-XX:+UseCerealGC",         // Should be ignored.
                     "-XX:Flags=" + flagsFile.getAbsolutePath(),
+                    "-Djdk.attach.allowAttachSelf",
                     "-cp", System.getProperty("test.class.path"),
                     "CheckOrigin",
                     "-runtests");
 
             Map<String, String> env = pb.environment();
-            env.put("_JAVA_OPTIONS", "-XX:+PrintOopAddress");
+            // "UseCMSGC" should be ignored.
+            env.put("_JAVA_OPTIONS", "-XX:+CheckJNICalls -XX:+UseCMSGC");
+            // "UseGOneGC" should be ignored.
+            env.put("JAVA_TOOL_OPTIONS", "-XX:+IgnoreUnrecognizedVMOptions "
+                + "-XX:+PrintVMOptions -XX:+UseGOneGC");
 
             pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
             pb.redirectError(ProcessBuilder.Redirect.INHERIT);
@@ -92,9 +99,12 @@ public class CheckOrigin {
             // Not set, so should be default
             checkOrigin("ManagementServer", Origin.DEFAULT);
             // Set on the command line
-            checkOrigin("PrintGCDetails", Origin.VM_CREATION);
+            checkOrigin("UseCodeAging", Origin.VM_CREATION);
             // Set in _JAVA_OPTIONS
-            checkOrigin("PrintOopAddress", Origin.ENVIRON_VAR);
+            checkOrigin("CheckJNICalls", Origin.ENVIRON_VAR);
+            // Set in JAVA_TOOL_OPTIONS
+            checkOrigin("IgnoreUnrecognizedVMOptions", Origin.ENVIRON_VAR);
+            checkOrigin("PrintVMOptions", Origin.ENVIRON_VAR);
             // Set in -XX:Flags file
             checkOrigin("PrintSafepointStatistics", Origin.CONFIG_FILE);
             // Set through j.l.m

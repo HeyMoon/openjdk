@@ -47,6 +47,7 @@ class Metadata : public MetaspaceObj {
   virtual bool is_method()             const volatile { return false; }
   virtual bool is_methodData()         const volatile { return false; }
   virtual bool is_constantPool()       const volatile { return false; }
+  virtual bool is_methodCounters()     const volatile { return false; }
 
   virtual const char* internal_name()  const = 0;
 
@@ -58,13 +59,13 @@ class Metadata : public MetaspaceObj {
     if (this == NULL)
       st->print("NULL");
     else
-      print_on(tty);
+      print_on(st);
   }
   void print_value_on_maybe_null(outputStream* st) const {
     if (this == NULL)
       st->print("NULL");
     else
-      print_value_on(tty);
+      print_value_on(st);
   }
 
   virtual void print_on(outputStream* st) const;       // First level print

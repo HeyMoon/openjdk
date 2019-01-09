@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,13 +26,17 @@
  * @summary Test selection of GC when no GC option is specified
  * @bug 8068582
  * @key gc
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @requires vm.gc=="null"
+ * @modules java.base/jdk.internal.misc
  *          java.management
  * @run driver TestSelectDefaultGC
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.Platform;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
+
 import java.util.regex.*;
 
 public class TestSelectDefaultGC {
@@ -40,24 +44,36 @@ public class TestSelectDefaultGC {
         output.shouldMatch(" " + option + " .*=.* " + value + " ");
     }
 
-    public static void main(String[] args) throws Exception {
+    public static void testDefaultGC(boolean actAsServer) throws Exception {
+        String[] args = new String[] {
+          "-XX:" + (actAsServer ? "+" : "-") + "AlwaysActAsServerClassMachine",
+          "-XX:" + (actAsServer ? "-" : "+") + "NeverActAsServerClassMachine",
+          "-XX:+PrintFlagsFinal",
+          "-version"
+        };
+
         // Start VM without specifying GC
-        ProcessBuilder pb = ProcessTools.createJavaProcessBuilder("-XX:+PrintFlagsFinal", "-version");
+        ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(args);
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
         output.shouldHaveExitValue(0);
 
-        boolean isServerVM = Platform.isServer();
-        boolean isEmbeddedVM = Platform.isEmbedded();
+        final boolean isServer = actAsServer;
 
         // Verify GC selection
-        // G1 is default for non-embedded server VMs
-        assertVMOption(output, "UseG1GC",            isServerVM && !isEmbeddedVM);
-        // Parallel is default for embedded server VMs
-        assertVMOption(output, "UseParallelGC",      isServerVM && isEmbeddedVM);
-        assertVMOption(output, "UseParallelOldGC",   isServerVM && isEmbeddedVM);
-        // Serial is default for non-server VMs
-        assertVMOption(output, "UseSerialGC",        !isServerVM);
+        // G1 is default for server class machines
+        assertVMOption(output, "UseG1GC",            isServer);
+        // Serial is default for non-server class machines
+        assertVMOption(output, "UseSerialGC",        !isServer);
+        // CMS is never default
         assertVMOption(output, "UseConcMarkSweepGC", false);
         assertVMOption(output, "UseParNewGC",        false);
+    }
+
+    public static void main(String[] args) throws Exception {
+        // Test server class machine
+        testDefaultGC(false);
+
+        // Test non-server class machine
+        testDefaultGC(true);
     }
 }

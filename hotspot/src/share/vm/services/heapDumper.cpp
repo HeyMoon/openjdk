@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@
 #include "gc/shared/gcLocker.inline.hpp"
 #include "gc/shared/genCollectedHeap.hpp"
 #include "gc/shared/vmGCOperations.hpp"
+#include "memory/resourceArea.hpp"
 #include "memory/universe.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "oops/objArrayOop.inline.hpp"
@@ -53,8 +54,7 @@
  *   src/share/demo/jvmti/hprof/hprof_io.c
  *
  *
- *  header    "JAVA PROFILE 1.0.1" or "JAVA PROFILE 1.0.2"
- *            (0-terminated)
+ *  header    "JAVA PROFILE 1.0.2" (0-terminated)
  *
  *  u4        size of identifiers. Identifiers are used to represent
  *            UTF8 strings, objects, stack traces, etc. They usually
@@ -379,11 +379,13 @@ class DumpWriter : public StackObj {
   };
 
   int _fd;              // file descriptor (-1 if dump file not open)
-  jlong _bytes_written; // number of byte written to dump file
+  julong _bytes_written; // number of byte written to dump file
 
   char* _buffer;    // internal buffer
-  int _size;
-  int _pos;
+  size_t _size;
+  size_t _pos;
+
+  jlong _dump_start;
 
   char* _error;   // error message when I/O fails
 
@@ -391,14 +393,14 @@ class DumpWriter : public StackObj {
   int file_descriptor() const                   { return _fd; }
 
   char* buffer() const                          { return _buffer; }
-  int buffer_size() const                       { return _size; }
-  int position() const                          { return _pos; }
-  void set_position(int pos)                    { _pos = pos; }
+  size_t buffer_size() const                    { return _size; }
+  size_t position() const                       { return _pos; }
+  void set_position(size_t pos)                 { _pos = pos; }
 
   void set_error(const char* error)             { _error = (char*)os::strdup(error); }
 
   // all I/O go through this function
-  void write_internal(void* s, int len);
+  void write_internal(void* s, size_t len);
 
  public:
   DumpWriter(const char* path);
@@ -408,15 +410,19 @@ class DumpWriter : public StackObj {
   bool is_open() const                  { return file_descriptor() >= 0; }
   void flush();
 
+  jlong dump_start() const                      { return _dump_start; }
+  void set_dump_start(jlong pos);
+  julong current_record_length();
+
   // total number of bytes written to the disk
-  jlong bytes_written() const           { return _bytes_written; }
+  julong bytes_written() const          { return _bytes_written; }
 
   // adjust the number of bytes written to disk (used to keep the count
   // of the number of bytes written in case of rewrites)
-  void adjust_bytes_written(jlong n)     { _bytes_written += n; }
+  void adjust_bytes_written(jlong n)    { _bytes_written += n; }
 
   // number of (buffered) bytes as yet unwritten to the dump file
-  jlong bytes_unwritten() const          { return (jlong)position(); }
+  size_t bytes_unwritten() const        { return position(); }
 
   char* error() const                   { return _error; }
 
@@ -424,7 +430,7 @@ class DumpWriter : public StackObj {
   void seek_to_offset(jlong pos);
 
   // writer functions
-  void write_raw(void* s, int len);
+  void write_raw(void* s, size_t len);
   void write_u1(u1 x)                   { write_raw((void*)&x, 1); }
   void write_u2(u2 x);
   void write_u4(u4 x);
@@ -449,11 +455,12 @@ DumpWriter::DumpWriter(const char* path) {
   _pos = 0;
   _error = NULL;
   _bytes_written = 0L;
+  _dump_start = (jlong)-1;
   _fd = os::create_binary_file(path, false);    // don't replace existing file
 
   // if the open failed we record the error
   if (_fd < 0) {
-    _error = (char*)os::strdup(strerror(errno));
+    _error = (char*)os::strdup(os::strerror(errno));
   }
 }
 
@@ -471,35 +478,56 @@ void DumpWriter::close() {
   // flush and close dump file
   if (is_open()) {
     flush();
-    ::close(file_descriptor());
+    os::close(file_descriptor());
     set_file_descriptor(-1);
   }
 }
 
-// write directly to the file
-void DumpWriter::write_internal(void* s, int len) {
+// sets the dump starting position
+void DumpWriter::set_dump_start(jlong pos) {
+  _dump_start = pos;
+}
+
+julong DumpWriter::current_record_length() {
   if (is_open()) {
-    int n = ::write(file_descriptor(), s, len);
-    if (n > 0) {
-      _bytes_written += n;
-    }
-    if (n != len) {
+    // calculate the size of the dump record
+    julong dump_end = bytes_written() + bytes_unwritten();
+    assert(dump_end == (size_t)current_offset(), "checking");
+    julong dump_len = dump_end - dump_start() - 4;
+    return dump_len;
+  }
+  return 0;
+}
+
+// write directly to the file
+void DumpWriter::write_internal(void* s, size_t len) {
+  if (is_open()) {
+    const char* pos = (char*)s;
+    ssize_t n = 0;
+    while (len > 0) {
+      uint tmp = (uint)MIN2(len, (size_t)UINT_MAX);
+      n = os::write(file_descriptor(), pos, tmp);
+
       if (n < 0) {
-        set_error(strerror(errno));
-      } else {
-        set_error("file size limit");
+        // EINTR cannot happen here, os::write will take care of that
+        set_error(os::strerror(errno));
+        os::close(file_descriptor());
+        set_file_descriptor(-1);
+        return;
       }
-      ::close(file_descriptor());
-      set_file_descriptor(-1);
+
+      _bytes_written += n;
+      pos += n;
+      len -= n;
     }
   }
 }
 
 // write raw bytes
-void DumpWriter::write_raw(void* s, int len) {
+void DumpWriter::write_raw(void* s, size_t len) {
   if (is_open()) {
-    // flush buffer to make toom
-    if ((position()+ len) >= buffer_size()) {
+    // flush buffer to make room
+    if ((position() + len) >= buffer_size()) {
       flush();
     }
 
@@ -522,13 +550,12 @@ void DumpWriter::flush() {
   }
 }
 
-
 jlong DumpWriter::current_offset() {
   if (is_open()) {
     // the offset is the file offset plus whatever we have buffered
     jlong offset = os::current_file_offset(file_descriptor());
     assert(offset >= 0, "lseek failed");
-    return offset + (jlong)position();
+    return offset + position();
   } else {
     return (jlong)-1;
   }
@@ -641,6 +668,18 @@ class DumperSupport : AllStatic {
   static void dump_prim_array(DumpWriter* writer, typeArrayOop array);
   // create HPROF_FRAME record for the given method and bci
   static void dump_stack_frame(DumpWriter* writer, int frame_serial_num, int class_serial_num, Method* m, int bci);
+
+  // check if we need to truncate an array
+  static int calculate_array_max_length(DumpWriter* writer, arrayOop array, short header_size);
+
+  // writes a HPROF_HEAP_DUMP_SEGMENT record
+  static void write_dump_header(DumpWriter* writer);
+
+  // fixes up the length of the current dump record
+  static void write_current_dump_record_length(DumpWriter* writer);
+
+  // fixes up the current dump record and writes HPROF_HEAP_DUMP_END record
+  static void end_of_dump(DumpWriter* writer);
 };
 
 // write a header of the given type
@@ -722,9 +761,9 @@ void DumperSupport::dump_field_value(DumpWriter* writer, char type, address addr
         o = oopDesc::load_decode_heap_oop((oop*)addr);
       }
 
-      // reflection and sun.misc.Unsafe classes may have a reference to a
+      // reflection and Unsafe classes may have a reference to a
       // Klass* so filter it out.
-      assert(o->is_oop_or_null(), err_msg("Expected an oop or NULL at " PTR_FORMAT, p2i(o)));
+      assert(o->is_oop_or_null(), "Expected an oop or NULL at " PTR_FORMAT, p2i(o));
       writer->write_objectID(o);
       break;
     }
@@ -777,7 +816,7 @@ u4 DumperSupport::instance_size(Klass* k) {
   HandleMark hm;
   instanceKlassHandle ikh = instanceKlassHandle(Thread::current(), k);
 
-  int size = 0;
+  u4 size = 0;
 
   for (FieldStream fld(ikh, false, false); !fld.eos(); fld.next()) {
     if (!fld.access_flags().is_static()) {
@@ -802,7 +841,7 @@ u4 DumperSupport::instance_size(Klass* k) {
       }
     }
   }
-  return (u4)size;
+  return size;
 }
 
 // dumps static fields of the given class
@@ -895,9 +934,14 @@ void DumperSupport::dump_instance(DumpWriter* writer, oop o) {
 // creates HPROF_GC_CLASS_DUMP record for the given class and each of
 // its array classes
 void DumperSupport::dump_class_and_array_classes(DumpWriter* writer, Klass* k) {
-  Klass* klass = k;
-  assert(klass->oop_is_instance(), "not an InstanceKlass");
-  InstanceKlass* ik = (InstanceKlass*)klass;
+  InstanceKlass* ik = InstanceKlass::cast(k);
+
+  // We can safepoint and do a heap dump at a point where we have a Klass,
+  // but no java mirror class has been setup for it. So we need to check
+  // that the class is at least loaded, to avoid crash from a null mirror.
+  if (!ik->is_loaded()) {
+    return;
+  }
 
   writer->write_u1(HPROF_GC_CLASS_DUMP);
 
@@ -934,10 +978,10 @@ void DumperSupport::dump_class_and_array_classes(DumpWriter* writer, Klass* k) {
   dump_instance_field_descriptors(writer, k);
 
   // array classes
-  k = klass->array_klass_or_null();
+  k = k->array_klass_or_null();
   while (k != NULL) {
     Klass* klass = k;
-    assert(klass->oop_is_objArray(), "not an ObjArrayKlass");
+    assert(klass->is_objArray_klass(), "not an ObjArrayKlass");
 
     writer->write_u1(HPROF_GC_CLASS_DUMP);
     writer->write_classID(klass);
@@ -996,51 +1040,102 @@ void DumperSupport::dump_basic_type_array_class(DumpWriter* writer, Klass* k) {
   }
 }
 
+// Hprof uses an u4 as record length field,
+// which means we need to truncate arrays that are too long.
+int DumperSupport::calculate_array_max_length(DumpWriter* writer, arrayOop array, short header_size) {
+  BasicType type = ArrayKlass::cast(array->klass())->element_type();
+  assert(type >= T_BOOLEAN && type <= T_OBJECT, "invalid array element type");
+
+  int length = array->length();
+
+  int type_size;
+  if (type == T_OBJECT) {
+    type_size = sizeof(address);
+  } else {
+    type_size = type2aelembytes(type);
+  }
+
+  size_t length_in_bytes = (size_t)length * type_size;
+
+  // Create a new record if the current record is non-empty and the array can't fit.
+  julong current_record_length = writer->current_record_length();
+  if (current_record_length > 0 &&
+      (current_record_length + header_size + length_in_bytes) > max_juint) {
+    write_current_dump_record_length(writer);
+    write_dump_header(writer);
+
+    // We now have an empty record.
+    current_record_length = 0;
+  }
+
+  // Calculate max bytes we can use.
+  uint max_bytes = max_juint - (header_size + current_record_length);
+
+  // Array too long for the record?
+  // Calculate max length and return it.
+  if (length_in_bytes > max_bytes) {
+    length = max_bytes / type_size;
+    length_in_bytes = (size_t)length * type_size;
+
+    warning("cannot dump array of type %s[] with length %d; truncating to length %d",
+            type2name_tab[type], array->length(), length);
+  }
+  return length;
+}
+
 // creates HPROF_GC_OBJ_ARRAY_DUMP record for the given object array
 void DumperSupport::dump_object_array(DumpWriter* writer, objArrayOop array) {
+  // sizeof(u1) + 2 * sizeof(u4) + sizeof(objectID) + sizeof(classID)
+  short header_size = 1 + 2 * 4 + 2 * sizeof(address);
+
+  int length = calculate_array_max_length(writer, array, header_size);
 
   writer->write_u1(HPROF_GC_OBJ_ARRAY_DUMP);
   writer->write_objectID(array);
   writer->write_u4(STACK_TRACE_ID);
-  writer->write_u4((u4)array->length());
+  writer->write_u4(length);
 
   // array class ID
   writer->write_classID(array->klass());
 
   // [id]* elements
-  for (int index=0; index<array->length(); index++) {
+  for (int index = 0; index < length; index++) {
     oop o = array->obj_at(index);
     writer->write_objectID(o);
   }
 }
 
-#define WRITE_ARRAY(Array, Type, Size) \
-  for (int i=0; i<Array->length(); i++) { writer->write_##Size((Size)array->Type##_at(i)); }
-
+#define WRITE_ARRAY(Array, Type, Size, Length) \
+  for (int i = 0; i < Length; i++) { writer->write_##Size((Size)Array->Type##_at(i)); }
 
 // creates HPROF_GC_PRIM_ARRAY_DUMP record for the given type array
 void DumperSupport::dump_prim_array(DumpWriter* writer, typeArrayOop array) {
   BasicType type = TypeArrayKlass::cast(array->klass())->element_type();
 
+  // 2 * sizeof(u1) + 2 * sizeof(u4) + sizeof(objectID)
+  short header_size = 2 * 1 + 2 * 4 + sizeof(address);
+
+  int length = calculate_array_max_length(writer, array, header_size);
+  int type_size = type2aelembytes(type);
+  u4 length_in_bytes = (u4)length * type_size;
+
   writer->write_u1(HPROF_GC_PRIM_ARRAY_DUMP);
   writer->write_objectID(array);
   writer->write_u4(STACK_TRACE_ID);
-  writer->write_u4((u4)array->length());
+  writer->write_u4(length);
   writer->write_u1(type2tag(type));
 
   // nothing to copy
-  if (array->length() == 0) {
+  if (length == 0) {
     return;
   }
 
   // If the byte ordering is big endian then we can copy most types directly
-  int length_in_bytes = array->length() * type2aelembytes(type);
-  assert(length_in_bytes > 0, "nothing to copy");
 
   switch (type) {
     case T_INT : {
       if (Bytes::is_Java_byte_ordering_different()) {
-        WRITE_ARRAY(array, int, u4);
+        WRITE_ARRAY(array, int, u4, length);
       } else {
         writer->write_raw((void*)(array->int_at_addr(0)), length_in_bytes);
       }
@@ -1052,7 +1147,7 @@ void DumperSupport::dump_prim_array(DumpWriter* writer, typeArrayOop array) {
     }
     case T_CHAR : {
       if (Bytes::is_Java_byte_ordering_different()) {
-        WRITE_ARRAY(array, char, u2);
+        WRITE_ARRAY(array, char, u2, length);
       } else {
         writer->write_raw((void*)(array->char_at_addr(0)), length_in_bytes);
       }
@@ -1060,7 +1155,7 @@ void DumperSupport::dump_prim_array(DumpWriter* writer, typeArrayOop array) {
     }
     case T_SHORT : {
       if (Bytes::is_Java_byte_ordering_different()) {
-        WRITE_ARRAY(array, short, u2);
+        WRITE_ARRAY(array, short, u2, length);
       } else {
         writer->write_raw((void*)(array->short_at_addr(0)), length_in_bytes);
       }
@@ -1068,7 +1163,7 @@ void DumperSupport::dump_prim_array(DumpWriter* writer, typeArrayOop array) {
     }
     case T_BOOLEAN : {
       if (Bytes::is_Java_byte_ordering_different()) {
-        WRITE_ARRAY(array, bool, u1);
+        WRITE_ARRAY(array, bool, u1, length);
       } else {
         writer->write_raw((void*)(array->bool_at_addr(0)), length_in_bytes);
       }
@@ -1076,7 +1171,7 @@ void DumperSupport::dump_prim_array(DumpWriter* writer, typeArrayOop array) {
     }
     case T_LONG : {
       if (Bytes::is_Java_byte_ordering_different()) {
-        WRITE_ARRAY(array, long, u8);
+        WRITE_ARRAY(array, long, u8, length);
       } else {
         writer->write_raw((void*)(array->long_at_addr(0)), length_in_bytes);
       }
@@ -1088,14 +1183,14 @@ void DumperSupport::dump_prim_array(DumpWriter* writer, typeArrayOop array) {
     // use IEEE 754.
 
     case T_FLOAT : {
-      for (int i=0; i<array->length(); i++) {
-        dump_float( writer, array->float_at(i) );
+      for (int i = 0; i < length; i++) {
+        dump_float(writer, array->float_at(i));
       }
       break;
     }
     case T_DOUBLE : {
-      for (int i=0; i<array->length(); i++) {
-        dump_double( writer, array->double_at(i) );
+      for (int i = 0; i < length; i++) {
+        dump_double(writer, array->double_at(i));
       }
       break;
     }
@@ -1121,7 +1216,7 @@ void DumperSupport::dump_stack_frame(DumpWriter* writer,
   writer->write_symbolID(m->name());                // method's name
   writer->write_symbolID(m->signature());           // method's signature
 
-  assert(m->method_holder()->oop_is_instance(), "not InstanceKlass");
+  assert(m->method_holder()->is_instance_klass(), "not InstanceKlass");
   writer->write_symbolID(m->method_holder()->source_file_name());  // source file name
   writer->write_u4(class_serial_num);               // class serial number
   writer->write_u4((u4) line_number);               // line number
@@ -1243,7 +1338,7 @@ class StickyClassDumper : public KlassClosure {
     _writer = writer;
   }
   void do_klass(Klass* k) {
-    if (k->oop_is_instance()) {
+    if (k->is_instance_klass()) {
       InstanceKlass* ik = InstanceKlass::cast(k);
         writer()->write_u1(HPROF_GC_ROOT_STICKY_CLASS);
         writer()->write_classID(ik);
@@ -1288,22 +1383,18 @@ void HeapObjectDumper::do_object(oop o) {
     }
   }
 
-  // create a HPROF_GC_INSTANCE record for each object
   if (o->is_instance()) {
+    // create a HPROF_GC_INSTANCE record for each object
     DumperSupport::dump_instance(writer(), o);
     mark_end_of_record();
-  } else {
+  } else if (o->is_objArray()) {
     // create a HPROF_GC_OBJ_ARRAY_DUMP record for each object array
-    if (o->is_objArray()) {
-      DumperSupport::dump_object_array(writer(), objArrayOop(o));
-      mark_end_of_record();
-    } else {
-      // create a HPROF_GC_PRIM_ARRAY_DUMP record for each type array
-      if (o->is_typeArray()) {
-        DumperSupport::dump_prim_array(writer(), typeArrayOop(o));
-        mark_end_of_record();
-      }
-    }
+    DumperSupport::dump_object_array(writer(), objArrayOop(o));
+    mark_end_of_record();
+  } else if (o->is_typeArray()) {
+    // create a HPROF_GC_PRIM_ARRAY_DUMP record for each type array
+    DumperSupport::dump_prim_array(writer(), typeArrayOop(o));
+    mark_end_of_record();
   }
 }
 
@@ -1316,8 +1407,6 @@ class VM_HeapDumper : public VM_GC_Operation {
   JavaThread*           _oome_thread;
   Method*               _oome_constructor;
   bool _gc_before_heap_dump;
-  bool _is_segmented_dump;
-  jlong _dump_start;
   GrowableArray<Klass*>* _klass_map;
   ThreadStackTrace** _stack_traces;
   int _num_threads;
@@ -1335,11 +1424,6 @@ class VM_HeapDumper : public VM_GC_Operation {
   }
   void clear_global_dumper() { _global_dumper = NULL; }
   void clear_global_writer() { _global_writer = NULL; }
-
-  bool is_segmented_dump() const                { return _is_segmented_dump; }
-  void set_segmented_dump()                     { _is_segmented_dump = true; }
-  jlong dump_start() const                      { return _dump_start; }
-  void set_dump_start(jlong pos);
 
   bool skip_operation() const;
 
@@ -1365,16 +1449,6 @@ class VM_HeapDumper : public VM_GC_Operation {
   // HPROF_TRACE and HPROF_FRAME records
   void dump_stack_traces();
 
-  // writes a HPROF_HEAP_DUMP or HPROF_HEAP_DUMP_SEGMENT record
-  void write_dump_header();
-
-  // fixes up the length of the current dump record
-  void write_current_dump_record_length();
-
-  // fixes up the current dump record )and writes HPROF_HEAP_DUMP_END
-  // record in the case of a segmented heap dump)
-  void end_of_dump();
-
  public:
   VM_HeapDumper(DumpWriter* writer, bool gc_before_heap_dump, bool oome) :
     VM_GC_Operation(0 /* total collections,      dummy, ignored */,
@@ -1383,15 +1457,13 @@ class VM_HeapDumper : public VM_GC_Operation {
                     gc_before_heap_dump) {
     _local_writer = writer;
     _gc_before_heap_dump = gc_before_heap_dump;
-    _is_segmented_dump = false;
-    _dump_start = (jlong)-1;
     _klass_map = new (ResourceObj::C_HEAP, mtInternal) GrowableArray<Klass*>(INITIAL_CLASS_COUNT, true);
     _stack_traces = NULL;
     _num_threads = 0;
     if (oome) {
       assert(!Thread::current()->is_VM_thread(), "Dump from OutOfMemoryError cannot be called by the VMThread");
       // get OutOfMemoryError zero-parameter constructor
-      InstanceKlass* oome_ik = InstanceKlass::cast(SystemDictionary::OutOfMemoryError_klass());
+      InstanceKlass* oome_ik = SystemDictionary::OutOfMemoryError_klass();
       _oome_constructor = oome_ik->find_method(vmSymbols::object_initializer_name(),
                                                           vmSymbols::void_method_signature());
       // get thread throwing OOME when generating the heap dump at OOME
@@ -1424,53 +1496,42 @@ bool VM_HeapDumper::skip_operation() const {
   return false;
 }
 
-// sets the dump starting position
-void VM_HeapDumper::set_dump_start(jlong pos) {
-  _dump_start = pos;
-}
-
- // writes a HPROF_HEAP_DUMP or HPROF_HEAP_DUMP_SEGMENT record
-void VM_HeapDumper::write_dump_header() {
-  if (writer()->is_open()) {
-    if (is_segmented_dump()) {
-      writer()->write_u1(HPROF_HEAP_DUMP_SEGMENT);
-    } else {
-      writer()->write_u1(HPROF_HEAP_DUMP);
-    }
-    writer()->write_u4(0); // current ticks
+ // writes a HPROF_HEAP_DUMP_SEGMENT record
+void DumperSupport::write_dump_header(DumpWriter* writer) {
+  if (writer->is_open()) {
+    writer->write_u1(HPROF_HEAP_DUMP_SEGMENT);
+    writer->write_u4(0); // current ticks
 
     // record the starting position for the dump (its length will be fixed up later)
-    set_dump_start(writer()->current_offset());
-    writer()->write_u4(0);
+    writer->set_dump_start(writer->current_offset());
+    writer->write_u4(0);
   }
 }
 
 // fixes up the length of the current dump record
-void VM_HeapDumper::write_current_dump_record_length() {
-  if (writer()->is_open()) {
-    assert(dump_start() >= 0, "no dump start recorded");
-
-    // calculate the size of the dump record
-    jlong dump_end = writer()->current_offset();
-    jlong dump_len = (dump_end - dump_start() - 4);
+void DumperSupport::write_current_dump_record_length(DumpWriter* writer) {
+  if (writer->is_open()) {
+    julong dump_end = writer->bytes_written() + writer->bytes_unwritten();
+    julong dump_len = writer->current_record_length();
 
     // record length must fit in a u4
-    if (dump_len > (jlong)(4L*(jlong)G)) {
+    if (dump_len > max_juint) {
       warning("record is too large");
     }
 
     // seek to the dump start and fix-up the length
-    writer()->seek_to_offset(dump_start());
-    writer()->write_u4((u4)dump_len);
+    assert(writer->dump_start() >= 0, "no dump start recorded");
+    writer->seek_to_offset(writer->dump_start());
+    writer->write_u4((u4)dump_len);
 
     // adjust the total size written to keep the bytes written correct.
-    writer()->adjust_bytes_written(-((long) sizeof(u4)));
+    writer->adjust_bytes_written(-((jlong) sizeof(u4)));
 
     // seek to dump end so we can continue
-    writer()->seek_to_offset(dump_end);
+    writer->seek_to_offset(dump_end);
 
     // no current dump record
-    set_dump_start((jlong)-1);
+    writer->set_dump_start((jlong)-1);
   }
 }
 
@@ -1478,33 +1539,23 @@ void VM_HeapDumper::write_current_dump_record_length() {
 // new segment.
 void VM_HeapDumper::check_segment_length() {
   if (writer()->is_open()) {
-    if (is_segmented_dump()) {
-      // don't use current_offset that would be too expensive on a per record basis
-      jlong dump_end = writer()->bytes_written() + writer()->bytes_unwritten();
-      assert(dump_end == writer()->current_offset(), "checking");
-      jlong dump_len = (dump_end - dump_start() - 4);
-      assert(dump_len >= 0 && dump_len <= max_juint, "bad dump length");
+    julong dump_len = writer()->current_record_length();
 
-      if (dump_len > (jlong)HeapDumpSegmentSize) {
-        write_current_dump_record_length();
-        write_dump_header();
-      }
+    if (dump_len > 2UL*G) {
+      DumperSupport::write_current_dump_record_length(writer());
+      DumperSupport::write_dump_header(writer());
     }
   }
 }
 
-// fixes up the current dump record )and writes HPROF_HEAP_DUMP_END
-// record in the case of a segmented heap dump)
-void VM_HeapDumper::end_of_dump() {
-  if (writer()->is_open()) {
-    write_current_dump_record_length();
+// fixes up the current dump record and writes HPROF_HEAP_DUMP_END record
+void DumperSupport::end_of_dump(DumpWriter* writer) {
+  if (writer->is_open()) {
+    write_current_dump_record_length(writer);
 
-    // for segmented dump we write the end record
-    if (is_segmented_dump()) {
-      writer()->write_u1(HPROF_HEAP_DUMP_END);
-      writer()->write_u4(0);
-      writer()->write_u4(0);
-    }
+    writer->write_u1(HPROF_HEAP_DUMP_END);
+    writer->write_u4(0);
+    writer->write_u4(0);
   }
 }
 
@@ -1548,7 +1599,7 @@ void VM_HeapDumper::do_load_class(Klass* k) {
 
 // writes a HPROF_GC_CLASS_DUMP record for the given class
 void VM_HeapDumper::do_class_dump(Klass* k) {
-  if (k->oop_is_instance()) {
+  if (k->is_instance_klass()) {
     DumperSupport::dump_class_and_array_classes(writer(), k);
   }
 }
@@ -1682,16 +1733,17 @@ void VM_HeapDumper::do_threads() {
 //  [HPROF_LOAD_CLASS]*
 //  [[HPROF_FRAME]*|HPROF_TRACE]*
 //  [HPROF_GC_CLASS_DUMP]*
-//  HPROF_HEAP_DUMP
+//  [HPROF_HEAP_DUMP_SEGMENT]*
+//  HPROF_HEAP_DUMP_END
 //
 // The HPROF_TRACE records represent the stack traces where the heap dump
 // is generated and a "dummy trace" record which does not include
 // any frames. The dummy trace record is used to be referenced as the
 // unknown object alloc site.
 //
-// The HPROF_HEAP_DUMP record has a length following by sub-records. To allow
-// the heap dump be generated in a single pass we remember the position of
-// the dump length and fix it up after all sub-records have been written.
+// Each HPROF_HEAP_DUMP_SEGMENT record has a length followed by sub-records.
+// To allow the heap dump be generated in a single pass we remember the position
+// of the dump length and fix it up after all sub-records have been written.
 // To generate the sub-records we iterate over the heap, writing
 // HPROF_GC_INSTANCE_DUMP, HPROF_GC_OBJ_ARRAY_DUMP, and HPROF_GC_PRIM_ARRAY_DUMP
 // records as we go. Once that is done we write records for some of the GC
@@ -1703,10 +1755,10 @@ void VM_HeapDumper::doit() {
   CollectedHeap* ch = Universe::heap();
 
   ch->ensure_parsability(false); // must happen, even if collection does
-                                 // not happen (e.g. due to GC_locker)
+                                 // not happen (e.g. due to GCLocker)
 
   if (_gc_before_heap_dump) {
-    if (GC_locker::is_active()) {
+    if (GCLocker::is_active()) {
       warning("GC locker is held; pre-heapdump GC was skipped");
     } else {
       ch->collect_as_vm_thread(GCCause::_heap_dump);
@@ -1718,15 +1770,9 @@ void VM_HeapDumper::doit() {
   set_global_dumper();
   set_global_writer();
 
-  // Write the file header - use 1.0.2 for large heaps, otherwise 1.0.1
+  // Write the file header - we always use 1.0.2
   size_t used = ch->used();
-  const char* header;
-  if (used > SegmentedHeapDumpThreshold) {
-    set_segmented_dump();
-    header = "JAVA PROFILE 1.0.2";
-  } else {
-    header = "JAVA PROFILE 1.0.1";
-  }
+  const char* header = "JAVA PROFILE 1.0.2";
 
   // header is few bytes long - no chance to overflow int
   writer()->write_raw((void*)header, (int)strlen(header));
@@ -1746,8 +1792,8 @@ void VM_HeapDumper::doit() {
   // this must be called after _klass_map is built when iterating the classes above.
   dump_stack_traces();
 
-  // write HPROF_HEAP_DUMP or HPROF_HEAP_DUMP_SEGMENT
-  write_dump_header();
+  // write HPROF_HEAP_DUMP_SEGMENT
+  DumperSupport::write_dump_header(writer());
 
   // Writes HPROF_GC_CLASS_DUMP records
   ClassLoaderDataGraph::classes_do(&do_class_dump);
@@ -1755,9 +1801,9 @@ void VM_HeapDumper::doit() {
   check_segment_length();
 
   // writes HPROF_GC_INSTANCE_DUMP records.
-  // After each sub-record is written check_segment_length will be invoked. When
-  // generated a segmented heap dump this allows us to check if the current
-  // segment exceeds a threshold and if so, then a new segment is started.
+  // After each sub-record is written check_segment_length will be invoked
+  // to check if the current segment exceeds a threshold. If so, a new
+  // segment is started.
   // The HPROF_GC_CLASS_DUMP and HPROF_GC_INSTANCE_DUMP are the vast bulk
   // of the heap dump.
   HeapObjectDumper obj_dumper(this, writer());
@@ -1781,9 +1827,8 @@ void VM_HeapDumper::doit() {
   StickyClassDumper class_dumper(writer());
   SystemDictionary::always_strong_classes_do(&class_dumper);
 
-  // fixes up the length of the dump record. In the case of a segmented
-  // heap then the HPROF_HEAP_DUMP_END record is also written.
-  end_of_dump();
+  // fixes up the length of the dump record and writes the HPROF_HEAP_DUMP_END record.
+  DumperSupport::end_of_dump(writer());
 
   // Now we clear the global variables, so that a future dumper might run.
   clear_global_dumper();
@@ -1845,7 +1890,6 @@ void VM_HeapDumper::dump_stack_traces() {
 }
 
 // dump the heap to given path.
-PRAGMA_FORMAT_NONLITERAL_IGNORED_EXTERNAL
 int HeapDumper::dump(const char* path) {
   assert(path != NULL && strlen(path) > 0, "path missing");
 
@@ -1883,13 +1927,8 @@ int HeapDumper::dump(const char* path) {
   if (print_to_tty()) {
     timer()->stop();
     if (error() == NULL) {
-      char msg[256];
-      sprintf(msg, "Heap dump file created [%s bytes in %3.3f secs]",
-        JLONG_FORMAT, timer()->seconds());
-PRAGMA_DIAG_PUSH
-PRAGMA_FORMAT_NONLITERAL_IGNORED_INTERNAL
-      tty->print_cr(msg, writer.bytes_written());
-PRAGMA_DIAG_POP
+      tty->print_cr("Heap dump file created [" JULONG_FORMAT " bytes in %3.3f secs]",
+                    writer.bytes_written(), timer()->seconds());
     } else {
       tty->print_cr("Dump file is incomplete: %s", writer.error());
     }
@@ -1974,7 +2013,7 @@ void HeapDumper::dump_heap(bool oome) {
     if (HeapDumpPath == NULL || HeapDumpPath[0] == '\0') {
       // HeapDumpPath=<file> not specified
     } else {
-      strncpy(base_path, HeapDumpPath, sizeof(base_path));
+      strcpy(base_path, HeapDumpPath);
       // check if the path is a directory (must exist)
       DIR* dir = os::opendir(base_path);
       if (dir == NULL) {

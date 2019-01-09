@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,27 +24,53 @@
 package javax.xml.datatype.ptests;
 
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNotSame;
+import static org.testng.Assert.assertSame;
+import static org.testng.Assert.assertEquals;
 
 import javax.xml.datatype.DatatypeConfigurationException;
 import javax.xml.datatype.DatatypeFactory;
 import javax.xml.datatype.Duration;
 
 import jaxp.library.JAXPDataProvider;
-import jaxp.library.JAXPBaseTest;
 
 import org.testng.annotations.DataProvider;
+import org.testng.annotations.Listeners;
 import org.testng.annotations.Test;
 
 /*
+ * @test
+ * @bug 8169778
+ * @library /javax/xml/jaxp/libs
+ * @run testng/othervm -DrunSecMngr=true javax.xml.datatype.ptests.FactoryNewInstanceTest
+ * @run testng/othervm javax.xml.datatype.ptests.FactoryNewInstanceTest
  * @summary Tests for DatatypeFactory.newInstance(factoryClassName , classLoader)
  */
-public class FactoryNewInstanceTest extends JAXPBaseTest {
+@Listeners({jaxp.library.BasePolicy.class})
+public class FactoryNewInstanceTest {
 
-    private static final String DATATYPE_FACTORY_CLASSNAME = "com.sun.org.apache.xerces.internal.jaxp.datatype.DatatypeFactoryImpl";
+    private static final String DEFAULT_IMPL_CLASS =
+        "com.sun.org.apache.xerces.internal.jaxp.datatype.DatatypeFactoryImpl";
+    private static final String DATATYPE_FACTORY_CLASSNAME = DEFAULT_IMPL_CLASS;
 
     @DataProvider(name = "parameters")
     public Object[][] getValidateParameters() {
         return new Object[][] { { DATATYPE_FACTORY_CLASSNAME, null }, { DATATYPE_FACTORY_CLASSNAME, this.getClass().getClassLoader() } };
+    }
+
+    /**
+     * Test if newDefaultInstance() method returns an instance
+     * of the expected factory.
+     * @throws Exception If any errors occur.
+     */
+    @Test
+    public void testDefaultInstance() throws Exception {
+        DatatypeFactory dtf1 = DatatypeFactory.newDefaultInstance();
+        DatatypeFactory dtf2 = DatatypeFactory.newInstance();
+        assertNotSame(dtf1, dtf2, "same instance returned:");
+        assertSame(dtf1.getClass(), dtf2.getClass(),
+                  "unexpected class mismatch for newDefaultInstance():");
+        assertEquals(dtf1.getClass().getName(), DEFAULT_IMPL_CLASS);
     }
 
     /*

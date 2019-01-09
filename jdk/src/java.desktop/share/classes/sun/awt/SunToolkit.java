@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@ import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
+import java.awt.image.ColorModel;
 import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferInt;
 import java.awt.image.ImageObserver;
@@ -46,6 +47,7 @@ import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.security.AccessController;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.Locale;
@@ -60,12 +62,11 @@ import sun.awt.im.InputContext;
 import sun.awt.image.ByteArrayImageSource;
 import sun.awt.image.FileImageSource;
 import sun.awt.image.ImageRepresentation;
-import sun.awt.image.MultiResolutionImage;
+import java.awt.image.MultiResolutionImage;
 import sun.awt.image.MultiResolutionToolkitImage;
 import sun.awt.image.ToolkitImage;
 import sun.awt.image.URLImageSource;
 import sun.font.FontDesignMetrics;
-import sun.misc.SoftCache;
 import sun.net.util.URLUtil;
 import sun.security.action.GetBooleanAction;
 import sun.security.action.GetPropertyAction;
@@ -113,7 +114,7 @@ public abstract class SunToolkit extends Toolkit
      * the 4-bytes limit for the int type. (CR 6799099)
      * One more bit is reserved for FIRST_HIGH_BIT.
      */
-    public final static int MAX_BUTTONS_SUPPORTED = 20;
+    public static final int MAX_BUTTONS_SUPPORTED = 20;
 
     /**
      * Creates and initializes EventQueue instance for the specified
@@ -124,18 +125,7 @@ public abstract class SunToolkit extends Toolkit
      * @param appContext AppContext to associate with the event queue
      */
     private static void initEQ(AppContext appContext) {
-        EventQueue eventQueue;
-
-        String eqName = System.getProperty("AWT.EventQueueClass",
-                "java.awt.EventQueue");
-
-        try {
-            eventQueue = (EventQueue)Class.forName(eqName).newInstance();
-        } catch (Exception e) {
-            e.printStackTrace();
-            System.err.println("Failed loading " + eqName + ": " + e);
-            eventQueue = new EventQueue();
-        }
+        EventQueue eventQueue = new EventQueue();
         appContext.put(AppContext.EVENT_QUEUE_KEY, eventQueue);
 
         PostEventQueue postEventQueue = new PostEventQueue(eventQueue);
@@ -350,9 +340,9 @@ public abstract class SunToolkit extends Toolkit
      /**
       * Sets the synchronous status of focus requests on lightweight
       * components in the specified window to the specified value.
-      * If the boolean parameter is <code>true</code> then the focus
+      * If the boolean parameter is {@code true} then the focus
       * requests on lightweight components will be performed
-      * synchronously, if it is <code>false</code>, then asynchronously.
+      * synchronously, if it is {@code false}, then asynchronously.
       * By default, all windows have their lightweight request status
       * set to asynchronous.
       * <p>
@@ -382,26 +372,6 @@ public abstract class SunToolkit extends Toolkit
                 getDefaultFocusTraversalPolicy();
 
         cont.setFocusTraversalPolicy(defaultPolicy);
-    }
-
-    private static FocusTraversalPolicy createLayoutPolicy() {
-        FocusTraversalPolicy policy = null;
-        try {
-            Class<?> layoutPolicyClass =
-                Class.forName("javax.swing.LayoutFocusTraversalPolicy");
-            policy = (FocusTraversalPolicy)layoutPolicyClass.newInstance();
-        }
-        catch (ClassNotFoundException e) {
-            assert false;
-        }
-        catch (InstantiationException e) {
-            assert false;
-        }
-        catch (IllegalAccessException e) {
-            assert false;
-        }
-
-        return policy;
     }
 
     /*
@@ -532,7 +502,7 @@ public abstract class SunToolkit extends Toolkit
     /*
      * Execute a chunk of code on the Java event handler thread. The
      * method takes into account provided AppContext and sets
-     * <code>SunToolkit.getDefaultToolkit()</code> as a target of the
+     * {@code SunToolkit.getDefaultToolkit()} as a target of the
      * event. See 6451487 for detailes.
      * Does not wait for the execution to occur before returning to
      * the caller.
@@ -591,10 +561,17 @@ public abstract class SunToolkit extends Toolkit
 
     @Override
     public Dimension getScreenSize() {
-        return new Dimension(getScreenWidth(), getScreenHeight());
+        return GraphicsEnvironment.getLocalGraphicsEnvironment()
+                .getDefaultScreenDevice().getDefaultConfiguration()
+                .getBounds().getSize();
     }
-    protected abstract int getScreenWidth();
-    protected abstract int getScreenHeight();
+
+    @Override
+    public ColorModel getColorModel() throws HeadlessException {
+        return GraphicsEnvironment.getLocalGraphicsEnvironment()
+                .getDefaultScreenDevice().getDefaultConfiguration()
+                .getColorModel();
+    }
 
     @Override
     @SuppressWarnings("deprecation")
@@ -662,16 +639,20 @@ public abstract class SunToolkit extends Toolkit
 
 
     @SuppressWarnings("deprecation")
-    static final SoftCache imgCache = new SoftCache();
+    static final SoftCache fileImgCache = new SoftCache();
+
+    @SuppressWarnings("deprecation")
+    static final SoftCache urlImgCache = new SoftCache();
 
     static Image getImageFromHash(Toolkit tk, URL url) {
         checkPermissions(url);
-        synchronized (imgCache) {
-            Image img = (Image)imgCache.get(url);
+        synchronized (urlImgCache) {
+            String key = url.toString();
+            Image img = (Image)urlImgCache.get(key);
             if (img == null) {
                 try {
                     img = tk.createImage(new URLImageSource(url));
-                    imgCache.put(url, img);
+                    urlImgCache.put(key, img);
                 } catch (Exception e) {
                 }
             }
@@ -682,12 +663,12 @@ public abstract class SunToolkit extends Toolkit
     static Image getImageFromHash(Toolkit tk,
                                                String filename) {
         checkPermissions(filename);
-        synchronized (imgCache) {
-            Image img = (Image)imgCache.get(filename);
+        synchronized (fileImgCache) {
+            Image img = (Image)fileImgCache.get(filename);
             if (img == null) {
                 try {
                     img = tk.createImage(new FileImageSource(filename));
-                    imgCache.put(filename, img);
+                    fileImgCache.put(filename, img);
                 } catch (Exception e) {
                 }
             }
@@ -707,28 +688,29 @@ public abstract class SunToolkit extends Toolkit
 
     protected Image getImageWithResolutionVariant(String fileName,
             String resolutionVariantName) {
-        synchronized (imgCache) {
+        synchronized (fileImgCache) {
             Image image = getImageFromHash(this, fileName);
             if (image instanceof MultiResolutionImage) {
                 return image;
             }
             Image resolutionVariant = getImageFromHash(this, resolutionVariantName);
             image = createImageWithResolutionVariant(image, resolutionVariant);
-            imgCache.put(fileName, image);
+            fileImgCache.put(fileName, image);
             return image;
         }
     }
 
     protected Image getImageWithResolutionVariant(URL url,
             URL resolutionVariantURL) {
-        synchronized (imgCache) {
+        synchronized (urlImgCache) {
             Image image = getImageFromHash(this, url);
             if (image instanceof MultiResolutionImage) {
                 return image;
             }
             Image resolutionVariant = getImageFromHash(this, resolutionVariantURL);
             image = createImageWithResolutionVariant(image, resolutionVariant);
-            imgCache.put(url, image);
+            String key = url.toString();
+            urlImgCache.put(key, image);
             return image;
         }
     }
@@ -839,8 +821,13 @@ public abstract class SunToolkit extends Toolkit
         return null;
     }
 
-    protected static boolean imageCached(Object key) {
-        return imgCache.containsKey(key);
+    protected static boolean imageCached(String fileName) {
+        return fileImgCache.containsKey(fileName);
+    }
+
+    protected static boolean imageCached(URL url) {
+        String key = url.toString();
+        return urlImgCache.containsKey(key);
     }
 
     protected static boolean imageExists(String filename) {
@@ -909,12 +896,21 @@ public abstract class SunToolkit extends Toolkit
         if (width == 0 || height == 0) {
             return null;
         }
+        java.util.List<Image> multiResAndnormalImages = new ArrayList<>(imageList.size());
+        for (Image image : imageList) {
+            if ((image instanceof MultiResolutionImage)) {
+                Image im = ((MultiResolutionImage) image).getResolutionVariant(width, height);
+                multiResAndnormalImages.add(im);
+            } else {
+                multiResAndnormalImages.add(image);
+            }
+        }
         Image bestImage = null;
         int bestWidth = 0;
         int bestHeight = 0;
         double bestSimilarity = 3; //Impossibly high value
         double bestScaleFactor = 0;
-        for (Iterator<Image> i = imageList.iterator();i.hasNext();) {
+        for (Iterator<Image> i = multiResAndnormalImages.iterator();i.hasNext();) {
             //Iterate imageList looking for best matching image.
             //'Similarity' measure is defined as good scale factor and small insets.
             //best possible similarity is 0 (no scale, no insets).
@@ -1061,6 +1057,7 @@ public abstract class SunToolkit extends Toolkit
     /**
      * Returns key modifiers used by Swing to set up a focus accelerator key stroke.
      */
+    @SuppressWarnings("deprecation")
     public int getFocusAcceleratorKeyMask() {
         return InputEvent.ALT_MASK;
     }
@@ -1071,6 +1068,7 @@ public abstract class SunToolkit extends Toolkit
      * the way things work on Windows: here, pressing ctrl + alt allows user to enter
      * characters from the extended character set (like euro sign or math symbols)
      */
+    @SuppressWarnings("deprecation")
     public boolean isPrintableCharacterModifiersMask(int mods) {
         return ((mods & InputEvent.ALT_MASK) == (mods & InputEvent.CTRL_MASK));
     }
@@ -1160,21 +1158,10 @@ public abstract class SunToolkit extends Toolkit
         return getStartupLocale();
     }
 
-    private static DefaultMouseInfoPeer mPeer = null;
-
-    @Override
-    public synchronized MouseInfoPeer getMouseInfoPeer() {
-        if (mPeer == null) {
-            mPeer = new DefaultMouseInfoPeer();
-        }
-        return mPeer;
-    }
-
-
     /**
      * Returns whether default toolkit needs the support of the xembed
      * from embedding host(if any).
-     * @return <code>true</code>, if XEmbed is needed, <code>false</code> otherwise
+     * @return {@code true}, if XEmbed is needed, {@code false} otherwise
      */
     public static boolean needsXEmbed() {
         String noxembed = AccessController.
@@ -1197,7 +1184,7 @@ public abstract class SunToolkit extends Toolkit
     /**
      * Returns whether this toolkit needs the support of the xembed
      * from embedding host(if any).
-     * @return <code>true</code>, if XEmbed is needed, <code>false</code> otherwise
+     * @return {@code true}, if XEmbed is needed, {@code false} otherwise
      */
     protected boolean needsXEmbedImpl() {
         return false;
@@ -1216,8 +1203,8 @@ public abstract class SunToolkit extends Toolkit
 
     /**
      * Returns whether the modal exclusion API is supported by the current toolkit.
-     * When it isn't supported, calling <code>setModalExcluded</code> has no
-     * effect, and <code>isModalExcluded</code> returns false for all windows.
+     * When it isn't supported, calling {@code setModalExcluded} has no
+     * effect, and {@code isModalExcluded} returns false for all windows.
      *
      * @return true if modal exclusion is supported by the toolkit, false otherwise
      *
@@ -1250,7 +1237,7 @@ public abstract class SunToolkit extends Toolkit
      * events, focus transfer and z-order will continue to work for the
      * window, it's owned windows and child components, even in the
      * presence of a modal dialog.
-     * For details on which <code>Window</code>s are normally blocked
+     * For details on which {@code Window}s are normally blocked
      * by modal dialog, see {@link java.awt.Dialog}.
      * Invoking this method when the modal exclusion API is not supported by
      * the current toolkit has no effect.
@@ -1439,23 +1426,23 @@ public abstract class SunToolkit extends Toolkit
      *
      * <p> This method allows to write tests without explicit timeouts
      * or wait for some event.  Example:
-     * <code>
+     * <pre>{@code
      * Frame f = ...;
      * f.setVisible(true);
      * ((SunToolkit)Toolkit.getDefaultToolkit()).realSync();
-     * </code>
+     * }</pre>
      *
-     * <p> After realSync, <code>f</code> will be completely visible
+     * <p> After realSync, {@code f} will be completely visible
      * on the screen, its getLocationOnScreen will be returning the
      * right result and it will be the focus owner.
      *
      * <p> Another example:
-     * <code>
+     * <pre>{@code
      * b.requestFocus();
      * ((SunToolkit)Toolkit.getDefaultToolkit()).realSync();
-     * </code>
+     * }</pre>
      *
-     * <p> After realSync, <code>b</code> will be focus owner.
+     * <p> After realSync, {@code b} will be focus owner.
      *
      * <p> Notice that realSync isn't guaranteed to work if recurring
      * actions occur, such as if during processing of some event
@@ -1530,14 +1517,14 @@ public abstract class SunToolkit extends Toolkit
      * sync of the native queue.  The method should wait until native
      * requests are processed, all native events are processed and
      * corresponding Java events are generated.  Should return
-     * <code>true</code> if some events were processed,
-     * <code>false</code> otherwise.
+     * {@code true} if some events were processed,
+     * {@code false} otherwise.
      */
     protected abstract boolean syncNativeQueue(final long timeout);
 
-    private boolean eventDispatched = false;
-    private boolean queueEmpty = false;
-    private final Object waitLock = "Wait Lock";
+    private boolean eventDispatched;
+    private boolean queueEmpty;
+    private final Object waitLock = new Object();
 
     private boolean isEQEmpty() {
         EventQueue queue = getSystemEventQueueImpl();
@@ -1548,16 +1535,17 @@ public abstract class SunToolkit extends Toolkit
      * Waits for the Java event queue to empty.  Ensures that all
      * events are processed (including paint events), and that if
      * recursive events were generated, they are also processed.
-     * Should return <code>true</code> if more processing is
-     * necessary, <code>false</code> otherwise.
+     * Should return {@code true} if more processing is
+     * necessary, {@code false} otherwise.
      */
     @SuppressWarnings("serial")
     protected final boolean waitForIdle(final long timeout) {
         flushPendingEvents();
-        boolean queueWasEmpty = isEQEmpty();
-        queueEmpty = false;
-        eventDispatched = false;
-        synchronized(waitLock) {
+        final boolean queueWasEmpty;
+        synchronized (waitLock) {
+            queueWasEmpty = isEQEmpty();
+            queueEmpty = false;
+            eventDispatched = false;
             postEvent(AppContext.getAppContext(),
                       new PeerEvent(getSystemEventQueueImpl(), null, PeerEvent.LOW_PRIORITY_EVENT) {
                           @Override
@@ -1793,6 +1781,7 @@ public abstract class SunToolkit extends Toolkit
 
 
     public abstract boolean isDesktopSupported();
+    public abstract boolean isTaskbarSupported();
 
     /*
      * consumeNextKeyTyped() method is not currently used,
@@ -1814,7 +1803,7 @@ public abstract class SunToolkit extends Toolkit
     }
 
     /**
-     * Returns the <code>Window</code> ancestor of the component <code>comp</code>.
+     * Returns the {@code Window} ancestor of the component {@code comp}.
      * @return Window ancestor of the component or component by itself if it is Window;
      *         null, if component is not a part of window hierarchy
      */
@@ -1831,7 +1820,7 @@ public abstract class SunToolkit extends Toolkit
      * Returns the value of "sun.awt.disableMixing" property. Default
      * value is {@code false}.
      */
-    public synchronized static boolean getSunAwtDisableMixing() {
+    public static synchronized boolean getSunAwtDisableMixing() {
         if (sunAwtDisableMixing == null) {
             sunAwtDisableMixing = AccessController.doPrivileged(
                                       new GetBooleanAction("sun.awt.disableMixing"));
@@ -1876,6 +1865,9 @@ public abstract class SunToolkit extends Toolkit
         }
         Long time = map.get(w);
         return time == null ? -1 : time;
+    }
+
+    public void updateScreenMenuBarUI() {
     }
 
     // Cosntant alpha

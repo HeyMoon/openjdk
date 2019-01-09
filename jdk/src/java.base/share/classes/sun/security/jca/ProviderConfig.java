@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,7 +43,7 @@ import sun.security.util.PropertyExpander;
  */
 final class ProviderConfig {
 
-    private final static sun.security.util.Debug debug =
+    private static final sun.security.util.Debug debug =
         sun.security.util.Debug.getInstance("jca", "ProviderConfig");
 
     // suffix for identifying the SunPKCS11-Solaris provider
@@ -54,7 +54,7 @@ final class ProviderConfig {
         "${java.home}/conf/security/sunpkcs11-solaris.cfg";
 
     // maximum number of times to try loading a provider before giving up
-    private final static int MAX_LOAD_TRIES = 30;
+    private static final int MAX_LOAD_TRIES = 30;
 
     // could be provider name (module) or provider class name (legacy)
     private final String provName;
@@ -159,6 +159,8 @@ final class ProviderConfig {
     /**
      * Get the provider object. Loads the provider if it is not already loaded.
      */
+    // com.sun.net.ssl.internal.ssl.Provider has been deprecated since JDK 9
+    @SuppressWarnings("deprecation")
     synchronized Provider getProvider() {
         // volatile variable load
         Provider p = provider;
@@ -178,6 +180,28 @@ final class ProviderConfig {
             p = new com.sun.crypto.provider.SunJCE();
         } else if (provName.equals("SunJSSE") || provName.equals("com.sun.net.ssl.internal.ssl.Provider")) {
             p = new com.sun.net.ssl.internal.ssl.Provider();
+        } else if (provName.equals("Apple") || provName.equals("apple.security.AppleProvider")) {
+            // need to use reflection since this class only exists on MacOsx
+            p = AccessController.doPrivileged(new PrivilegedAction<Provider>() {
+                public Provider run() {
+                    try {
+                        Class<?> c = Class.forName("apple.security.AppleProvider");
+                        if (Provider.class.isAssignableFrom(c)) {
+                            @SuppressWarnings("deprecation")
+                            Object tmp = c.newInstance();
+                            return (Provider) tmp;
+                        } else {
+                            return null;
+                        }
+                    } catch (Exception ex) {
+                        if (debug != null) {
+                        debug.println("Error loading provider Apple");
+                        ex.printStackTrace();
+                    }
+                    return null;
+                }
+             }
+             });
         } else {
             if (isLoading) {
                 // because this method is synchronized, this can only
@@ -216,9 +240,8 @@ final class ProviderConfig {
                 if (debug != null) {
                     debug.println("Loading provider " + ProviderConfig.this);
                 }
-                ProviderLoader pl = new ProviderLoader();
                 try {
-                    Provider p = pl.load(provName);
+                    Provider p = ProviderLoader.INSTANCE.load(provName);
                     if (p != null) {
                         if (hasArgument()) {
                             p = p.configure(argument);
@@ -283,9 +306,11 @@ final class ProviderConfig {
 
     // Inner class for loading security providers listed in java.security file
     private static final class ProviderLoader {
+        static final ProviderLoader INSTANCE = new ProviderLoader();
+
         private final ServiceLoader<Provider> services;
 
-        ProviderLoader() {
+        private ProviderLoader() {
             // VM should already been booted at this point, if not
             // - Only providers in java.base should be loaded, don't use
             //   ServiceLoader
@@ -365,6 +390,7 @@ final class ProviderConfig {
 
                 Provider p = AccessController.doPrivileged
                     (new PrivilegedExceptionAction<Provider>() {
+                    @SuppressWarnings("deprecation") // Class.newInstance
                     public Provider run() throws Exception {
                         return (Provider) provClass.newInstance();
                     }

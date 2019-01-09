@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,6 +33,7 @@ import java.util.Vector;
 import java.util.HashSet;
 import static java.util.zip.ZipConstants64.*;
 import static java.util.zip.ZipUtils.*;
+import sun.security.action.GetPropertyAction;
 
 /**
  * This class implements an output stream filter for writing files in the
@@ -40,6 +41,7 @@ import static java.util.zip.ZipUtils.*;
  * entries.
  *
  * @author      David Connelly
+ * @since 1.1
  */
 public
 class ZipOutputStream extends DeflaterOutputStream implements ZipConstants {
@@ -54,9 +56,7 @@ class ZipOutputStream extends DeflaterOutputStream implements ZipConstants {
      */
     private static final boolean inhibitZip64 =
         Boolean.parseBoolean(
-            java.security.AccessController.doPrivileged(
-                new sun.security.action.GetPropertyAction(
-                    "jdk.util.zip.inhibitZip64", "false")));
+            GetPropertyAction.privilegedGetProperty("jdk.util.zip.inhibitZip64"));
 
     private static class XEntry {
         final ZipEntry entry;
@@ -422,22 +422,36 @@ class ZipOutputStream extends DeflaterOutputStream implements ZipConstants {
         byte[] nameBytes = zc.getBytes(e.name);
         writeShort(nameBytes.length);
 
-        int elenEXTT = 0;               // info-zip extended timestamp
+        int elenEXTT = 0;         // info-zip extended timestamp
         int flagEXTT = 0;
+        long umtime = -1;
+        long uatime = -1;
+        long uctime = -1;
         if (e.mtime != null) {
             elenEXTT += 4;
             flagEXTT |= EXTT_FLAG_LMT;
+            umtime = fileTimeToUnixTime(e.mtime);
         }
         if (e.atime != null) {
             elenEXTT += 4;
             flagEXTT |= EXTT_FLAG_LAT;
+            uatime = fileTimeToUnixTime(e.atime);
         }
         if (e.ctime != null) {
             elenEXTT += 4;
             flagEXTT |= EXTT_FLAT_CT;
+            uctime = fileTimeToUnixTime(e.ctime);
         }
-        if (flagEXTT != 0)
-            elen += (elenEXTT + 5);    // headid(2) + size(2) + flag(1) + data
+        if (flagEXTT != 0) {
+            // to use ntfs time if any m/a/ctime is beyond unixtime upper bound
+            if (umtime > UPPER_UNIXTIME_BOUND ||
+                uatime > UPPER_UNIXTIME_BOUND ||
+                uctime > UPPER_UNIXTIME_BOUND) {
+                elen += 36;                // NTFS time, total 36 bytes
+            } else {
+                elen += (elenEXTT + 5);    // headid(2) + size(2) + flag(1) + data
+            }
+        }
         writeShort(elen);
         writeBytes(nameBytes, 0, nameBytes.length);
         if (hasZip64) {
@@ -447,15 +461,31 @@ class ZipOutputStream extends DeflaterOutputStream implements ZipConstants {
             writeLong(e.csize);
         }
         if (flagEXTT != 0) {
-            writeShort(EXTID_EXTT);
-            writeShort(elenEXTT + 1);      // flag + data
-            writeByte(flagEXTT);
-            if (e.mtime != null)
-                writeInt(fileTimeToUnixTime(e.mtime));
-            if (e.atime != null)
-                writeInt(fileTimeToUnixTime(e.atime));
-            if (e.ctime != null)
-                writeInt(fileTimeToUnixTime(e.ctime));
+            if (umtime > UPPER_UNIXTIME_BOUND ||
+                uatime > UPPER_UNIXTIME_BOUND ||
+                uctime > UPPER_UNIXTIME_BOUND) {
+                writeShort(EXTID_NTFS);    // id
+                writeShort(32);            // data size
+                writeInt(0);               // reserved
+                writeShort(0x0001);        // NTFS attr tag
+                writeShort(24);
+                writeLong(e.mtime == null ? WINDOWS_TIME_NOT_AVAILABLE
+                                          : fileTimeToWinTime(e.mtime));
+                writeLong(e.atime == null ? WINDOWS_TIME_NOT_AVAILABLE
+                                          : fileTimeToWinTime(e.atime));
+                writeLong(e.ctime == null ? WINDOWS_TIME_NOT_AVAILABLE
+                                          : fileTimeToWinTime(e.ctime));
+            } else {
+                writeShort(EXTID_EXTT);
+                writeShort(elenEXTT + 1);  // flag + data
+                writeByte(flagEXTT);
+                if (e.mtime != null)
+                    writeInt(umtime);
+                if (e.atime != null)
+                    writeInt(uatime);
+                if (e.ctime != null)
+                    writeInt(uctime);
+            }
         }
         writeExtra(e.extra);
         locoff = written;
@@ -529,18 +559,30 @@ class ZipOutputStream extends DeflaterOutputStream implements ZipConstants {
         // cen info-zip extended timestamp only outputs mtime
         // but set the flag for a/ctime, if present in loc
         int flagEXTT = 0;
+        long umtime = -1;
+        long uatime = -1;
+        long uctime = -1;
         if (e.mtime != null) {
-            elen += 4;              // + mtime(4)
             flagEXTT |= EXTT_FLAG_LMT;
+            umtime = fileTimeToUnixTime(e.mtime);
         }
         if (e.atime != null) {
             flagEXTT |= EXTT_FLAG_LAT;
+            uatime = fileTimeToUnixTime(e.atime);
         }
         if (e.ctime != null) {
             flagEXTT |= EXTT_FLAT_CT;
+            uctime = fileTimeToUnixTime(e.ctime);
         }
         if (flagEXTT != 0) {
-            elen += 5;             // headid + sz + flag
+            // to use ntfs time if any m/a/ctime is beyond unixtime upper bound
+            if (umtime > UPPER_UNIXTIME_BOUND ||
+                uatime > UPPER_UNIXTIME_BOUND ||
+                uctime > UPPER_UNIXTIME_BOUND) {
+                elen += 36;         // NTFS time total 36 bytes
+            } else {
+                elen += 9;          // headid(2) + sz(2) + flag(1) + mtime (4)
+            }
         }
         writeShort(elen);
         byte[] commentBytes;
@@ -569,14 +611,30 @@ class ZipOutputStream extends DeflaterOutputStream implements ZipConstants {
                 writeLong(xentry.offset);
         }
         if (flagEXTT != 0) {
-            writeShort(EXTID_EXTT);
-            if (e.mtime != null) {
-                writeShort(5);      // flag + mtime
-                writeByte(flagEXTT);
-                writeInt(fileTimeToUnixTime(e.mtime));
+            if (umtime > UPPER_UNIXTIME_BOUND ||
+                uatime > UPPER_UNIXTIME_BOUND ||
+                uctime > UPPER_UNIXTIME_BOUND) {
+                writeShort(EXTID_NTFS);    // id
+                writeShort(32);            // data size
+                writeInt(0);               // reserved
+                writeShort(0x0001);        // NTFS attr tag
+                writeShort(24);
+                writeLong(e.mtime == null ? WINDOWS_TIME_NOT_AVAILABLE
+                                          : fileTimeToWinTime(e.mtime));
+                writeLong(e.atime == null ? WINDOWS_TIME_NOT_AVAILABLE
+                                          : fileTimeToWinTime(e.atime));
+                writeLong(e.ctime == null ? WINDOWS_TIME_NOT_AVAILABLE
+                                          : fileTimeToWinTime(e.ctime));
             } else {
-                writeShort(1);      // flag only
-                writeByte(flagEXTT);
+                writeShort(EXTID_EXTT);
+                if (e.mtime != null) {
+                    writeShort(5);      // flag + mtime
+                    writeByte(flagEXTT);
+                    writeInt(umtime);
+                } else {
+                    writeShort(1);      // flag only
+                    writeByte(flagEXTT);
+                }
             }
         }
         writeExtra(e.extra);

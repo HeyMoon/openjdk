@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,11 +36,13 @@ import javax.crypto.*;
 import javax.crypto.spec.SecretKeySpec;
 import javax.crypto.spec.GCMParameterSpec;
 
+import sun.security.jca.JCAUtil;
+
 /**
  * Cipher wrapper class utilizing ucrypto APIs. This class currently supports
  * - AES/GCM/NoPADDING
  *
- * @since 1.9
+ * @since 9
  */
 class NativeGCMCipher extends NativeCipher {
 
@@ -55,12 +57,18 @@ class NativeGCMCipher extends NativeCipher {
 
     private static final int DEFAULT_TAG_LEN = 128; // same as SunJCE provider
 
+    // same as SunJCE provider, see GaloisCounterMode.java for details
+    private static final int MAX_BUF_SIZE = Integer.MAX_VALUE;
+
     // buffer for storing AAD data; if null, meaning buffer content has been
     // supplied to native context
-    private ByteArrayOutputStream aadBuffer = new ByteArrayOutputStream();
+    private ByteArrayOutputStream aadBuffer;
 
     // buffer for storing input in decryption, not used for encryption
-    private ByteArrayOutputStream ibuffer = null;
+    private ByteArrayOutputStream ibuffer;
+
+    // needed for checking against MAX_BUF_SIZE
+    private int processed;
 
     private int tagLen = DEFAULT_TAG_LEN;
 
@@ -73,9 +81,21 @@ class NativeGCMCipher extends NativeCipher {
      * key + iv values used in previous encryption.
      * For decryption operations, no checking is necessary.
      */
-    private boolean requireReinit = false;
+    private boolean requireReinit;
     private byte[] lastEncKey = null;
     private byte[] lastEncIv = null;
+
+    private void checkAndUpdateProcessed(int len) {
+        // Currently, cipher text and tag are packed in one byte array, so
+        // the impl-specific limit for input data size is (MAX_BUF_SIZE - tagLen)
+        int inputDataLimit = MAX_BUF_SIZE - tagLen;
+
+        if (processed > inputDataLimit - len) {
+            throw new ProviderException("OracleUcrypto provider only supports " +
+                "input size up to " + inputDataLimit + " bytes");
+        }
+        processed += len;
+    }
 
     NativeGCMCipher(int fixedKeySize) throws NoSuchAlgorithmException {
         super(UcryptoMech.CRYPTO_AES_GCM, fixedKeySize);
@@ -84,12 +104,14 @@ class NativeGCMCipher extends NativeCipher {
     @Override
     protected void ensureInitialized() {
         if (!initialized) {
-            if (aadBuffer != null && aadBuffer.size() > 0) {
-                init(encrypt, keyValue, iv, tagLen, aadBuffer.toByteArray());
-                aadBuffer = null;
-            } else {
-                init(encrypt, keyValue, iv, tagLen, null);
+            byte[] aad = null;
+            if (aadBuffer != null) {
+                if (aadBuffer.size() > 0) {
+                    aad = aadBuffer.toByteArray();
+                }
             }
+            init(encrypt, keyValue, iv, tagLen, aad);
+            aadBuffer = null;
             if (!initialized) {
                 throw new UcryptoException("Cannot initialize Cipher");
             }
@@ -134,6 +156,7 @@ class NativeGCMCipher extends NativeCipher {
             ibuffer.reset();
         }
         if (!encrypt) requireReinit = false;
+        processed = 0;
     }
 
     // actual init() implementation - caller should clone key and iv if needed
@@ -183,12 +206,14 @@ class NativeGCMCipher extends NativeCipher {
             throw new InvalidAlgorithmParameterException
                 ("Unsupported mode: " + opmode);
         }
+        aadBuffer = new ByteArrayOutputStream();
         boolean doEncrypt = (opmode == Cipher.ENCRYPT_MODE || opmode == Cipher.WRAP_MODE);
         byte[] keyBytes = key.getEncoded().clone();
         byte[] ivBytes = null;
         if (params != null) {
             if (!(params instanceof GCMParameterSpec)) {
-                throw new InvalidAlgorithmParameterException("GCMParameterSpec required");
+                throw new InvalidAlgorithmParameterException("GCMParameterSpec required." +
+                    " Received: " + params.getClass().getName());
             } else {
                 tagLen = ((GCMParameterSpec) params).getTLen();
                 ivBytes = ((GCMParameterSpec) params).getIV();
@@ -199,7 +224,10 @@ class NativeGCMCipher extends NativeCipher {
 
                 // generate IV if none supplied for encryption
                 ivBytes = new byte[blockSize];
-                new SecureRandom().nextBytes(ivBytes);
+                if (random == null) {
+                    random = JCAUtil.getSecureRandom();
+                }
+                random.nextBytes(ivBytes);
             } else {
                 throw new InvalidAlgorithmParameterException("Parameters required for decryption");
             }
@@ -213,6 +241,7 @@ class NativeGCMCipher extends NativeCipher {
             }
             lastEncIv = ivBytes;
             lastEncKey = keyBytes;
+            ibuffer = null;
         } else {
             requireReinit = false;
             ibuffer = new ByteArrayOutputStream();
@@ -240,15 +269,18 @@ class NativeGCMCipher extends NativeCipher {
     // see JCE spec
     @Override
     protected synchronized byte[] engineUpdate(byte[] in, int inOfs, int inLen) {
-        if (aadBuffer != null && aadBuffer.size() > 0) {
-            // init again with AAD data
-            init(encrypt, keyValue, iv, tagLen, aadBuffer.toByteArray());
+        if (aadBuffer != null) {
+            if (aadBuffer.size() > 0) {
+                // init again with AAD data
+                init(encrypt, keyValue, iv, tagLen, aadBuffer.toByteArray());
+            }
             aadBuffer = null;
         }
         if (requireReinit) {
             throw new IllegalStateException
                 ("Must use either different key or iv for GCM encryption");
         }
+        checkAndUpdateProcessed(inLen);
         if (inLen > 0) {
             if (!encrypt) {
                 ibuffer.write(in, inOfs, inLen);
@@ -264,19 +296,22 @@ class NativeGCMCipher extends NativeCipher {
             int outOfs) throws ShortBufferException {
         int len = getOutputSizeByOperation(inLen, false);
         if (out.length - outOfs < len) {
-            throw new ShortBufferException("Output buffer must be "
-                                           + "(at least) " + len
-                                           + " bytes long");
+            throw new ShortBufferException("Output buffer must be " +
+                 "(at least) " + len + " bytes long. Got: " +
+                 (out.length - outOfs));
         }
-        if (aadBuffer != null && aadBuffer.size() > 0) {
-            // init again with AAD data
-            init(encrypt, keyValue, iv, tagLen, aadBuffer.toByteArray());
+        if (aadBuffer != null) {
+            if (aadBuffer.size() > 0) {
+                // init again with AAD data
+                init(encrypt, keyValue, iv, tagLen, aadBuffer.toByteArray());
+            }
             aadBuffer = null;
         }
         if (requireReinit) {
             throw new IllegalStateException
                 ("Must use either different key or iv for GCM encryption");
         }
+        checkAndUpdateProcessed(inLen);
         if (inLen > 0) {
             if (!encrypt) {
                 ibuffer.write(in, inOfs, inLen);
@@ -365,18 +400,22 @@ class NativeGCMCipher extends NativeCipher {
         int len = getOutputSizeByOperation(inLen, true);
         if (out.length - outOfs < len) {
             throw new ShortBufferException("Output buffer must be "
-                                           + "(at least) " + len
-                                           + " bytes long");
+                + "(at least) " + len + " bytes long. Got: " +
+                (out.length - outOfs));
         }
-        if (aadBuffer != null && aadBuffer.size() > 0) {
-            // init again with AAD data
-            init(encrypt, keyValue, iv, tagLen, aadBuffer.toByteArray());
+        if (aadBuffer != null) {
+            if (aadBuffer.size() > 0) {
+                // init again with AAD data
+                init(encrypt, keyValue, iv, tagLen, aadBuffer.toByteArray());
+            }
             aadBuffer = null;
         }
         if (requireReinit) {
             throw new IllegalStateException
                 ("Must use either different key or iv for GCM encryption");
         }
+
+        checkAndUpdateProcessed(inLen);
         if (!encrypt) {
             if (inLen > 0) {
                 ibuffer.write(in, inOfs, inLen);
@@ -385,7 +424,8 @@ class NativeGCMCipher extends NativeCipher {
             if (inLen < tagLen/8) {
                 // Otherwise, Solaris lib will error out w/ CRYPTO_BUFFER_TOO_SMALL
                 // when ucrypto_decrypt_final() is called
-                throw new AEADBadTagException("Input too short - need tag");
+                throw new AEADBadTagException("Input too short - need tag." +
+                    " inLen: " + inLen + ". tagLen: " + tagLen);
             }
             // refresh 'in' to all buffered-up bytes
             in = ibuffer.toByteArray();

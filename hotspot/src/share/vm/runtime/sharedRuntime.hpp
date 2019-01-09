@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,6 @@
 #include "interpreter/linkResolver.hpp"
 #include "memory/allocation.hpp"
 #include "memory/resourceArea.hpp"
-#include "runtime/threadLocalStorage.hpp"
 #include "utilities/hashtable.hpp"
 #include "utilities/macros.hpp"
 
@@ -61,6 +60,7 @@ class SharedRuntime: AllStatic {
   static RuntimeStub*        _resolve_opt_virtual_call_blob;
   static RuntimeStub*        _resolve_virtual_call_blob;
   static RuntimeStub*        _resolve_static_call_blob;
+  static address             _resolve_static_call_entry;
 
   static DeoptimizationBlob* _deopt_blob;
 
@@ -100,6 +100,12 @@ class SharedRuntime: AllStatic {
   // float and double remainder
   static jfloat  frem(jfloat  x, jfloat  y);
   static jdouble drem(jdouble x, jdouble y);
+
+
+#ifdef _WIN64
+  // Workaround for fmod issue in the Windows x64 CRT
+  static double fmod_winx64(double x, double y);
+#endif
 
 #ifdef __SOFTFP__
   static jfloat  fadd(jfloat x, jfloat y);
@@ -141,7 +147,7 @@ class SharedRuntime: AllStatic {
   static double dabs(double f);
 #endif
 
-#if defined(__SOFTFP__) || defined(PPC32)
+#if defined(__SOFTFP__) || defined(PPC)
   static double dsqrt(double f);
 #endif
 
@@ -183,8 +189,8 @@ class SharedRuntime: AllStatic {
 #endif // INCLUDE_ALL_GCS
 
   // exception handling and implicit exceptions
-  static address compute_compiled_exc_handler(nmethod* nm, address ret_pc, Handle& exception,
-                                              bool force_unwind, bool top_frame_only);
+  static address compute_compiled_exc_handler(CompiledMethod* nm, address ret_pc, Handle& exception,
+                                              bool force_unwind, bool top_frame_only, bool& recursive_exception_occurred);
   enum ImplicitExceptionKind {
     IMPLICIT_NULL,
     IMPLICIT_DIVIDE_BY_ZERO,
@@ -196,9 +202,17 @@ class SharedRuntime: AllStatic {
   static void    throw_NullPointerException(JavaThread* thread);
   static void    throw_NullPointerException_at_call(JavaThread* thread);
   static void    throw_StackOverflowError(JavaThread* thread);
+  static void    throw_delayed_StackOverflowError(JavaThread* thread);
+  static void    throw_StackOverflowError_common(JavaThread* thread, bool delayed);
   static address continuation_for_implicit_exception(JavaThread* thread,
                                                      address faulting_pc,
                                                      ImplicitExceptionKind exception_kind);
+#if INCLUDE_JVMCI
+  static address deoptimize_for_implicit_exception(JavaThread* thread, address pc, CompiledMethod* nm, int deopt_reason);
+#endif
+
+  static void enable_stack_reserved_zone(JavaThread* thread);
+  static frame look_for_reserved_stack_annotated_method(JavaThread* thread, frame fr);
 
   // Shared stub locations
   static address get_poll_stub(address pc);
@@ -256,9 +270,6 @@ class SharedRuntime: AllStatic {
   static address native_method_throw_unsatisfied_link_error_entry();
   static address native_method_throw_unsupported_operation_exception_entry();
 
-  // bytecode tracing is only used by the TraceBytecodes
-  static intptr_t trace_bytecode(JavaThread* thread, intptr_t preserve_this_value, intptr_t tos, intptr_t tos2) PRODUCT_RETURN0;
-
   static oop retrieve_receiver(Symbol* sig, frame caller);
 
   static void register_finalizer(JavaThread* thread, oopDesc* obj);
@@ -280,22 +291,21 @@ class SharedRuntime: AllStatic {
   // Fill in the "X cannot be cast to a Y" message for ClassCastException
   //
   // @param thr the current thread
-  // @param name the name of the class of the object attempted to be cast
+  // @param caster_klass the class of the object we are casting
   // @return the dynamically allocated exception message (must be freed
   // by the caller using a resource mark)
   //
   // BCP must refer to the current 'checkcast' opcode for the frame
   // on top of the stack.
-  // The caller (or one of it's callers) must use a ResourceMark
+  // The caller (or one of its callers) must use a ResourceMark
   // in order to correctly free the result.
   //
-  static char* generate_class_cast_message(JavaThread* thr, const char* name);
+  static char* generate_class_cast_message(JavaThread* thr, Klass* caster_klass);
 
   // Fill in the "X cannot be cast to a Y" message for ClassCastException
   //
-  // @param name the name of the class of the object attempted to be cast
-  // @param klass the name of the target klass attempt
-  // @param gripe the specific kind of problem being reported
+  // @param caster_klass the class of the object we are casting
+  // @param target_klass the target klass attempt
   // @return the dynamically allocated exception message (must be freed
   // by the caller using a resource mark)
   //
@@ -304,8 +314,7 @@ class SharedRuntime: AllStatic {
   // The caller (or one of it's callers) must use a ResourceMark
   // in order to correctly free the result.
   //
-  static char* generate_class_cast_message(const char* name, const char* klass,
-                                           const char* gripe = " cannot be cast to ");
+  static char* generate_class_cast_message(Klass* caster_klass, Klass* target_klass);
 
   // Resolves a call site- may patch in the destination of the call into the
   // compiled code.
@@ -340,9 +349,16 @@ class SharedRuntime: AllStatic {
                                         Bytecodes::Code& bc,
                                         CallInfo& callinfo, TRAPS);
 
+  static methodHandle extract_attached_method(vframeStream& vfst);
+
   static address clean_virtual_call_entry();
   static address clean_opt_virtual_call_entry();
   static address clean_static_call_entry();
+
+#if defined(X86) && defined(COMPILER1)
+  // For Object.hashCode, System.identityHashCode try to pull hashCode from object header if available.
+  static void inline_check_hashcode_from_object_header(MacroAssembler* masm, methodHandle method, Register obj_reg, Register result);
+#endif // X86 && COMPILER1
 
  public:
 
@@ -358,7 +374,7 @@ class SharedRuntime: AllStatic {
   // return value is the maximum number of VMReg stack slots the convention will use.
   static int java_calling_convention(const BasicType* sig_bt, VMRegPair* regs, int total_args_passed, int is_outgoing);
 
-  static void check_member_name_argument_is_last_argument(methodHandle method,
+  static void check_member_name_argument_is_last_argument(const methodHandle& method,
                                                           const BasicType* sig_bt,
                                                           const VMRegPair* regs) NOT_DEBUG_RETURN;
 
@@ -373,15 +389,9 @@ class SharedRuntime: AllStatic {
   static int c_calling_convention(const BasicType *sig_bt, VMRegPair *regs, VMRegPair *regs2,
                                   int total_args_passed);
 
-  // Compute the new number of arguments in the signature if 32 bit ints
-  // must be converted to longs. Needed if CCallingConventionRequiresIntsAsLongs
-  // is true.
-  static int  convert_ints_to_longints_argcnt(int in_args_count, BasicType* in_sig_bt);
-  // Adapt a method's signature if it contains 32 bit integers that must
-  // be converted to longs. Needed if CCallingConventionRequiresIntsAsLongs
-  // is true.
-  static void convert_ints_to_longints(int i2l_argcnt, int& in_args_count,
-                                       BasicType*& in_sig_bt, VMRegPair*& in_regs);
+  static size_t trampoline_size();
+
+  static void generate_trampoline(MacroAssembler *masm, address destination);
 
   // Generate I2C and C2I adapters. These adapters are simple argument marshalling
   // blobs. Unlike adapters in the tiger and earlier releases the code in these
@@ -416,6 +426,12 @@ class SharedRuntime: AllStatic {
                                                       const BasicType *sig_bt,
                                                       const VMRegPair *regs,
                                                       AdapterFingerPrint* fingerprint);
+
+  static void gen_i2c_adapter(MacroAssembler *_masm,
+                              int total_args_passed,
+                              int comp_args_on_stack,
+                              const BasicType *sig_bt,
+                              const VMRegPair *regs);
 
   // OSR support
 
@@ -463,7 +479,7 @@ class SharedRuntime: AllStatic {
   // is a JNI critical method, or a compiled method handle adapter,
   // such as _invokeBasic, _linkToVirtual, etc.
   static nmethod* generate_native_wrapper(MacroAssembler* masm,
-                                          methodHandle method,
+                                          const methodHandle& method,
                                           int compile_id,
                                           BasicType* sig_bt,
                                           VMRegPair* regs,
@@ -475,6 +491,7 @@ class SharedRuntime: AllStatic {
   // A compiled caller has just called the interpreter, but compiled code
   // exists.  Patch the caller so he no longer calls into the interpreter.
   static void fixup_callers_callsite(Method* moop, address ret_pc);
+  static bool should_fixup_call_destination(address destination, address entry_point, address caller_pc, Method* moop, CodeBlob* cb);
 
   // Slow-path Locking and Unlocking
   static void complete_monitor_locking_C(oopDesc* obj, BasicLock* lock, JavaThread* thread);
@@ -495,6 +512,8 @@ class SharedRuntime: AllStatic {
   static address handle_wrong_method(JavaThread* thread);
   static address handle_wrong_method_abstract(JavaThread* thread);
   static address handle_wrong_method_ic_miss(JavaThread* thread);
+
+  static address handle_unsafe_access(JavaThread* thread, address next_pc);
 
 #ifndef PRODUCT
 
@@ -658,6 +677,20 @@ class AdapterHandlerEntry : public BasicHashtableEntry<mtCode> {
   void print_adapter_on(outputStream* st) const;
 };
 
+// This class is used only with DumpSharedSpaces==true. It holds extra information
+// that's used only during CDS dump time.
+// For details, see comments around Method::link_method()
+class CDSAdapterHandlerEntry: public AdapterHandlerEntry {
+  address               _c2i_entry_trampoline;   // allocated from shared spaces "MC" region
+  AdapterHandlerEntry** _adapter_trampoline;     // allocated from shared spaces "MD" region
+
+public:
+  address get_c2i_entry_trampoline()             const { return _c2i_entry_trampoline; }
+  AdapterHandlerEntry** get_adapter_trampoline() const { return _adapter_trampoline; }
+  void init() NOT_CDS_RETURN;
+};
+
+
 class AdapterHandlerLibrary: public AllStatic {
  private:
   static BufferBlob* _buffer; // the temporary code buffer in CodeCache
@@ -665,17 +698,18 @@ class AdapterHandlerLibrary: public AllStatic {
   static AdapterHandlerEntry* _abstract_method_handler;
   static BufferBlob* buffer_blob();
   static void initialize();
+  static AdapterHandlerEntry* get_adapter0(const methodHandle& method);
 
  public:
 
   static AdapterHandlerEntry* new_entry(AdapterFingerPrint* fingerprint,
                                         address i2c_entry, address c2i_entry, address c2i_unverified_entry);
-  static void create_native_wrapper(methodHandle method);
-  static AdapterHandlerEntry* get_adapter(methodHandle method);
+  static void create_native_wrapper(const methodHandle& method);
+  static AdapterHandlerEntry* get_adapter(const methodHandle& method);
 
-  static void print_handler(CodeBlob* b) { print_handler_on(tty, b); }
-  static void print_handler_on(outputStream* st, CodeBlob* b);
-  static bool contains(CodeBlob* b);
+  static void print_handler(const CodeBlob* b) { print_handler_on(tty, b); }
+  static void print_handler_on(outputStream* st, const CodeBlob* b);
+  static bool contains(const CodeBlob* b);
 #ifndef PRODUCT
   static void print_statistics();
 #endif // PRODUCT

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,6 @@
 
 package com.sun.tools.javac.tree;
 
-
 import javax.tools.Diagnostic;
 
 import com.sun.source.doctree.*;
@@ -36,11 +35,13 @@ import com.sun.tools.javac.util.DefinedBy.Api;
 import com.sun.tools.javac.util.DiagnosticSource;
 import com.sun.tools.javac.util.JCDiagnostic;
 import com.sun.tools.javac.util.JCDiagnostic.SimpleDiagnosticPosition;
-import com.sun.tools.javac.util.List;
-import com.sun.tools.javac.util.Name;
 import com.sun.tools.javac.util.Position;
+
 import java.io.IOException;
 import java.io.StringWriter;
+import java.util.List;
+
+import javax.lang.model.element.Name;
 import javax.tools.JavaFileObject;
 
 /**
@@ -104,39 +105,49 @@ public abstract class DCTree implements DocTree {
     public static class DCDocComment extends DCTree implements DocCommentTree {
         public final Comment comment; // required for the implicit source pos table
 
+        public final List<DCTree> fullBody;
         public final List<DCTree> firstSentence;
         public final List<DCTree> body;
         public final List<DCTree> tags;
 
         public DCDocComment(Comment comment,
-                List<DCTree> firstSentence, List<DCTree> body, List<DCTree> tags) {
+                            List<DCTree> fullBody,
+                            List<DCTree> firstSentence,
+                            List<DCTree> body,
+                            List<DCTree> tags) {
             this.comment = comment;
             this.firstSentence = firstSentence;
+            this.fullBody = fullBody;
             this.body = body;
             this.tags = tags;
         }
 
-        @DefinedBy(Api.COMPILER_TREE)
+        @Override @DefinedBy(Api.COMPILER_TREE)
         public Kind getKind() {
             return Kind.DOC_COMMENT;
         }
 
-        @DefinedBy(Api.COMPILER_TREE)
+        @Override @DefinedBy(Api.COMPILER_TREE)
         public <R, D> R accept(DocTreeVisitor<R, D> v, D d) {
             return v.visitDocComment(this, d);
         }
 
-        @DefinedBy(Api.COMPILER_TREE)
+        @Override @DefinedBy(Api.COMPILER_TREE)
         public List<? extends DocTree> getFirstSentence() {
             return firstSentence;
         }
 
-        @DefinedBy(Api.COMPILER_TREE)
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public List<? extends DocTree> getFullBody() {
+            return fullBody;
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
         public List<? extends DocTree> getBody() {
             return body;
         }
 
-        @DefinedBy(Api.COMPILER_TREE)
+        @Override @DefinedBy(Api.COMPILER_TREE)
         public List<? extends DocTree> getBlockTags() {
             return tags;
         }
@@ -144,14 +155,14 @@ public abstract class DCTree implements DocTree {
     }
 
     public static abstract class DCBlockTag extends DCTree implements BlockTagTree {
-        @DefinedBy(Api.COMPILER_TREE)
+        @Override @DefinedBy(Api.COMPILER_TREE)
         public String getTagName() {
             return getKind().tagName;
         }
     }
 
     public static abstract class DCInlineTag extends DCEndPosTree<DCInlineTag> implements InlineTagTree {
-        @DefinedBy(Api.COMPILER_TREE)
+        @Override @DefinedBy(Api.COMPILER_TREE)
         public String getTagName() {
             return getKind().tagName;
         }
@@ -332,6 +343,11 @@ public abstract class DCTree implements DocTree {
             this.diag = diags.error(null, diagSource, this, code, args);
         }
 
+        DCErroneous(String body, JCDiagnostic diag) {
+            this.body = body;
+            this.diag = diag;
+        }
+
         @Override @DefinedBy(Api.COMPILER_TREE)
         public Kind getKind() {
             return Kind.ERRONEOUS;
@@ -374,6 +390,29 @@ public abstract class DCTree implements DocTree {
 
     }
 
+    public static class DCHidden extends DCBlockTag implements HiddenTree {
+        public final List<DCTree> body;
+
+        DCHidden(List<DCTree> body) {
+            this.body = body;
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public Kind getKind() {
+            return Kind.HIDDEN;
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public <R, D> R accept(DocTreeVisitor<R, D> v, D d) {
+            return v.visitHidden(this, d);
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public List<? extends DocTree> getBody() {
+            return body;
+        }
+    }
+
     public static class DCIdentifier extends DCTree implements IdentifierTree {
         public final Name name;
 
@@ -394,6 +433,36 @@ public abstract class DCTree implements DocTree {
         @Override @DefinedBy(Api.COMPILER_TREE)
         public Name getName() {
             return name;
+        }
+    }
+
+    public static class DCIndex extends DCInlineTag implements IndexTree {
+        public final DCTree term;
+        public final List<DCTree> description;
+
+        DCIndex(DCTree term, List<DCTree> description) {
+            this.term = term;
+            this.description = description;
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public Kind getKind() {
+            return Kind.INDEX;
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public <R, D> R accept(DocTreeVisitor<R, D> v, D d) {
+            return v.visitIndex(this, d);
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public DocTree getSearchTerm() {
+            return term;
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public java.util.List<? extends DocTree> getDescription() {
+            return description;
         }
     }
 
@@ -505,11 +574,41 @@ public abstract class DCTree implements DocTree {
         }
     }
 
+    public static class DCProvides extends DCBlockTag implements ProvidesTree {
+        public final DCReference serviceType;
+        public final List<DCTree> description;
+
+        DCProvides(DCReference serviceType, List<DCTree> description) {
+            this.serviceType = serviceType;
+            this.description = description;
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public Kind getKind() {
+            return Kind.PROVIDES;
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public <R, D> R accept(DocTreeVisitor<R, D> v, D d) {
+            return v.visitProvides(this, d);
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public ReferenceTree getServiceType() {
+            return serviceType;
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public List<? extends DocTree> getDescription() {
+            return description;
+        }
+    }
+
     public static class DCReference extends DCEndPosTree<DCReference> implements ReferenceTree {
         public final String signature;
 
         // The following are not directly exposed through ReferenceTree
-        // use DocTrees.getElement(TreePath,ReferenceTree)
+        // use DocTrees.getElement(DocTreePath)
         public final JCTree qualifierExpression;
         public final Name memberName;
         public final List<JCTree> paramTypes;
@@ -840,6 +939,36 @@ public abstract class DCTree implements DocTree {
         @Override @DefinedBy(Api.COMPILER_TREE)
         public List<? extends DocTree> getContent() {
             return content;
+        }
+    }
+
+    public static class DCUses extends DCBlockTag implements UsesTree {
+        public final DCReference serviceType;
+        public final List<DCTree> description;
+
+        DCUses(DCReference serviceType, List<DCTree> description) {
+            this.serviceType = serviceType;
+            this.description = description;
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public Kind getKind() {
+            return Kind.USES;
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public <R, D> R accept(DocTreeVisitor<R, D> v, D d) {
+            return v.visitUses(this, d);
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public ReferenceTree getServiceType() {
+            return serviceType;
+        }
+
+        @Override @DefinedBy(Api.COMPILER_TREE)
+        public List<? extends DocTree> getDescription() {
+            return description;
         }
     }
 

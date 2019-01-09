@@ -26,8 +26,7 @@
 package java.security;
 
 import java.util.Map;
-import java.util.ArrayList;
-import java.net.URL;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
@@ -40,6 +39,7 @@ import sun.security.util.Debug;
  *
  * @author  Li Gong
  * @author  Roland Schemers
+ * @since 1.2
  */
 public class SecureClassLoader extends ClassLoader {
     /*
@@ -50,18 +50,16 @@ public class SecureClassLoader extends ClassLoader {
     private final boolean initialized;
 
     /*
-     * Map that maps the CodeSource URL (as a String) to ProtectionDomain.
-     * We use a String instead of a CodeSource/URL as the key to avoid
+     * Map that maps the CodeSource to a ProtectionDomain. The key is a
+     * CodeSourceKey class that uses a String instead of a URL to avoid
      * potential expensive name service lookups. This does mean that URLs that
      * are equivalent after nameservice lookup will be placed in separate
      * ProtectionDomains; however during policy enforcement these URLs will be
      * canonicalized and resolved resulting in a consistent set of granted
      * permissions.
      */
-    private final Map<String, ProtectionDomain> pdcache
+    private final Map<CodeSourceKey, ProtectionDomain> pdcache
             = new ConcurrentHashMap<>(11);
-
-    private static final Debug debug = Debug.getInstance("scl");
 
     static {
         ClassLoader.registerAsParallelCapable();
@@ -107,6 +105,31 @@ public class SecureClassLoader extends ClassLoader {
     protected SecureClassLoader() {
         super();
         // this is to make the stack depth consistent with 1.1
+        SecurityManager security = System.getSecurityManager();
+        if (security != null) {
+            security.checkCreateClassLoader();
+        }
+        initialized = true;
+    }
+
+    /**
+     * Creates a new {@code SecureClassLoader} of the specified name and
+     * using the specified parent class loader for delegation.
+     *
+     * @param name class loader name; or {@code null} if not named
+     * @param parent the parent class loader
+     *
+     * @throws IllegalArgumentException if the given name is empty.
+     *
+     * @throws SecurityException  if a security manager exists and its
+     *         {@link SecurityManager#checkCreateClassLoader()} method
+     *         doesn't allow creation of a class loader.
+     *
+     * @since 9
+     * @spec JPMS
+     */
+    protected SecureClassLoader(String name, ClassLoader parent) {
+        super(name, parent);
         SecurityManager security = System.getSecurityManager();
         if (security != null) {
             security.checkCreateClassLoader();
@@ -202,6 +225,13 @@ public class SecureClassLoader extends ClassLoader {
     }
 
     /*
+     * holder class for the static field "debug" to delay its initialization
+     */
+    private static class DebugHolder {
+        private static final Debug debug = Debug.getInstance("scl");
+    }
+
+    /*
      * Returned cached ProtectionDomain for the specified CodeSource.
      */
     private ProtectionDomain getProtectionDomain(CodeSource cs) {
@@ -209,24 +239,21 @@ public class SecureClassLoader extends ClassLoader {
             return null;
         }
 
-        // Use a String form of the URL as the key. It should behave in the
-        // same manner as the URL when compared for equality except that no
-        // nameservice lookup is done on the hostname (String comparison
+        // Use a CodeSourceKey object key. It should behave in the
+        // same manner as the CodeSource when compared for equality except
+        // that no nameservice lookup is done on the hostname (String comparison
         // only), and the fragment is not considered.
-        String key = cs.getLocationNoFragString();
-        if (key == null) {
-            key = "<null>";
-        }
+        CodeSourceKey key = new CodeSourceKey(cs);
         return pdcache.computeIfAbsent(key, new Function<>() {
             @Override
-            public ProtectionDomain apply(String key /* not used */) {
+            public ProtectionDomain apply(CodeSourceKey key /* not used */) {
                 PermissionCollection perms
                         = SecureClassLoader.this.getPermissions(cs);
                 ProtectionDomain pd = new ProtectionDomain(
                         cs, perms, SecureClassLoader.this, null);
-                if (debug != null) {
-                    debug.println(" getPermissions " + pd);
-                    debug.println("");
+                if (DebugHolder.debug != null) {
+                    DebugHolder.debug.println(" getPermissions " + pd);
+                    DebugHolder.debug.println("");
                 }
                 return pd;
             }
@@ -242,4 +269,37 @@ public class SecureClassLoader extends ClassLoader {
         }
     }
 
+    private static class CodeSourceKey {
+        private final CodeSource cs;
+
+        CodeSourceKey(CodeSource cs) {
+            this.cs = cs;
+        }
+
+        @Override
+        public int hashCode() {
+            String locationNoFrag = cs.getLocationNoFragString();
+            return locationNoFrag != null ? locationNoFrag.hashCode() : 0;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (obj == this) {
+                return true;
+            }
+
+            if (!(obj instanceof CodeSourceKey)) {
+                return false;
+            }
+
+            CodeSourceKey csk = (CodeSourceKey) obj;
+
+            if (!Objects.equals(cs.getLocationNoFragString(),
+                                csk.cs.getLocationNoFragString())) {
+                return false;
+            }
+
+            return cs.matchCerts(csk.cs, true);
+        }
+    }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2014, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -38,8 +38,6 @@
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "runtime/synchronizer.hpp"
-
-#ifndef CC_INTERP
 
 #define __ _masm->
 
@@ -186,7 +184,7 @@ static void do_oop_store(InterpreterMacroAssembler* _masm,
       }
       break;
 #endif // INCLUDE_ALL_GCS
-    case BarrierSet::CardTableModRef:
+    case BarrierSet::CardTableForRS:
     case BarrierSet::CardTableExtension:
       {
         if (val == noreg) {
@@ -231,6 +229,7 @@ void TemplateTable::patch_bytecode(Bytecodes::Code bc, Register bc_reg,
   switch (bc) {
   case Bytecodes::_fast_aputfield:
   case Bytecodes::_fast_bputfield:
+  case Bytecodes::_fast_zputfield:
   case Bytecodes::_fast_cputfield:
   case Bytecodes::_fast_dputfield:
   case Bytecodes::_fast_fputfield:
@@ -386,7 +385,8 @@ void TemplateTable::ldc(bool wide)
 
   // get type
   __ add(r3, r1, tags_offset);
-  __ ldrb(r3, Address(r0, r3));
+  __ lea(r3, Address(r0, r3));
+  __ ldarb(r3, r3);
 
   // unresolved class - get the resolved class
   __ cmp(r3, JVM_CONSTANT_UnresolvedClass);
@@ -852,26 +852,23 @@ void TemplateTable::aload_0_internal(RewriteControl rc) {
     // get next bytecode
     __ load_unsigned_byte(r1, at_bcp(Bytecodes::length_for(Bytecodes::_aload_0)));
 
-    // do actual aload_0
-    aload(0);
-
     // if _getfield then wait with rewrite
     __ cmpw(r1, Bytecodes::Bytecodes::_getfield);
     __ br(Assembler::EQ, done);
 
-    // if _igetfield then reqrite to _fast_iaccess_0
+    // if _igetfield then rewrite to _fast_iaccess_0
     assert(Bytecodes::java_code(Bytecodes::_fast_iaccess_0) == Bytecodes::_aload_0, "fix bytecode definition");
     __ cmpw(r1, Bytecodes::_fast_igetfield);
     __ movw(bc, Bytecodes::_fast_iaccess_0);
     __ br(Assembler::EQ, rewrite);
 
-    // if _agetfield then reqrite to _fast_aaccess_0
+    // if _agetfield then rewrite to _fast_aaccess_0
     assert(Bytecodes::java_code(Bytecodes::_fast_aaccess_0) == Bytecodes::_aload_0, "fix bytecode definition");
     __ cmpw(r1, Bytecodes::_fast_agetfield);
     __ movw(bc, Bytecodes::_fast_aaccess_0);
     __ br(Assembler::EQ, rewrite);
 
-    // if _fgetfield then reqrite to _fast_faccess_0
+    // if _fgetfield then rewrite to _fast_faccess_0
     assert(Bytecodes::java_code(Bytecodes::_fast_faccess_0) == Bytecodes::_aload_0, "fix bytecode definition");
     __ cmpw(r1, Bytecodes::_fast_fgetfield);
     __ movw(bc, Bytecodes::_fast_faccess_0);
@@ -887,9 +884,10 @@ void TemplateTable::aload_0_internal(RewriteControl rc) {
     patch_bytecode(Bytecodes::_aload_0, bc, r1, false);
 
     __ bind(done);
-  } else {
-    aload(0);
   }
+
+  // Do actual aload_0 (must do this after patch_bytecode which might call VM and GC might change oop).
+  aload(0);
 }
 
 void TemplateTable::istore()
@@ -1083,6 +1081,17 @@ void TemplateTable::bastore()
   // r1: index
   // r3: array
   index_check(r3, r1); // prefer index in r1
+
+  // Need to check whether array is boolean or byte
+  // since both types share the bastore bytecode.
+  __ load_klass(r2, r3);
+  __ ldrw(r2, Address(r2, Klass::layout_helper_offset()));
+  int diffbit_index = exact_log2(Klass::layout_helper_boolean_diffbit());
+  Label L_skip;
+  __ tbz(r2, diffbit_index, L_skip);
+  __ andw(r0, r0, 1);  // if it is a T_BOOLEAN array, mask the stored value to 0/1
+  __ bind(L_skip);
+
   __ lea(rscratch1, Address(r3, r1, Address::uxtw(0)));
   __ strb(r0, Address(rscratch1,
                       arrayOopDesc::base_offset_in_bytes(T_BYTE)));
@@ -2179,9 +2188,8 @@ void TemplateTable::_return(TosState state)
     __ ldr(c_rarg1, aaddress(0));
     __ load_klass(r3, c_rarg1);
     __ ldrw(r3, Address(r3, Klass::access_flags_offset()));
-    __ tst(r3, JVM_ACC_HAS_FINALIZER);
     Label skip_register_finalizer;
-    __ br(Assembler::EQ, skip_register_finalizer);
+    __ tbz(r3, exact_log2(JVM_ACC_HAS_FINALIZER), skip_register_finalizer);
 
     __ call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::register_finalizer), c_rarg1);
 
@@ -2193,6 +2201,13 @@ void TemplateTable::_return(TosState state)
   // know if this is a finalizer, so we always do so.
   if (_desc->bytecode() == Bytecodes::_return)
     __ membar(MacroAssembler::StoreStore);
+
+  // Narrow result if state is itos but result type is smaller.
+  // Need to narrow in the return bytecode rather than in generate_return_entry
+  // since compiled code callers expect the result to already be narrowed.
+  if (state == itos) {
+    __ narrow(r0);
+  }
 
   __ remove_activation(state);
   __ ret(lr);
@@ -2374,25 +2389,40 @@ void TemplateTable::getfield_or_static(int byte_no, bool is_static, RewriteContr
   const Register obj   = r4;
   const Register off   = r19;
   const Register flags = r0;
+  const Register raw_flags = r6;
   const Register bc    = r4; // uses same reg as obj, so don't mix them
 
   resolve_cache_and_index(byte_no, cache, index, sizeof(u2));
   jvmti_post_field_access(cache, index, is_static, false);
-  load_field_cp_cache_entry(obj, cache, index, off, flags, is_static);
+  load_field_cp_cache_entry(obj, cache, index, off, raw_flags, is_static);
 
   if (!is_static) {
     // obj is on the stack
     pop_and_check_object(obj);
   }
 
+  // 8179954: We need to make sure that the code generated for
+  // volatile accesses forms a sequentially-consistent set of
+  // operations when combined with STLR and LDAR.  Without a leading
+  // membar it's possible for a simple Dekker test to fail if loads
+  // use LDR;DMB but stores use STLR.  This can happen if C2 compiles
+  // the stores in one method and we interpret the loads in another.
+  if (! UseBarriersForVolatile) {
+    Label notVolatile;
+    __ tbz(raw_flags, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+    __ membar(MacroAssembler::AnyAny);
+    __ bind(notVolatile);
+  }
+
   const Address field(obj, off);
 
-  Label Done, notByte, notInt, notShort, notChar,
+  Label Done, notByte, notBool, notInt, notShort, notChar,
               notLong, notFloat, notObj, notDouble;
 
   // x86 uses a shift and mask or wings it with a shift plus assert
   // the mask is not needed. aarch64 just uses bitfield extract
-  __ ubfxw(flags, flags, ConstantPoolCacheEntry::tos_state_shift,  ConstantPoolCacheEntry::tos_state_bits);
+  __ ubfxw(flags, raw_flags, ConstantPoolCacheEntry::tos_state_shift,
+           ConstantPoolCacheEntry::tos_state_bits);
 
   assert(btos == 0, "change code, btos != 0");
   __ cbnz(flags, notByte);
@@ -2410,6 +2440,20 @@ void TemplateTable::getfield_or_static(int byte_no, bool is_static, RewriteContr
   __ b(Done);
 
   __ bind(notByte);
+  __ cmp(flags, ztos);
+  __ br(Assembler::NE, notBool);
+
+  // ztos (same code as btos)
+  __ ldrsb(r0, field);
+  __ push(ztos);
+  // Rewrite bytecode to be faster
+  if (rc == may_rewrite) {
+    // use btos rewriting, no truncating to t/f bit is needed for getfield.
+    patch_bytecode(Bytecodes::_fast_bgetfield, bc, r1);
+  }
+  __ b(Done);
+
+  __ bind(notBool);
   __ cmp(flags, atos);
   __ br(Assembler::NE, notObj);
   // atos
@@ -2500,9 +2544,11 @@ void TemplateTable::getfield_or_static(int byte_no, bool is_static, RewriteContr
 #endif
 
   __ bind(Done);
-  // It's really not worth bothering to check whether this field
-  // really is volatile in the slow case.
+
+  Label notVolatile;
+  __ tbz(raw_flags, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
   __ membar(MacroAssembler::LoadLoad | MacroAssembler::LoadStore);
+  __ bind(notVolatile);
 }
 
 
@@ -2605,7 +2651,7 @@ void TemplateTable::putfield_or_static(int byte_no, bool is_static, RewriteContr
   // field address
   const Address field(obj, off);
 
-  Label notByte, notInt, notShort, notChar,
+  Label notByte, notBool, notInt, notShort, notChar,
         notLong, notFloat, notObj, notDouble;
 
   // x86 uses a shift and mask or wings it with a shift plus assert
@@ -2630,6 +2676,22 @@ void TemplateTable::putfield_or_static(int byte_no, bool is_static, RewriteContr
   }
 
   __ bind(notByte);
+  __ cmp(flags, ztos);
+  __ br(Assembler::NE, notBool);
+
+  // ztos
+  {
+    __ pop(ztos);
+    if (!is_static) pop_and_check_object(obj);
+    __ andw(r0, r0, 0x1);
+    __ strb(r0, field);
+    if (rc == may_rewrite) {
+      patch_bytecode(Bytecodes::_fast_zputfield, bc, r1, true, byte_no);
+    }
+    __ b(Done);
+  }
+
+  __ bind(notBool);
   __ cmp(flags, atos);
   __ br(Assembler::NE, notObj);
 
@@ -2784,6 +2846,7 @@ void TemplateTable::jvmti_post_fast_field_mod()
     switch (bytecode()) {          // load values into the jvalue object
     case Bytecodes::_fast_aputfield: __ push_ptr(r0); break;
     case Bytecodes::_fast_bputfield: // fall through
+    case Bytecodes::_fast_zputfield: // fall through
     case Bytecodes::_fast_sputfield: // fall through
     case Bytecodes::_fast_cputfield: // fall through
     case Bytecodes::_fast_iputfield: __ push_i(r0); break;
@@ -2809,6 +2872,7 @@ void TemplateTable::jvmti_post_fast_field_mod()
     switch (bytecode()) {             // restore tos values
     case Bytecodes::_fast_aputfield: __ pop_ptr(r0); break;
     case Bytecodes::_fast_bputfield: // fall through
+    case Bytecodes::_fast_zputfield: // fall through
     case Bytecodes::_fast_sputfield: // fall through
     case Bytecodes::_fast_cputfield: // fall through
     case Bytecodes::_fast_iputfield: __ pop_i(r0); break;
@@ -2864,6 +2928,9 @@ void TemplateTable::fast_storefield(TosState state)
   case Bytecodes::_fast_iputfield:
     __ strw(r0, field);
     break;
+  case Bytecodes::_fast_zputfield:
+    __ andw(r0, r0, 0x1);  // boolean is true if LSB is 1
+    // fall through to bputfield
   case Bytecodes::_fast_bputfield:
     __ strb(r0, field);
     break;
@@ -2929,6 +2996,19 @@ void TemplateTable::fast_accessfield(TosState state)
   __ null_check(r0);
   const Address field(r0, r1);
 
+  // 8179954: We need to make sure that the code generated for
+  // volatile accesses forms a sequentially-consistent set of
+  // operations when combined with STLR and LDAR.  Without a leading
+  // membar it's possible for a simple Dekker test to fail if loads
+  // use LDR;DMB but stores use STLR.  This can happen if C2 compiles
+  // the stores in one method and we interpret the loads in another.
+  if (! UseBarriersForVolatile) {
+    Label notVolatile;
+    __ tbz(r3, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+    __ membar(MacroAssembler::AnyAny);
+    __ bind(notVolatile);
+  }
+
   // access field
   switch (bytecode()) {
   case Bytecodes::_fast_agetfield:
@@ -2977,13 +3057,29 @@ void TemplateTable::fast_xaccess(TosState state)
   __ get_cache_and_index_at_bcp(r2, r3, 2);
   __ ldr(r1, Address(r2, in_bytes(ConstantPoolCache::base_offset() +
                                   ConstantPoolCacheEntry::f2_offset())));
+
+  // 8179954: We need to make sure that the code generated for
+  // volatile accesses forms a sequentially-consistent set of
+  // operations when combined with STLR and LDAR.  Without a leading
+  // membar it's possible for a simple Dekker test to fail if loads
+  // use LDR;DMB but stores use STLR.  This can happen if C2 compiles
+  // the stores in one method and we interpret the loads in another.
+  if (! UseBarriersForVolatile) {
+    Label notVolatile;
+    __ ldrw(r3, Address(r2, in_bytes(ConstantPoolCache::base_offset() +
+                                     ConstantPoolCacheEntry::flags_offset())));
+    __ tbz(r3, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
+    __ membar(MacroAssembler::AnyAny);
+    __ bind(notVolatile);
+  }
+
   // make sure exception is reported in correct bcp range (getfield is
   // next instruction)
   __ increment(rbcp);
   __ null_check(r0);
   switch (state) {
   case itos:
-    __ ldr(r0, Address(r0, r1, Address::lsl(0)));
+    __ ldrw(r0, Address(r0, r1, Address::lsl(0)));
     break;
   case atos:
     __ load_heap_oop(r0, Address(r0, r1, Address::lsl(0)));
@@ -3001,7 +3097,7 @@ void TemplateTable::fast_xaccess(TosState state)
     __ ldrw(r3, Address(r2, in_bytes(ConstantPoolCache::base_offset() +
                                      ConstantPoolCacheEntry::flags_offset())));
     __ tbz(r3, ConstantPoolCacheEntry::is_volatile_shift, notVolatile);
-    __ membar(MacroAssembler::LoadLoad);
+    __ membar(MacroAssembler::LoadLoad | MacroAssembler::LoadStore);
     __ bind(notVolatile);
   }
 
@@ -3316,7 +3412,8 @@ void TemplateTable::_new() {
   // how Constant Pool is updated (see ConstantPool::klass_at_put)
   const int tags_offset = Array<u1>::base_offset_in_bytes();
   __ lea(rscratch1, Address(r0, r3, Address::lsl(0)));
-  __ ldrb(rscratch1, Address(rscratch1, tags_offset));
+  __ lea(rscratch1, Address(rscratch1, tags_offset));
+  __ ldarb(rscratch1, rscratch1);
   __ cmp(rscratch1, JVM_CONSTANT_Class);
   __ br(Assembler::NE, slow_case);
 
@@ -3460,7 +3557,8 @@ void TemplateTable::checkcast()
   __ get_unsigned_2_byte_index_at_bcp(r19, 1); // r19=index
   // See if bytecode has already been quicked
   __ add(rscratch1, r3, Array<u1>::base_offset_in_bytes());
-  __ ldrb(r1, Address(rscratch1, r19));
+  __ lea(r1, Address(rscratch1, r19));
+  __ ldarb(r1, r1);
   __ cmp(r1, JVM_CONSTANT_Class);
   __ br(Assembler::EQ, quicked);
 
@@ -3514,7 +3612,8 @@ void TemplateTable::instanceof() {
   __ get_unsigned_2_byte_index_at_bcp(r19, 1); // r19=index
   // See if bytecode has already been quicked
   __ add(rscratch1, r3, Array<u1>::base_offset_in_bytes());
-  __ ldrb(r1, Address(rscratch1, r19));
+  __ lea(r1, Address(rscratch1, r19));
+  __ ldarb(r1, r1);
   __ cmp(r1, JVM_CONSTANT_Class);
   __ br(Assembler::EQ, quicked);
 
@@ -3664,19 +3763,15 @@ void TemplateTable::monitorenter()
 
   // allocate one if there's no free slot
   {
-    Label entry, loop, no_adjust;
+    Label entry, loop;
     // 1. compute new pointers            // rsp: old expression stack top
     __ ldr(c_rarg1, monitor_block_bot);   // c_rarg1: old expression stack bottom
-    __ sub(esp, esp, entry_size);           // move expression stack top
+    __ sub(esp, esp, entry_size);         // move expression stack top
     __ sub(c_rarg1, c_rarg1, entry_size); // move expression stack bottom
     __ mov(c_rarg3, esp);                 // set start value for copy loop
     __ str(c_rarg1, monitor_block_bot);   // set new monitor block bottom
 
-    __ cmp(sp, c_rarg3);                  // Check if we need to move sp
-    __ br(Assembler::LO, no_adjust);      // to allow more stack space
-                                          // for our new esp
-    __ sub(sp, sp, 2 * wordSize);
-    __ bind(no_adjust);
+    __ sub(sp, sp, entry_size);           // make room for the monitor
 
     __ b(entry);
     // 2. move expression stack contents
@@ -3791,4 +3886,3 @@ void TemplateTable::multianewarray() {
   __ load_unsigned_byte(r1, at_bcp(3));
   __ lea(esp, Address(esp, r1, Address::uxtw(3)));
 }
-#endif // !CC_INTERP

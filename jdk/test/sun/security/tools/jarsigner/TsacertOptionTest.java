@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,44 +22,30 @@
  */
 
 import jdk.testlibrary.OutputAnalyzer;
-import jdk.testlibrary.ProcessTools;
 import jdk.testlibrary.JarUtils;
 
 /**
  * @test
- * @bug 8024302 8026037
+ * @bug 8024302 8026037 8176320
  * @summary The test signs and verifies a jar file with -tsacert option
- * @library /lib/testlibrary
- * @modules java.base/sun.misc
- *          java.base/sun.security.pkcs
+ * @library /lib/testlibrary warnings
+ * @library /test/lib
+ * @modules java.base/sun.security.pkcs
  *          java.base/sun.security.timestamp
+ *          java.base/sun.security.tools.keytool
  *          java.base/sun.security.util
  *          java.base/sun.security.x509
  *          java.management
  * @run main TsacertOptionTest
  */
-public class TsacertOptionTest {
+public class TsacertOptionTest extends Test {
 
-    private static final String FS = System.getProperty("file.separator");
-    private static final String JAVA_HOME = System.getProperty("java.home");
-    private static final String KEYTOOL = JAVA_HOME + FS + "bin" + FS
-            + "keytool";
-    private static final String JARSIGNER = JAVA_HOME + FS + "bin" + FS
-            + "jarsigner";
-    private static final String UNSIGNED_JARFILE = "unsigned.jar";
-    private static final String SIGNED_JARFILE = "signed.jar";
     private static final String FILENAME = TsacertOptionTest.class.getName()
             + ".txt";
-    private static final String PASSWORD = "changeit";
-    private static final String KEYSTORE = "ks.jks";
     private static final String SIGNING_KEY_ALIAS = "sign_alias";
     private static final String TSA_KEY_ALIAS = "ts";
-    private static final String KEY_ALG = "RSA";
-    private static final int KEY_SIZE = 2048;
-    private static final int VALIDITY = 365;
-    private static final String WARNING = "Warning:";
-    private static final String JAR_SIGNED = "jar signed.";
-    private static final String JAR_VERIFIED = "jar verified.";
+
+    private static final String PASSWORD = "changeit";
 
     /**
      * The test signs and verifies a jar file with -tsacert option,
@@ -77,13 +63,18 @@ public class TsacertOptionTest {
         Utils.createFiles(FILENAME);
         JarUtils.createJar(UNSIGNED_JARFILE, FILENAME);
 
-        // look for free network port for TSA service
-        int port = jdk.testlibrary.Utils.getFreePort();
-        String host = jdk.testlibrary.Utils.getHostname();
-        String tsaUrl = "http://" + host + ":" + port;
-
         // create key pair for jar signing
-        ProcessTools.executeCommand(KEYTOOL,
+        keytool(
+                "-genkey",
+                "-alias", CA_KEY_ALIAS,
+                "-keyalg", KEY_ALG,
+                "-keysize", Integer.toString(KEY_SIZE),
+                "-keystore", KEYSTORE,
+                "-storepass", PASSWORD,
+                "-keypass", PASSWORD,
+                "-dname", "CN=CA",
+                "-validity", Integer.toString(VALIDITY)).shouldHaveExitValue(0);
+        keytool(
                 "-genkey",
                 "-alias", SIGNING_KEY_ALIAS,
                 "-keyalg", KEY_ALG,
@@ -91,27 +82,55 @@ public class TsacertOptionTest {
                 "-keystore", KEYSTORE,
                 "-storepass", PASSWORD,
                 "-keypass", PASSWORD,
-                "-dname", "CN=Test",
-                "-validity", Integer.toString(VALIDITY)).shouldHaveExitValue(0);
-
-        // create key pair for TSA service
-        // SubjectInfoAccess extension contains URL to TSA service
-        ProcessTools.executeCommand(KEYTOOL,
-                "-genkey",
-                "-v",
-                "-alias", TSA_KEY_ALIAS,
-                "-keyalg", KEY_ALG,
-                "-keysize", Integer.toString(KEY_SIZE),
+                "-dname", "CN=Test").shouldHaveExitValue(0);
+        keytool(
+                "-certreq",
+                "-alias", SIGNING_KEY_ALIAS,
                 "-keystore", KEYSTORE,
                 "-storepass", PASSWORD,
                 "-keypass", PASSWORD,
-                "-dname", "CN=TSA",
-                "-ext", "ExtendedkeyUsage:critical=timeStamping",
-                "-ext", "SubjectInfoAccess=timeStamping:URI:" + tsaUrl,
-                "-validity", Integer.toString(VALIDITY)).shouldHaveExitValue(0);
+                "-file", "certreq").shouldHaveExitValue(0);
+        keytool(
+                "-gencert",
+                "-alias", CA_KEY_ALIAS,
+                "-keystore", KEYSTORE,
+                "-storepass", PASSWORD,
+                "-keypass", PASSWORD,
+                "-validity", Integer.toString(VALIDITY),
+                "-infile", "certreq",
+                "-outfile", "cert").shouldHaveExitValue(0);
+        keytool(
+                "-importcert",
+                "-alias", SIGNING_KEY_ALIAS,
+                "-keystore", KEYSTORE,
+                "-storepass", PASSWORD,
+                "-keypass", PASSWORD,
+                "-file", "cert").shouldHaveExitValue(0);
 
-        try (TimestampCheck.Handler tsa = TimestampCheck.Handler.init(port,
-                KEYSTORE);) {
+
+        try (TimestampCheck.Handler tsa = TimestampCheck.Handler.init(0,
+                KEYSTORE)) {
+
+            // look for free network port for TSA service
+            int port = tsa.getPort();
+            String host = "127.0.0.1";
+            String tsaUrl = "http://" + host + ":" + port;
+
+            // create key pair for TSA service
+            // SubjectInfoAccess extension contains URL to TSA service
+            keytool(
+                    "-genkey",
+                    "-v",
+                    "-alias", TSA_KEY_ALIAS,
+                    "-keyalg", KEY_ALG,
+                    "-keysize", Integer.toString(KEY_SIZE),
+                    "-keystore", KEYSTORE,
+                    "-storepass", PASSWORD,
+                    "-keypass", PASSWORD,
+                    "-dname", "CN=TSA",
+                    "-ext", "ExtendedkeyUsage:critical=timeStamping",
+                    "-ext", "SubjectInfoAccess=timeStamping:URI:" + tsaUrl,
+                    "-validity", Integer.toString(VALIDITY)).shouldHaveExitValue(0);
 
             // start TSA
             tsa.start();
@@ -119,7 +138,7 @@ public class TsacertOptionTest {
             // sign jar file
             // specify -tsadigestalg option because
             // TSA server uses SHA-1 digest algorithm
-             OutputAnalyzer analyzer = ProcessTools.executeCommand(JARSIGNER,
+             OutputAnalyzer analyzer = jarsigner(
                     "-J-Dhttp.proxyHost=",
                     "-J-Dhttp.proxyPort=",
                     "-J-Djava.net.useSystemProxies=",
@@ -138,7 +157,7 @@ public class TsacertOptionTest {
             analyzer.shouldContain(JAR_SIGNED);
 
             // verify signed jar
-            analyzer = ProcessTools.executeCommand(JARSIGNER,
+            analyzer = jarsigner(
                     "-verbose",
                     "-verify",
                     "-keystore", KEYSTORE,

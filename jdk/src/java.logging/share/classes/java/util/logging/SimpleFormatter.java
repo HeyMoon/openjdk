@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,17 +27,16 @@
 package java.util.logging;
 
 import java.io.*;
-import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import sun.util.logging.LoggingSupport;
+import jdk.internal.logger.SurrogateLogger;
 
 /**
  * Print a brief summary of the {@code LogRecord} in a human readable
  * format.  The summary will typically be 1 or 2 lines.
  *
  * <p>
- * <a name="formatting">
+ * <a id="formatting">
  * <b>Configuration:</b></a>
  * The {@code SimpleFormatter} is initialized with the
  * <a href="../Formatter.html#syntax">format string</a>
@@ -60,8 +59,12 @@ import sun.util.logging.LoggingSupport;
 public class SimpleFormatter extends Formatter {
 
     // format string for printing the log record
-    private final String format = LoggingSupport.getSimpleFormat();
-    private final ZoneId zoneId = ZoneId.systemDefault();
+    static String getLoggingProperty(String name) {
+        return LogManager.getLogManager().getProperty(name);
+    }
+
+    private final String format =
+        SurrogateLogger.getSimpleFormat(SimpleFormatter::getLoggingProperty);
 
     /**
      * Format the given LogRecord.
@@ -132,7 +135,7 @@ public class SimpleFormatter extends Formatter {
      *     SEVERE: several message with an exception
      *     </pre></li>
      * <li> {@code java.util.logging.SimpleFormatter.format="%1$tb %1$td, %1$tY %1$tl:%1$tM:%1$tS.%1$tN %1$Tp %2$s%n%4$s: %5$s%6$s%n"}
-     *      <p>Since JDK 1.9, {@code java.util.logging} uses {@link
+     *      <p>Since JDK 9, {@code java.util.logging} uses {@link
      *         java.time.Clock#systemUTC() java.time} to create more precise time
      *         stamps.
      *         The format above can be used to add a {@code .%1$tN} to the
@@ -150,9 +153,9 @@ public class SimpleFormatter extends Formatter {
      * @return a formatted log record
      */
     @Override
-    public synchronized String format(LogRecord record) {
+    public String format(LogRecord record) {
         ZonedDateTime zdt = ZonedDateTime.ofInstant(
-                record.getInstant(), zoneId);
+                record.getInstant(), ZoneId.systemDefault());
         String source;
         if (record.getSourceClassName() != null) {
             source = record.getSourceClassName();

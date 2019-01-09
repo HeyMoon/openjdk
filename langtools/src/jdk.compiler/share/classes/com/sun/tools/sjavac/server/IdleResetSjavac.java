@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,12 +22,12 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package com.sun.tools.sjavac.server;
 
-import java.io.File;
-import java.net.URI;
-import java.util.List;
-import java.util.Set;
+import com.sun.tools.javac.main.Main.Result;
+import com.sun.tools.sjavac.Log;
+
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -55,8 +55,8 @@ public class IdleResetSjavac implements Sjavac {
     private TimerTask idlenessTimerTask;
 
     public IdleResetSjavac(Sjavac delegate,
-                            Terminable toShutdown,
-                            long idleTimeout) {
+                           Terminable toShutdown,
+                           long idleTimeout) {
         this.delegate = delegate;
         this.toShutdown = toShutdown;
         this.idleTimeout = idleTimeout;
@@ -64,30 +64,10 @@ public class IdleResetSjavac implements Sjavac {
     }
 
     @Override
-    public SysInfo getSysInfo() {
+    public Result compile(String[] args) {
         startCall();
         try {
-            return delegate.getSysInfo();
-        } finally {
-            endCall();
-        }
-    }
-
-    @Override
-    public CompilationResult compile(String protocolId,
-                                     String invocationId,
-                                     String[] args,
-                                     List<File> explicitSources,
-                                     Set<URI> sourcesToCompile,
-                                     Set<URI> visibleSources) {
-        startCall();
-        try {
-            return delegate.compile(protocolId,
-                                    invocationId,
-                                    args,
-                                    explicitSources,
-                                    sourcesToCompile,
-                                    visibleSources);
+            return delegate.compile(args);
         } finally {
             endCall();
         }
@@ -117,6 +97,7 @@ public class IdleResetSjavac implements Sjavac {
             throw new IllegalStateException("Idle timeout already scheduled");
         idlenessTimerTask = new TimerTask() {
             public void run() {
+                Log.setLogForCurrentThread(ServerMain.getErrorLog());
                 toShutdown.shutdown("Server has been idle for " + (idleTimeout / 1000) + " seconds.");
             }
         };
@@ -129,8 +110,4 @@ public class IdleResetSjavac implements Sjavac {
         delegate.shutdown();
     }
 
-    @Override
-    public String serverSettings() {
-        return delegate.serverSettings();
-    }
 }

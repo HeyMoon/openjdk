@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,19 +30,27 @@
 #include "interpreter/invocationCounter.hpp"
 #include "runtime/arguments.hpp"
 
-class MethodCounters: public MetaspaceObj {
+class MethodCounters : public Metadata {
  friend class VMStructs;
+ friend class JVMCIVMStructs;
  private:
+#if INCLUDE_AOT
+  Method*           _method;                     // Back link to Method
+#endif
+#if defined(COMPILER2) || INCLUDE_JVMCI
   int               _interpreter_invocation_count; // Count of times invoked (reused as prev_event_count in tiered)
   u2                _interpreter_throwout_count; // Count of times method was exited via exception while interpreting
+#endif
+#if INCLUDE_JVMTI
   u2                _number_of_breakpoints;      // fullspeed debugging support
+#endif
   InvocationCounter _invocation_counter;         // Incremented before each activation of the method - used to trigger frequency-based optimizations
   InvocationCounter _backedge_counter;           // Incremented before each backedge taken - used to trigger frequencey-based optimizations
   // NMethod age is a counter for warm methods detection in the code cache sweeper.
   // The counter is reset by the sweeper and is decremented by some of the compiled
   // code. The counter values are interpreted as follows:
   // 1. (HotMethodDetection..INT_MAX] - initial value, no counters inserted
-  // 2. (1..HotMethodDetectionLimit)  - the method is warm, the counter is used
+  // 2. [1..HotMethodDetectionLimit)  - the method is warm, the counter is used
   //                                    to figure out which methods can be flushed.
   // 3. (INT_MIN..0]                  - method is hot and will deopt and get
   //                                    recompiled without the counters
@@ -59,9 +67,10 @@ class MethodCounters: public MetaspaceObj {
   u1                _highest_osr_comp_level;      // Same for OSR level
 #endif
 
-  MethodCounters(methodHandle mh) : _interpreter_invocation_count(0),
-                                    _interpreter_throwout_count(0),
-                                    _number_of_breakpoints(0),
+  MethodCounters(methodHandle mh) :
+#if INCLUDE_AOT
+                                    _method(mh()),
+#endif
                                     _nmethod_age(INT_MAX)
 #ifdef TIERED
                                  , _rate(0),
@@ -70,6 +79,9 @@ class MethodCounters: public MetaspaceObj {
                                    _highest_osr_comp_level(0)
 #endif
   {
+    set_interpreter_invocation_count(0);
+    set_interpreter_throwout_count(0);
+    JVMTI_ONLY(clear_number_of_breakpoints());
     invocation_counter()->init();
     backedge_counter()->init();
 
@@ -97,16 +109,21 @@ class MethodCounters: public MetaspaceObj {
   }
 
  public:
+  virtual bool is_methodCounters() const volatile { return true; }
+
   static MethodCounters* allocate(methodHandle mh, TRAPS);
 
   void deallocate_contents(ClassLoaderData* loader_data) {}
-  DEBUG_ONLY(bool on_stack() { return false; })  // for template
 
-  static int size() { return sizeof(MethodCounters) / wordSize; }
+  AOT_ONLY(Method* method() const { return _method; })
 
-  bool is_klass() const { return false; }
+  static int size() {
+    return align_size_up(sizeof(MethodCounters), wordSize) / wordSize;
+  }
 
   void clear_counters();
+
+#if defined(COMPILER2) || INCLUDE_JVMCI
 
   int interpreter_invocation_count() {
     return _interpreter_invocation_count;
@@ -130,10 +147,30 @@ class MethodCounters: public MetaspaceObj {
     _interpreter_throwout_count = count;
   }
 
+#else // defined(COMPILER2) || INCLUDE_JVMCI
+
+  int interpreter_invocation_count() {
+    return 0;
+  }
+  void set_interpreter_invocation_count(int count) {
+    assert(count == 0, "count must be 0");
+  }
+
+  int  interpreter_throwout_count() const {
+    return 0;
+  }
+  void set_interpreter_throwout_count(int count) {
+    assert(count == 0, "count must be 0");
+  }
+
+#endif // defined(COMPILER2) || INCLUDE_JVMCI
+
+#if INCLUDE_JVMTI
   u2   number_of_breakpoints() const   { return _number_of_breakpoints; }
   void incr_number_of_breakpoints()    { ++_number_of_breakpoints; }
   void decr_number_of_breakpoints()    { --_number_of_breakpoints; }
   void clear_number_of_breakpoints()   { _number_of_breakpoints = 0; }
+#endif
 
 #ifdef TIERED
   jlong prev_time() const                        { return _prev_time; }
@@ -169,9 +206,24 @@ class MethodCounters: public MetaspaceObj {
     return byte_offset_of(MethodCounters, _nmethod_age);
   }
 
+#if defined(COMPILER2) || INCLUDE_JVMCI
+
   static ByteSize interpreter_invocation_counter_offset() {
     return byte_offset_of(MethodCounters, _interpreter_invocation_count);
   }
+
+  static int interpreter_invocation_counter_offset_in_bytes() {
+    return offset_of(MethodCounters, _interpreter_invocation_count);
+  }
+
+#else // defined(COMPILER2) || INCLUDE_JVMCI
+
+  static ByteSize interpreter_invocation_counter_offset() {
+    ShouldNotReachHere();
+    return in_ByteSize(0);
+  }
+
+#endif // defined(COMPILER2) || INCLUDE_JVMCI
 
   static ByteSize invocation_counter_offset()    {
     return byte_offset_of(MethodCounters, _invocation_counter);
@@ -179,10 +231,6 @@ class MethodCounters: public MetaspaceObj {
 
   static ByteSize backedge_counter_offset()      {
     return byte_offset_of(MethodCounters, _backedge_counter);
-  }
-
-  static int interpreter_invocation_counter_offset_in_bytes() {
-    return offset_of(MethodCounters, _interpreter_invocation_count);
   }
 
   static ByteSize interpreter_invocation_limit_offset() {
@@ -204,5 +252,9 @@ class MethodCounters: public MetaspaceObj {
   static ByteSize backedge_mask_offset() {
     return byte_offset_of(MethodCounters, _backedge_mask);
   }
+
+  virtual const char* internal_name() const { return "{method counters}"; }
+  virtual void print_value_on(outputStream* st) const;
+
 };
 #endif //SHARE_VM_OOPS_METHODCOUNTERS_HPP

@@ -40,6 +40,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -54,8 +55,6 @@ import sun.awt.FontConfiguration;
 import sun.awt.SunToolkit;
 import sun.awt.util.ThreadGroupUtils;
 import sun.java2d.FontSupport;
-import sun.misc.InnocuousThread;
-import sun.misc.ManagedLocalsThread;
 import sun.util.logging.PlatformLogger;
 
 /**
@@ -361,6 +360,14 @@ public abstract class SunFontManager implements FontSupport, FontManagerForSGE {
                return null;
            }
         });
+    }
+
+    /**
+     * If the module image layout changes the location of JDK fonts,
+     * this will be updated to reflect that.
+     */
+    public static final String getJDKFontDir() {
+        return jreFontDirName;
     }
 
     public TrueTypeFont getEUDCFont() {
@@ -1844,7 +1851,7 @@ public abstract class SunFontManager implements FontSupport, FontManagerForSGE {
 
     private PhysicalFont registerFontFile(String file) {
         if (new File(file).isAbsolute() &&
-            !registeredFonts.contains(file)) {
+            !registeredFonts.containsKey(file)) {
             int fontFormat = FONTFORMAT_NONE;
             int fontRank = Font2D.UNKNOWN_RANK;
             if (ttFilter.accept(null, file)) {
@@ -2421,15 +2428,15 @@ public abstract class SunFontManager implements FontSupport, FontManagerForSGE {
 
     protected abstract String getFontPath(boolean noType1Fonts);
 
-    // MACOSX begin -- need to access this in subclass
-    protected Thread fileCloser = null;
-    // MACOSX end
+    Thread fileCloser = null;
     Vector<File> tmpFontFiles = null;
 
-    public Font2D createFont2D(File fontFile, int fontFormat,
-                               boolean isCopy, CreatedFontTracker tracker)
+    public Font2D[] createFont2D(File fontFile, int fontFormat, boolean all,
+                                 boolean isCopy, CreatedFontTracker tracker)
     throws FontFormatException {
 
+        List<Font2D> fList = new ArrayList<Font2D>();
+        int cnt = 1;
         String fontFilePath = fontFile.getPath();
         FileFont font2D = null;
         final File fFile = fontFile;
@@ -2438,9 +2445,19 @@ public abstract class SunFontManager implements FontSupport, FontManagerForSGE {
             switch (fontFormat) {
             case Font.TRUETYPE_FONT:
                 font2D = new TrueTypeFont(fontFilePath, null, 0, true);
+                fList.add(font2D);
+                if (!all) {
+                    break;
+                }
+                cnt = ((TrueTypeFont)font2D).getFontCount();
+                int index = 1;
+                while (index < cnt) {
+                    fList.add(new TrueTypeFont(fontFilePath, null, index++, true));
+                }
                 break;
             case Font.TYPE1_FONT:
                 font2D = new Type1Font(fontFilePath, null, isCopy);
+                fList.add(font2D);
                 break;
             default:
                 throw new FontFormatException("Unrecognised Font Format");
@@ -2461,7 +2478,7 @@ public abstract class SunFontManager implements FontSupport, FontManagerForSGE {
             throw(e);
         }
         if (isCopy) {
-            font2D.setFileToRemove(fontFile, tracker);
+            FileFont.setFileToRemove(fList, fontFile, cnt, tracker);
             synchronized (FontManager.class) {
 
                 if (tmpFontFiles == null) {
@@ -2503,8 +2520,8 @@ public abstract class SunFontManager implements FontSupport, FontManagerForSGE {
                     };
                     AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
                         ThreadGroup rootTG = ThreadGroupUtils.getRootThreadGroup();
-                        fileCloser = new ManagedLocalsThread(rootTG,
-                                                             fileCloserRunnable);
+                        fileCloser = new Thread(rootTG, fileCloserRunnable,
+                                                "FileCloser", 0, false);
                         fileCloser.setContextClassLoader(null);
                         Runtime.getRuntime().addShutdownHook(fileCloser);
                         return null;
@@ -2512,7 +2529,7 @@ public abstract class SunFontManager implements FontSupport, FontManagerForSGE {
                 }
             }
         }
-        return font2D;
+        return fList.toArray(new Font2D[0]);
     }
 
     /* remind: used in X11GraphicsEnvironment and called often enough

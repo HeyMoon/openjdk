@@ -49,9 +49,10 @@ uint StartNode::size_of() const { return sizeof(*this); }
 uint StartNode::cmp( const Node &n ) const
 { return _domain == ((StartNode&)n)._domain; }
 const Type *StartNode::bottom_type() const { return _domain; }
-const Type *StartNode::Value(PhaseTransform *phase) const { return _domain; }
+const Type* StartNode::Value(PhaseGVN* phase) const { return _domain; }
 #ifndef PRODUCT
 void StartNode::dump_spec(outputStream *st) const { st->print(" #"); _domain->dump_on(st);}
+void StartNode::dump_compact_spec(outputStream *st) const { /* empty */ }
 #endif
 
 //------------------------------Ideal------------------------------------------
@@ -121,6 +122,23 @@ void ParmNode::dump_spec(outputStream *st) const {
     if( !Verbose && !WizardMode )   bottom_type()->dump_on(st);
   }
 }
+
+void ParmNode::dump_compact_spec(outputStream *st) const {
+  if (_con < TypeFunc::Parms) {
+    st->print("%s", names[_con]);
+  } else {
+    st->print("%d:", _con-TypeFunc::Parms);
+    // unconditionally dump bottom_type
+    bottom_type()->dump_on(st);
+  }
+}
+
+// For a ParmNode, all immediate inputs and outputs are considered relevant
+// both in compact and standard representation.
+void ParmNode::related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const {
+  this->collect_nodes(in_rel, 1, false, false);
+  this->collect_nodes(out_rel, -1, false, false);
+}
 #endif
 
 uint ParmNode::ideal_reg() const {
@@ -155,7 +173,7 @@ Node *ReturnNode::Ideal(PhaseGVN *phase, bool can_reshape){
   return remove_dead_region(phase, can_reshape) ? this : NULL;
 }
 
-const Type *ReturnNode::Value( PhaseTransform *phase ) const {
+const Type* ReturnNode::Value(PhaseGVN* phase) const {
   return ( phase->type(in(TypeFunc::Control)) == Type::TOP)
     ? Type::TOP
     : Type::BOTTOM;
@@ -200,7 +218,7 @@ Node *RethrowNode::Ideal(PhaseGVN *phase, bool can_reshape){
   return remove_dead_region(phase, can_reshape) ? this : NULL;
 }
 
-const Type *RethrowNode::Value( PhaseTransform *phase ) const {
+const Type* RethrowNode::Value(PhaseGVN* phase) const {
   return (phase->type(in(TypeFunc::Control)) == Type::TOP)
     ? Type::TOP
     : Type::BOTTOM;
@@ -238,6 +256,7 @@ uint TailJumpNode::match_edge(uint idx) const {
 JVMState::JVMState(ciMethod* method, JVMState* caller) :
   _method(method) {
   assert(method != NULL, "must be valid call site");
+  _bci = InvocationEntryBci;
   _reexecute = Reexecute_Undefined;
   debug_only(_bci = -99);  // random garbage value
   debug_only(_map = (SafePointNode*)-1);
@@ -667,7 +686,7 @@ void CallNode::dump_spec(outputStream *st) const {
 #endif
 
 const Type *CallNode::bottom_type() const { return tf()->range(); }
-const Type *CallNode::Value(PhaseTransform *phase) const {
+const Type* CallNode::Value(PhaseGVN* phase) const {
   if (phase->type(in(0)) == Type::TOP)  return Type::TOP;
   return tf()->range();
 }
@@ -724,7 +743,7 @@ uint CallNode::match_edge(uint idx) const {
 //
 bool CallNode::may_modify(const TypeOopPtr *t_oop, PhaseTransform *phase) {
   assert((t_oop != NULL), "sanity");
-  if (is_call_to_arraycopystub()) {
+  if (is_call_to_arraycopystub() && strcmp(_name, "unsafe_arraycopy") != 0) {
     const TypeTuple* args = _tf->domain();
     Node* dest = NULL;
     // Stubs that can be called once an ArrayCopyNode is expanded have
@@ -760,13 +779,13 @@ bool CallNode::may_modify(const TypeOopPtr *t_oop, PhaseTransform *phase) {
     }
     if (is_CallJava() && as_CallJava()->method() != NULL) {
       ciMethod* meth = as_CallJava()->method();
-      if (meth->is_accessor()) {
+      if (meth->is_getter()) {
         return false;
       }
       // May modify (by reflection) if an boxing object is passed
       // as argument or returned.
-      if (returns_pointer() && (proj_out(TypeFunc::Parms) != NULL)) {
-        Node* proj = proj_out(TypeFunc::Parms);
+      Node* proj = returns_pointer() ? proj_out(TypeFunc::Parms) : NULL;
+      if (proj != NULL) {
         const TypeInstPtr* inst_t = phase->type(proj)->isa_instptr();
         if ((inst_t != NULL) && (!inst_t->klass_is_exact() ||
                                  (inst_t->klass() == boxing_klass))) {
@@ -941,12 +960,21 @@ bool CallNode::is_call_to_arraycopystub() const {
 uint CallJavaNode::size_of() const { return sizeof(*this); }
 uint CallJavaNode::cmp( const Node &n ) const {
   CallJavaNode &call = (CallJavaNode&)n;
-  return CallNode::cmp(call) && _method == call._method;
+  return CallNode::cmp(call) && _method == call._method &&
+         _override_symbolic_info == call._override_symbolic_info;
 }
 #ifndef PRODUCT
 void CallJavaNode::dump_spec(outputStream *st) const {
   if( _method ) _method->print_short_name(st);
   CallNode::dump_spec(st);
+}
+
+void CallJavaNode::dump_compact_spec(outputStream* st) const {
+  if (_method) {
+    _method->print_short_name(st);
+  } else {
+    st->print("<?>");
+  }
 }
 #endif
 
@@ -994,6 +1022,16 @@ void CallStaticJavaNode::dump_spec(outputStream *st) const {
     st->print(" ");
   }
   CallJavaNode::dump_spec(st);
+}
+
+void CallStaticJavaNode::dump_compact_spec(outputStream* st) const {
+  if (_method) {
+    _method->print_short_name(st);
+  } else if (_name) {
+    st->print("%s", _name);
+  } else {
+    st->print("<?>");
+  }
 }
 #endif
 
@@ -1096,7 +1134,7 @@ Node *SafePointNode::Ideal(PhaseGVN *phase, bool can_reshape) {
 
 //------------------------------Identity---------------------------------------
 // Remove obviously duplicate safepoints
-Node *SafePointNode::Identity( PhaseTransform *phase ) {
+Node* SafePointNode::Identity(PhaseGVN* phase) {
 
   // If you have back to back safepoints, remove one
   if( in(TypeFunc::Control)->is_SafePoint() )
@@ -1119,7 +1157,7 @@ Node *SafePointNode::Identity( PhaseTransform *phase ) {
 }
 
 //------------------------------Value------------------------------------------
-const Type *SafePointNode::Value( PhaseTransform *phase ) const {
+const Type* SafePointNode::Value(PhaseGVN* phase) const {
   if( phase->type(in(0)) == Type::TOP ) return Type::TOP;
   if( phase->eqv( in(0), this ) ) return Type::TOP; // Dead infinite loop
   return Type::CONTROL;
@@ -1129,6 +1167,19 @@ const Type *SafePointNode::Value( PhaseTransform *phase ) const {
 void SafePointNode::dump_spec(outputStream *st) const {
   st->print(" SafePoint ");
   _replaced_nodes.dump(st);
+}
+
+// The related nodes of a SafepointNode are all data inputs, excluding the
+// control boundary, as well as all outputs till level 2 (to include projection
+// nodes and targets). In compact mode, just include inputs till level 1 and
+// outputs as before.
+void SafePointNode::related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const {
+  if (compact) {
+    this->collect_nodes(in_rel, 1, false, false);
+  } else {
+    this->collect_nodes_in_all_data(in_rel, false);
+  }
+  this->collect_nodes(out_rel, -2, false, false);
 }
 #endif
 
@@ -1193,13 +1244,13 @@ void SafePointNode::pop_monitor() {
 
 Node *SafePointNode::peek_monitor_box() const {
   int mon = jvms()->nof_monitors() - 1;
-  assert(mon >= 0, "most have a monitor");
+  assert(mon >= 0, "must have a monitor");
   return monitor_box(jvms(), mon);
 }
 
 Node *SafePointNode::peek_monitor_obj() const {
   int mon = jvms()->nof_monitors() - 1;
-  assert(mon >= 0, "most have a monitor");
+  assert(mon >= 0, "must have a monitor");
   return monitor_obj(jvms(), mon);
 }
 
@@ -1283,6 +1334,7 @@ AllocateNode::AllocateNode(Compile* C, const TypeFunc *atype,
   init_flags(Flag_is_macro);
   _is_scalar_replaceable = false;
   _is_non_escaping = false;
+  _is_allocation_MemBar_redundant = false;
   Node *topnode = C->top();
 
   init_req( TypeFunc::Control  , ctrl );
@@ -1295,6 +1347,23 @@ AllocateNode::AllocateNode(Compile* C, const TypeFunc *atype,
   init_req( InitialTest        , initial_test);
   init_req( ALength            , topnode);
   C->add_macro_node(this);
+}
+
+void AllocateNode::compute_MemBar_redundancy(ciMethod* initializer)
+{
+  assert(initializer != NULL &&
+         initializer->is_initializer() &&
+         !initializer->is_static(),
+             "unexpected initializer method");
+  BCEscapeAnalyzer* analyzer = initializer->get_bcea();
+  if (analyzer == NULL) {
+    return;
+  }
+
+  // Allocation node is first parameter in its initializer
+  if (analyzer->is_arg_stack(0) || analyzer->is_arg_local(0)) {
+    _is_allocation_MemBar_redundant = true;
+  }
 }
 
 //=============================================================================
@@ -1675,6 +1744,27 @@ void AbstractLockNode::set_eliminated_lock_counter() {
     // optimizer will eliminate the lock operation itself.
     _counter->set_tag(NamedCounter::EliminatedLockCounter);
   }
+}
+
+const char* AbstractLockNode::_kind_names[] = {"Regular", "NonEscObj", "Coarsened", "Nested"};
+
+void AbstractLockNode::dump_spec(outputStream* st) const {
+  st->print("%s ", _kind_names[_kind]);
+  CallNode::dump_spec(st);
+}
+
+void AbstractLockNode::dump_compact_spec(outputStream* st) const {
+  st->print("%s", _kind_names[_kind]);
+}
+
+// The related set of lock nodes includes the control boundary.
+void AbstractLockNode::related(GrowableArray<Node*> *in_rel, GrowableArray<Node*> *out_rel, bool compact) const {
+  if (compact) {
+      this->collect_nodes(in_rel, 1, false, false);
+    } else {
+      this->collect_nodes_in_all_data(in_rel, true);
+    }
+    this->collect_nodes(out_rel, -2, false, false);
 }
 #endif
 

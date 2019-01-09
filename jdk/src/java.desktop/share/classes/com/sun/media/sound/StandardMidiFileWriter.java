@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,27 +25,27 @@
 
 package com.sun.media.sound;
 
-import java.io.DataOutputStream;
-import java.io.PipedInputStream;
-import java.io.PipedOutputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.ByteArrayInputStream;
-import java.io.SequenceInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
+import java.io.SequenceInputStream;
+import java.util.Objects;
 
 import javax.sound.midi.InvalidMidiDataException;
-import javax.sound.midi.MidiEvent;
 import javax.sound.midi.MetaMessage;
+import javax.sound.midi.MidiEvent;
 import javax.sound.midi.Sequence;
 import javax.sound.midi.ShortMessage;
 import javax.sound.midi.SysexMessage;
 import javax.sound.midi.Track;
 import javax.sound.midi.spi.MidiFileWriter;
-
 
 /**
  * MIDI file writer.
@@ -71,20 +71,15 @@ public final class StandardMidiFileWriter extends MidiFileWriter {
     private static final int bufferSize = 16384;  // buffersize for write
     private DataOutputStream tddos;               // data output stream for track writing
 
-
-
     /**
-     * MIDI parser types
+     * MIDI parser types.
      */
     private static final int types[] = {
         MIDI_TYPE_0,
         MIDI_TYPE_1
     };
 
-
-    /**
-     * new
-     */
+    @Override
     public int[] getMidiFileTypes() {
         int[] localArray = new int[types.length];
         System.arraycopy(types, 0, localArray, 0, types.length);
@@ -99,6 +94,7 @@ public final class StandardMidiFileWriter extends MidiFileWriter {
      * @return array of file types.  If no file types are supported,
      * returns an array of length 0.
      */
+    @Override
     public int[] getMidiFileTypes(Sequence sequence){
         int typesArray[];
         Track tracks[] = sequence.getTracks();
@@ -115,24 +111,17 @@ public final class StandardMidiFileWriter extends MidiFileWriter {
         return typesArray;
     }
 
-    public boolean isFileTypeSupported(int type) {
-        for(int i=0; i<types.length; i++) {
-            if( type == types[i] ) {
-                return true;
-            }
-        }
-        return false;
-    }
-
+    @Override
     public int write(Sequence in, int type, OutputStream out) throws IOException {
+        Objects.requireNonNull(out);
+        if (!isFileTypeSupported(type, in)) {
+            throw new IllegalArgumentException("Could not write MIDI file");
+        }
         byte [] buffer = null;
 
         int bytesRead = 0;
         long bytesWritten = 0;
 
-        if( !isFileTypeSupported(type,in) ) {
-            throw new IllegalArgumentException("Could not write MIDI file");
-        }
         // First get the fileStream from this sequence
         InputStream fileStream = getFileStream(type,in);
         if (fileStream == null) {
@@ -148,7 +137,9 @@ public final class StandardMidiFileWriter extends MidiFileWriter {
         return (int) bytesWritten;
     }
 
+    @Override
     public int write(Sequence in, int type, File out) throws IOException {
+        Objects.requireNonNull(in);
         FileOutputStream fos = new FileOutputStream(out); // throws IOException
         int bytesWritten = write( in, type, fos );
         fos.close();
@@ -156,7 +147,6 @@ public final class StandardMidiFileWriter extends MidiFileWriter {
     }
 
     //=================================================================================
-
 
     private InputStream getFileStream(int type, Sequence sequence) throws IOException {
         Track tracks[] = sequence.getTracks();
@@ -307,7 +297,7 @@ public final class StandardMidiFileWriter extends MidiFileWriter {
         return ERROR;
     }
 
-    private final static long mask = 0x7F;
+    private static final long mask = 0x7F;
 
     private int writeVarInt(long value) throws IOException {
         int len = 1;

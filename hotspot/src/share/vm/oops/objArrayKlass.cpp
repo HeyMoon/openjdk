@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,8 @@
  */
 
 #include "precompiled.hpp"
+#include "classfile/moduleEntry.hpp"
+#include "classfile/packageEntry.hpp"
 #include "classfile/symbolTable.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
@@ -32,6 +34,7 @@
 #include "memory/metadataFactory.hpp"
 #include "memory/resourceArea.hpp"
 #include "memory/universe.inline.hpp"
+#include "oops/arrayKlass.inline.hpp"
 #include "oops/instanceKlass.hpp"
 #include "oops/klass.inline.hpp"
 #include "oops/objArrayKlass.inline.hpp"
@@ -40,7 +43,6 @@
 #include "oops/symbol.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/mutexLocker.hpp"
-#include "runtime/orderAccess.inline.hpp"
 #include "utilities/copy.hpp"
 #include "utilities/macros.hpp"
 
@@ -102,7 +104,7 @@ Klass* ObjArrayKlass::allocate_objArray_klass(ClassLoaderData* loader_data,
 
   // Create type name for klass.
   Symbol* name = NULL;
-  if (!element_klass->oop_is_instance() ||
+  if (!element_klass->is_instance_klass() ||
       (name = InstanceKlass::cast(element_klass())->array_name()) == NULL) {
 
     ResourceMark rm(THREAD);
@@ -111,17 +113,17 @@ Klass* ObjArrayKlass::allocate_objArray_klass(ClassLoaderData* loader_data,
     char *new_str = NEW_RESOURCE_ARRAY(char, len + 4);
     int idx = 0;
     new_str[idx++] = '[';
-    if (element_klass->oop_is_instance()) { // it could be an array or simple type
+    if (element_klass->is_instance_klass()) { // it could be an array or simple type
       new_str[idx++] = 'L';
     }
     memcpy(&new_str[idx], name_str, len * sizeof(char));
     idx += len;
-    if (element_klass->oop_is_instance()) {
+    if (element_klass->is_instance_klass()) {
       new_str[idx++] = ';';
     }
     new_str[idx++] = '\0';
     name = SymbolTable::new_permanent_symbol(new_str, CHECK_0);
-    if (element_klass->oop_is_instance()) {
+    if (element_klass->is_instance_klass()) {
       InstanceKlass* ik = InstanceKlass::cast(element_klass());
       ik->set_array_name(name);
     }
@@ -135,8 +137,11 @@ Klass* ObjArrayKlass::allocate_objArray_klass(ClassLoaderData* loader_data,
   // GC walks these as strong roots.
   loader_data->add_class(oak);
 
+  ModuleEntry* module = oak->module();
+  assert(module != NULL, "No module entry for array");
+
   // Call complete_create_array_klass after all instance variables has been initialized.
-  ArrayKlass::complete_create_array_klass(oak, super_klass, CHECK_0);
+  ArrayKlass::complete_create_array_klass(oak, super_klass, module, CHECK_0);
 
   return oak;
 }
@@ -150,18 +155,18 @@ ObjArrayKlass::ObjArrayKlass(int n, KlassHandle element_klass, Symbol* name) : A
   name->decrement_refcount();
 
   Klass* bk;
-  if (element_klass->oop_is_objArray()) {
+  if (element_klass->is_objArray_klass()) {
     bk = ObjArrayKlass::cast(element_klass())->bottom_klass();
   } else {
     bk = element_klass();
   }
-  assert(bk != NULL && (bk->oop_is_instance() || bk->oop_is_typeArray()), "invalid bottom klass");
+  assert(bk != NULL && (bk->is_instance_klass() || bk->is_typeArray_klass()), "invalid bottom klass");
   this->set_bottom_klass(bk);
   this->set_class_loader_data(bk->class_loader_data());
 
   this->set_layout_helper(array_layout_helper(T_OBJECT));
-  assert(this->oop_is_array(), "sanity");
-  assert(this->oop_is_objArray(), "sanity");
+  assert(this->is_array_klass(), "sanity");
+  assert(this->is_objArray_klass(), "sanity");
 }
 
 int ObjArrayKlass::oop_size(oop obj) const {
@@ -316,7 +321,8 @@ Klass* ObjArrayKlass::array_klass_impl(bool or_null, int n, TRAPS) {
   int dim = dimension();
   if (dim == n) return this;
 
-  if (higher_dimension() == NULL) {
+  // lock-free read needs acquire semantics
+  if (higher_dimension_acquire() == NULL) {
     if (or_null)  return NULL;
 
     ResourceMark rm;
@@ -334,9 +340,9 @@ Klass* ObjArrayKlass::array_klass_impl(bool or_null, int n, TRAPS) {
           ObjArrayKlass::allocate_objArray_klass(class_loader_data(), dim + 1, this, CHECK_NULL);
         ObjArrayKlass* ak = ObjArrayKlass::cast(k);
         ak->set_lower_dimension(this);
-        OrderAccess::storestore();
-        set_higher_dimension(ak);
-        assert(ak->oop_is_objArray(), "incorrect initialization of ObjArrayKlass");
+        // use 'release' to pair with lock-free load
+        release_set_higher_dimension(ak);
+        assert(ak->is_objArray_klass(), "incorrect initialization of ObjArrayKlass");
       }
     }
   } else {
@@ -386,7 +392,7 @@ GrowableArray<Klass*>* ObjArrayKlass::compute_secondary_supers(int num_extra_slo
 }
 
 bool ObjArrayKlass::compute_is_subtype_of(Klass* k) {
-  if (!k->oop_is_objArray())
+  if (!k->is_objArray_klass())
     return ArrayKlass::compute_is_subtype_of(k);
 
   ObjArrayKlass* oak = ObjArrayKlass::cast(k);
@@ -412,6 +418,16 @@ jint ObjArrayKlass::compute_modifier_flags(TRAPS) const {
                         | (JVM_ACC_ABSTRACT | JVM_ACC_FINAL);
 }
 
+ModuleEntry* ObjArrayKlass::module() const {
+  assert(bottom_klass() != NULL, "ObjArrayKlass returned unexpected NULL bottom_klass");
+  // The array is defined in the module of its bottom class
+  return bottom_klass()->module();
+}
+
+PackageEntry* ObjArrayKlass::package() const {
+  assert(bottom_klass() != NULL, "ObjArrayKlass returned unexpected NULL bottom_klass");
+  return bottom_klass()->package();
+}
 
 // Printing
 
@@ -451,8 +467,6 @@ void ObjArrayKlass::oop_print_on(oop obj, outputStream* st) {
 
 #endif //PRODUCT
 
-static int max_objArray_print_length = 4;
-
 void ObjArrayKlass::oop_print_value_on(oop obj, outputStream* st) {
   assert(obj->is_objArray(), "must be objArray");
   st->print("a ");
@@ -460,16 +474,6 @@ void ObjArrayKlass::oop_print_value_on(oop obj, outputStream* st) {
   int len = objArrayOop(obj)->length();
   st->print("[%d] ", len);
   obj->print_address_on(st);
-  if (NOT_PRODUCT(PrintOopAddress ||) PrintMiscellaneous && (WizardMode || Verbose)) {
-    st->print("{");
-    for (int i = 0; i < len; i++) {
-      if (i > max_objArray_print_length) {
-        st->print("..."); break;
-      }
-      st->print(" " INTPTR_FORMAT, (intptr_t)(void*)objArrayOop(obj)->obj_at(i));
-    }
-    st->print(" }");
-  }
 }
 
 const char* ObjArrayKlass::internal_name() const {
@@ -484,7 +488,7 @@ void ObjArrayKlass::verify_on(outputStream* st) {
   guarantee(element_klass()->is_klass(), "should be klass");
   guarantee(bottom_klass()->is_klass(), "should be klass");
   Klass* bk = bottom_klass();
-  guarantee(bk->oop_is_instance() || bk->oop_is_typeArray(),  "invalid bottom klass");
+  guarantee(bk->is_instance_klass() || bk->is_typeArray_klass(),  "invalid bottom klass");
 }
 
 void ObjArrayKlass::oop_verify_on(oop obj, outputStream* st) {

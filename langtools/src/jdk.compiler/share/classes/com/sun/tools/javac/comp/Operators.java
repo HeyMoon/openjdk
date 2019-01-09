@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -95,6 +95,7 @@ public class Operators {
         names = Names.instance(context);
         log = Log.instance(context);
         types = Types.instance(context);
+        noOpSymbol = new OperatorSymbol(names.empty, Type.noType, -1, syms.noSymbol);
         initOperatorNames();
         initUnaryOperators();
         initBinaryOperators();
@@ -145,7 +146,7 @@ public class Operators {
     /**
      * Entry point for resolving a unary operator given an operator tag and an argument type.
      */
-    Symbol resolveUnary(DiagnosticPosition pos, JCTree.Tag tag, Type op) {
+    OperatorSymbol resolveUnary(DiagnosticPosition pos, JCTree.Tag tag, Type op) {
         return resolve(tag,
                 unaryOperators,
                 unop -> unop.test(op),
@@ -156,7 +157,7 @@ public class Operators {
     /**
      * Entry point for resolving a binary operator given an operator tag and a pair of argument types.
      */
-    Symbol resolveBinary(DiagnosticPosition pos, JCTree.Tag tag, Type op1, Type op2) {
+    OperatorSymbol resolveBinary(DiagnosticPosition pos, JCTree.Tag tag, Type op1, Type op2) {
         return resolve(tag,
                 binaryOperators,
                 binop -> binop.test(op1, op2),
@@ -169,8 +170,8 @@ public class Operators {
      * map. If there's a matching operator, its resolve routine is called and the result is returned;
      * otherwise the result of a fallback function is returned.
      */
-    private <O> Symbol resolve(Tag tag, Map<Name, List<O>> opMap, Predicate<O> opTestFunc,
-                       Function<O, Symbol> resolveFunc, Supplier<Symbol> noResultFunc) {
+    private <O> OperatorSymbol resolve(Tag tag, Map<Name, List<O>> opMap, Predicate<O> opTestFunc,
+                       Function<O, OperatorSymbol> resolveFunc, Supplier<OperatorSymbol> noResultFunc) {
         return opMap.get(operatorName(tag)).stream()
                 .filter(opTestFunc)
                 .map(resolveFunc)
@@ -181,7 +182,7 @@ public class Operators {
     /**
      * Creates an operator symbol.
      */
-    private Symbol makeOperator(Name name, List<OperatorType> formals, OperatorType res, int... opcodes) {
+    private OperatorSymbol makeOperator(Name name, List<OperatorType> formals, OperatorType res, int... opcodes) {
         MethodType opType = new MethodType(
                 formals.stream()
                         .map(o -> o.asType(syms))
@@ -201,10 +202,14 @@ public class Operators {
                 ((opcodes[0] << ByteCodes.preShift) | opcodes[1]);
     }
 
+    /** A symbol that stands for a missing operator.
+     */
+    public final OperatorSymbol noOpSymbol;
+
     /**
      * Report an operator lookup error.
      */
-    private Symbol reportErrorIfNeeded(DiagnosticPosition pos, Tag tag, Type... args) {
+    private OperatorSymbol reportErrorIfNeeded(DiagnosticPosition pos, Tag tag, Type... args) {
         if (Stream.of(args).noneMatch(Type::isErroneous)) {
             Name opName = operatorName(tag);
             JCDiagnostic.Error opError = (args.length) == 1 ?
@@ -212,7 +217,7 @@ public class Operators {
                     Errors.OperatorCantBeApplied1(opName, args[0], args[1]);
             log.error(pos, opError);
         }
-        return syms.noSymbol;
+        return noOpSymbol;
     }
 
     /**
@@ -263,10 +268,10 @@ public class Operators {
         final Name name;
 
         /** The list of symbols associated with this operator (lazily populated). */
-        Optional<Symbol[]> alternatives = Optional.empty();
+        Optional<OperatorSymbol[]> alternatives = Optional.empty();
 
         /** An array of operator symbol suppliers (used to lazily populate the symbol list). */
-        List<Supplier<Symbol>> operatorSuppliers = List.nil();
+        List<Supplier<OperatorSymbol>> operatorSuppliers = List.nil();
 
         @SuppressWarnings("varargs")
         OperatorHelper(Tag tag) {
@@ -278,21 +283,21 @@ public class Operators {
          * using an applicability predicate; if the test suceeds that same operator is returned,
          * otherwise a dummy symbol is returned.
          */
-        final Symbol doLookup(Predicate<Symbol> applicabilityTest) {
+        final OperatorSymbol doLookup(Predicate<OperatorSymbol> applicabilityTest) {
             return Stream.of(alternatives.orElseGet(this::initOperators))
                     .filter(applicabilityTest)
                     .findFirst()
-                    .orElse(syms.noSymbol);
+                    .orElse(noOpSymbol);
         }
 
         /**
          * This routine performs lazy instantiation of the operator symbols supported by this helper.
          * After initialization is done, the suppliers are cleared, to free up memory.
          */
-        private Symbol[] initOperators() {
-            Symbol[] operators = operatorSuppliers.stream()
-                    .map(op -> op.get())
-                    .toArray(Symbol[]::new);
+        private OperatorSymbol[] initOperators() {
+            OperatorSymbol[] operators = operatorSuppliers.stream()
+                    .map(Supplier::get)
+                    .toArray(OperatorSymbol[]::new);
             alternatives = Optional.of(operators);
             operatorSuppliers = null; //let GC do its work
             return operators;
@@ -311,10 +316,10 @@ public class Operators {
         /**
          * This routine implements the unary operator lookup process. It customizes the behavior
          * of the shared lookup routine in {@link OperatorHelper}, by using an unary applicability test
-         * (see {@link UnaryOperatorHelper#isUnaryOperatorApplicable(OperatorSymbol, Type)}
+         * (see {@link UnaryOperatorHelper#isUnaryOperatorApplicable(OperatorOperatorSymbol, Type)}
          */
-        final Symbol doLookup(Type t) {
-            return doLookup(op -> isUnaryOperatorApplicable((OperatorSymbol)op, t));
+        final OperatorSymbol doLookup(Type t) {
+            return doLookup(op -> isUnaryOperatorApplicable(op, t));
         }
 
         /**
@@ -336,7 +341,7 @@ public class Operators {
          * This method will be overridden by unary operator helpers to provide custom resolution
          * logic.
          */
-        abstract Symbol resolve(Type t);
+        abstract OperatorSymbol resolve(Type t);
     }
 
     abstract class BinaryOperatorHelper extends OperatorHelper implements BiPredicate<Type, Type> {
@@ -350,8 +355,8 @@ public class Operators {
          * of the shared lookup routine in {@link OperatorHelper}, by using an unary applicability test
          * (see {@link BinaryOperatorHelper#isBinaryOperatorApplicable(OperatorSymbol, Type, Type)}
          */
-        final Symbol doLookup(Type t1, Type t2) {
-            return doLookup(op -> isBinaryOperatorApplicable((OperatorSymbol)op, t1, t2));
+        final OperatorSymbol doLookup(Type t1, Type t2) {
+            return doLookup(op -> isBinaryOperatorApplicable(op, t1, t2));
         }
 
         /**
@@ -375,7 +380,7 @@ public class Operators {
          * This method will be overridden by binary operator helpers to provide custom resolution
          * logic.
          */
-        abstract Symbol resolve(Type t1, Type t2);
+        abstract OperatorSymbol resolve(Type t1, Type t2);
     }
 
     /**
@@ -393,7 +398,7 @@ public class Operators {
         }
 
         @Override
-        public Symbol resolve(Type arg) {
+        public OperatorSymbol resolve(Type arg) {
             return doLookup(syms.objectType);
         }
     }
@@ -404,17 +409,24 @@ public class Operators {
      */
     class UnaryNumericOperator extends UnaryOperatorHelper {
 
+        Predicate<Type> numericTest;
+
         UnaryNumericOperator(Tag tag) {
+            this(tag, Type::isNumeric);
+        }
+
+        UnaryNumericOperator(Tag tag, Predicate<Type> numericTest) {
             super(tag);
+            this.numericTest = numericTest;
         }
 
         @Override
         public boolean test(Type type) {
-            return unaryPromotion(type).isNumeric();
+            return numericTest.test(unaryPromotion(type));
         }
 
         @Override
-        public Symbol resolve(Type arg) {
+        public OperatorSymbol resolve(Type arg) {
             return doLookup(unaryPromotion(arg));
         }
     }
@@ -435,7 +447,7 @@ public class Operators {
         }
 
         @Override
-        public Symbol resolve(Type arg) {
+        public OperatorSymbol resolve(Type arg) {
             return doLookup(syms.booleanType);
         }
     }
@@ -451,7 +463,7 @@ public class Operators {
         }
 
         @Override
-        public Symbol resolve(Type arg) {
+        public OperatorSymbol resolve(Type arg) {
             return doLookup(types.unboxedTypeOrType(arg));
         }
     }
@@ -462,19 +474,27 @@ public class Operators {
      */
     class BinaryNumericOperator extends BinaryOperatorHelper {
 
+        Predicate<Type> numericTest;
+
         BinaryNumericOperator(Tag tag) {
+            this(tag, Type::isNumeric);
+        }
+
+        BinaryNumericOperator(Tag tag, Predicate<Type> numericTest) {
             super(tag);
+            this.numericTest = numericTest;
         }
 
         @Override
-        public Symbol resolve(Type arg1, Type arg2) {
+        public OperatorSymbol resolve(Type arg1, Type arg2) {
             Type t = binaryPromotion(arg1, arg2);
             return doLookup(t, t);
         }
 
         @Override
         public boolean test(Type arg1, Type arg2) {
-            return unaryPromotion(arg1).isNumeric() && unaryPromotion(arg2).isNumeric();
+            return numericTest.test(unaryPromotion(arg1)) &&
+                    numericTest.test(unaryPromotion(arg2));
         }
     }
 
@@ -489,7 +509,7 @@ public class Operators {
         }
 
         @Override
-        public Symbol resolve(Type arg1, Type arg2) {
+        public OperatorSymbol resolve(Type arg1, Type arg2) {
             return doLookup(syms.booleanType, syms.booleanType);
         }
 
@@ -512,26 +532,28 @@ public class Operators {
         }
 
         @Override
-        public Symbol resolve(Type arg1, Type arg2) {
+        public OperatorSymbol resolve(Type arg1, Type arg2) {
             return doLookup(stringPromotion(arg1), stringPromotion(arg2));
         }
 
         @Override
         public boolean test(Type arg1, Type arg2) {
-            return types.isSameType(arg1, syms.stringType) ||
+            boolean hasStringOp = types.isSameType(arg1, syms.stringType) ||
                     types.isSameType(arg2, syms.stringType);
+            boolean hasVoidOp = arg1.hasTag(TypeTag.VOID) || arg2.hasTag(TypeTag.VOID);
+            return hasStringOp && !hasVoidOp;
         }
 
         /**
          * This routine applies following mappings:
          * - if input type is primitive, apply numeric promotion
-         * - if input type is either 'null' or 'String' leave it untouched
+         * - if input type is either 'void', 'null' or 'String' leave it untouched
          * - otherwise return 'Object'
          */
         private Type stringPromotion(Type t) {
             if (t.isPrimitive()) {
                 return unaryPromotion(t);
-            } else if (t.hasTag(TypeTag.BOT) ||
+            } else if (t.hasTag(TypeTag.VOID) || t.hasTag(TypeTag.BOT) ||
                     types.isSameType(t, syms.stringType)) {
                 return t;
             } else if (t.hasTag(TypeTag.TYPEVAR)) {
@@ -553,7 +575,7 @@ public class Operators {
         }
 
         @Override
-        public Symbol resolve(Type arg1, Type arg2) {
+        public OperatorSymbol resolve(Type arg1, Type arg2) {
             return doLookup(unaryPromotion(arg1), unaryPromotion(arg2));
         }
 
@@ -596,7 +618,7 @@ public class Operators {
         }
 
         @Override
-        public Symbol resolve(Type t1, Type t2) {
+        public OperatorSymbol resolve(Type t1, Type t2) {
             ComparisonKind kind = getKind(t1, t2);
             Type t = (kind == ComparisonKind.NUMERIC_OR_BOOLEAN) ?
                     binaryPromotion(t1, t2) :
@@ -640,7 +662,7 @@ public class Operators {
                         .addUnaryOperator(FLOAT, FLOAT, fneg)
                         .addUnaryOperator(LONG, LONG, lneg)
                         .addUnaryOperator(INT, INT, ineg),
-                new UnaryNumericOperator(Tag.COMPL)
+                new UnaryNumericOperator(Tag.COMPL, Type::isIntegral)
                         .addUnaryOperator(LONG, LONG, lxor)
                         .addUnaryOperator(INT, INT, ixor),
                 new UnaryPrefixPostfixOperator(Tag.POSTINC)
@@ -713,17 +735,17 @@ public class Operators {
                     .addBinaryOperator(INT, INT, INT, imod),
             new BinaryBooleanOperator(Tag.BITAND)
                     .addBinaryOperator(BOOLEAN, BOOLEAN, BOOLEAN, iand),
-            new BinaryNumericOperator(Tag.BITAND)
+            new BinaryNumericOperator(Tag.BITAND, Type::isIntegral)
                     .addBinaryOperator(LONG, LONG, LONG, land)
                     .addBinaryOperator(INT, INT, INT, iand),
             new BinaryBooleanOperator(Tag.BITOR)
                     .addBinaryOperator(BOOLEAN, BOOLEAN, BOOLEAN, ior),
-            new BinaryNumericOperator(Tag.BITOR)
+            new BinaryNumericOperator(Tag.BITOR, Type::isIntegral)
                     .addBinaryOperator(LONG, LONG, LONG, lor)
                     .addBinaryOperator(INT, INT, INT, ior),
             new BinaryBooleanOperator(Tag.BITXOR)
                     .addBinaryOperator(BOOLEAN, BOOLEAN, BOOLEAN, ixor),
-            new BinaryNumericOperator(Tag.BITXOR)
+            new BinaryNumericOperator(Tag.BITXOR, Type::isIntegral)
                     .addBinaryOperator(LONG, LONG, LONG, lxor)
                     .addBinaryOperator(INT, INT, INT, ixor),
             new BinaryShiftOperator(Tag.SL)
@@ -779,6 +801,15 @@ public class Operators {
                     .addBinaryOperator(BOOLEAN, BOOLEAN, BOOLEAN, bool_and),
             new BinaryBooleanOperator(Tag.OR)
                     .addBinaryOperator(BOOLEAN, BOOLEAN, BOOLEAN, bool_or));
+    }
+
+    OperatorSymbol lookupBinaryOp(Predicate<OperatorSymbol> applicabilityTest) {
+        return binaryOperators.values().stream()
+                .flatMap(List::stream)
+                .map(helper -> helper.doLookup(applicabilityTest))
+                .distinct()
+                .filter(sym -> sym != noOpSymbol)
+                .findFirst().get();
     }
 
     /**

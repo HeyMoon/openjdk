@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,12 +47,9 @@ import javax.management.openmbean.CompositeData;
  * object was constructed.  The value of the VM option
  * may be changed after the {@code VMOption} object was constructed,
  *
- * @see <a href="{@docRoot}/../../../../technotes/guides/vm/index.html">
- *         Java Virtual Machine</a>
  * @author Mandy Chung
  * @since 1.6
  */
-@jdk.Exported
 public class VMOption {
     private String name;
     private String value;
@@ -65,7 +62,6 @@ public class VMOption {
      *
      * @since 1.6
      */
-    @jdk.Exported
     public enum Origin {
         /**
          * The VM option has not been set and its value
@@ -98,7 +94,7 @@ public class VMOption {
         ERGONOMIC,
         /**
          * The VM option was set using the attach framework.
-         * @since 1.9
+         * @since 9
          */
         ATTACH_ON_DEMAND,
         /**
@@ -194,10 +190,10 @@ public class VMOption {
      * must contain the following attributes:
      *
      * <blockquote>
-     * <table border>
+     * <table class="striped"><caption style="display:none">description</caption>
      * <tr>
-     *   <th align=left>Attribute Name</th>
-     *   <th align=left>Type</th>
+     *   <th style="text-align:left">Attribute Name</th>
+     *   <th style="text-align:left">Type</th>
      * </tr>
      * <tr>
      *   <td>name</td>
@@ -239,10 +235,5 @@ public class VMOption {
             return new VMOption(cd);
         }
 
-    }
-
-    // for sun.management.MappedMXBeanType
-    static CompositeData toCompositeData(VMOption option) {
-        return VMOptionCompositeData.toCompositeData(option);
     }
 }

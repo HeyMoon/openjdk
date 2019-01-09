@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@
 #include "gc/parallel/psPromotionLAB.hpp"
 #include "gc/shared/copyFailedInfo.hpp"
 #include "gc/shared/gcTrace.hpp"
+#include "gc/shared/preservedMarks.hpp"
 #include "gc/shared/taskqueue.hpp"
 #include "memory/allocation.hpp"
 #include "memory/padded.hpp"
@@ -55,6 +56,7 @@ class PSPromotionManager VALUE_OBJ_CLASS_SPEC {
  private:
   static PaddedEnd<PSPromotionManager>* _manager_array;
   static OopStarTaskQueueSet*           _stack_array_depth;
+  static PreservedMarksSet*             _preserved_marks_set;
   static PSOldGen*                      _old_gen;
   static MutableSpace*                  _young_space;
 
@@ -65,7 +67,7 @@ class PSPromotionManager VALUE_OBJ_CLASS_SPEC {
   size_t                              _array_chunks_processed;
 
   void print_local_stats(outputStream* const out, uint i) const;
-  static void print_taskqueue_stats(outputStream* const out = gclog_or_tty);
+  static void print_taskqueue_stats();
 
   void reset_stats();
 #endif // TASKQUEUE_STATS
@@ -84,6 +86,7 @@ class PSPromotionManager VALUE_OBJ_CLASS_SPEC {
   uint                                _array_chunk_size;
   uint                                _min_array_size_for_chunking;
 
+  PreservedMarks*                     _preserved_marks;
   PromotionFailedInfo                 _promotion_failed_info;
 
   // Accessors
@@ -176,6 +179,8 @@ class PSPromotionManager VALUE_OBJ_CLASS_SPEC {
   oop oop_promotion_failed(oop obj, markOop obj_mark);
 
   void reset();
+  void register_preserved_marks(PreservedMarks* preserved_marks);
+  static void restore_preserved_marks();
 
   void flush_labs();
   void drain_stacks(bool totally_drain) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@ package javax.net.ssl;
 
 import java.security.Security;
 import java.security.*;
+import java.util.Objects;
 
 import sun.security.jca.GetInstance;
 
@@ -34,7 +35,19 @@ import sun.security.jca.GetInstance;
  * This class acts as a factory for trust managers based on a
  * source of trust material. Each trust manager manages a specific
  * type of trust material for use by secure sockets. The trust
- * material is based on a KeyStore and/or provider specific sources.
+ * material is based on a KeyStore and/or provider-specific sources.
+ *
+ * <p> Every implementation of the Java platform is required to support the
+ * following standard {@code TrustManagerFactory} algorithm:
+ * <ul>
+ * <li>{@code PKIX}</li>
+ * </ul>
+ * This algorithm is described in the <a href=
+ * "{@docRoot}/../specs/security/standard-names.html#trustmanagerfactory-algorithms">
+ * TrustManagerFactory section</a> of the
+ * Java Security Standard Algorithm Names Specification.
+ * Consult the release documentation for your implementation to see if any
+ * other algorithms are supported.
  *
  * @since 1.4
  * @see TrustManager
@@ -61,7 +74,7 @@ public class TrustManagerFactory {
      * {@code ssl.TrustManagerFactory.algorithm} security property, or an
      * implementation-specific default if no such property exists.
      */
-    public final static String getDefaultAlgorithm() {
+    public static final String getDefaultAlgorithm() {
         String type;
         type = AccessController.doPrivileged(new PrivilegedAction<>() {
             @Override
@@ -118,23 +131,33 @@ public class TrustManagerFactory {
      * <p> Note that the list of registered providers may be retrieved via
      * the {@link Security#getProviders() Security.getProviders()} method.
      *
+     * @implNote
+     * The JDK Reference Implementation additionally uses the
+     * {@code jdk.security.provider.preferred}
+     * {@link Security#getProperty(String) Security} property to determine
+     * the preferred provider order for the specified algorithm. This
+     * may be different than the order of providers returned by
+     * {@link Security#getProviders() Security.getProviders()}.
+     *
      * @param algorithm the standard name of the requested trust management
      *          algorithm.  See the <a href=
-     *  "{@docRoot}/../technotes/guides/security/jsse/JSSERefGuide.html">
-     *          Java Secure Socket Extension Reference Guide </a>
+     *          "{@docRoot}/../specs/security/standard-names.html">
+     *          Java Security Standard Algorithm Names</a> document
      *          for information about standard algorithm names.
      *
-     * @return the new <code>TrustManagerFactory</code> object.
+     * @return the new {@code TrustManagerFactory} object
      *
-     * @exception NoSuchAlgorithmException if no Provider supports a
-     *          TrustManagerFactorySpi implementation for the
-     *          specified algorithm.
-     * @exception NullPointerException if algorithm is null.
+     * @throws NoSuchAlgorithmException if no {@code Provider} supports a
+     *         {@code TrustManagerFactorySpi} implementation for the
+     *         specified algorithm
+     *
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final TrustManagerFactory getInstance(String algorithm)
             throws NoSuchAlgorithmException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         GetInstance.Instance instance = GetInstance.getInstance
                 ("TrustManagerFactory", TrustManagerFactorySpi.class,
                 algorithm);
@@ -156,29 +179,32 @@ public class TrustManagerFactory {
      *
      * @param algorithm the standard name of the requested trust management
      *          algorithm.  See the <a href=
-     *  "{@docRoot}/../technotes/guides/security/jsse/JSSERefGuide.html">
-     *          Java Secure Socket Extension Reference Guide </a>
+     *          "{@docRoot}/../specs/security/standard-names.html">
+     *          Java Security Standard Algorithm Names</a> document
      *          for information about standard algorithm names.
      *
      * @param provider the name of the provider.
      *
-     * @return the new <code>TrustManagerFactory</code> object
+     * @return the new {@code TrustManagerFactory} object
      *
-     * @throws NoSuchAlgorithmException if a TrustManagerFactorySpi
-     *          implementation for the specified algorithm is not
-     *          available from the specified provider.
+     * @throws IllegalArgumentException if the provider name is
+     *         {@code null} or empty
+     *
+     * @throws NoSuchAlgorithmException if a {@code TrustManagerFactorySpi}
+     *         implementation for the specified algorithm is not
+     *         available from the specified provider
      *
      * @throws NoSuchProviderException if the specified provider is not
-     *          registered in the security provider list.
+     *         registered in the security provider list
      *
-     * @throws IllegalArgumentException if the provider name is null or empty.
-     * @throws NullPointerException if algorithm is null.
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final TrustManagerFactory getInstance(String algorithm,
             String provider) throws NoSuchAlgorithmException,
             NoSuchProviderException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         GetInstance.Instance instance = GetInstance.getInstance
                 ("TrustManagerFactory", TrustManagerFactorySpi.class,
                 algorithm, provider);
@@ -197,25 +223,27 @@ public class TrustManagerFactory {
      *
      * @param algorithm the standard name of the requested trust management
      *          algorithm.  See the <a href=
-     *  "{@docRoot}/../technotes/guides/security/jsse/JSSERefGuide.html">
-     *          Java Secure Socket Extension Reference Guide </a>
+     *          "{@docRoot}/../specs/security/standard-names.html">
+     *          Java Security Standard Algorithm Names</a> document
      *          for information about standard algorithm names.
      *
      * @param provider an instance of the provider.
      *
-     * @return the new <code>TrustManagerFactory</code> object.
+     * @return the new {@code TrustManagerFactory} object
      *
-     * @throws NoSuchAlgorithmException if a TrustManagerFactorySpi
-     *          implementation for the specified algorithm is not available
-     *          from the specified Provider object.
+     * @throws IllegalArgumentException if the provider is {@code null}
      *
-     * @throws IllegalArgumentException if the provider is null.
-     * @throws NullPointerException if algorithm is null.
+     * @throws NoSuchAlgorithmException if a {@code TrustManagerFactorySpi}
+     *         implementation for the specified algorithm is not available
+     *         from the specified {@code Provider} object
+     *
+     * @throws NullPointerException if {@code algorithm} is {@code null}
      *
      * @see java.security.Provider
      */
     public static final TrustManagerFactory getInstance(String algorithm,
             Provider provider) throws NoSuchAlgorithmException {
+        Objects.requireNonNull(algorithm, "null algorithm name");
         GetInstance.Instance instance = GetInstance.getInstance
                 ("TrustManagerFactory", TrustManagerFactorySpi.class,
                 algorithm, provider);

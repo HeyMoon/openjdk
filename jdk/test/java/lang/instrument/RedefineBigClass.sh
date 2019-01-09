@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2011, 2015 Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,9 @@
 # @summary Redefine a big class.
 # @author Daniel D. Daugherty
 #
+# @key intermittent
 # @modules java.instrument
+#          java.management
 # @run shell MakeJAR3.sh RedefineBigClassAgent 'Can-Redefine-Classes: true'
 # @run build BigClass RedefineBigClassApp NMTHelper
 # @run shell/timeout=600 RedefineBigClass.sh
@@ -68,10 +70,10 @@ else
 fi
 
 "${JAVA}" ${TESTVMOPTS} \
-    -XX:TraceRedefineClasses=3 ${NMT} \
+    -Xlog:redefine+class+load=debug,redefine+class+load+exceptions=info ${NMT} \
     -javaagent:RedefineBigClassAgent.jar=BigClass.class \
     -classpath "${TESTCLASSES}" RedefineBigClassApp \
-    > output.log 2>&1 
+    > output.log 2>&1
 result=$?
 
 cat output.log

@@ -3,13 +3,14 @@
  * DO NOT REMOVE OR ALTER!
  */
 /*
- * Copyright 1999-2004 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,9 +18,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * $Id: XPATHErrorResources_zh_TW.java,v 1.2.4.1 2005/09/15 00:39:22 jeffsuttor Exp $
- */
+
 package com.sun.org.apache.xpath.internal.res;
 
 import java.util.ListResourceBundle;
@@ -93,6 +92,7 @@ public class XPATHErrorResources_zh_TW extends ListResourceBundle
   public static final String ER_CURRENT_TAKES_NO_ARGS =
          "ER_CURRENT_TAKES_NO_ARGS";
   public static final String ER_DOCUMENT_REPLACED = "ER_DOCUMENT_REPLACED";
+  public static final String ER_CONTEXT_CAN_NOT_BE_NULL = "ER_CONTEXT_CAN_NOT_BE_NULL";
   public static final String ER_CONTEXT_HAS_NO_OWNERDOC =
          "ER_CONTEXT_HAS_NO_OWNERDOC";
   public static final String ER_LOCALNAME_HAS_TOO_MANY_ARGS =
@@ -367,6 +367,9 @@ public static final String ER_IGNORABLE_WHITESPACE_NOT_HANDLED =
 
   { ER_DOCUMENT_REPLACED,
       "document() \u51FD\u6578\u5BE6\u884C\u5DF2\u7531 com.sun.org.apache.xalan.internal.xslt.FuncDocument \u53D6\u4EE3\u3002"},
+
+  { ER_CONTEXT_CAN_NOT_BE_NULL,
+      "\u5982\u679C\u4F5C\u696D\u8207\u76F8\u95DC\u8CC7\u8A0A\u74B0\u5883\u76F8\u4F9D\uFF0C\u5247\u76F8\u95DC\u8CC7\u8A0A\u74B0\u5883\u4E0D\u53EF\u4EE5\u662F\u7A7A\u503C\u3002"},
 
   { ER_CONTEXT_HAS_NO_OWNERDOC,
       "\u76F8\u95DC\u8CC7\u8A0A\u74B0\u5883\u4E0D\u5177\u6709\u64C1\u6709\u8005\u6587\u4EF6\uFF01"},

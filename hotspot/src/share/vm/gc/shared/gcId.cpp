@@ -25,18 +25,67 @@
 #include "precompiled.hpp"
 #include "gc/shared/gcId.hpp"
 #include "runtime/safepoint.hpp"
+#include "runtime/thread.inline.hpp"
 
 uint GCId::_next_id = 0;
 
-const GCId GCId::create() {
-  return GCId(_next_id++);
+NamedThread* currentNamedthread() {
+  assert(Thread::current()->is_Named_thread(), "This thread must be NamedThread");
+  return (NamedThread*)Thread::current();
 }
-const GCId GCId::peek() {
-  return GCId(_next_id);
+
+const uint GCId::create() {
+  return _next_id++;
 }
-const GCId GCId::undefined() {
-  return GCId(UNDEFINED);
+
+const uint GCId::peek() {
+  return _next_id;
 }
-bool GCId::is_undefined() const {
-  return _id == UNDEFINED;
+
+const uint GCId::current() {
+  assert(currentNamedthread()->gc_id() != undefined(), "Using undefined GC id.");
+  return current_raw();
+}
+
+const uint GCId::current_raw() {
+  return currentNamedthread()->gc_id();
+}
+
+size_t GCId::print_prefix(char* buf, size_t len) {
+  Thread* thread = Thread::current_or_null();
+  if (thread != NULL && thread->is_Named_thread()) {
+    uint gc_id = current_raw();
+    if (gc_id != undefined()) {
+      int ret = jio_snprintf(buf, len, "GC(%u) ", gc_id);
+      assert(ret > 0, "Failed to print prefix. Log buffer too small?");
+      return (size_t)ret;
+    }
+  }
+  return 0;
+}
+
+GCIdMark::GCIdMark() : _gc_id(GCId::create()) {
+  currentNamedthread()->set_gc_id(_gc_id);
+}
+
+GCIdMark::GCIdMark(uint gc_id) : _gc_id(gc_id) {
+  currentNamedthread()->set_gc_id(_gc_id);
+}
+
+GCIdMark::~GCIdMark() {
+  currentNamedthread()->set_gc_id(GCId::undefined());
+}
+
+GCIdMarkAndRestore::GCIdMarkAndRestore() : _gc_id(GCId::create()) {
+  _previous_gc_id = GCId::current_raw();
+  currentNamedthread()->set_gc_id(_gc_id);
+}
+
+GCIdMarkAndRestore::GCIdMarkAndRestore(uint gc_id) : _gc_id(gc_id) {
+  _previous_gc_id = GCId::current_raw();
+  currentNamedthread()->set_gc_id(_gc_id);
+}
+
+GCIdMarkAndRestore::~GCIdMarkAndRestore() {
+  currentNamedthread()->set_gc_id(_previous_gc_id);
 }

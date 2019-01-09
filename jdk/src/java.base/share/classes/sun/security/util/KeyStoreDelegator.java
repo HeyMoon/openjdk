@@ -37,7 +37,7 @@ import sun.security.util.Debug;
 /**
  * This class delegates to a primary or secondary keystore implementation.
  *
- * @since 1.9
+ * @since 9
  */
 
 public class KeyStoreDelegator extends KeyStoreSpi {
@@ -196,8 +196,9 @@ public class KeyStoreDelegator extends KeyStoreSpi {
         // A new keystore is always created in the primary keystore format
         if (stream == null) {
             try {
-                keystore = primaryKeyStore.newInstance();
-
+                @SuppressWarnings("deprecation")
+                KeyStoreSpi tmp = primaryKeyStore.newInstance();
+                keystore = tmp;
             } catch (InstantiationException | IllegalAccessException e) {
                 // can safely ignore
             }
@@ -210,62 +211,64 @@ public class KeyStoreDelegator extends KeyStoreSpi {
 
         } else {
             // First try the primary keystore then try the secondary keystore
-            try (InputStream bufferedStream = new BufferedInputStream(stream)) {
-                bufferedStream.mark(Integer.MAX_VALUE);
+            InputStream bufferedStream = new BufferedInputStream(stream);
+            bufferedStream.mark(Integer.MAX_VALUE);
+
+            try {
+                @SuppressWarnings("deprecation")
+                KeyStoreSpi tmp = primaryKeyStore.newInstance();
+                keystore = tmp;
+                type = primaryType;
+                keystore.engineLoad(bufferedStream, password);
+
+            } catch (Exception e) {
+
+                // incorrect password
+                if (e instanceof IOException &&
+                    e.getCause() instanceof UnrecoverableKeyException) {
+                    throw (IOException)e;
+                }
 
                 try {
-                    keystore = primaryKeyStore.newInstance();
-                    type = primaryType;
-                    keystore.engineLoad(bufferedStream, password);
-
-                } catch (Exception e) {
-
-                    // incorrect password
-                    if (e instanceof IOException &&
-                        e.getCause() instanceof UnrecoverableKeyException) {
-                        throw (IOException)e;
+                    // Ignore secondary keystore when no compatibility mode
+                    if (!compatModeEnabled) {
+                        throw e;
                     }
 
-                    try {
-                        // Ignore secondary keystore when no compatibility mode
-                        if (!compatModeEnabled) {
-                            throw e;
-                        }
+                    @SuppressWarnings("deprecation")
+                    KeyStoreSpi tmp= secondaryKeyStore.newInstance();
+                    keystore = tmp;
+                    type = secondaryType;
+                    bufferedStream.reset();
+                    keystore.engineLoad(bufferedStream, password);
 
-                        keystore = secondaryKeyStore.newInstance();
-                        type = secondaryType;
-                        bufferedStream.reset();
-                        keystore.engineLoad(bufferedStream, password);
+                    if (debug != null) {
+                        debug.println("WARNING: switching from " +
+                          primaryType + " to " + secondaryType +
+                          " keystore file format has altered the " +
+                          "keystore security level");
+                    }
 
-                        if (debug != null) {
-                            debug.println("WARNING: switching from " +
-                              primaryType + " to " + secondaryType +
-                              " keystore file format has altered the " +
-                              "keystore security level");
-                        }
+                } catch (InstantiationException |
+                    IllegalAccessException e2) {
+                    // can safely ignore
 
-                    } catch (InstantiationException |
-                        IllegalAccessException e2) {
-                        // can safely ignore
+                } catch (IOException |
+                    NoSuchAlgorithmException |
+                    CertificateException e3) {
 
-                    } catch (IOException |
-                        NoSuchAlgorithmException |
-                        CertificateException e3) {
-
-                        // incorrect password
-                        if (e3 instanceof IOException &&
-                            e3.getCause() instanceof
-                                UnrecoverableKeyException) {
-                            throw (IOException)e3;
-                        }
-                        // rethrow the outer exception
-                        if (e instanceof IOException) {
-                            throw (IOException)e;
-                        } else if (e instanceof CertificateException) {
-                            throw (CertificateException)e;
-                        } else if (e instanceof NoSuchAlgorithmException) {
-                            throw (NoSuchAlgorithmException)e;
-                        }
+                    // incorrect password
+                    if (e3 instanceof IOException &&
+                        e3.getCause() instanceof UnrecoverableKeyException) {
+                        throw (IOException)e3;
+                    }
+                    // rethrow the outer exception
+                    if (e instanceof IOException) {
+                        throw (IOException)e;
+                    } else if (e instanceof CertificateException) {
+                        throw (CertificateException)e;
+                    } else if (e instanceof NoSuchAlgorithmException) {
+                        throw (NoSuchAlgorithmException)e;
                     }
                 }
             }
@@ -286,7 +289,9 @@ public class KeyStoreDelegator extends KeyStoreSpi {
         boolean result = false;
 
         try {
-            keystore = primaryKeyStore.newInstance();
+            @SuppressWarnings("deprecation")
+            KeyStoreSpi tmp = primaryKeyStore.newInstance();
+            keystore = tmp;
             type = primaryType;
             result = keystore.engineProbe(stream);
 

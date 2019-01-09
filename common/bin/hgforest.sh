@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Copyright (c) 2009, 2014, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2009, 2017, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -183,7 +183,7 @@ trap 'nice_exit' EXIT
 
 subrepos="corba jaxp jaxws langtools jdk hotspot nashorn"
 jdk_subrepos_extra="closed jdk/src/closed jdk/make/closed jdk/test/closed hotspot/make/closed hotspot/src/closed hotspot/test/closed"
-subrepos_extra="$jdk_subrepos_extra deploy install sponsors pubs"
+subrepos_extra="$jdk_subrepos_extra deploy install sponsors"
 
 # Only look in specific locations for possible forests (avoids long searches)
 pull_default=""
@@ -309,8 +309,8 @@ if [ "${command}" = "serve" ] ; then
 
       echo "serving root repo ${serving}" > ${status_output}
 
-      echo "hg${global_opts} serve" > ${status_output}
-      (PYTHONUNBUFFERED=true hg${global_opts} serve -A ${status_output} -E ${status_output} --pid-file ${tmp}/serve.pid --web-conf ${tmp}/serve.web-conf; echo "$?" > ${tmp}/serve.pid.rc ) 2>&1 &
+      echo "hg${global_opts} serve ${@}" > ${status_output}
+      (PYTHONUNBUFFERED=true hg${global_opts} serve -A ${status_output} -E ${status_output} --pid-file ${tmp}/serve.pid --web-conf ${tmp}/serve.web-conf "${@}"; echo "$?" > ${tmp}/serve.pid.rc ) 2>&1 &
     ) 2>&1 | sed -e "s@^@serve:   @" > ${status_output}
   ) &
 else
@@ -335,7 +335,10 @@ else
     for j in ${repos_extra} ; do
       if [ "${i}" = "${j}" ] ; then
         # it's an "extra"
-        pull_base="${pull_extra}"
+        if [ -n "${pull_extra}" ]; then
+          # if no pull_extra is defined, assume that pull_default is valid
+          pull_base="${pull_extra}"
+        fi
       fi
     done
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,7 @@
 package sun.security.tools.keytool;
 
 /**
- * This class represents the <code>ResourceBundle</code>
+ * <p> This class represents the <code>ResourceBundle</code>
  * for the keytool.
  *
  */
@@ -48,7 +48,7 @@ public class Resources_fr extends java.util.ListResourceBundle {
                  "Outil de gestion de certificats et de cl\u00E9s"},
         {"Commands.", "Commandes :"},
         {"Use.keytool.command.name.help.for.usage.of.command.name",
-                "Utiliser \"keytool -command_name -help\" pour la syntaxe de command_name"},
+                "Utilisez \"keytool -command_name -help\" pour la syntaxe de command_name.\nUtilisez l'option -conf <url> pour indiquer un fichier d'options pr\u00E9configur\u00E9es."},
         // keytool: help: commands
         {"Generates.a.certificate.request",
                 "G\u00E9n\u00E8re une demande de certificat"}, //-certreq
@@ -126,16 +126,24 @@ public class Resources_fr extends java.util.ListResourceBundle {
                 "taille en bits de la cl\u00E9"}, //-keysize
         {"keystore.name",
                 "nom du fichier de cl\u00E9s"}, //-keystore
+        {"access.the.cacerts.keystore",
+                "acc\u00E9der au fichier de cl\u00E9s cacerts"}, // -cacerts
+        {"warning.cacerts.option",
+                "Avertissement : utiliser l'option -cacerts pour acc\u00E9der au fichier de cl\u00E9s cacerts"},
         {"new.password",
                 "nouveau mot de passe"}, //-new
         {"do.not.prompt",
                 "ne pas inviter"}, //-noprompt
         {"password.through.protected.mechanism",
                 "mot de passe via m\u00E9canisme prot\u00E9g\u00E9"}, //-protected
-        {"provider.argument",
-                "argument du fournisseur"}, //-providerarg
-        {"provider.class.name",
-                "nom de la classe de fournisseur"}, //-providerclass
+
+        // The following 2 values should span 2 lines, the first for the
+        // option itself, the second for its -providerArg value.
+        {"addprovider.option",
+                "ajouter un fournisseur de s\u00E9curit\u00E9 par nom (par ex. SunPKCS11)\nconfigurer l'argument pour -addprovider"}, //-addprovider
+        {"provider.class.option",
+                "ajouter un fournisseur de s\u00E9curit\u00E9 par nom de classe qualifi\u00E9 complet\nconfigurer l'argument pour -providerclass"}, //-providerclass
+
         {"provider.name",
                 "nom du fournisseur"}, //-providername
         {"provider.classpath",
@@ -187,6 +195,8 @@ public class Resources_fr extends java.util.ListResourceBundle {
         {"Command.option.flag.needs.an.argument.", "L''option de commande {0} requiert un argument."},
         {"Warning.Different.store.and.key.passwords.not.supported.for.PKCS12.KeyStores.Ignoring.user.specified.command.value.",
                 "Avertissement\u00A0: les mots de passe de cl\u00E9 et de banque distincts ne sont pas pris en charge pour les fichiers de cl\u00E9s d''acc\u00E8s PKCS12. La valeur {0} sp\u00E9cifi\u00E9e par l''utilisateur est ignor\u00E9e."},
+        {"the.keystore.or.storetype.option.cannot.be.used.with.the.cacerts.option",
+            "Les options -keystore ou -storetype ne peuvent pas \u00EAtre utilis\u00E9es avec l'option -cacerts"},
         {".keystore.must.be.NONE.if.storetype.is.{0}",
                 "-keystore doit \u00EAtre d\u00E9fini sur NONE si -storetype est {0}"},
         {"Too.many.retries.program.terminated",
@@ -208,7 +218,9 @@ public class Resources_fr extends java.util.ListResourceBundle {
         {"Illegal.startdate.value", "Valeur de date de d\u00E9but non admise"},
         {"Validity.must.be.greater.than.zero",
                 "La validit\u00E9 doit \u00EAtre sup\u00E9rieure \u00E0 z\u00E9ro"},
-        {"provName.not.a.provider", "{0} n''est pas un fournisseur"},
+        {"provclass.not.a.provider", "%s n'est pas un fournisseur"},
+        {"provider.name.not.found", "Fournisseur nomm\u00E9 \"%s\" introuvable"},
+        {"provider.class.not.found", "Fournisseur \"%s\" introuvable"},
         {"Usage.error.no.command.provided", "Erreur de syntaxe\u00A0: aucune commande fournie"},
         {"Source.keystore.file.exists.but.is.empty.", "Le fichier de cl\u00E9s source existe mais il est vide : "},
         {"Please.specify.srckeystore", "Indiquez -srckeystore"},
@@ -306,7 +318,7 @@ public class Resources_fr extends java.util.ListResourceBundle {
         {"Entry.type.type.", "Type d''entr\u00E9e\u00A0: {0}"},
         {"Certificate.chain.length.", "Longueur de cha\u00EEne du certificat : "},
         {"Certificate.i.1.", "Certificat[{0,number,integer}]:"},
-        {"Certificate.fingerprint.SHA1.", "Empreinte du certificat (SHA1) : "},
+        {"Certificate.fingerprint.SHA.256.", "Empreinte du certificat (SHA-256) : "},
         {"Keystore.type.", "Type de fichier de cl\u00E9s : "},
         {"Keystore.provider.", "Fournisseur de fichier de cl\u00E9s : "},
         {"Your.keystore.contains.keyStore.size.entry",
@@ -345,8 +357,6 @@ public class Resources_fr extends java.util.ListResourceBundle {
         {"Enter.alias.name.", "Indiquez le nom d'alias :  "},
         {".RETURN.if.same.as.for.otherAlias.",
                 "\t(appuyez sur Entr\u00E9e si le r\u00E9sultat est identique \u00E0 <{0}>)"},
-        {".PATTERN.printX509Cert",
-                "Propri\u00E9taire : {0}\nEmetteur : {1}\nNum\u00E9ro de s\u00E9rie : {2}\nValide du : {3} au : {4}\nEmpreintes du certificat :\n\t MD5:  {5}\n\t SHA1 : {6}\n\t SHA256 : {7}\n\t Nom de l''algorithme de signature : {8}\n\t Version : {9}"},
         {"What.is.your.first.and.last.name.",
                 "Quels sont vos nom et pr\u00E9nom ?"},
         {"What.is.the.name.of.your.organizational.unit.",
@@ -409,15 +419,12 @@ public class Resources_fr extends java.util.ListResourceBundle {
         {"Please.provide.keysize.for.secret.key.generation",
                 "Indiquez -keysize pour la g\u00E9n\u00E9ration de la cl\u00E9 secr\u00E8te"},
 
-        {"verified.by.s.in.s", "V\u00E9rifi\u00E9 par %s dans %s"},
         {"warning.not.verified.make.sure.keystore.is.correct",
             "AVERTISSEMENT : non v\u00E9rifi\u00E9. Assurez-vous que -keystore est correct."},
 
         {"Extensions.", "Extensions\u00A0: "},
         {".Empty.value.", "(Valeur vide)"},
         {"Extension.Request.", "Demande d'extension :"},
-        {"PKCS.10.Certificate.Request.Version.1.0.Subject.s.Public.Key.s.format.s.key.",
-                "Demande de certificat PKCS #10 (version 1.0)\nSujet : %s\nCl\u00E9 publique : format %s pour la cl\u00E9 %s\n"},
         {"Unknown.keyUsage.type.", "Type keyUsage inconnu : "},
         {"Unknown.extendedkeyUsage.type.", "Type extendedkeyUsage inconnu : "},
         {"Unknown.AccessDescription.type.", "Type AccessDescription inconnu : "},
@@ -426,12 +433,40 @@ public class Resources_fr extends java.util.ListResourceBundle {
                  "Cette extension ne peut pas \u00EAtre marqu\u00E9e comme critique. "},
         {"Odd.number.of.hex.digits.found.", "Nombre impair de chiffres hexad\u00E9cimaux trouv\u00E9 : "},
         {"Unknown.extension.type.", "Type d'extension inconnu : "},
-        {"command.{0}.is.ambiguous.", "commande {0} ambigu\u00EB :"}
+        {"command.{0}.is.ambiguous.", "commande {0} ambigu\u00EB :"},
+
+        // 8171319: keytool should print out warnings when reading or
+        // generating cert/cert req using weak algorithms
+        {"the.certificate.request", "Demande de certificat"},
+        {"the.issuer", "Emetteur"},
+        {"the.generated.certificate", "Certificat g\u00E9n\u00E9r\u00E9"},
+        {"the.generated.crl", "Liste des certificats r\u00E9voqu\u00E9s g\u00E9n\u00E9r\u00E9e"},
+        {"the.generated.certificate.request", "Demande de certificat g\u00E9n\u00E9r\u00E9"},
+        {"the.certificate", "Certificat"},
+        {"the.crl", "Liste de certificats r\u00E9voqu\u00E9s"},
+        {"the.tsa.certificate", "Certificat TSA"},
+        {"the.input", "Entr\u00E9e"},
+        {"reply", "R\u00E9pondre"},
+        {"one.in.many", "%s #%d sur %d"},
+        {"alias.in.cacerts", "Emetteur <%s> dans les certificats CA"},
+        {"alias.in.keystore", "Emetteur <%s>"},
+        {"with.weak", "%s (faible)"},
+        {"key.bit", "Cl\u00E9 %s %d bits"},
+        {"key.bit.weak", "Cl\u00E9 %s %d bits (faible)"},
+        {".PATTERN.printX509Cert.with.weak",
+                "Propri\u00E9taire : {0}\nEmetteur : {1}\nNum\u00E9ro de s\u00E9rie : {2}\nValide du {3} au {4}\nEmpreintes du certificat :\n\t SHA 1: {5}\n\t SHA 256: {6}\nNom de l''algorithme de signature : {7}\nAlgorithme de cl\u00E9 publique du sujet : {8}\nVersion : {9}"},
+        {"PKCS.10.with.weak",
+                "Demande de certificat PKCS #10 (version 1.0)\nSujet : %s\nFormat : %s\nCl\u00E9 publique : %s\nAlgorithme de signature : %s\n"},
+        {"verified.by.s.in.s.weak", "V\u00E9rifi\u00E9 par %s dans %s avec un \u00E9l\u00E9ment %s"},
+        {"whose.sigalg.risk", "%s utilise l'algorithme de signature %s, qui repr\u00E9sente un risque pour la s\u00E9curit\u00E9."},
+        {"whose.key.risk", "%s utilise un \u00E9l\u00E9ment %s, qui repr\u00E9sente un risque pour la s\u00E9curit\u00E9."},
     };
 
 
     /**
      * Returns the contents of this <code>ResourceBundle</code>.
+     *
+     * <p>
      *
      * @return the contents of this <code>ResourceBundle</code>.
      */

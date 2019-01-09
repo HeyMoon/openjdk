@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,22 +23,23 @@
 
 /*
  * @test
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.compiler
  *          java.management
- *          jdk.jvmstat/sun.jvmstat.monitor
- * @build jdk.test.lib.*
+ *          jdk.internal.jvmstat/sun.jvmstat.monitor
  * @run driver CreateCoredumpOnCrash
  */
 
-import jdk.test.lib.*;
-import sun.misc.Unsafe;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.Platform;
+import jdk.internal.misc.Unsafe;
 
 public class CreateCoredumpOnCrash {
     private static class Crasher {
         public static void main(String[] args) {
-            Utils.getUnsafe().getInt(0);
+            Unsafe.getUnsafe().putInt(0L, 0);
         }
     }
 
@@ -46,16 +47,8 @@ public class CreateCoredumpOnCrash {
         runTest("-XX:-CreateCoredumpOnCrash").shouldContain("CreateCoredumpOnCrash turned off, no core file dumped");
 
         if (Platform.isWindows()) {
-            runTest("-XX:+CreateCoredumpOnCrash").shouldContain("Core dump will be written. Default location");
-
             // The old CreateMinidumpOnCrash option should still work
-            runTest("-XX:+CreateMinidumpOnCrash").shouldContain("Core dump will be written. Default location");
             runTest("-XX:-CreateMinidumpOnCrash").shouldContain("CreateCoredumpOnCrash turned off, no core file dumped");
-
-            if (Platform.isDebugBuild()) {
-                // Make sure we create dumps on Windows debug builds by default
-                runTest("-Ddummyopt=false").shouldContain("Core dump will be written. Default location");
-            }
         } else {
             runTest("-XX:+CreateCoredumpOnCrash").shouldNotContain("CreateCoredumpOnCrash turned off, no core file dumped");
         }
@@ -64,7 +57,7 @@ public class CreateCoredumpOnCrash {
     public static OutputAnalyzer runTest(String option) throws Exception {
         return new OutputAnalyzer(
             ProcessTools.createJavaProcessBuilder(
-            "-Xmx64m", "-XX:-TransmitErrorReport", option, Crasher.class.getName())
+            "-Xmx64m", "-XX:-TransmitErrorReport", "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED", option, Crasher.class.getName())
             .start());
     }
 }

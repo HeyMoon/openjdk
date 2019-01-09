@@ -94,8 +94,10 @@ void PredicateFailedStub::emit_code(LIR_Assembler* ce) {
 void CounterOverflowStub::emit_code(LIR_Assembler* ce) {
   __ bind(_entry);
   __ set(_bci, G4);
+  Metadata *m = _method->as_constant_ptr()->as_metadata();
+  __ set_metadata_constant(m, G5);
   __ call(Runtime1::entry_for(Runtime1::counter_overflow_id), relocInfo::runtime_call_type);
-  __ delayed()->mov_or_nop(_method->as_register(), G5);
+  __ delayed()->nop();
   ce->add_call_info_here(_info);
   ce->verify_oop_map(_info);
 
@@ -432,6 +434,9 @@ void ArrayCopyStub::emit_code(LIR_Assembler* ce) {
   __ mov(length()->as_register(),  O4);
 
   ce->emit_static_call_stub();
+  if (ce->compilation()->bailed_out()) {
+    return; // CodeCache is full
+  }
 
   __ call(SharedRuntime::get_resolve_static_call_stub(), relocInfo::static_call_type);
   __ delayed()->nop();

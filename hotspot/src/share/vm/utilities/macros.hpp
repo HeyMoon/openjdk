@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,6 +33,9 @@
 
 // Makes a string of the macro expansion of a
 #define XSTR(a) STR(a)
+
+// Allow commas in macro arguments.
+#define COMMA ,
 
 // Apply pre-processor token pasting to the expansions of x and y.
 // The token pasting operator (##) prevents its arguments from being
@@ -173,6 +176,38 @@
 #define INCLUDE_TRACE 1
 #endif // INCLUDE_TRACE
 
+#ifndef INCLUDE_JVMCI
+#define INCLUDE_JVMCI 1
+#endif
+
+#ifdef INCLUDE_AOT
+# if INCLUDE_AOT && !(INCLUDE_JVMCI)
+#   error "Must have JVMCI for AOT"
+# endif
+#else
+# define INCLUDE_AOT 0
+#endif
+
+#if INCLUDE_JVMCI
+#define JVMCI_ONLY(code) code
+#define NOT_JVMCI(code)
+#define NOT_JVMCI_RETURN /* next token must be ; */
+#else
+#define JVMCI_ONLY(code)
+#define NOT_JVMCI(code) code
+#define NOT_JVMCI_RETURN {}
+#endif // INCLUDE_JVMCI
+
+#if INCLUDE_AOT
+#define AOT_ONLY(code) code
+#define NOT_AOT(code)
+#define NOT_AOT_RETURN /* next token must be ; */
+#else
+#define AOT_ONLY(code)
+#define NOT_AOT(code) code
+#define NOT_AOT_RETURN {}
+#endif // INCLUDE_AOT
+
 // COMPILER1 variant
 #ifdef COMPILER1
 #ifdef COMPILER2
@@ -192,10 +227,21 @@
 #define NOT_COMPILER2(code) code
 #endif // COMPILER2
 
+// COMPILER2 or JVMCI
+#if defined(COMPILER2) || INCLUDE_JVMCI
+#define COMPILER2_OR_JVMCI 1
+#define COMPILER2_OR_JVMCI_PRESENT(code) code
+#define NOT_COMPILER2_OR_JVMCI(code)
+#else
+#define COMPILER2_OR_JVMCI 0
+#define COMPILER2_OR_JVMCI_PRESENT(code)
+#define NOT_COMPILER2_OR_JVMCI(code) code
+#endif
+
 #ifdef TIERED
 #define TIERED_ONLY(code) code
 #define NOT_TIERED(code)
-#else
+#else // TIERED
 #define TIERED_ONLY(code)
 #define NOT_TIERED(code) code
 #endif // TIERED
@@ -288,6 +334,7 @@
 #endif
 
 #if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
+#define BSD
 #define BSD_ONLY(code) code
 #define NOT_BSD(code)
 #else
@@ -357,6 +404,14 @@
 #define NOT_AMD64(code) code
 #endif
 
+#ifdef S390
+#define S390_ONLY(code) code
+#define NOT_S390(code)
+#else
+#define S390_ONLY(code)
+#define NOT_S390(code) code
+#endif
+
 #ifdef SPARC
 #define SPARC_ONLY(code) code
 #define NOT_SPARC(code)
@@ -401,6 +456,10 @@
 #define NOT_E500V2(code) code
 #endif
 
+// Note: There are three ARM ports. They set the following in the makefiles:
+// 1. Closed 32-bit port:   -DARM -DARM32           -DTARGET_ARCH_arm
+// 2. Closed 64-bit port:   -DARM -DAARCH64 -D_LP64 -DTARGET_ARCH_arm
+// 3. Open   64-bit port:         -DAARCH64 -D_LP64 -DTARGET_ARCH_aaarch64
 #ifdef ARM
 #define ARM_ONLY(code) code
 #define NOT_ARM(code)
@@ -425,14 +484,52 @@
 #define NOT_AARCH64(code) code
 #endif
 
-#ifdef JAVASE_EMBEDDED
-#define EMBEDDED_ONLY(code) code
-#define NOT_EMBEDDED(code)
-#else
-#define EMBEDDED_ONLY(code)
-#define NOT_EMBEDDED(code) code
-#endif
-
 #define define_pd_global(type, name, value) const type pd_##name = value;
+
+// Helper macros for constructing file names for includes.
+#define CPU_HEADER_STEM(basename) PASTE_TOKENS(basename, INCLUDE_SUFFIX_CPU)
+#define OS_HEADER_STEM(basename) PASTE_TOKENS(basename, INCLUDE_SUFFIX_OS)
+#define OS_CPU_HEADER_STEM(basename) PASTE_TOKENS(basename, PASTE_TOKENS(INCLUDE_SUFFIX_OS, INCLUDE_SUFFIX_CPU))
+
+// Include platform dependent files.
+//
+// This macro constructs from basename and INCLUDE_SUFFIX_OS /
+// INCLUDE_SUFFIX_CPU, which are set on the command line, the name of
+// platform dependent files to be included.
+// Example: INCLUDE_SUFFIX_OS=_linux / INCLUDE_SUFFIX_CPU=_sparc
+//   CPU_HEADER_INLINE(macroAssembler) --> macroAssembler_sparc.inline.hpp
+//   OS_CPU_HEADER(vmStructs)          --> vmStructs_linux_sparc.hpp
+//
+// basename<cpu>.hpp / basename<cpu>.inline.hpp
+#define CPU_HEADER_H(basename)         XSTR(CPU_HEADER_STEM(basename).h)
+#define CPU_HEADER(basename)           XSTR(CPU_HEADER_STEM(basename).hpp)
+#define CPU_HEADER_INLINE(basename)    XSTR(CPU_HEADER_STEM(basename).inline.hpp)
+// basename<os>.hpp / basename<os>.inline.hpp
+#define OS_HEADER_H(basename)          XSTR(OS_HEADER_STEM(basename).h)
+#define OS_HEADER(basename)            XSTR(OS_HEADER_STEM(basename).hpp)
+#define OS_HEADER_INLINE(basename)     XSTR(OS_HEADER_STEM(basename).inline.hpp)
+// basename<os><cpu>.hpp / basename<os><cpu>.inline.hpp
+#define OS_CPU_HEADER(basename)        XSTR(OS_CPU_HEADER_STEM(basename).hpp)
+#define OS_CPU_HEADER_INLINE(basename) XSTR(OS_CPU_HEADER_STEM(basename).inline.hpp)
+
+// To use Atomic::inc(jshort* dest) and Atomic::dec(jshort* dest), the address must be specially
+// aligned, such that (*dest) occupies the upper 16 bits of an aligned 32-bit word. The best way to
+// achieve is to place your short value next to another short value, which doesn't need atomic ops.
+//
+// Example
+//  ATOMIC_SHORT_PAIR(
+//    volatile short _refcount,  // needs atomic operation
+//    unsigned short _length     // number of UTF8 characters in the symbol (does not need atomic op)
+//  );
+
+#ifdef VM_LITTLE_ENDIAN
+  #define ATOMIC_SHORT_PAIR(atomic_decl, non_atomic_decl)  \
+    non_atomic_decl;                                       \
+    atomic_decl
+#else
+  #define ATOMIC_SHORT_PAIR(atomic_decl, non_atomic_decl)  \
+    atomic_decl;                                           \
+    non_atomic_decl
+#endif
 
 #endif // SHARE_VM_UTILITIES_MACROS_HPP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,13 +32,13 @@ import javax.net.ssl.SSLEngineResult.HandshakeStatus;
  * Plaintext
  */
 final class Plaintext {
-    final static Plaintext PLAINTEXT_NULL = new Plaintext();
+    static final Plaintext PLAINTEXT_NULL = new Plaintext();
 
     byte            contentType;
     byte            majorVersion;
     byte            minorVersion;
     int             recordEpoch;    // incremented on every cipher state change
-    long            recordSN;
+    long            recordSN;       // contains epcoh number (epoch | sequence)
     ByteBuffer      fragment;       // null if need to be reassembled
 
     HandshakeStatus handshakeStatus;    // null if not used or not handshaking

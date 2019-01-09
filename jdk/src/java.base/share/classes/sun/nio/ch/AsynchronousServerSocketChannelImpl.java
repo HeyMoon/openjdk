@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -51,14 +51,14 @@ abstract class AsynchronousServerSocketChannelImpl
     protected final FileDescriptor fd;
 
     // the local address to which the channel's socket is bound
-    protected volatile InetSocketAddress localAddress = null;
+    protected volatile InetSocketAddress localAddress;
 
     // need this lock to set local address
     private final Object stateLock = new Object();
 
     // close support
     private ReadWriteLock closeLock = new ReentrantReadWriteLock();
-    private volatile boolean open = true;
+    private volatile boolean closed;
 
     // set true when accept operation is cancelled
     private volatile boolean acceptKilled;
@@ -73,7 +73,7 @@ abstract class AsynchronousServerSocketChannelImpl
 
     @Override
     public final boolean isOpen() {
-        return open;
+        return !closed;
     }
 
     /**
@@ -102,9 +102,9 @@ abstract class AsynchronousServerSocketChannelImpl
         // synchronize with any threads using file descriptor/handle
         closeLock.writeLock().lock();
         try {
-            if (!open)
+            if (closed)
                 return;     // already closed
-            open = false;
+            closed = true;
         } finally {
             closeLock.writeLock().unlock();
         }
@@ -231,6 +231,9 @@ abstract class AsynchronousServerSocketChannelImpl
             HashSet<SocketOption<?>> set = new HashSet<>(2);
             set.add(StandardSocketOptions.SO_RCVBUF);
             set.add(StandardSocketOptions.SO_REUSEADDR);
+            if (Net.isReusePortAvailable()) {
+                set.add(StandardSocketOptions.SO_REUSEPORT);
+            }
             return Collections.unmodifiableSet(set);
         }
     }

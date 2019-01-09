@@ -35,7 +35,7 @@ import java.util.*;
 import javax.security.auth.x500.X500Principal;
 
 import sun.security.util.*;
-import sun.misc.HexDumpEncoder;
+import sun.security.util.HexDumpEncoder;
 
 /**
  * <p>Abstract class for a revoked certificate in a CRL.
@@ -76,7 +76,7 @@ public class X509CRLEntryImpl extends X509CRLEntry
     private byte[] revokedCert = null;
     private X500Principal certIssuer;
 
-    private final static boolean isExplicit = false;
+    private static final boolean isExplicit = false;
     private static final long YR_2050 = 2524636800000L;
 
     /**

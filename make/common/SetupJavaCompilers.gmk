@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -28,7 +28,7 @@ _SETUP_GMK := 1
 
 include JavaCompilation.gmk
 
-DISABLE_WARNINGS := -Xlint:all,-deprecation,-unchecked,-rawtypes,-cast,-serial,-dep-ann,-static,-fallthrough,-try,-varargs,-empty,-finally
+DISABLE_WARNINGS := -Xlint:all,-deprecation,-removal,-unchecked,-rawtypes,-cast,-serial,-dep-ann,-static,-fallthrough,-try,-varargs,-empty,-finally
 
 # If warnings needs to be non-fatal for testing purposes use a command like:
 # make JAVAC_WARNINGS="-Xlint:all -Xmaxwarns 10000"
@@ -38,7 +38,13 @@ JAVAC_WARNINGS := -Xlint:all -Werror
 # and the interim javac, to be run by the boot jdk.
 $(eval $(call SetupJavaCompiler,BOOT_JAVAC, \
     JAVAC := $(JAVAC), \
-    FLAGS := -XDignore.symbol.file=true -g -Xlint:all$(COMMA)-deprecation -Werror))
+    FLAGS := \
+        $(JAVA_TOOL_FLAGS_SMALL) \
+        $(BOOT_JDK_SOURCETARGET) \
+        -XDignore.symbol.file=true -g \
+        -Xlint:all$(COMMA)-deprecation$(COMMA)-options -Werror, \
+    DISABLE_SJAVAC := true, \
+))
 
 # Any java code executed during a JDK build to build other parts of the JDK must be
 # executed by the bootstrap JDK (probably with -Xbootclasspath/p: ) and for this
@@ -53,7 +59,7 @@ $(eval $(call SetupJavaCompiler,BOOT_JAVAC, \
 $(eval $(call SetupJavaCompiler,GENERATE_OLDBYTECODE, \
     JVM := $(JAVA_SMALL), \
     JAVAC := $(NEW_JAVAC), \
-    FLAGS := $(BOOT_JDK_SOURCETARGET) -XDignore.symbol.file=true \
+    FLAGS := $(BOOT_JDK_SOURCETARGET) -XDignore.symbol.file=true -XDstringConcat=inline \
         $(DISABLE_WARNINGS) -Xlint:-options, \
     SERVER_DIR := $(SJAVAC_SERVER_DIR), \
     SERVER_JVM := $(SJAVAC_SERVER_JAVA)))
@@ -61,9 +67,9 @@ $(eval $(call SetupJavaCompiler,GENERATE_OLDBYTECODE, \
 # The generate new bytecode javac setup uses the new compiler to compile for the
 # new jdk. This new bytecode might only be possible to run using the new jvm.
 $(eval $(call SetupJavaCompiler,GENERATE_JDKBYTECODE, \
-    JVM := $(JAVA), \
+    JVM := $(JAVA_JAVAC), \
     JAVAC := $(NEW_JAVAC), \
-    FLAGS := -source 9 -target 9 \
+    FLAGS := -source 9 -target 9 --doclint-format html5 \
         -encoding ascii -XDignore.symbol.file=true $(JAVAC_WARNINGS), \
     SERVER_DIR := $(SJAVAC_SERVER_DIR), \
     SERVER_JVM := $(SJAVAC_SERVER_JAVA)))
@@ -71,15 +77,12 @@ $(eval $(call SetupJavaCompiler,GENERATE_JDKBYTECODE, \
 # The generate new bytecode javac setup uses the new compiler to compile for the
 # new jdk. This new bytecode might only be possible to run using the new jvm.
 $(eval $(call SetupJavaCompiler,GENERATE_JDKBYTECODE_NOWARNINGS, \
-    JVM := $(JAVA), \
+    JVM := $(JAVA_JAVAC), \
     JAVAC := $(NEW_JAVAC), \
     FLAGS := -source 9 -target 9 \
         -encoding ascii -XDignore.symbol.file=true $(DISABLE_WARNINGS), \
     SERVER_DIR := $(SJAVAC_SERVER_DIR), \
     SERVER_JVM := $(SJAVAC_SERVER_JAVA)))
-
-JDK_BOOTCLASSPATH := $(subst $(SPACE),$(PATH_SEP),\
-    $(filter-out $(JDK_OUTPUTDIR)/modules/_%, $(wildcard $(JDK_OUTPUTDIR)/modules/*)))
 
 # After the jdk is built, we want to build demos using only the recently
 # generated jdk classes and nothing else, no jdk source, etc etc.
@@ -88,7 +91,7 @@ JDK_BOOTCLASSPATH := $(subst $(SPACE),$(PATH_SEP),\
 $(eval $(call SetupJavaCompiler,GENERATE_USINGJDKBYTECODE, \
     JVM := $(JAVA_SMALL), \
     JAVAC := $(NEW_JAVAC), \
-    FLAGS := -bootclasspath "$(JDK_BOOTCLASSPATH)" $(DISABLE_WARNINGS), \
+    FLAGS := --upgrade-module-path $(JDK_OUTPUTDIR)/modules --system none $(DISABLE_WARNINGS), \
     SERVER_DIR := $(SJAVAC_SERVER_DIR), \
     SERVER_JVM := $(SJAVAC_SERVER_JAVA)))
 

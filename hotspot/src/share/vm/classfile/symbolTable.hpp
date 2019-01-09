@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,9 +41,19 @@
 
 class BoolObjectClosure;
 class outputStream;
+class SerializeClosure;
 
-// Class to hold a newly created or referenced Symbol* temporarily in scope.
-// new_symbol() and lookup() will create a Symbol* if not already in the
+// TempNewSymbol acts as a handle class in a handle/body idiom and is
+// responsible for proper resource management of the body (which is a Symbol*).
+// The body is resource managed by a reference counting scheme.
+// TempNewSymbol can therefore be used to properly hold a newly created or referenced
+// Symbol* temporarily in scope.
+//
+// Routines in SymbolTable will initialize the reference count of a Symbol* before
+// it becomes "managed" by TempNewSymbol instances. As a handle class, TempNewSymbol
+// needs to maintain proper reference counting in context of copy semantics.
+//
+// In SymbolTable, new_symbol() and lookup() will create a Symbol* if not already in the
 // symbol table and add to the symbol's reference count.
 // probe() and lookup_only() will increment the refcount if symbol is found.
 class TempNewSymbol : public StackObj {
@@ -51,25 +61,38 @@ class TempNewSymbol : public StackObj {
 
  public:
   TempNewSymbol() : _temp(NULL) {}
-  // Creating or looking up a symbol increments the symbol's reference count
+
+  // Conversion from a Symbol* to a TempNewSymbol.
+  // Does not increment the current reference count.
   TempNewSymbol(Symbol *s) : _temp(s) {}
 
-  // Operator= increments reference count.
-  void operator=(const TempNewSymbol &s) {
-    //clear();  //FIXME
-    _temp = s._temp;
-    if (_temp !=NULL) _temp->increment_refcount();
+  // Copy constructor increments reference count.
+  TempNewSymbol(const TempNewSymbol& rhs) : _temp(rhs._temp) {
+    if (_temp != NULL) {
+      _temp->increment_refcount();
+    }
   }
 
-  // Decrement reference counter so it can go away if it's unique
-  void clear() { if (_temp != NULL)  _temp->decrement_refcount();  _temp = NULL; }
+  // Assignment operator uses a c++ trick called copy and swap idiom.
+  // rhs is passed by value so within the scope of this method it is a copy.
+  // At method exit it contains the former value of _temp, triggering the correct refcount
+  // decrement upon destruction.
+  void operator=(TempNewSymbol rhs) {
+    Symbol* tmp = rhs._temp;
+    rhs._temp = _temp;
+    _temp = tmp;
+  }
 
-  ~TempNewSymbol() { clear(); }
+  // Decrement reference counter so it can go away if it's unused
+  ~TempNewSymbol() {
+    if (_temp != NULL) {
+      _temp->decrement_refcount();
+    }
+  }
 
-  // Operators so they can be used like Symbols
+  // Symbol* conversion operators
   Symbol* operator -> () const                   { return _temp; }
   bool    operator == (Symbol* o) const          { return _temp == o; }
-  // Sneaky conversion function
   operator Symbol*()                             { return _temp; }
 };
 
@@ -100,12 +123,12 @@ private:
   Symbol* basic_add(int index, u1* name, int len, unsigned int hashValue,
                     bool c_heap, TRAPS);
   bool basic_add(ClassLoaderData* loader_data,
-                 constantPoolHandle cp, int names_count,
+                 const constantPoolHandle& cp, int names_count,
                  const char** names, int* lengths, int* cp_indices,
                  unsigned int* hashValues, TRAPS);
 
   static void new_symbols(ClassLoaderData* loader_data,
-                          constantPoolHandle cp, int names_count,
+                          const constantPoolHandle& cp, int names_count,
                           const char** name, int* lengths,
                           int* cp_indices, unsigned int* hashValues,
                           TRAPS) {
@@ -131,8 +154,11 @@ private:
 
   static volatile int _parallel_claimed_idx;
 
-  // Release any dead symbols
-  static void buckets_unlink(int start_idx, int end_idx, int* processed, int* removed, size_t* memory_total);
+  typedef SymbolTable::BucketUnlinkContext BucketUnlinkContext;
+  // Release any dead symbols. Unlinked bucket entries are collected in the given
+  // context to be freed later.
+  // This allows multiple threads to work on the table at once.
+  static void buckets_unlink(int start_idx, int end_idx, BucketUnlinkContext* context);
 public:
   enum {
     symbol_alloc_batch_size = 8,
@@ -153,6 +179,7 @@ public:
   }
 
   static unsigned int hash_symbol(const char* s, int len);
+  static unsigned int hash_shared_symbol(const char* s, int len);
 
   static Symbol* lookup(const char* name, int len, TRAPS);
   // lookup only, won't add. Also calculate hash.
@@ -165,12 +192,12 @@ public:
   // Look up the address of the literal in the SymbolTable for this Symbol*
   static Symbol** lookup_symbol_addr(Symbol* sym);
 
-  // jchar (utf16) version of lookups
+  // jchar (UTF16) version of lookups
   static Symbol* lookup_unicode(const jchar* name, int len, TRAPS);
   static Symbol* lookup_only_unicode(const jchar* name, int len, unsigned int& hash);
 
   static void add(ClassLoaderData* loader_data,
-                  constantPoolHandle cp, int names_count,
+                  const constantPoolHandle& cp, int names_count,
                   const char** names, int* lengths, int* cp_indices,
                   unsigned int* hashValues, TRAPS);
 
@@ -228,8 +255,9 @@ public:
   static void read(const char* filename, TRAPS);
 
   // Sharing
-  static bool copy_compact_table(char** top, char* end);
-  static const char* init_shared_table(const char* buffer);
+  static void serialize(SerializeClosure* soc);
+  static u4 encode_shared(Symbol* sym);
+  static Symbol* decode_shared(u4 offset);
 
   // Rehash the symbol table if it gets out of balance
   static void rehash_table();

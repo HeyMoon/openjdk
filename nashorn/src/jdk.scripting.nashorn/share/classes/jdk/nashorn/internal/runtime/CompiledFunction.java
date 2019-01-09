@@ -27,6 +27,7 @@ package jdk.nashorn.internal.runtime;
 import static jdk.nashorn.internal.lookup.Lookup.MH;
 import static jdk.nashorn.internal.runtime.UnwarrantedOptimismException.INVALID_PROGRAM_POINT;
 import static jdk.nashorn.internal.runtime.UnwarrantedOptimismException.isValid;
+
 import java.lang.invoke.CallSite;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -42,7 +43,7 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.function.Supplier;
 import java.util.logging.Level;
-import jdk.internal.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.GuardedInvocation;
 import jdk.nashorn.internal.codegen.Compiler;
 import jdk.nashorn.internal.codegen.Compiler.CompilationPhases;
 import jdk.nashorn.internal.codegen.TypeMap;
@@ -101,7 +102,7 @@ final class CompiledFunction {
             /*
              * An optimistic builtin with isOptimistic=true works like any optimistic generated function, i.e. it
              * can throw unwarranted optimism exceptions. As native functions trivially can't have parts of them
-             * regenerated as restof methods, this only works if the methods are atomic/functional in their behavior
+             * regenerated as "restOf" methods, this only works if the methods are atomic/functional in their behavior
              * and doesn't modify state before an UOE can be thrown. If they aren't, we can reexecute a wider version
              * of the same builtin in a recompilation handler for FinalScriptFunctionData. There are several
              * candidate methods in Native* that would benefit from this, but I haven't had time to implement any
@@ -149,6 +150,10 @@ final class CompiledFunction {
             return linkLogicClass;
         }
         return null;
+    }
+
+    boolean convertsNumericArgs() {
+        return isSpecialization() && specialization.convertsNumericArgs();
     }
 
     int getFlags() {
@@ -387,10 +392,18 @@ final class CompiledFunction {
             int narrowWeightDelta = 0;
             int widenWeightDelta = 0;
             final int minParamsCount = Math.min(Math.min(thisParamCount, otherParamCount), callSiteParamCount);
+            final boolean convertsNumericArgs = cf.convertsNumericArgs();
             for(int i = 0; i < minParamsCount; ++i) {
-                final int callSiteParamWeight = getParamType(i, callSiteType, csVarArg).getWeight();
+                final Type callSiteParamType = getParamType(i, callSiteType, csVarArg);
+                final Type thisParamType = getParamType(i, thisType, thisVarArg);
+                if (!convertsNumericArgs && callSiteParamType.isBoolean() && thisParamType.isNumeric()) {
+                    // When an argument is converted to number by a function it is safe to "widen" booleans to numeric types.
+                    // However, we must avoid this conversion for generic functions such as Array.prototype.push.
+                    return false;
+                }
+                final int callSiteParamWeight = callSiteParamType.getWeight();
                 // Delta is negative for narrowing, positive for widening
-                final int thisParamWeightDelta = getParamType(i, thisType, thisVarArg).getWeight() - callSiteParamWeight;
+                final int thisParamWeightDelta = thisParamType.getWeight() - callSiteParamWeight;
                 final int otherParamWeightDelta = getParamType(i, otherType, otherVarArg).getWeight() - callSiteParamWeight;
                 // Only count absolute values of narrowings
                 narrowWeightDelta += Math.max(-thisParamWeightDelta, 0) - Math.max(-otherParamWeightDelta, 0);
@@ -566,7 +579,7 @@ final class CompiledFunction {
             return handle;
         }
 
-        // Otherwise, we need a new level of indirection; need to introduce a mutable call site that can relink itslef
+        // Otherwise, we need a new level of indirection; need to introduce a mutable call site that can relink itself
         // to the compiled function's changed target whenever the optimistic assumptions are invalidated.
         final CallSite cs = new MutableCallSite(handle.type());
         relinkComposableInvoker(cs, this, isConstructor);
@@ -820,7 +833,7 @@ final class CompiledFunction {
         // isn't available, we'll use the old one bound into the call site.
         final OptimismInfo effectiveOptInfo = currentOptInfo != null ? currentOptInfo : oldOptInfo;
         FunctionNode fn = effectiveOptInfo.reparse();
-        final boolean serialized = effectiveOptInfo.isSerialized();
+        final boolean cached = fn.isCached();
         final Compiler compiler = effectiveOptInfo.getCompiler(fn, ct, re); //set to non rest-of
 
         if (!shouldRecompile) {
@@ -828,11 +841,11 @@ final class CompiledFunction {
             // recompiled a deoptimized version for an inner invocation.
             // We still need to do the rest of from the beginning
             logRecompile("Rest-of compilation [STANDALONE] ", fn, ct, effectiveOptInfo.invalidatedProgramPoints);
-            return restOfHandle(effectiveOptInfo, compiler.compile(fn, serialized ? CompilationPhases.COMPILE_SERIALIZED_RESTOF : CompilationPhases.COMPILE_ALL_RESTOF), currentOptInfo != null);
+            return restOfHandle(effectiveOptInfo, compiler.compile(fn, cached ? CompilationPhases.COMPILE_CACHED_RESTOF : CompilationPhases.COMPILE_ALL_RESTOF), currentOptInfo != null);
         }
 
         logRecompile("Deoptimizing recompilation (up to bytecode) ", fn, ct, effectiveOptInfo.invalidatedProgramPoints);
-        fn = compiler.compile(fn, serialized ? CompilationPhases.RECOMPILE_SERIALIZED_UPTO_BYTECODE : CompilationPhases.COMPILE_UPTO_BYTECODE);
+        fn = compiler.compile(fn, cached ? CompilationPhases.RECOMPILE_CACHED_UPTO_BYTECODE : CompilationPhases.COMPILE_UPTO_BYTECODE);
         log.fine("Reusable IR generated");
 
         // compile the rest of the function, and install it
@@ -955,10 +968,6 @@ final class CompiledFunction {
 
         FunctionNode reparse() {
             return data.reparse();
-        }
-
-        boolean isSerialized() {
-            return data.isSerialized();
         }
     }
 

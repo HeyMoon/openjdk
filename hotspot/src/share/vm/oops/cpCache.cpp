@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,18 +25,17 @@
 #include "precompiled.hpp"
 #include "interpreter/interpreter.hpp"
 #include "interpreter/rewriter.hpp"
+#include "logging/log.hpp"
+#include "memory/resourceArea.hpp"
 #include "memory/universe.inline.hpp"
 #include "oops/cpCache.hpp"
 #include "oops/objArrayOop.inline.hpp"
 #include "oops/oop.inline.hpp"
-#include "prims/jvmtiRedefineClassesTrace.hpp"
 #include "prims/methodHandles.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/orderAccess.inline.hpp"
 #include "utilities/macros.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 // Implementation of ConstantPoolCacheEntry
 
@@ -126,7 +125,7 @@ void ConstantPoolCacheEntry::set_parameter_size(int value) {
   // This routine is called only in corner cases where the CPCE is not yet initialized.
   // See AbstractInterpreter::deopt_continue_after_entry.
   assert(_flags == 0 || parameter_size() == 0 || parameter_size() == value,
-         err_msg("size must not change: parameter_size=%d, value=%d", parameter_size(), value));
+         "size must not change: parameter_size=%d, value=%d", parameter_size(), value);
   // Setting the parameter size by itself is only safe if the
   // current value of _flags is 0, otherwise another thread may have
   // updated it and we don't want to overwrite that value.  Don't
@@ -136,12 +135,13 @@ void ConstantPoolCacheEntry::set_parameter_size(int value) {
     Atomic::cmpxchg_ptr((value & parameter_size_mask), &_flags, 0);
   }
   guarantee(parameter_size() == value,
-            err_msg("size must not change: parameter_size=%d, value=%d", parameter_size(), value));
+            "size must not change: parameter_size=%d, value=%d", parameter_size(), value);
 }
 
 void ConstantPoolCacheEntry::set_direct_or_vtable_call(Bytecodes::Code invoke_code,
                                                        methodHandle method,
-                                                       int vtable_index) {
+                                                       int vtable_index,
+                                                       bool sender_is_interface) {
   bool is_vtable_call = (vtable_index >= 0);  // FIXME: split this method on this boolean
   assert(method->interpreter_entry() != NULL, "should have been set at this point");
   assert(!method->is_obsolete(),  "attempt to write obsolete method to cpCache");
@@ -205,7 +205,13 @@ void ConstantPoolCacheEntry::set_direct_or_vtable_call(Bytecodes::Code invoke_co
   if (byte_no == 1) {
     assert(invoke_code != Bytecodes::_invokevirtual &&
            invoke_code != Bytecodes::_invokeinterface, "");
+    // Don't mark invokespecial to method as resolved if sender is an interface.  The receiver
+    // has to be checked that it is a subclass of the current class every time this bytecode
+    // is executed.
+    if (invoke_code != Bytecodes::_invokespecial || !sender_is_interface ||
+        method->name() == vmSymbols::object_initializer_name()) {
     set_bytecode_1(invoke_code);
+    }
   } else if (byte_no == 2)  {
     if (change_to_virtual) {
       assert(invoke_code == Bytecodes::_invokeinterface, "");
@@ -235,20 +241,21 @@ void ConstantPoolCacheEntry::set_direct_or_vtable_call(Bytecodes::Code invoke_co
   NOT_PRODUCT(verify(tty));
 }
 
-void ConstantPoolCacheEntry::set_direct_call(Bytecodes::Code invoke_code, methodHandle method) {
+void ConstantPoolCacheEntry::set_direct_call(Bytecodes::Code invoke_code, methodHandle method,
+                                             bool sender_is_interface) {
   int index = Method::nonvirtual_vtable_index;
   // index < 0; FIXME: inline and customize set_direct_or_vtable_call
-  set_direct_or_vtable_call(invoke_code, method, index);
+  set_direct_or_vtable_call(invoke_code, method, index, sender_is_interface);
 }
 
 void ConstantPoolCacheEntry::set_vtable_call(Bytecodes::Code invoke_code, methodHandle method, int index) {
   // either the method is a miranda or its holder should accept the given index
   assert(method->method_holder()->is_interface() || method->method_holder()->verify_vtable_index(index), "");
   // index >= 0; FIXME: inline and customize set_direct_or_vtable_call
-  set_direct_or_vtable_call(invoke_code, method, index);
+  set_direct_or_vtable_call(invoke_code, method, index, false);
 }
 
-void ConstantPoolCacheEntry::set_itable_call(Bytecodes::Code invoke_code, methodHandle method, int index) {
+void ConstantPoolCacheEntry::set_itable_call(Bytecodes::Code invoke_code, const methodHandle& method, int index) {
   assert(method->method_holder()->verify_itable_index(index), "");
   assert(invoke_code == Bytecodes::_invokeinterface, "");
   InstanceKlass* interf = method->method_holder();
@@ -263,15 +270,15 @@ void ConstantPoolCacheEntry::set_itable_call(Bytecodes::Code invoke_code, method
 }
 
 
-void ConstantPoolCacheEntry::set_method_handle(constantPoolHandle cpool, const CallInfo &call_info) {
+void ConstantPoolCacheEntry::set_method_handle(const constantPoolHandle& cpool, const CallInfo &call_info) {
   set_method_handle_common(cpool, Bytecodes::_invokehandle, call_info);
 }
 
-void ConstantPoolCacheEntry::set_dynamic_call(constantPoolHandle cpool, const CallInfo &call_info) {
+void ConstantPoolCacheEntry::set_dynamic_call(const constantPoolHandle& cpool, const CallInfo &call_info) {
   set_method_handle_common(cpool, Bytecodes::_invokedynamic, call_info);
 }
 
-void ConstantPoolCacheEntry::set_method_handle_common(constantPoolHandle cpool,
+void ConstantPoolCacheEntry::set_method_handle_common(const constantPoolHandle& cpool,
                                                       Bytecodes::Code invoke_code,
                                                       const CallInfo &call_info) {
   // NOTE: This CPCE can be the subject of data races.
@@ -308,11 +315,12 @@ void ConstantPoolCacheEntry::set_method_handle_common(constantPoolHandle cpool,
                    adapter->size_of_parameters());
 
   if (TraceInvokeDynamic) {
+    ttyLocker ttyl;
     tty->print_cr("set_method_handle bc=%d appendix=" PTR_FORMAT "%s method_type=" PTR_FORMAT "%s method=" PTR_FORMAT " ",
                   invoke_code,
-                  (void *)appendix(),    (has_appendix    ? "" : " (unused)"),
-                  (void *)method_type(), (has_method_type ? "" : " (unused)"),
-                  (intptr_t)adapter());
+                  p2i(appendix()),    (has_appendix    ? "" : " (unused)"),
+                  p2i(method_type()), (has_method_type ? "" : " (unused)"),
+                  p2i(adapter()));
     adapter->print();
     if (has_appendix)  appendix()->print();
   }
@@ -359,11 +367,12 @@ void ConstantPoolCacheEntry::set_method_handle_common(constantPoolHandle cpool,
   set_bytecode_1(invoke_code);
   NOT_PRODUCT(verify(tty));
   if (TraceInvokeDynamic) {
+    ttyLocker ttyl;
     this->print(tty, 0);
   }
 }
 
-Method* ConstantPoolCacheEntry::method_if_resolved(constantPoolHandle cpool) {
+Method* ConstantPoolCacheEntry::method_if_resolved(const constantPoolHandle& cpool) {
   // Decode the action of set_method and set_interface_call
   Bytecodes::Code invoke_code = bytecode_1();
   if (invoke_code != (Bytecodes::Code)0) {
@@ -396,9 +405,7 @@ Method* ConstantPoolCacheEntry::method_if_resolved(constantPoolHandle cpool) {
         int holder_index = cpool->uncached_klass_ref_index_at(constant_pool_index());
         if (cpool->tag_at(holder_index).is_klass()) {
           Klass* klass = cpool->resolved_klass_at(holder_index);
-          if (!klass->oop_is_instance())
-            klass = SystemDictionary::Object_klass();
-          return InstanceKlass::cast(klass)->method_at_vtable(f2_as_index());
+          return klass->method_at_vtable(f2_as_index());
         }
       }
       break;
@@ -408,7 +415,7 @@ Method* ConstantPoolCacheEntry::method_if_resolved(constantPoolHandle cpool) {
 }
 
 
-oop ConstantPoolCacheEntry::appendix_if_resolved(constantPoolHandle cpool) {
+oop ConstantPoolCacheEntry::appendix_if_resolved(const constantPoolHandle& cpool) {
   if (!has_appendix())
     return NULL;
   const int ref_index = f2_as_index() + _indy_resolved_references_appendix_offset;
@@ -417,7 +424,7 @@ oop ConstantPoolCacheEntry::appendix_if_resolved(constantPoolHandle cpool) {
 }
 
 
-oop ConstantPoolCacheEntry::method_type_if_resolved(constantPoolHandle cpool) {
+oop ConstantPoolCacheEntry::method_type_if_resolved(const constantPoolHandle& cpool) {
   if (!has_method_type())
     return NULL;
   const int ref_index = f2_as_index() + _indy_resolved_references_method_type_offset;
@@ -439,17 +446,14 @@ bool ConstantPoolCacheEntry::adjust_method_entry(Method* old_method,
       // match old_method so need an update
       // NOTE: can't use set_f2_as_vfinal_method as it asserts on different values
       _f2 = (intptr_t)new_method;
-      if (RC_TRACE_IN_RANGE(0x00100000, 0x00400000)) {
+      if (log_is_enabled(Info, redefine, class, update)) {
+        ResourceMark rm;
         if (!(*trace_name_printed)) {
-          // RC_TRACE_MESG macro has an embedded ResourceMark
-          RC_TRACE_MESG(("adjust: name=%s",
-            old_method->method_holder()->external_name()));
+          log_info(redefine, class, update)("adjust: name=%s", old_method->method_holder()->external_name());
           *trace_name_printed = true;
         }
-        // RC_TRACE macro has an embedded ResourceMark
-        RC_TRACE(0x00400000, ("cpc vf-entry update: %s(%s)",
-          new_method->name()->as_C_string(),
-          new_method->signature()->as_C_string()));
+        log_debug(redefine, class, update, constantpool)
+          ("cpc vf-entry update: %s(%s)", new_method->name()->as_C_string(), new_method->signature()->as_C_string());
       }
       return true;
     }
@@ -466,17 +470,14 @@ bool ConstantPoolCacheEntry::adjust_method_entry(Method* old_method,
 
   if (_f1 == old_method) {
     _f1 = new_method;
-    if (RC_TRACE_IN_RANGE(0x00100000, 0x00400000)) {
+    if (log_is_enabled(Info, redefine, class, update)) {
+      ResourceMark rm;
       if (!(*trace_name_printed)) {
-        // RC_TRACE_MESG macro has an embedded ResourceMark
-        RC_TRACE_MESG(("adjust: name=%s",
-          old_method->method_holder()->external_name()));
+        log_info(redefine, class, update)("adjust: name=%s", old_method->method_holder()->external_name());
         *trace_name_printed = true;
       }
-      // RC_TRACE macro has an embedded ResourceMark
-      RC_TRACE(0x00400000, ("cpc entry update: %s(%s)",
-        new_method->name()->as_C_string(),
-        new_method->signature()->as_C_string()));
+      log_debug(redefine, class, update, constantpool)
+        ("cpc entry update: %s(%s)", new_method->name()->as_C_string(), new_method->signature()->as_C_string());
     }
     return true;
   }
@@ -570,7 +571,7 @@ void ConstantPoolCache::initialize(const intArray& inverse_index_map,
                                    const intArray& invokedynamic_references_map) {
   for (int i = 0; i < inverse_index_map.length(); i++) {
     ConstantPoolCacheEntry* e = entry_at(i);
-    int original_index = inverse_index_map[i];
+    int original_index = inverse_index_map.at(i);
     e->initialize_entry(original_index);
     assert(entry_at(i) == e, "sanity");
   }
@@ -580,20 +581,20 @@ void ConstantPoolCache::initialize(const intArray& inverse_index_map,
   for (int i = 0; i < invokedynamic_inverse_index_map.length(); i++) {
     int offset = i + invokedynamic_offset;
     ConstantPoolCacheEntry* e = entry_at(offset);
-    int original_index = invokedynamic_inverse_index_map[i];
+    int original_index = invokedynamic_inverse_index_map.at(i);
     e->initialize_entry(original_index);
     assert(entry_at(offset) == e, "sanity");
   }
 
   for (int ref = 0; ref < invokedynamic_references_map.length(); ref++) {
-    const int cpci = invokedynamic_references_map[ref];
+    const int cpci = invokedynamic_references_map.at(ref);
     if (cpci >= 0) {
 #ifdef ASSERT
       // invokedynamic and invokehandle have more entries; check if they
       // all point to the same constant pool cache entry.
       for (int entry = 1; entry < ConstantPoolCacheEntry::_indy_resolved_references_entries; entry++) {
-        const int cpci_next = invokedynamic_references_map[ref + entry];
-        assert(cpci == cpci_next, err_msg_res("%d == %d", cpci, cpci_next));
+        const int cpci_next = invokedynamic_references_map.at(ref + entry);
+        assert(cpci == cpci_next, "%d == %d", cpci, cpci_next);
       }
 #endif
       entry_at(cpci)->initialize_resolved_reference_index(ref);

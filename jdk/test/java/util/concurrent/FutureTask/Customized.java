@@ -28,9 +28,12 @@
  * @author Martin Buchholz
  */
 
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Customized {
     static final AtomicLong doneCount = new AtomicLong(0);
@@ -116,7 +119,7 @@ public class Customized {
                 public void run() { throw new Error(); }};
 
         try {
-            final MyFutureTask<Long> task = new MyFutureTask<Long>(nop, 42L);
+            final MyFutureTask<Long> task = new MyFutureTask<>(nop, 42L);
             checkReady(task);
             equalCounts(0,0,0);
             check(task.runAndReset());
@@ -133,7 +136,7 @@ public class Customized {
         } catch (Throwable t) { unexpected(t); }
 
         try {
-            final MyFutureTask<Long> task = new MyFutureTask<Long>(nop, 42L);
+            final MyFutureTask<Long> task = new MyFutureTask<>(nop, 42L);
             cancel(task, false);
             equalCounts(2,1,0);
             cancel(task, false);
@@ -144,7 +147,7 @@ public class Customized {
         } catch (Throwable t) { unexpected(t); }
 
         try {
-            final MyFutureTask<Long> task = new MyFutureTask<Long>(bad, 42L);
+            final MyFutureTask<Long> task = new MyFutureTask<>(bad, 42L);
             checkReady(task);
             run(task);
             checkThrew(task);
@@ -154,7 +157,7 @@ public class Customized {
         } catch (Throwable t) { unexpected(t); }
 
         try {
-            final MyFutureTask<Long> task = new MyFutureTask<Long>(nop, 42L);
+            final MyFutureTask<Long> task = new MyFutureTask<>(nop, 42L);
             checkReady(task);
             task.set(99L);
             checkDone(task);
@@ -167,7 +170,7 @@ public class Customized {
         } catch (Throwable t) { unexpected(t); }
 
         try {
-            final MyFutureTask<Long> task = new MyFutureTask<Long>(nop, 42L);
+            final MyFutureTask<Long> task = new MyFutureTask<>(nop, 42L);
             checkReady(task);
             task.setException(new Throwable());
             checkThrew(task);

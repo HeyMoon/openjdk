@@ -14,5 +14,11 @@ keys=intermittent randomness
 # Group definitions
 groups=TEST.groups
 
-# Tests using jtreg 4.1 b11 features
-requiredVersion=4.1 b11
+# Tests using jtreg 4.2 b07 features
+requiredVersion=4.2 b07
+
+# Use new module options
+useNewOptions=true
+
+# Use --patch-module instead of -Xmodule:
+useNewPatchModule=true

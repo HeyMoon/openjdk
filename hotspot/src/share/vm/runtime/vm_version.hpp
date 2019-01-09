@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,14 +27,22 @@
 
 #include "memory/allocation.hpp"
 #include "utilities/ostream.hpp"
+#include "utilities/macros.hpp"
 
 // VM_Version provides information about the VM.
 
 class Abstract_VM_Version: AllStatic {
- protected:
   friend class VMStructs;
+  friend class JVMCIVMStructs;
+
+ protected:
   static const char*  _s_vm_release;
   static const char*  _s_internal_vm_info_string;
+
+  // CPU feature flags.
+  static uint64_t _features;
+  static const char* _features_string;
+
   // These are set by machine-dependent initializations
   static bool         _supports_cx8;
   static bool         _supports_atomic_getset4;
@@ -45,17 +53,22 @@ class Abstract_VM_Version: AllStatic {
   static unsigned int _L1_data_cache_line_size;
   static int          _vm_major_version;
   static int          _vm_minor_version;
-  static int          _vm_micro_version;
+  static int          _vm_security_version;
+  static int          _vm_patch_version;
   static int          _vm_build_number;
-  static bool         _initialized;
   static unsigned int _parallel_worker_threads;
   static bool         _parallel_worker_threads_initialized;
-  static int          _reserve_for_allocation_prefetch;
 
   static unsigned int nof_parallel_worker_threads(unsigned int num,
                                                   unsigned int dem,
                                                   unsigned int switch_pt);
  public:
+  // Called as part of the runtime services initialization which is
+  // called from the management module initialization (via init_globals())
+  // after argument parsing and attaching of the main thread has
+  // occurred.  Examines a variety of the hardware capabilities of
+  // the platform to determine which features can be used to execute the
+  // program.
   static void initialize();
 
   // This allows for early initialization of VM_Version information
@@ -64,6 +77,11 @@ class Abstract_VM_Version: AllStatic {
   // other part of the VM being initialized when called. Platforms that
   // need to specialize this define VM_Version::early_initialize().
   static void early_initialize() { }
+
+  // Called to initialize VM variables needing initialization
+  // after command line parsing. Platforms that need to specialize
+  // this should define VM_Version::init_before_ergo().
+  static void init_before_ergo() {}
 
   // Name
   static const char* vm_name();
@@ -75,10 +93,11 @@ class Abstract_VM_Version: AllStatic {
   static const char* vm_platform_string();
   static const char* vm_build_user();
 
-  static int vm_major_version()               { assert(_initialized, "not initialized"); return _vm_major_version; }
-  static int vm_minor_version()               { assert(_initialized, "not initialized"); return _vm_minor_version; }
-  static int vm_micro_version()               { assert(_initialized, "not initialized"); return _vm_micro_version; }
-  static int vm_build_number()                { assert(_initialized, "not initialized"); return _vm_build_number; }
+  static int vm_major_version()               { return _vm_major_version; }
+  static int vm_minor_version()               { return _vm_minor_version; }
+  static int vm_security_version()            { return _vm_security_version; }
+  static int vm_patch_version()               { return _vm_patch_version; }
+  static int vm_build_number()                { return _vm_build_number; }
 
   // Gets the jvm_version_info.jvm_version defined in jvm.h
   static unsigned int jvm_version();
@@ -86,6 +105,16 @@ class Abstract_VM_Version: AllStatic {
   // Internal version providing additional build information
   static const char* internal_vm_info_string();
   static const char* jre_release_version();
+  static const char* jdk_debug_level();
+  static const char* printable_jdk_debug_level();
+
+  static uint64_t features() {
+    return _features;
+  }
+
+  static const char* features_string() {
+    return _features_string;
+  }
 
   // does HW support an 8-byte compare-exchange operation?
   static bool supports_cx8()  {
@@ -110,12 +139,6 @@ class Abstract_VM_Version: AllStatic {
     return _L1_data_cache_line_size;
   }
 
-  // Need a space at the end of TLAB for prefetch instructions
-  // which may fault when accessing memory outside of heap.
-  static int reserve_for_allocation_prefetch() {
-    return _reserve_for_allocation_prefetch;
-  }
-
   // ARCH specific policy for the BiasedLocking
   static bool use_biased_locking()  { return true; }
 
@@ -133,22 +156,11 @@ class Abstract_VM_Version: AllStatic {
   // Calculates and returns the number of parallel threads.  May
   // be VM version specific.
   static unsigned int calc_parallel_worker_threads();
+
+  // Does this CPU support spin wait instruction?
+  static bool supports_on_spin_wait() { return false; }
 };
 
-#ifdef TARGET_ARCH_x86
-# include "vm_version_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "vm_version_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "vm_version_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "vm_version_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "vm_version_ppc.hpp"
-#endif
+#include CPU_HEADER(vm_version)
 
 #endif // SHARE_VM_RUNTIME_VM_VERSION_HPP

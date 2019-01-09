@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -102,13 +102,11 @@ public class LinuxFileSystemProvider extends UnixFileSystemProvider {
 
     @Override
     FileTypeDetector getFileTypeDetector() {
-        Path userMimeTypes = Paths.get(AccessController.doPrivileged(
-            new GetPropertyAction("user.home")), ".mime.types");
+        String userHome = GetPropertyAction.privilegedGetProperty("user.home");
+        Path userMimeTypes = Paths.get(userHome, ".mime.types");
         Path etcMimeTypes = Paths.get("/etc/mime.types");
 
-        return chain(new GnomeFileTypeDetector(),
-                     new MimeTypesFileTypeDetector(userMimeTypes),
-                     new MimeTypesFileTypeDetector(etcMimeTypes),
-                     new MagicFileTypeDetector());
+        return chain(new MimeTypesFileTypeDetector(userMimeTypes),
+                     new MimeTypesFileTypeDetector(etcMimeTypes));
     }
 }

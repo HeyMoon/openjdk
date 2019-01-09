@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,8 @@
 #include "oops/instanceKlass.hpp"
 #include "runtime/handles.hpp"
 
+class ClassListParser;
+
 class ClassLoaderExt: public ClassLoader { // AllStatic
 public:
 
@@ -39,7 +41,7 @@ public:
       _file_name = file_name;
     }
 
-    bool check(ClassFileStream* stream, const int classpath_index) {
+    bool check(const ClassFileStream* stream, const int classpath_index) {
       return true;
     }
 
@@ -47,12 +49,19 @@ public:
       return false;
     }
 
-    instanceKlassHandle record_result(const int classpath_index,
-                                      ClassPathEntry* e, instanceKlassHandle result, TRAPS) {
+    instanceKlassHandle record_result(Symbol* class_name,
+                                      ClassPathEntry* e,
+                                      const s2 classpath_index,
+                                      instanceKlassHandle result, TRAPS) {
       if (ClassLoader::add_package(_file_name, classpath_index, THREAD)) {
+#if INCLUDE_CDS
         if (DumpSharedSpaces) {
+          s2 classloader_type = ClassLoader::classloader_type(
+                          class_name, e, classpath_index, CHECK_(result));
           result->set_shared_classpath_index(classpath_index);
+          result->set_class_loader_type(classloader_type);
         }
+#endif
         return result;
       } else {
         return instanceKlassHandle(); // NULL
@@ -69,6 +78,10 @@ public:
     ClassLoader::add_to_list(new_entry);
   }
   static void setup_search_paths() {}
+  static bool is_boot_classpath(int classpath_index) {
+   return true;
+ }
+  static Klass* load_one_class(ClassListParser* parser, TRAPS);
 };
 
 #endif // SHARE_VM_CLASSFILE_CLASSLOADEREXT_HPP

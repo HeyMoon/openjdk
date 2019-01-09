@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,18 +21,20 @@
  * questions.
  */
 
+//    THIS TEST IS LINE NUMBER SENSITIVE
+
 /**
- *  @test
- *  @bug 6496524
- *  @summary Setting breakpoint in jdb crashes Hotspot JVM
+ * @test
+ * @bug 6496524
+ * @key intermittent
+ * @summary Setting breakpoint in jdb crashes Hotspot JVM
+ * @author jjh
  *
- *  @author jjh
- *
- *  @modules jdk.jdi
- *  @run build TestScaffold VMConnection TargetListener TargetAdapter
- *  @run compile -g BreakpointTest.java
- *  @run driver BreakpointTest
+ * @run build TestScaffold VMConnection TargetListener TargetAdapter
+ * @run compile -g BreakpointTest.java
+ * @run driver BreakpointTest
  */
+
 import com.sun.jdi.*;
 import com.sun.jdi.event.*;
 import com.sun.jdi.request.*;
@@ -45,8 +47,7 @@ import java.util.*;
 // the debuggee, waits a bit, and enables the bkpt again.
 
 class BreakpointTarg {
-    public final static int BKPT_LINE = 55;
-            // LINE NUMBER SENSITIVE
+    public final static int BKPT_LINE = 56;
 
     public static long count;
     static void doit() {

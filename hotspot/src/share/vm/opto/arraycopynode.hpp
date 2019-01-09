@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -58,6 +58,7 @@ private:
   // the arraycopy is not parsed yet so doesn't exist when
   // LibraryCallKit::tightly_coupled_allocation() is called.
   bool _alloc_tightly_coupled;
+  bool _has_negative_length_guard;
 
   bool _arguments_validated;
 
@@ -82,14 +83,13 @@ private:
     return TypeFunc::make(domain, range);
   }
 
-  ArrayCopyNode(Compile* C, bool alloc_tightly_coupled);
+  ArrayCopyNode(Compile* C, bool alloc_tightly_coupled, bool has_negative_length_guard);
 
   intptr_t get_length_if_constant(PhaseGVN *phase) const;
   int get_count(PhaseGVN *phase) const;
   static const TypePtr* get_address_type(PhaseGVN *phase, Node* n);
 
   Node* try_clone_instance(PhaseGVN *phase, bool can_reshape, int count);
-  Node* conv_I2X_offset(PhaseGVN *phase, Node* offset, const TypeAryPtr* ary_t);
   bool prepare_array_copy(PhaseGVN *phase, bool can_reshape,
                           Node*& adr_src, Node*& base_src, Node*& adr_dest, Node*& base_dest,
                           BasicType& copy_type, const Type*& value_type, bool& disjoint_bases);
@@ -108,6 +108,7 @@ private:
                             BasicType copy_type, const Type* value_type, int count);
   bool finish_transform(PhaseGVN *phase, bool can_reshape,
                         Node* ctl, Node *mem);
+  static bool may_modify_helper(const TypeOopPtr *t_oop, Node* n, PhaseTransform *phase, CallNode*& call);
 
 public:
 
@@ -133,6 +134,7 @@ public:
                              Node* dest,  Node* dest_offset,
                              Node* length,
                              bool alloc_tightly_coupled,
+                             bool has_negative_length_guard,
                              Node* src_klass = NULL, Node* dest_klass = NULL,
                              Node* src_length = NULL, Node* dest_length = NULL);
 
@@ -162,8 +164,14 @@ public:
 
   bool is_alloc_tightly_coupled() const { return _alloc_tightly_coupled; }
 
+  bool has_negative_length_guard() const { return _has_negative_length_guard; }
+
+  static bool may_modify(const TypeOopPtr *t_oop, MemBarNode* mb, PhaseTransform *phase, ArrayCopyNode*& ac);
+  bool modifies(intptr_t offset_lo, intptr_t offset_hi, PhaseTransform* phase, bool must_modify) const;
+
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const;
+  virtual void dump_compact_spec(outputStream* st) const;
 #endif
 };
 #endif // SHARE_VM_OPTO_ARRAYCOPYNODE_HPP

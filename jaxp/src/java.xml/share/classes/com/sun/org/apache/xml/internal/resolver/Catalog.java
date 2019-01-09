@@ -1,4 +1,7 @@
 /*
+ * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ */
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -33,8 +36,9 @@ import java.io.UnsupportedEncodingException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.Enumeration;
-import java.util.Hashtable;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Vector;
 import javax.xml.parsers.SAXParserFactory;
 
@@ -174,6 +178,14 @@ import javax.xml.parsers.SAXParserFactory;
  *
  * @see CatalogReader
  * @see CatalogEntry
+ * @deprecated The JDK internal Catalog API in package
+ * {@code com.sun.org.apache.xml.internal.resolver}
+ * is encapsulated in JDK 9. The entire implementation under the package is now
+ * deprecated and subject to removal in a future release. Users of the API
+ * should migrate to the {@linkplain javax.xml.catalog new public API}.
+ * <p>
+ * The new Catalog API is supported throughout the JDK XML Processors, which allows
+ * the use of Catalog by simply setting a path to a Catalog file as a property.
  *
  * @author Norman Walsh
  * <a href="mailto:Norman.Walsh@Sun.COM">Norman.Walsh@Sun.COM</a>
@@ -183,6 +195,7 @@ import javax.xml.parsers.SAXParserFactory;
  * <p>Derived from public domain code originally published by Arbortext,
  * Inc.</p>
  */
+@Deprecated(since="9", forRemoval=true)
 public class Catalog {
   /** The BASE Catalog Entry type. */
   public static final int BASE     = CatalogEntry.addEntryType("BASE", 1);
@@ -335,7 +348,7 @@ public class Catalog {
    * vector. This allows the Catalog to quickly locate the reader
    * for a particular MIME type.</p>
    */
-  protected Hashtable readerMap = new Hashtable();
+  protected Map<String, Integer> readerMap = new HashMap<>();
 
   /**
    * A vector of CatalogReaders.
@@ -431,11 +444,11 @@ public class Catalog {
    */
   public void addReader(String mimeType, CatalogReader reader) {
     if (readerMap.containsKey(mimeType)) {
-      Integer pos = (Integer) readerMap.get(mimeType);
-      readerArr.set(pos.intValue(), reader);
+      Integer pos = readerMap.get(mimeType);
+      readerArr.set(pos, reader);
     } else {
       readerArr.add(reader);
-      Integer pos = new Integer(readerArr.size()-1);
+      Integer pos = readerArr.size()-1;
       readerMap.put(mimeType, pos);
     }
   }
@@ -458,16 +471,13 @@ public class Catalog {
       mapArr.add(null);
     }
 
-    Enumeration en = readerMap.keys();
-    while (en.hasMoreElements()) {
-      String mimeType = (String) en.nextElement();
-      Integer pos = (Integer) readerMap.get(mimeType);
-      mapArr.set(pos.intValue(), mimeType);
+    for (Map.Entry<String, Integer> entry : readerMap.entrySet()) {
+        mapArr.set(entry.getValue().intValue(), entry.getKey());
     }
 
     for (int count = 0; count < mapArr.size(); count++) {
       String mimeType = (String) mapArr.get(count);
-      Integer pos = (Integer) readerMap.get(mimeType);
+      Integer pos = readerMap.get(mimeType);
       newCatalog.addReader(mimeType,
                            (CatalogReader)
                            readerArr.get(pos.intValue()));
@@ -810,9 +820,7 @@ public class Catalog {
       // tack on a basename because URLs point to files not dirs
       catalogCwd = FileURL.makeURL("basename");
     } catch (MalformedURLException e) {
-      String userdir = SecuritySupport.getSystemProperty("user.dir");
-      userdir = userdir.replace('\\', '/');
-      catalogManager.debug.message(1, "Malformed URL on cwd", userdir);
+      catalogManager.debug.message(1, "Malformed URL on cwd", "user.dir");
       catalogCwd = null;
     }
 

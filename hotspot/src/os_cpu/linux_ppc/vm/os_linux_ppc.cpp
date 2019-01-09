@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,16 +24,16 @@
  */
 
 // no precompiled headers
-#include "assembler_ppc.inline.hpp"
+#include "asm/assembler.inline.hpp"
 #include "classfile/classLoader.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
+#include "code/codeCache.hpp"
 #include "code/icBuffer.hpp"
 #include "code/vtableStubs.hpp"
 #include "interpreter/interpreter.hpp"
 #include "jvm_linux.h"
 #include "memory/allocation.inline.hpp"
-#include "mutex_linux.inline.hpp"
 #include "nativeInst_ppc.hpp"
 #include "os_share_linux.hpp"
 #include "prims/jniFastGetField.hpp"
@@ -98,7 +98,7 @@ void os::initialize_thread(Thread *thread) { }
 // Frame information (pc, sp, fp) retrieved via ucontext
 // always looks like a C-frame according to the frame
 // conventions in frame_ppc64.hpp.
-address os::Linux::ucontext_get_pc(ucontext_t * uc) {
+address os::Linux::ucontext_get_pc(const ucontext_t * uc) {
   // On powerpc64, ucontext_t is not selfcontained but contains
   // a pointer to an optional substructure (mcontext_t.regs) containing the volatile
   // registers - NIP, among others.
@@ -121,19 +121,19 @@ void os::Linux::ucontext_set_pc(ucontext_t * uc, address pc) {
   uc->uc_mcontext.regs->nip = (unsigned long)pc;
 }
 
-intptr_t* os::Linux::ucontext_get_sp(ucontext_t * uc) {
+intptr_t* os::Linux::ucontext_get_sp(const ucontext_t * uc) {
   return (intptr_t*)uc->uc_mcontext.regs->gpr[1/*REG_SP*/];
 }
 
-intptr_t* os::Linux::ucontext_get_fp(ucontext_t * uc) {
+intptr_t* os::Linux::ucontext_get_fp(const ucontext_t * uc) {
   return NULL;
 }
 
-ExtendedPC os::fetch_frame_from_context(void* ucVoid,
+ExtendedPC os::fetch_frame_from_context(const void* ucVoid,
                     intptr_t** ret_sp, intptr_t** ret_fp) {
 
   ExtendedPC  epc;
-  ucontext_t* uc = (ucontext_t*)ucVoid;
+  const ucontext_t* uc = (const ucontext_t*)ucVoid;
 
   if (uc != NULL) {
     epc = ExtendedPC(os::Linux::ucontext_get_pc(uc));
@@ -149,11 +149,47 @@ ExtendedPC os::fetch_frame_from_context(void* ucVoid,
   return epc;
 }
 
-frame os::fetch_frame_from_context(void* ucVoid) {
+frame os::fetch_frame_from_context(const void* ucVoid) {
   intptr_t* sp;
   intptr_t* fp;
   ExtendedPC epc = fetch_frame_from_context(ucVoid, &sp, &fp);
   return frame(sp, epc.pc());
+}
+
+bool os::Linux::get_frame_at_stack_banging_point(JavaThread* thread, ucontext_t* uc, frame* fr) {
+  address pc = (address) os::Linux::ucontext_get_pc(uc);
+  if (Interpreter::contains(pc)) {
+    // Interpreter performs stack banging after the fixed frame header has
+    // been generated while the compilers perform it before. To maintain
+    // semantic consistency between interpreted and compiled frames, the
+    // method returns the Java sender of the current frame.
+    *fr = os::fetch_frame_from_context(uc);
+    if (!fr->is_first_java_frame()) {
+      assert(fr->safe_for_sender(thread), "Safety check");
+      *fr = fr->java_sender();
+    }
+  } else {
+    // More complex code with compiled code.
+    assert(!Interpreter::contains(pc), "Interpreted methods should have been handled above");
+    CodeBlob* cb = CodeCache::find_blob(pc);
+    if (cb == NULL || !cb->is_nmethod() || cb->is_frame_complete_at(pc)) {
+      // Not sure where the pc points to, fallback to default
+      // stack overflow handling. In compiled code, we bang before
+      // the frame is complete.
+      return false;
+    } else {
+      intptr_t* fp = os::Linux::ucontext_get_fp(uc);
+      intptr_t* sp = os::Linux::ucontext_get_sp(uc);
+      *fr = frame(sp, (address)*sp);
+      if (!fr->is_java_frame()) {
+        assert(fr->safe_for_sender(thread), "Safety check");
+        assert(!fr->is_first_frame(), "Safety check");
+        *fr = fr->java_sender();
+      }
+    }
+  }
+  assert(fr->is_java_frame(), "Safety check");
+  return true;
 }
 
 frame os::get_sender_for_C_frame(frame* fr) {
@@ -169,8 +205,10 @@ frame os::current_frame() {
   intptr_t* csp = (intptr_t*) *((intptr_t*) os::current_stack_pointer());
   // hack.
   frame topframe(csp, (address)0x8);
-  // return sender of current topframe which hopefully has pc != NULL.
-  return os::get_sender_for_C_frame(&topframe);
+  // Return sender of sender of current topframe which hopefully
+  // both have pc != NULL.
+  frame tmp = os::get_sender_for_C_frame(&topframe);
+  return os::get_sender_for_C_frame(&tmp);
 }
 
 // Utility functions
@@ -182,7 +220,7 @@ JVM_handle_linux_signal(int sig,
                         int abort_if_unrecognized) {
   ucontext_t* uc = (ucontext_t*) ucVoid;
 
-  Thread* t = ThreadLocalStorage::get_thread_slow();
+  Thread* t = Thread::current_or_null_safe();
 
   SignalHandlerMark shm(t);
 
@@ -197,9 +235,29 @@ JVM_handle_linux_signal(int sig,
     if (os::Linux::chained_handler(sig, info, ucVoid)) {
       return true;
     } else {
-      if (PrintMiscellaneous && (WizardMode || Verbose)) {
-        warning("Ignoring SIGPIPE - see bug 4229104");
+      // Ignoring SIGPIPE - see bugs 4229104
+      return true;
+    }
+  }
+
+  // Make the signal handler transaction-aware by checking the existence of a
+  // second (transactional) context with MSR TS bits active. If the signal is
+  // caught during a transaction, then just return to the HTM abort handler.
+  // Please refer to Linux kernel document powerpc/transactional_memory.txt,
+  // section "Signals".
+  if (uc && uc->uc_link) {
+    ucontext_t* second_uc = uc->uc_link;
+
+    // MSR TS bits are 29 and 30 (Power ISA, v2.07B, Book III-S, pp. 857-858,
+    // 3.2.1 "Machine State Register"), however note that ISA notation for bit
+    // numbering is MSB 0, so for normal bit numbering (LSB 0) they come to be
+    // bits 33 and 34. It's not related to endianness, just a notation matter.
+    if (second_uc->uc_mcontext.regs->msr & 0x600000000) {
+      if (TraceTraps) {
+        tty->print_cr("caught signal in transaction, "
+                        "ignoring to jump to abort handler");
       }
+      // Return control to the HTM abort handler.
       return true;
     }
   }
@@ -241,17 +299,34 @@ JVM_handle_linux_signal(int sig,
       address addr = ((NativeInstruction*)pc)->get_stack_bang_address(uc);
 
       // Check if fault address is within thread stack.
-      if (addr < thread->stack_base() &&
-          addr >= thread->stack_base() - thread->stack_size()) {
+      if (thread->on_local_stack(addr)) {
         // stack overflow
-        if (thread->in_stack_yellow_zone(addr)) {
-          thread->disable_stack_yellow_zone();
+        if (thread->in_stack_yellow_reserved_zone(addr)) {
           if (thread->thread_state() == _thread_in_Java) {
+            if (thread->in_stack_reserved_zone(addr)) {
+              frame fr;
+              if (os::Linux::get_frame_at_stack_banging_point(thread, uc, &fr)) {
+                assert(fr.is_java_frame(), "Must be a Javac frame");
+                frame activation =
+                  SharedRuntime::look_for_reserved_stack_annotated_method(thread, fr);
+                if (activation.sp() != NULL) {
+                  thread->disable_stack_reserved_zone();
+                  if (activation.is_interpreted_frame()) {
+                    thread->set_reserved_stack_activation((address)activation.fp());
+                  } else {
+                    thread->set_reserved_stack_activation((address)activation.unextended_sp());
+                  }
+                  return 1;
+                }
+              }
+            }
             // Throw a stack overflow exception.
             // Guard pages will be reenabled while unwinding the stack.
+            thread->disable_stack_yellow_reserved_zone();
             stub = SharedRuntime::continuation_for_implicit_exception(thread, pc, SharedRuntime::STACK_OVERFLOW);
           } else {
             // Thread was in the vm or native code. Return and try to finish.
+            thread->disable_stack_yellow_reserved_zone();
             return 1;
           }
         } else if (thread->in_stack_red_zone(addr)) {
@@ -317,7 +392,7 @@ JVM_handle_linux_signal(int sig,
                ((NativeInstruction*)pc)->is_safepoint_poll() &&
                CodeCache::contains((void*) pc) &&
                ((cb = CodeCache::find_blob(pc)) != NULL) &&
-               cb->is_nmethod()) {
+               cb->is_compiled()) {
         if (TraceTraps) {
           tty->print_cr("trap: safepoint_poll at " INTPTR_FORMAT " (SIGSEGV)", p2i(pc));
         }
@@ -366,13 +441,11 @@ JVM_handle_linux_signal(int sig,
         // BugId 4454115: A read from a MappedByteBuffer can fault here if the
         // underlying file has been truncated. Do not crash the VM in such a case.
         CodeBlob* cb = CodeCache::find_blob_unsafe(pc);
-        nmethod* nm = (cb != NULL && cb->is_nmethod()) ? (nmethod*)cb : NULL;
+        CompiledMethod* nm = (cb != NULL) ? cb->as_compiled_method_or_null() : NULL;
         if (nm != NULL && nm->has_unsafe_access()) {
-          // We don't really need a stub here! Just set the pending exeption and
-          // continue at the next instruction after the faulting read. Returning
-          // garbage from this read is ok.
-          thread->set_pending_unsafe_access_error();
-          os::Linux::ucontext_set_pc(uc, pc + 4);
+          address next_pc = pc + 4;
+          next_pc = SharedRuntime::handle_unsafe_access(thread, next_pc);
+          os::Linux::ucontext_set_pc(uc, next_pc);
           return true;
         }
       }
@@ -387,10 +460,8 @@ JVM_handle_linux_signal(int sig,
       }
       else if (thread->thread_state() == _thread_in_vm &&
                sig == SIGBUS && thread->doing_unsafe_access()) {
-        // We don't really need a stub here! Just set the pending exeption and
-        // continue at the next instruction after the faulting read. Returning
-        // garbage from this read is ok.
-        thread->set_pending_unsafe_access_error();
+        address next_pc = pc + 4;
+        next_pc = SharedRuntime::handle_unsafe_access(thread, next_pc);
         os::Linux::ucontext_set_pc(uc, pc + 4);
         return true;
       }
@@ -439,8 +510,7 @@ report_and_die:
   sigaddset(&newset, sig);
   sigprocmask(SIG_UNBLOCK, &newset, NULL);
 
-  VMError err(t, sig, pc, info, ucVoid);
-  err.report_and_die();
+  VMError::report_and_die(t, sig, pc, info, ucVoid);
 
   ShouldNotReachHere();
   return false;
@@ -465,111 +535,26 @@ void os::Linux::set_fpu_control_word(int fpu_control) {
 ////////////////////////////////////////////////////////////////////////////////
 // thread stack
 
-size_t os::Linux::min_stack_allowed = 128*K;
+// Minimum usable stack sizes required to get to user code. Space for
+// HotSpot guard pages is added later.
+size_t os::Posix::_compiler_thread_min_stack_allowed = 64 * K;
+size_t os::Posix::_java_thread_min_stack_allowed = 64 * K;
+size_t os::Posix::_vm_internal_thread_min_stack_allowed = 64 * K;
 
-bool os::Linux::supports_variable_stack_size() { return true; }
-
-// return default stack size for thr_type
-size_t os::Linux::default_stack_size(os::ThreadType thr_type) {
-  // default stack size (compiler thread needs larger stack)
-  // Notice that the setting for compiler threads here have no impact
-  // because of the strange 'fallback logic' in os::create_thread().
-  // Better set CompilerThreadStackSize in globals_<os_cpu>.hpp if you want to
-  // specify a different stack size for compiler threads!
+// Return default stack size for thr_type.
+size_t os::Posix::default_stack_size(os::ThreadType thr_type) {
+  // Default stack size (compiler thread needs larger stack).
   size_t s = (thr_type == os::compiler_thread ? 4 * M : 1024 * K);
   return s;
-}
-
-size_t os::Linux::default_guard_size(os::ThreadType thr_type) {
-  return 2 * page_size();
-}
-
-// Java thread:
-//
-//   Low memory addresses
-//    +------------------------+
-//    |                        |\  JavaThread created by VM does not have glibc
-//    |    glibc guard page    | - guard, attached Java thread usually has
-//    |                        |/  1 page glibc guard.
-// P1 +------------------------+ Thread::stack_base() - Thread::stack_size()
-//    |                        |\
-//    |  HotSpot Guard Pages   | - red and yellow pages
-//    |                        |/
-//    +------------------------+ JavaThread::stack_yellow_zone_base()
-//    |                        |\
-//    |      Normal Stack      | -
-//    |                        |/
-// P2 +------------------------+ Thread::stack_base()
-//
-// Non-Java thread:
-//
-//   Low memory addresses
-//    +------------------------+
-//    |                        |\
-//    |  glibc guard page      | - usually 1 page
-//    |                        |/
-// P1 +------------------------+ Thread::stack_base() - Thread::stack_size()
-//    |                        |\
-//    |      Normal Stack      | -
-//    |                        |/
-// P2 +------------------------+ Thread::stack_base()
-//
-// ** P1 (aka bottom) and size ( P2 = P1 - size) are the address and stack size returned from
-//    pthread_attr_getstack()
-
-static void current_stack_region(address * bottom, size_t * size) {
-  if (os::Linux::is_initial_thread()) {
-     // initial thread needs special handling because pthread_getattr_np()
-     // may return bogus value.
-    *bottom = os::Linux::initial_thread_stack_bottom();
-    *size   = os::Linux::initial_thread_stack_size();
-  } else {
-    pthread_attr_t attr;
-
-    int rslt = pthread_getattr_np(pthread_self(), &attr);
-
-    // JVM needs to know exact stack location, abort if it fails
-    if (rslt != 0) {
-      if (rslt == ENOMEM) {
-        vm_exit_out_of_memory(0, OOM_MMAP_ERROR, "pthread_getattr_np");
-      } else {
-        fatal(err_msg("pthread_getattr_np failed with errno = %d", rslt));
-      }
-    }
-
-    if (pthread_attr_getstack(&attr, (void **)bottom, size) != 0) {
-      fatal("Can not locate current stack attributes!");
-    }
-
-    pthread_attr_destroy(&attr);
-
-  }
-  assert(os::current_stack_pointer() >= *bottom &&
-         os::current_stack_pointer() < *bottom + *size, "just checking");
-}
-
-address os::current_stack_base() {
-  address bottom;
-  size_t size;
-  current_stack_region(&bottom, &size);
-  return (bottom + size);
-}
-
-size_t os::current_stack_size() {
-  // stack size includes normal stack and HotSpot guard pages
-  address bottom;
-  size_t size;
-  current_stack_region(&bottom, &size);
-  return size;
 }
 
 /////////////////////////////////////////////////////////////////////////////
 // helper functions for fatal error handler
 
-void os::print_context(outputStream *st, void *context) {
+void os::print_context(outputStream *st, const void *context) {
   if (context == NULL) return;
 
-  ucontext_t* uc = (ucontext_t*)context;
+  const ucontext_t* uc = (const ucontext_t*)context;
 
   st->print_cr("Registers:");
   st->print("pc =" INTPTR_FORMAT "  ", uc->uc_mcontext.regs->nip);
@@ -597,10 +582,10 @@ void os::print_context(outputStream *st, void *context) {
   st->cr();
 }
 
-void os::print_register_info(outputStream *st, void *context) {
+void os::print_register_info(outputStream *st, const void *context) {
   if (context == NULL) return;
 
-  ucontext_t *uc = (ucontext_t*)context;
+  const ucontext_t *uc = (const ucontext_t*)context;
 
   st->print_cr("Register to memory mapping:");
   st->cr();

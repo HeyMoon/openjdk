@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -58,7 +58,7 @@ public class Sequence {
      *
      * @see #Sequence(float, int)
      */
-    public static final float PPQ                                                       = 0.0f;
+    public static final float PPQ = 0.0f;
 
     /**
      * The SMPTE-based timing type with 24 frames per second (resolution is
@@ -66,7 +66,7 @@ public class Sequence {
      *
      * @see #Sequence(float, int)
      */
-    public static final float SMPTE_24                                          = 24.0f;
+    public static final float SMPTE_24 = 24.0f;
 
     /**
      * The SMPTE-based timing type with 25 frames per second (resolution is
@@ -74,7 +74,7 @@ public class Sequence {
      *
      * @see #Sequence(float, int)
      */
-    public static final float SMPTE_25                                          = 25.0f;
+    public static final float SMPTE_25 = 25.0f;
 
     /**
      * The SMPTE-based timing type with 29.97 frames per second (resolution is
@@ -82,7 +82,7 @@ public class Sequence {
      *
      * @see #Sequence(float, int)
      */
-    public static final float SMPTE_30DROP                                      = 29.97f;
+    public static final float SMPTE_30DROP = 29.97f;
 
     /**
      * The SMPTE-based timing type with 30 frames per second (resolution is
@@ -90,7 +90,7 @@ public class Sequence {
      *
      * @see #Sequence(float, int)
      */
-    public static final float SMPTE_30                                          = 30.0f;
+    public static final float SMPTE_30 = 30.0f;
 
     // Variables
 
@@ -118,7 +118,7 @@ public class Sequence {
      *
      * @see #getTracks
      */
-    protected Vector<Track> tracks = new Vector<Track>();
+    protected Vector<Track> tracks = new Vector<>();
 
     /**
      * Constructs a new MIDI sequence with the specified timing division type
@@ -266,11 +266,7 @@ public class Sequence {
      * @see #getTracks
      */
     public boolean deleteTrack(Track track) {
-
-        synchronized(tracks) {
-
-            return tracks.removeElement(track);
-        }
+        return tracks.removeElement(track);
     }
 
     /**
@@ -282,8 +278,8 @@ public class Sequence {
      * @see #deleteTrack
      */
     public Track[] getTracks() {
-
-        return tracks.toArray(new Track[tracks.size()]);
+        // Creation of the non-empty array will be synchronized inside toArray()
+        return tracks.toArray(new Track[0]);
     }
 
     /**

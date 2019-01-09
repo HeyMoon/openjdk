@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,9 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.Reader;
+import java.lang.management.GarbageCollectorMXBean;
+import java.lang.management.ManagementFactory;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -34,9 +37,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.StringTokenizer;
 import java.util.function.Predicate;
-import jdk.test.lib.OutputAnalyzer;
+import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.Platform;
-import jdk.test.lib.ProcessTools;
+import jdk.test.lib.process.ProcessTools;
 
 public class JVMOptionsUtils {
 
@@ -48,6 +51,11 @@ public class JVMOptionsUtils {
 
     /* Used to start the JVM with the same type as current */
     static String VMType;
+
+    /* Used to start the JVM with the same GC type as current */
+    static String GCType;
+
+    private static Map<String, JVMOption> optionsAsMap;
 
     static {
         if (Platform.isServer()) {
@@ -61,6 +69,105 @@ public class JVMOptionsUtils {
         } else {
             VMType = null;
         }
+
+        List<GarbageCollectorMXBean> gcMxBeans = ManagementFactory.getGarbageCollectorMXBeans();
+
+        GCType = null;
+
+        for (GarbageCollectorMXBean gcMxBean : gcMxBeans) {
+            switch (gcMxBean.getName()) {
+                case "ConcurrentMarkSweep":
+                    GCType = "-XX:+UseConcMarkSweepGC";
+                    break;
+                case "MarkSweepCompact":
+                    GCType = "-XX:+UseSerialGC";
+                    break;
+                case "PS Scavenge":
+                    GCType = "-XX:+UseParallelGC";
+                    break;
+                case "G1 Old Generation":
+                    GCType = "-XX:+UseG1GC";
+                    break;
+            }
+        }
+    }
+
+    public static boolean fitsRange(String optionName, BigDecimal number) throws Exception {
+        JVMOption option;
+        String minRangeString = null;
+        String maxRangeString = null;
+        boolean fits = true;
+
+        if (optionsAsMap == null) {
+            optionsAsMap = getOptionsWithRangeAsMap();
+        }
+
+        option = optionsAsMap.get(optionName);
+        if (option != null) {
+            minRangeString = option.getMin();
+            if (minRangeString != null) {
+                fits = (number.compareTo(new BigDecimal(minRangeString)) >= 0);
+            }
+            maxRangeString = option.getMax();
+            if (maxRangeString != null) {
+                fits &= (number.compareTo(new BigDecimal(maxRangeString)) <= 0);
+            }
+        }
+
+        return fits;
+    }
+
+    public static boolean fitsRange(String optionName, String number) throws Exception {
+        String lowerCase = number.toLowerCase();
+        String multiplier = "1";
+        if (lowerCase.endsWith("k")) {
+            multiplier = "1024";
+            lowerCase = lowerCase.substring(0, lowerCase.length()-1);
+        } else if (lowerCase.endsWith("m")) {
+            multiplier = "1048576"; //1024*1024
+            lowerCase = lowerCase.substring(0, lowerCase.length()-1);
+        } else if (lowerCase.endsWith("g")) {
+            multiplier = "1073741824"; //1024*1024*1024
+            lowerCase = lowerCase.substring(0, lowerCase.length()-1);
+        } else if (lowerCase.endsWith("t")) {
+            multiplier = "1099511627776"; //1024*1024*1024*1024
+            lowerCase = lowerCase.substring(0, lowerCase.length()-1);
+        }
+        BigDecimal valueBig = new BigDecimal(lowerCase);
+        BigDecimal multiplierBig = new BigDecimal(multiplier);
+        return fitsRange(optionName, valueBig.multiply(multiplierBig));
+    }
+
+    public static String getMinOptionRange(String optionName) throws Exception {
+        JVMOption option;
+        String minRange = null;
+
+        if (optionsAsMap == null) {
+            optionsAsMap = getOptionsWithRangeAsMap();
+        }
+
+        option = optionsAsMap.get(optionName);
+        if (option != null) {
+            minRange = option.getMin();
+        }
+
+        return minRange;
+    }
+
+    public static String getMaxOptionRange(String optionName) throws Exception {
+        JVMOption option;
+        String maxRange = null;
+
+        if (optionsAsMap == null) {
+            optionsAsMap = getOptionsWithRangeAsMap();
+        }
+
+        option = optionsAsMap.get(optionName);
+        if (option != null) {
+            maxRange = option.getMax();
+        }
+
+        return maxRange;
     }
 
     /**
@@ -78,6 +185,10 @@ public class JVMOptionsUtils {
 
         if (name.startsWith("CMS")) {
             option.addPrepend("-XX:+UseConcMarkSweepGC");
+        }
+
+        if (name.startsWith("NUMA")) {
+            option.addPrepend("-XX:+UseNUMA");
         }
 
         switch (name) {
@@ -108,24 +219,32 @@ public class JVMOptionsUtils {
             case "InitialTenuringThreshold":
                 option.addPrepend("-XX:MaxTenuringThreshold=" + option.getMax());
                 break;
+            case "NUMAInterleaveGranularity":
+                option.addPrepend("-XX:+UseNUMAInterleaving");
+                break;
+            case "CPUForCMSThread":
+                option.addPrepend("-XX:+BindCMSThreadToCPU");
+                break;
+            case "VerifyGCStartAt":
+                option.addPrepend("-XX:+VerifyBeforeGC");
+                option.addPrepend("-XX:+VerifyAfterGC");
+                break;
+            case "NewSizeThreadIncrease":
+                option.addPrepend("-XX:+UseSerialGC");
+                break;
+            case "SharedReadWriteSize":
+            case "SharedReadOnlySize":
+            case "SharedMiscDataSize":
+            case "SharedMiscCodeSize":
+            case "SharedBaseAddress":
+            case "SharedSymbolTableBucketSize":
+                option.addPrepend("-XX:+UnlockDiagnosticVMOptions");
+                option.addPrepend("-XX:SharedArchiveFile=TestOptionsWithRanges.jsa");
+                option.addPrepend("-Xshare:dump");
+                break;
             default:
                 /* Do nothing */
                 break;
-        }
-
-    }
-
-    /**
-     * Add dependency for option depending on it's type. E.g. run the JVM in
-     * compilation mode for compiler options.
-     *
-     * @param option option
-     * @param type type of the option
-     */
-    private static void addTypeDependency(JVMOption option, String type) {
-        if (type.contains("C1") || type.contains("C2")) {
-            /* Run in compiler mode for compiler flags */
-            option.addPrepend("-Xcomp");
         }
     }
 
@@ -214,7 +333,6 @@ public class JVMOptionsUtils {
             token = token.substring(1, token.indexOf("}"));
 
             if (acceptOrigin.test(token)) {
-                addTypeDependency(option, token);
                 addNameDependency(option);
 
                 allOptions.put(name, option);
@@ -351,6 +469,10 @@ public class JVMOptionsUtils {
         if (VMType != null) {
             runJava.add(VMType);
         }
+
+        if (GCType != null) {
+            runJava.add(GCType);
+        }
         runJava.add(PRINT_FLAGS_RANGES);
         runJava.add("-version");
 
@@ -441,10 +563,5 @@ public class JVMOptionsUtils {
      */
     public static Map<String, JVMOption> getOptionsWithRangeAsMap(String... additionalArgs) throws Exception {
         return getOptionsWithRangeAsMap(origin -> true, additionalArgs);
-    }
-
-    /* Simple method to test that java start-up. Used for testing options. */
-    public static void main(String[] args) {
-        System.out.print("Java start-up!");
     }
 }

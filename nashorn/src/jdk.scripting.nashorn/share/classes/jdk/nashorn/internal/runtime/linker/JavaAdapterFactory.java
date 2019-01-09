@@ -46,12 +46,15 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import jdk.internal.dynalink.beans.StaticClass;
-import jdk.internal.dynalink.support.LinkRequestImpl;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.StandardOperation;
+import jdk.dynalink.beans.StaticClass;
+import jdk.dynalink.linker.support.SimpleLinkRequest;
 import jdk.nashorn.internal.runtime.Context;
 import jdk.nashorn.internal.runtime.ECMAException;
 import jdk.nashorn.internal.runtime.ScriptFunction;
 import jdk.nashorn.internal.runtime.ScriptObject;
+import jdk.nashorn.internal.runtime.linker.AdaptationResult.Outcome;
 
 /**
  * A factory class that generates adapter classes. Adapter classes allow
@@ -188,9 +191,9 @@ public final class JavaAdapterFactory {
      */
     public static MethodHandle getConstructor(final Class<?> sourceType, final Class<?> targetType, final MethodHandles.Lookup lookup) throws Exception {
         final StaticClass adapterClass = getAdapterClassFor(new Class<?>[] { targetType }, null, lookup);
-        return MH.bindTo(Bootstrap.getLinkerServices().getGuardedInvocation(new LinkRequestImpl(
-                NashornCallSiteDescriptor.get(lookup, "dyn:new",
-                        MethodType.methodType(targetType, StaticClass.class, sourceType), 0), null, 0, false,
+        return MH.bindTo(Bootstrap.getLinkerServices().getGuardedInvocation(new SimpleLinkRequest(
+                new CallSiteDescriptor(lookup, StandardOperation.NEW,
+                        MethodType.methodType(targetType, StaticClass.class, sourceType)), false,
                         adapterClass, null)).getInvocation(), adapterClass);
     }
 
@@ -209,7 +212,7 @@ public final class JavaAdapterFactory {
      *         be generated from a ScriptFunction.
      */
     static boolean isAutoConvertibleFromFunction(final Class<?> clazz) {
-        return getAdapterInfo(new Class<?>[] { clazz }).autoConvertibleFromFunction;
+        return getAdapterInfo(new Class<?>[] { clazz }).isAutoConvertibleFromFunction();
     }
 
     private static AdapterInfo getAdapterInfo(final Class<?>[] types) {
@@ -231,7 +234,7 @@ public final class JavaAdapterFactory {
    /**
      * For a given class, create its adapter class and associated info.
      *
-     * @param type the class for which the adapter is created
+     * @param types the class and interfaces for which the adapter is created
      *
      * @return the adapter info for the class.
      */
@@ -271,7 +274,7 @@ public final class JavaAdapterFactory {
                 } catch (final AdaptationException e) {
                     return new AdapterInfo(e.getAdaptationResult());
                 } catch (final RuntimeException e) {
-                    return new AdapterInfo(new AdaptationResult(AdaptationResult.Outcome.ERROR_OTHER, Arrays.toString(types), e.toString()));
+                    return new AdapterInfo(new AdaptationResult(Outcome.ERROR_OTHER, e, Arrays.toString(types), e.toString()));
                 }
             }
         }, CREATE_ADAPTER_INFO_ACC_CTXT);
@@ -315,6 +318,13 @@ public final class JavaAdapterFactory {
             }
             return classOverrides == null ? getInstanceAdapterClass(protectionDomain) :
                 getClassAdapterClass(classOverrides, protectionDomain);
+        }
+
+        boolean isAutoConvertibleFromFunction() {
+            if(adaptationResult.getOutcome() == AdaptationResult.Outcome.ERROR_OTHER) {
+                throw adaptationResult.typeError();
+            }
+            return autoConvertibleFromFunction;
         }
 
         private StaticClass getInstanceAdapterClass(final ProtectionDomain protectionDomain) {
@@ -370,7 +380,6 @@ public final class JavaAdapterFactory {
     private static ProtectionDomain createMinimalPermissionDomain() {
         // Generated classes need to have at least the permission to access Nashorn runtime and runtime.linker packages.
         final Permissions permissions = new Permissions();
-        permissions.add(new RuntimePermission("accessClassInPackage.jdk.nashorn.internal.objects"));
         permissions.add(new RuntimePermission("accessClassInPackage.jdk.nashorn.internal.runtime"));
         permissions.add(new RuntimePermission("accessClassInPackage.jdk.nashorn.internal.runtime.linker"));
         return new ProtectionDomain(new CodeSource(null, (CodeSigner[])null), permissions);

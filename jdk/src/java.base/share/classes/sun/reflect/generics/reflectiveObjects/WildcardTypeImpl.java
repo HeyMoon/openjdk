@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,6 +32,7 @@ import sun.reflect.generics.factory.GenericsFactory;
 import sun.reflect.generics.tree.FieldTypeSignature;
 import sun.reflect.generics.visitor.Reifier;
 import java.util.Arrays;
+import java.util.StringJoiner;
 
 
 /**
@@ -78,9 +79,9 @@ public class WildcardTypeImpl extends LazyReflectiveObjectGenerator
     }
 
     /**
-     * Returns an array of <tt>Type</tt> objects representing the upper
+     * Returns an array of {@code Type} objects representing the upper
      * bound(s) of this type variable.  Note that if no upper bound is
-     * explicitly declared, the upper bound is <tt>Object</tt>.
+     * explicitly declared, the upper bound is {@code Object}.
      *
      * <p>For each upper bound B :
      * <ul>
@@ -92,9 +93,9 @@ public class WildcardTypeImpl extends LazyReflectiveObjectGenerator
      *
      * @return an array of Types representing the upper bound(s) of this
      *     type variable
-     * @throws <tt>TypeNotPresentException</tt> if any of the
+     * @throws {@code TypeNotPresentException} if any of the
      *     bounds refers to a non-existent type declaration
-     * @throws <tt>MalformedParameterizedTypeException</tt> if any of the
+     * @throws {@code MalformedParameterizedTypeException} if any of the
      *     bounds refer to a parameterized type that cannot be instantiated
      *     for any reason
      */
@@ -108,9 +109,9 @@ public class WildcardTypeImpl extends LazyReflectiveObjectGenerator
     }
 
     /**
-     * Returns an array of <tt>Type</tt> objects representing the
+     * Returns an array of {@code Type} objects representing the
      * lower bound(s) of this type variable.  Note that if no lower bound is
-     * explicitly declared, the lower bound is the type of <tt>null</tt>.
+     * explicitly declared, the lower bound is the type of {@code null}.
      * In this case, a zero length array is returned.
      *
      * <p>For each lower bound B :
@@ -123,9 +124,9 @@ public class WildcardTypeImpl extends LazyReflectiveObjectGenerator
      *
      * @return an array of Types representing the lower bound(s) of this
      *     type variable
-     * @throws <tt>TypeNotPresentException</tt> if any of the
+     * @throws {@code TypeNotPresentException} if any of the
      *     bounds refers to a non-existent type declaration
-     * @throws <tt>MalformedParameterizedTypeException</tt> if any of the
+     * @throws {@code MalformedParameterizedTypeException} if any of the
      *     bounds refer to a parameterized type that cannot be instantiated
      *     for any reason
      */
@@ -156,14 +157,12 @@ public class WildcardTypeImpl extends LazyReflectiveObjectGenerator
 
         assert bounds.length > 0;
 
-        boolean first = true;
+        StringJoiner sj = new StringJoiner(" & ");
         for(Type bound: bounds) {
-            if (!first)
-                sb.append(" & ");
-
-            first = false;
-            sb.append(bound.getTypeName());
+            sj.add(bound.getTypeName());
         }
+        sb.append(sj.toString());
+
         return sb.toString();
     }
 

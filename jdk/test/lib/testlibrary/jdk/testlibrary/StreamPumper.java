@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,11 @@ import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * @deprecated This class is deprecated. Use the one from
+ *             {@code <root>/test/lib/jdk/test/lib/process}
+ */
+@Deprecated
 public final class StreamPumper implements Runnable {
 
     private static final int BUF_SIZE = 256;

@@ -28,6 +28,10 @@
 
 const int StackAlignmentInBytes  = 16;
 
+// Indicates whether the C calling conventions require that
+// 32-bit integer argument values are extended to 64 bits.
+const bool CCallingConventionRequiresIntsAsLongs = false;
+
 #define SUPPORTS_NATIVE_CX8
 
 // The maximum B/BL offset range on AArch64 is 128MB.
@@ -48,5 +52,7 @@ const int StackAlignmentInBytes  = 16;
 // in the defauilt case.  We could revisit this decision if we get any
 // evidence that it's worth doing.
 #define DEOPTIMIZE_WHEN_PATCHING
+
+#define SUPPORT_RESERVED_STACK_AREA
 
 #endif // CPU_AARCH64_VM_GLOBALDEFINITIONS_AARCH64_HPP

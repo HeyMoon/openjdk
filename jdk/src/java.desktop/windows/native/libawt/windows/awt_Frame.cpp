@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -156,7 +156,7 @@ AwtFrame* AwtFrame::Create(jobject self, jobject parent)
 
     PDATA pData;
     HWND hwndParent = NULL;
-    AwtFrame* frame;
+    AwtFrame* frame = NULL;
     jclass cls = NULL;
     jclass inputMethodWindowCls = NULL;
     jobject target = NULL;
@@ -484,7 +484,10 @@ MsgRouting AwtFrame::WmShowWindow(BOOL show, UINT status)
             if (fgProcessID != ::GetCurrentProcessId()) {
                 AwtWindow* window = (AwtWindow*)GetComponent(GetHWnd());
 
-                if (window != NULL && window->IsFocusableWindow() && window->IsAutoRequestFocus() &&
+                if (window != NULL &&
+                    window->IsFocusableWindow() &&
+                    window->IsAutoRequestFocus() &&
+                    !::IsWindowVisible(GetHWnd()) && // the window is really showing
                     !::IsWindow(GetModalBlocker(GetHWnd())))
                 {
                     // When the Java process is not allowed to set the foreground window
@@ -993,7 +996,9 @@ MsgRouting AwtFrame::WmActivate(UINT nState, BOOL fMinimized, HWND opposite)
         AwtComponent::SetFocusedWindow(GetHWnd());
 
     } else {
-        if (!::IsWindow(AwtWindow::GetModalBlocker(opposite))) {
+        if (::IsWindow(AwtWindow::GetModalBlocker(opposite))) {
+            return mrConsume;
+        } else {
             // If deactivation happens because of press on grabbing
             // window - this is nonsense, since grabbing window is
             // assumed to have focus and watch for deactivation.  But
@@ -1111,11 +1116,19 @@ AwtMenuBar* AwtFrame::GetMenuBar()
 
 void AwtFrame::SetMenuBar(AwtMenuBar* mb)
 {
+    if (menuBar) {
+        menuBar->SetFrame(NULL);
+    }
     menuBar = mb;
     if (mb == NULL) {
         // Remove existing menu bar, if any.
         ::SetMenu(GetHWnd(), NULL);
     } else {
+        AwtFrame* oldFrame = menuBar->GetFrame();
+        if (oldFrame && oldFrame != this) {
+            oldFrame->SetMenuBar(NULL);
+        }
+        menuBar->SetFrame(this);
         if (menuBar->GetHMenu() != NULL) {
             ::SetMenu(GetHWnd(), menuBar->GetHMenu());
         }
@@ -1372,7 +1385,6 @@ void AwtFrame::_SetState(void *param)
             } else { // zoom == iconify == FALSE
                 wp.showCmd = focusable ? SW_RESTORE : SW_SHOWNOACTIVATE;
             }
-
             if (zoom && iconify) {
                 wp.flags |= WPF_RESTORETOMAXIMIZED;
             } else {
@@ -1959,29 +1971,6 @@ Java_sun_awt_windows_WFramePeer_synthesizeWmActivate(JNIEnv *env, jobject self, 
     // global ref and sas are deleted in _SynthesizeWmActivate()
 
     CATCH_BAD_ALLOC;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_sun_awt_windows_WEmbeddedFramePeer_requestFocusToEmbedder(JNIEnv *env, jobject self)
-{
-    jboolean result = JNI_FALSE;
-
-    TRY;
-
-    AwtFrame *frame = NULL;
-
-    PDATA pData;
-    JNI_CHECK_PEER_GOTO(self, ret);
-    frame = (AwtFrame *)pData;
-
-    // JDK-8056915: During initial applet activation, set focus to plugin control window
-    HWND hwndParent = ::GetParent(frame->GetHWnd());
-
-    result = SetFocusToPluginControl(hwndParent);
-
-    CATCH_BAD_ALLOC_RET(JNI_FALSE);
-ret:
-    return result;
 }
 
 } /* extern "C" */

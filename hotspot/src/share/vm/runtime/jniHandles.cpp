@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,13 +24,16 @@
 
 #include "precompiled.hpp"
 #include "classfile/systemDictionary.hpp"
+#include "logging/log.hpp"
+#include "memory/iterator.hpp"
 #include "oops/oop.inline.hpp"
 #include "prims/jvmtiExport.hpp"
 #include "runtime/jniHandles.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "runtime/thread.inline.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
+#if INCLUDE_ALL_GCS
+#include "gc/g1/g1SATBCardTableModRefBS.hpp"
+#endif
 
 JNIHandleBlock* JNIHandles::_global_handles       = NULL;
 JNIHandleBlock* JNIHandles::_weak_global_handles  = NULL;
@@ -92,28 +95,48 @@ jobject JNIHandles::make_weak_global(Handle obj) {
   jobject res = NULL;
   if (!obj.is_null()) {
     // ignore null handles
-    MutexLocker ml(JNIGlobalHandle_lock);
-    assert(Universe::heap()->is_in_reserved(obj()), "sanity check");
-    res = _weak_global_handles->allocate_handle(obj());
+    {
+      MutexLocker ml(JNIGlobalHandle_lock);
+      assert(Universe::heap()->is_in_reserved(obj()), "sanity check");
+      res = _weak_global_handles->allocate_handle(obj());
+    }
+    // Add weak tag.
+    assert(is_ptr_aligned(res, weak_tag_alignment), "invariant");
+    char* tptr = reinterpret_cast<char*>(res) + weak_tag_value;
+    res = reinterpret_cast<jobject>(tptr);
   } else {
     CHECK_UNHANDLED_OOPS_ONLY(Thread::current()->clear_unhandled_oops());
   }
   return res;
 }
 
+template<bool external_guard>
+oop JNIHandles::resolve_jweak(jweak handle) {
+  assert(is_jweak(handle), "precondition");
+  oop result = jweak_ref(handle);
+  result = guard_value<external_guard>(result);
+#if INCLUDE_ALL_GCS
+  if (result != NULL && UseG1GC) {
+    G1SATBCardTableModRefBS::enqueue(result);
+  }
+#endif // INCLUDE_ALL_GCS
+  return result;
+}
+
+template oop JNIHandles::resolve_jweak<true>(jweak);
+template oop JNIHandles::resolve_jweak<false>(jweak);
 
 void JNIHandles::destroy_global(jobject handle) {
   if (handle != NULL) {
     assert(is_global_handle(handle), "Invalid delete of global JNI handle");
-    *((oop*)handle) = deleted_handle(); // Mark the handle as deleted, allocate will reuse it
+    jobject_ref(handle) = deleted_handle();
   }
 }
 
 
 void JNIHandles::destroy_weak_global(jobject handle) {
   if (handle != NULL) {
-    assert(!CheckJNICalls || is_weak_global_handle(handle), "Invalid delete of weak global JNI handle");
-    *((oop*)handle) = deleted_handle(); // Mark the handle as deleted, allocate will reuse it
+    jweak_ref(handle) = deleted_handle();
   }
 }
 
@@ -126,6 +149,12 @@ void JNIHandles::oops_do(OopClosure* f) {
 
 void JNIHandles::weak_oops_do(BoolObjectClosure* is_alive, OopClosure* f) {
   _weak_global_handles->weak_oops_do(is_alive, f);
+}
+
+
+void JNIHandles::weak_oops_do(OopClosure* f) {
+  AlwaysTrueClosure always_true;
+  weak_oops_do(&always_true, f);
 }
 
 
@@ -186,11 +215,6 @@ long JNIHandles::weak_global_handle_memory_usage() {
 }
 
 
-class AlwaysAliveClosure: public BoolObjectClosure {
-public:
-  bool do_object_b(oop obj) { return true; }
-};
-
 class CountHandleClosure: public OopClosure {
 private:
   int _count;
@@ -212,9 +236,8 @@ void JNIHandles::print_on(outputStream* st) {
          "JNIHandles not initialized");
 
   CountHandleClosure global_handle_count;
-  AlwaysAliveClosure always_alive;
   oops_do(&global_handle_count);
-  weak_oops_do(&always_alive, &global_handle_count);
+  weak_oops_do(&global_handle_count);
 
   st->print_cr("JNI global references: %d", global_handle_count.count());
   st->cr();
@@ -231,10 +254,9 @@ public:
 
 void JNIHandles::verify() {
   VerifyHandleClosure verify_handle;
-  AlwaysAliveClosure always_alive;
 
   oops_do(&verify_handle);
-  weak_oops_do(&always_alive, &verify_handle);
+  weak_oops_do(&verify_handle);
 }
 
 
@@ -279,10 +301,6 @@ JNIHandleBlock* JNIHandleBlock::allocate_block(Thread* thread)  {
       // Allocate new block
       block = new JNIHandleBlock();
       _blocks_allocated++;
-      if (TraceJNIHandleAllocation) {
-        tty->print_cr("JNIHandleBlock " INTPTR_FORMAT " allocated (%d total blocks)",
-                      block, _blocks_allocated);
-      }
       if (ZapJNIHandleArea) block->zap();
       #ifndef PRODUCT
       // Link new block to list of all allocated blocks
@@ -395,9 +413,7 @@ void JNIHandleBlock::weak_oops_do(BoolObjectClosure* is_alive,
           f->do_oop(root);
         } else {
           // The weakly referenced object is not alive, clear the reference by storing NULL
-          if (TraceReferenceGC) {
-            tty->print_cr("Clearing JNI weak reference (" INTPTR_FORMAT ")", root);
-          }
+          log_develop_trace(gc, ref)("Clearing JNI weak reference (" INTPTR_FORMAT ")", p2i(root));
           *root = NULL;
         }
       }
@@ -474,6 +490,14 @@ jobject JNIHandleBlock::allocate_handle(oop obj) {
   return allocate_handle(obj);  // retry
 }
 
+void JNIHandleBlock::release_handle(jobject h) {
+  if (h != NULL) {
+    assert(chain_contains(h), "does not contain the JNI handle");
+    // Mark the handle as deleted, allocate will reuse it
+    *((oop*)h) = JNIHandles::deleted_handle();
+  }
+}
+
 
 void JNIHandleBlock::rebuild_free_list() {
   assert(_allocate_before_rebuild == 0 && _free_list == NULL, "just checking");
@@ -501,10 +525,6 @@ void JNIHandleBlock::rebuild_free_list() {
   if (extra > 0) {
     // Not as many free handles as we would like - compute number of new blocks to append
     _allocate_before_rebuild = (extra + block_size_in_oops - 1) / block_size_in_oops;
-  }
-  if (TraceJNIHandleAllocation) {
-    tty->print_cr("Rebuild free list JNIHandleBlock " INTPTR_FORMAT " blocks=%d used=%d free=%d add=%d",
-      this, blocks, total-free, free, _allocate_before_rebuild);
   }
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,11 +25,9 @@
 
 package jdk.nashorn.internal.ir;
 
-import java.io.Serializable;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import jdk.nashorn.internal.codegen.CompileUnit;
 import jdk.nashorn.internal.codegen.types.ArrayType;
 import jdk.nashorn.internal.codegen.types.Type;
 import jdk.nashorn.internal.ir.annotations.Immutable;
@@ -252,7 +250,7 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
     }
 
     private static Expression[] valueToArray(final List<Expression> value) {
-        return value.toArray(new Expression[value.size()]);
+        return value.toArray(new Expression[0]);
     }
 
     /**
@@ -388,8 +386,6 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
         private static Type numberGetType(final Number number) {
             if (number instanceof Integer) {
                 return Type.INT;
-            } else if (number instanceof Long) {
-                return Type.LONG;
             } else if (number instanceof Double) {
                 return Type.NUMBER;
             } else {
@@ -420,6 +416,7 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
      * @return the new literal node
      */
     public static LiteralNode<Number> newInstance(final long token, final int finish, final Number value) {
+        assert !(value instanceof Long);
         return new NumberLiteralNode(token, finish, value);
     }
 
@@ -452,7 +449,7 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
      *
      * @param token   token
      * @param finish  finish
-     * @param value   undefined value, passed only for polymorphisism discrimination
+     * @param value   undefined value, passed only for polymorphism discrimination
      *
      * @return the new literal node
      */
@@ -583,6 +580,15 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
         return POSTSET_MARKER;
     }
 
+    /**
+     * Test whether {@code object} represents a constant value.
+     * @param object a node or value object
+     * @return true if object is a constant value
+     */
+    public static boolean isConstant(final Object object) {
+        return objectAsConstant(object) != POSTSET_MARKER;
+    }
+
     private static final class NullLiteralNode extends PrimitiveLiteralNode<Object> {
         private static final long serialVersionUID = 1L;
 
@@ -614,7 +620,7 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
      * Array literal node class.
      */
     @Immutable
-    public static final class ArrayLiteralNode extends LiteralNode<Expression[]> implements LexicalContextNode {
+    public static final class ArrayLiteralNode extends LiteralNode<Expression[]> implements LexicalContextNode, Splittable {
         private static final long serialVersionUID = 1L;
 
         /** Array element type. */
@@ -626,8 +632,14 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
         /** Indices of array elements requiring computed post sets. */
         private final int[] postsets;
 
-        /** Sub units with indexes ranges, in which to split up code generation, for large literals */
-        private final List<ArrayUnit> units;
+        /** Ranges for splitting up large literals in code generation */
+        private final List<Splittable.SplitRange> splitRanges;
+
+        /** Does this array literal have a spread element? */
+        private final boolean hasSpread;
+
+        /** Does this array literal have a trailing comma?*/
+        private final boolean hasTrailingComma;
 
         @Override
         public boolean isArray() {
@@ -635,64 +647,13 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
         }
 
 
-        /**
-         * An ArrayUnit is a range in an ArrayLiteral. ArrayLiterals can
-         * be split if they are too large, for bytecode generation reasons
-         */
-        public static final class ArrayUnit implements CompileUnitHolder, Serializable {
-            private static final long serialVersionUID = 1L;
-
-            /** Compile unit associated with the postsets range. */
-            private final CompileUnit compileUnit;
-
-            /** postsets range associated with the unit (hi not inclusive). */
-            private final int lo, hi;
-
-            /**
-             * Constructor
-             * @param compileUnit compile unit
-             * @param lo lowest array index in unit
-             * @param hi highest array index in unit + 1
-             */
-            public ArrayUnit(final CompileUnit compileUnit, final int lo, final int hi) {
-                this.compileUnit = compileUnit;
-                this.lo   = lo;
-                this.hi   = hi;
-            }
-
-            /**
-             * Get the high index position of the ArrayUnit (non inclusive)
-             * @return high index position
-             */
-            public int getHi() {
-                return hi;
-            }
-
-            /**
-             * Get the low index position of the ArrayUnit (inclusive)
-             * @return low index position
-             */
-            public int getLo() {
-                return lo;
-            }
-
-            /**
-             * The array compile unit
-             * @return array compile unit
-             */
-            @Override
-            public CompileUnit getCompileUnit() {
-                return compileUnit;
-            }
-        }
-
         private static final class ArrayLiteralInitializer {
 
             static ArrayLiteralNode initialize(final ArrayLiteralNode node) {
                 final Type elementType = computeElementType(node.value);
                 final int[] postsets = computePostsets(node.value);
                 final Object presets = computePresets(node.value, elementType, postsets);
-                return new ArrayLiteralNode(node, node.value, elementType, postsets, presets, node.units);
+                return new ArrayLiteralNode(node, node.value, elementType, postsets, presets, node.splitRanges);
             }
 
             private static Type computeElementType(final Expression[] value) {
@@ -725,7 +686,7 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
 
                 for (int i = 0; i < value.length; i++) {
                     final Expression element = value[i];
-                    if (element == null || objectAsConstant(element) == POSTSET_MARKER) {
+                    if (element == null || !isConstant(element)) {
                         computed[nComputed++] = i;
                     }
                 }
@@ -820,8 +781,6 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
                 assert !elementType.isUnknown();
                 if (elementType.isInteger()) {
                     return presetIntArray(value, postsets);
-                } else if (elementType.isLong()) {
-                    return presetLongArray(value, postsets);
                 } else if (elementType.isNumeric()) {
                     return presetDoubleArray(value, postsets);
                 } else {
@@ -838,23 +797,56 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
          * @param value   array literal value, a Node array
          */
         protected ArrayLiteralNode(final long token, final int finish, final Expression[] value) {
+            this(token, finish, value, false, false);
+        }
+
+        /**
+         * Constructor
+         *
+         * @param token   token
+         * @param finish  finish
+         * @param value   array literal value, a Node array
+         * @param hasSpread true if the array has a spread element
+         * @param hasTrailingComma true if the array literal has a comma after the last element
+         */
+        protected ArrayLiteralNode(final long token, final int finish, final Expression[] value, final boolean hasSpread, final boolean hasTrailingComma) {
             super(Token.recast(token, TokenType.ARRAY), finish, value);
             this.elementType = Type.UNKNOWN;
             this.presets     = null;
             this.postsets    = null;
-            this.units       = null;
+            this.splitRanges = null;
+            this.hasSpread        = hasSpread;
+            this.hasTrailingComma = hasTrailingComma;
         }
 
         /**
          * Copy constructor
          * @param node source array literal node
          */
-        private ArrayLiteralNode(final ArrayLiteralNode node, final Expression[] value, final Type elementType, final int[] postsets, final Object presets, final List<ArrayUnit> units) {
+        private ArrayLiteralNode(final ArrayLiteralNode node, final Expression[] value, final Type elementType, final int[] postsets, final Object presets, final List<Splittable.SplitRange> splitRanges) {
             super(node, value);
             this.elementType = elementType;
             this.postsets    = postsets;
             this.presets     = presets;
-            this.units       = units;
+            this.splitRanges = splitRanges;
+            this.hasSpread        = node.hasSpread;
+            this.hasTrailingComma = node.hasTrailingComma;
+        }
+
+        /**
+         * Returns {@code true} if this array literal has a spread element.
+         * @return true if this literal has a spread element
+         */
+        public boolean hasSpread() {
+            return hasSpread;
+        }
+
+        /**
+         * Returns {@code true} if this array literal has a trailing comma.
+         * @return true if this literal has a trailing comma
+         */
+        public boolean hasTrailingComma() {
+             return hasTrailingComma;
         }
 
         /**
@@ -891,8 +883,6 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
         private static ArrayType getArrayType(final Type elementType) {
             if (elementType.isInteger()) {
                 return Type.INT_ARRAY;
-            } else if (elementType.isLong()) {
-                return Type.LONG_ARRAY;
             } else if (elementType.isNumeric()) {
                 return Type.NUMBER_ARRAY;
             } else {
@@ -927,8 +917,6 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
         private boolean presetsMatchElementType() {
             if (elementType == Type.INT) {
                 return presets instanceof int[];
-            } else if (elementType == Type.LONG) {
-                return presets instanceof long[];
             } else if (elementType == Type.NUMBER) {
                 return presets instanceof double[];
             } else {
@@ -946,26 +934,27 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
         }
 
         /**
-         * Get the array units that make up this ArrayLiteral
-         * @see ArrayUnit
-         * @return list of array units
+         * Get the split ranges for this ArrayLiteral, or null if this array does not have to be split.
+         * @see Splittable.SplitRange
+         * @return list of split ranges
          */
-        public List<ArrayUnit> getUnits() {
-            return units == null ? null : Collections.unmodifiableList(units);
+        @Override
+        public List<Splittable.SplitRange> getSplitRanges() {
+            return splitRanges == null ? null : Collections.unmodifiableList(splitRanges);
         }
 
         /**
-         * Set the ArrayUnits that make up this ArrayLiteral
+         * Set the SplitRanges that make up this ArrayLiteral
          * @param lc lexical context
-         * @see ArrayUnit
-         * @param units list of array units
-         * @return new or changed arrayliteralnode
+         * @see Splittable.SplitRange
+         * @param splitRanges list of split ranges
+         * @return new or changed node
          */
-        public ArrayLiteralNode setUnits(final LexicalContext lc, final List<ArrayUnit> units) {
-            if (this.units == units) {
+        public ArrayLiteralNode setSplitRanges(final LexicalContext lc, final List<Splittable.SplitRange> splitRanges) {
+            if (this.splitRanges == splitRanges) {
                 return this;
             }
-            return Node.replaceInLexicalContext(lc, this, new ArrayLiteralNode(this, value, elementType, postsets, presets, units));
+            return Node.replaceInLexicalContext(lc, this, new ArrayLiteralNode(this, value, elementType, postsets, presets, splitRanges));
         }
 
         @Override
@@ -987,11 +976,11 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
             if (this.value == value) {
                 return this;
             }
-            return Node.replaceInLexicalContext(lc, this, new ArrayLiteralNode(this, value, elementType, postsets, presets, units));
+            return Node.replaceInLexicalContext(lc, this, new ArrayLiteralNode(this, value, elementType, postsets, presets, splitRanges));
         }
 
         private ArrayLiteralNode setValue(final LexicalContext lc, final List<Expression> value) {
-            return setValue(lc, value.toArray(new Expression[value.size()]));
+            return setValue(lc, value.toArray(new Expression[0]));
         }
 
         @Override
@@ -1038,6 +1027,23 @@ public abstract class LiteralNode<T> extends Expression implements PropertyKey {
     public static LiteralNode<?> newInstance(final Node parent, final List<Expression> value) {
         return new ArrayLiteralNode(parent.getToken(), parent.getFinish(), valueToArray(value));
     }
+
+    /*
+     * Create a new array literal of Nodes from a list of Node values
+     *
+     * @param token token
+     * @param finish finish
+     * @param value literal value list
+     * @param hasSpread true if the array has a spread element
+     * @param hasTrailingComma true if the array literal has a comma after the last element
+     *
+     * @return the new literal node
+     */
+    public static LiteralNode<Expression[]> newInstance(final long token, final int finish, final List<Expression> value,
+                                                        final boolean hasSpread, final boolean hasTrailingComma) {
+        return new ArrayLiteralNode(token, finish, valueToArray(value), hasSpread, hasTrailingComma);
+    }
+
 
     /**
      * Create a new array literal of Nodes

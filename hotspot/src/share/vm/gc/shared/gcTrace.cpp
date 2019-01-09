@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,31 +40,16 @@
 #include "gc/g1/evacuationInfo.hpp"
 #endif
 
-#define assert_unset_gc_id() assert(_shared_gc_info.gc_id().is_undefined(), "GC already started?")
-#define assert_set_gc_id() assert(!_shared_gc_info.gc_id().is_undefined(), "GC not started?")
-
 void GCTracer::report_gc_start_impl(GCCause::Cause cause, const Ticks& timestamp) {
-  assert_unset_gc_id();
-
-  GCId gc_id = GCId::create();
-  _shared_gc_info.set_gc_id(gc_id);
   _shared_gc_info.set_cause(cause);
   _shared_gc_info.set_start_timestamp(timestamp);
 }
 
 void GCTracer::report_gc_start(GCCause::Cause cause, const Ticks& timestamp) {
-  assert_unset_gc_id();
-
   report_gc_start_impl(cause, timestamp);
 }
 
-bool GCTracer::has_reported_gc_start() const {
-  return !_shared_gc_info.gc_id().is_undefined();
-}
-
 void GCTracer::report_gc_end_impl(const Ticks& timestamp, TimePartitions* time_partitions) {
-  assert_set_gc_id();
-
   _shared_gc_info.set_sum_of_pauses(time_partitions->sum_of_pauses());
   _shared_gc_info.set_longest_pause(time_partitions->longest_pause());
   _shared_gc_info.set_end_timestamp(timestamp);
@@ -74,16 +59,10 @@ void GCTracer::report_gc_end_impl(const Ticks& timestamp, TimePartitions* time_p
 }
 
 void GCTracer::report_gc_end(const Ticks& timestamp, TimePartitions* time_partitions) {
-  assert_set_gc_id();
-
   report_gc_end_impl(timestamp, time_partitions);
-
-  _shared_gc_info.set_gc_id(GCId::undefined());
 }
 
 void GCTracer::report_gc_reference_stats(const ReferenceProcessorStats& rps) const {
-  assert_set_gc_id();
-
   send_reference_stats_event(REF_SOFT, rps.soft_count());
   send_reference_stats_event(REF_WEAK, rps.weak_count());
   send_reference_stats_event(REF_FINAL, rps.final_count());
@@ -92,14 +71,12 @@ void GCTracer::report_gc_reference_stats(const ReferenceProcessorStats& rps) con
 
 #if INCLUDE_SERVICES
 class ObjectCountEventSenderClosure : public KlassInfoClosure {
-  const GCId _gc_id;
   const double _size_threshold_percentage;
   const size_t _total_size_in_words;
   const Ticks _timestamp;
 
  public:
-  ObjectCountEventSenderClosure(GCId gc_id, size_t total_size_in_words, const Ticks& timestamp) :
-    _gc_id(gc_id),
+  ObjectCountEventSenderClosure(size_t total_size_in_words, const Ticks& timestamp) :
     _size_threshold_percentage(ObjectCountCutOffPercent / 100),
     _total_size_in_words(total_size_in_words),
     _timestamp(timestamp)
@@ -107,7 +84,7 @@ class ObjectCountEventSenderClosure : public KlassInfoClosure {
 
   virtual void do_cinfo(KlassInfoEntry* entry) {
     if (should_send_event(entry)) {
-      ObjectCountEventSender::send(entry, _gc_id, _timestamp);
+      ObjectCountEventSender::send(entry, _timestamp);
     }
   }
 
@@ -119,7 +96,6 @@ class ObjectCountEventSenderClosure : public KlassInfoClosure {
 };
 
 void GCTracer::report_object_count_after_gc(BoolObjectClosure* is_alive_cl) {
-  assert_set_gc_id();
   assert(is_alive_cl != NULL, "Must supply function to check liveness");
 
   if (ObjectCountEventSender::should_send_event()) {
@@ -129,7 +105,7 @@ void GCTracer::report_object_count_after_gc(BoolObjectClosure* is_alive_cl) {
     if (!cit.allocation_failed()) {
       HeapInspection hi(false, false, false, NULL);
       hi.populate_table(&cit, is_alive_cl);
-      ObjectCountEventSenderClosure event_sender(_shared_gc_info.gc_id(), cit.size_of_instances_in_words(), Ticks::now());
+      ObjectCountEventSenderClosure event_sender(cit.size_of_instances_in_words(), Ticks::now());
       cit.iterate(&event_sender);
     }
   }
@@ -137,14 +113,10 @@ void GCTracer::report_object_count_after_gc(BoolObjectClosure* is_alive_cl) {
 #endif // INCLUDE_SERVICES
 
 void GCTracer::report_gc_heap_summary(GCWhen::Type when, const GCHeapSummary& heap_summary) const {
-  assert_set_gc_id();
-
   send_gc_heap_summary_event(when, heap_summary);
 }
 
 void GCTracer::report_metaspace_summary(GCWhen::Type when, const MetaspaceSummary& summary) const {
-  assert_set_gc_id();
-
   send_meta_space_summary_event(when, summary);
 
   send_metaspace_chunk_free_list_summary(when, Metaspace::NonClassType, summary.metaspace_chunk_free_list_summary());
@@ -154,7 +126,6 @@ void GCTracer::report_metaspace_summary(GCWhen::Type when, const MetaspaceSummar
 }
 
 void YoungGCTracer::report_gc_end_impl(const Ticks& timestamp, TimePartitions* time_partitions) {
-  assert_set_gc_id();
   assert(_tenuring_threshold != UNSET_TENURING_THRESHOLD, "Tenuring threshold has not been reported");
 
   GCTracer::report_gc_end_impl(timestamp, time_partitions);
@@ -164,13 +135,16 @@ void YoungGCTracer::report_gc_end_impl(const Ticks& timestamp, TimePartitions* t
 }
 
 void YoungGCTracer::report_promotion_failed(const PromotionFailedInfo& pf_info) const {
-  assert_set_gc_id();
-
   send_promotion_failed_event(pf_info);
 }
 
 void YoungGCTracer::report_tenuring_threshold(const uint tenuring_threshold) {
   _tenuring_threshold = tenuring_threshold;
+}
+
+bool YoungGCTracer::should_report_promotion_events() const {
+  return should_report_promotion_in_new_plab_event() ||
+          should_report_promotion_outside_plab_event();
 }
 
 bool YoungGCTracer::should_report_promotion_in_new_plab_event() const {
@@ -184,72 +158,98 @@ bool YoungGCTracer::should_report_promotion_outside_plab_event() const {
 void YoungGCTracer::report_promotion_in_new_plab_event(Klass* klass, size_t obj_size,
                                                        uint age, bool tenured,
                                                        size_t plab_size) const {
-  assert_set_gc_id();
   send_promotion_in_new_plab_event(klass, obj_size, age, tenured, plab_size);
 }
 
 void YoungGCTracer::report_promotion_outside_plab_event(Klass* klass, size_t obj_size,
                                                         uint age, bool tenured) const {
-  assert_set_gc_id();
   send_promotion_outside_plab_event(klass, obj_size, age, tenured);
 }
 
 void OldGCTracer::report_gc_end_impl(const Ticks& timestamp, TimePartitions* time_partitions) {
-  assert_set_gc_id();
-
   GCTracer::report_gc_end_impl(timestamp, time_partitions);
   send_old_gc_event();
 }
 
 void ParallelOldTracer::report_gc_end_impl(const Ticks& timestamp, TimePartitions* time_partitions) {
-  assert_set_gc_id();
-
   OldGCTracer::report_gc_end_impl(timestamp, time_partitions);
   send_parallel_old_event();
 }
 
 void ParallelOldTracer::report_dense_prefix(void* dense_prefix) {
-  assert_set_gc_id();
-
   _parallel_old_gc_info.report_dense_prefix(dense_prefix);
 }
 
 void OldGCTracer::report_concurrent_mode_failure() {
-  assert_set_gc_id();
-
   send_concurrent_mode_failure_event();
 }
 
 #if INCLUDE_ALL_GCS
-void G1MMUTracer::report_mmu(const GCId& gcId, double timeSlice, double gcTime, double maxTime) {
-  assert(!gcId.is_undefined(), "Undefined GC id");
-
-  send_g1_mmu_event(gcId, timeSlice, gcTime, maxTime);
+void G1MMUTracer::report_mmu(double time_slice_sec, double gc_time_sec, double max_time_sec) {
+  send_g1_mmu_event(time_slice_sec * MILLIUNITS,
+                    gc_time_sec * MILLIUNITS,
+                    max_time_sec * MILLIUNITS);
 }
 
 void G1NewTracer::report_yc_type(G1YCType type) {
-  assert_set_gc_id();
-
   _g1_young_gc_info.set_type(type);
 }
 
 void G1NewTracer::report_gc_end_impl(const Ticks& timestamp, TimePartitions* time_partitions) {
-  assert_set_gc_id();
-
   YoungGCTracer::report_gc_end_impl(timestamp, time_partitions);
   send_g1_young_gc_event();
 }
 
 void G1NewTracer::report_evacuation_info(EvacuationInfo* info) {
-  assert_set_gc_id();
-
   send_evacuation_info_event(info);
 }
 
 void G1NewTracer::report_evacuation_failed(EvacuationFailedInfo& ef_info) {
-  assert_set_gc_id();
-
   send_evacuation_failed_event(ef_info);
   ef_info.reset();
 }
+
+void G1NewTracer::report_evacuation_statistics(const G1EvacSummary& young_summary, const G1EvacSummary& old_summary) const {
+  send_young_evacuation_statistics(young_summary);
+  send_old_evacuation_statistics(old_summary);
+}
+
+void G1NewTracer::report_basic_ihop_statistics(size_t threshold,
+                                               size_t target_ccupancy,
+                                               size_t current_occupancy,
+                                               size_t last_allocation_size,
+                                               double last_allocation_duration,
+                                               double last_marking_length) {
+  send_basic_ihop_statistics(threshold,
+                             target_ccupancy,
+                             current_occupancy,
+                             last_allocation_size,
+                             last_allocation_duration,
+                             last_marking_length);
+}
+
+void G1NewTracer::report_adaptive_ihop_statistics(size_t threshold,
+                                                  size_t internal_target_occupancy,
+                                                  size_t current_occupancy,
+                                                  size_t additional_buffer_size,
+                                                  double predicted_allocation_rate,
+                                                  double predicted_marking_length,
+                                                  bool prediction_active) {
+  send_adaptive_ihop_statistics(threshold,
+                                internal_target_occupancy,
+                                additional_buffer_size,
+                                current_occupancy,
+                                predicted_allocation_rate,
+                                predicted_marking_length,
+                                prediction_active);
+}
+
+void G1OldTracer::report_gc_start_impl(GCCause::Cause cause, const Ticks& timestamp) {
+  _shared_gc_info.set_start_timestamp(timestamp);
+}
+
+void G1OldTracer::set_gc_cause(GCCause::Cause cause) {
+  _shared_gc_info.set_cause(cause);
+}
+
 #endif

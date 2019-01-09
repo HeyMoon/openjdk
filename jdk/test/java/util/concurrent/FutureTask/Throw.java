@@ -27,7 +27,10 @@
  * @summary Check exceptional behavior in run and done methods
  */
 
-import java.util.concurrent.*;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 
 public class Throw {
 
@@ -137,8 +140,8 @@ public class Throw {
             catch (Throwable t) {
                 if (k.isAssignableFrom(t.getClass())) pass();
                 else unexpected(t);}}
-    @SuppressWarnings("unchecked") static <T extends Throwable>
-        void uncheckedThrow(Throwable t) throws T {
+    @SuppressWarnings("unchecked")
+    static <T extends Throwable> void uncheckedThrow(Throwable t) throws T {
         throw (T)t; // rely on vacuous cast
     }
 }

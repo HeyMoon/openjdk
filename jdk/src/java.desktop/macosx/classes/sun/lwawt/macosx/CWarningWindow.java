@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,8 +45,8 @@ public final class CWarningWindow extends CPlatformWindow
     private static class Lock {}
     private final Lock lock = new Lock();
 
-    private final static int SHOWING_DELAY = 300;
-    private final static int HIDING_DELAY = 2000;
+    private static final int SHOWING_DELAY = 300;
+    private static final int HIDING_DELAY = 2000;
 
     private Rectangle bounds = new Rectangle();
     private final WeakReference<LWWindowPeer> ownerPeer;
@@ -173,7 +173,7 @@ public final class CWarningWindow extends CPlatformWindow
 
     @Override
     public void notifyMouseEvent(int id, long when, int button, int x, int y,
-                                 int screenX, int screenY, int modifiers,
+                                 int absX, int absY, int modifiers,
                                  int clickCount, boolean popupTrigger,
                                  byte[] bdata) {
         LWWindowPeer peer = ownerPeer.get();
@@ -204,32 +204,28 @@ public final class CWarningWindow extends CPlatformWindow
     @Override
     public void setVisible(boolean visible) {
         synchronized (lock) {
-            final long nsWindowPtr = getNSWindowPtr();
-
-            // Process parent-child relationship when hiding
-            if (!visible) {
-                // Unparent myself
-                if (owner != null && owner.isVisible()) {
-                    CWrapper.NSWindow.removeChildWindow(
-                            owner.getNSWindowPtr(), nsWindowPtr);
+            execute(ptr -> {
+                // Actually show or hide the window
+                if (visible) {
+                    CWrapper.NSWindow.orderFront(ptr);
+                } else {
+                    CWrapper.NSWindow.orderOut(ptr);
                 }
-            }
-
-            // Actually show or hide the window
-            if (visible) {
-                CWrapper.NSWindow.orderFront(nsWindowPtr);
-            } else {
-                CWrapper.NSWindow.orderOut(nsWindowPtr);
-            }
+            });
 
             this.visible = visible;
 
             // Manage parent-child relationship when showing
             if (visible) {
-                // Add myself as a child
+                // Order myself above my parent
                 if (owner != null && owner.isVisible()) {
-                    CWrapper.NSWindow.addChildWindow(owner.getNSWindowPtr(),
-                            nsWindowPtr, CWrapper.NSWindow.NSWindowAbove);
+                    owner.execute(ownerPtr -> {
+                        execute(ptr -> {
+                            CWrapper.NSWindow.orderWindow(ptr,
+                                                          CWrapper.NSWindow.NSWindowAbove,
+                                                          ownerPtr);
+                        });
+                    });
 
                     // do not allow security warning to be obscured by other windows
                     applyWindowLevel(ownerWindow);
@@ -239,9 +235,10 @@ public final class CWarningWindow extends CPlatformWindow
     }
 
     @Override
-    public void notifyMouseWheelEvent(long when, int x, int y, int modifiers,
-                                      int scrollType, int scrollAmount,
-                                      int wheelRotation, double preciseWheelRotation,
+    public void notifyMouseWheelEvent(long when, int x, int y, int absX,
+                                      int absY, int modifiers, int scrollType,
+                                      int scrollAmount, int wheelRotation,
+                                      double preciseWheelRotation,
                                       byte[] bdata) {
     }
 
@@ -363,8 +360,8 @@ public final class CWarningWindow extends CPlatformWindow
             return null;
         }
 
-        return transformGraphics(new SunGraphics2D(sd, SystemColor.windowText,
-                SystemColor.window, ownerWindow.getFont()));
+        return new SunGraphics2D(sd, SystemColor.windowText, SystemColor.window,
+                                 ownerWindow.getFont());
     }
 
 
@@ -405,7 +402,7 @@ public final class CWarningWindow extends CPlatformWindow
     private final Lock taskLock = new Lock();
     private CancelableRunnable showHideTask;
 
-    private static abstract class CancelableRunnable implements Runnable {
+    private abstract static class CancelableRunnable implements Runnable {
         private volatile boolean perform = true;
 
         public final void cancel() {

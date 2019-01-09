@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,22 +25,20 @@
 #ifndef SHARE_VM_GC_G1_CONCURRENTG1REFINE_HPP
 #define SHARE_VM_GC_G1_CONCURRENTG1REFINE_HPP
 
-#include "gc/g1/g1HotCardCache.hpp"
 #include "memory/allocation.hpp"
-#include "runtime/thread.hpp"
 #include "utilities/globalDefinitions.hpp"
 
 // Forward decl
+class CardTableEntryClosure;
 class ConcurrentG1RefineThread;
-class G1CollectedHeap;
-class G1HotCardCache;
-class G1RegionToSpaceMapper;
-class G1RemSet;
-class DirtyCardQueue;
+class G1YoungRemSetSamplingThread;
+class outputStream;
+class ThreadClosure;
 
 class ConcurrentG1Refine: public CHeapObj<mtGC> {
+  G1YoungRemSetSamplingThread* _sample_thread;
+
   ConcurrentG1RefineThread** _threads;
-  uint _n_threads;
   uint _n_worker_threads;
  /*
   * The value of the update buffer queue length falls into one of 3 zones:
@@ -59,26 +57,34 @@ class ConcurrentG1Refine: public CHeapObj<mtGC> {
   * 2) green = 0. Means no caching. Can be a good way to minimize the
   *    amount of time spent updating rsets during a collection.
   */
-  int _green_zone;
-  int _yellow_zone;
-  int _red_zone;
+  size_t _green_zone;
+  size_t _yellow_zone;
+  size_t _red_zone;
+  size_t _min_yellow_zone_size;
 
-  int _thread_threshold_step;
+  ConcurrentG1Refine(size_t green_zone,
+                     size_t yellow_zone,
+                     size_t red_zone,
+                     size_t min_yellow_zone_size);
 
-  // We delay the refinement of 'hot' cards using the hot card cache.
-  G1HotCardCache _hot_card_cache;
+  // Update green/yellow/red zone values based on how well goals are being met.
+  void update_zones(double update_rs_time,
+                    size_t update_rs_processed_buffers,
+                    double goal_ms);
 
-  // Reset the threshold step value based of the current zone boundaries.
-  void reset_threshold_step();
+  // Update thread thresholds to account for updated zone values.
+  void update_thread_thresholds();
 
  public:
-  ConcurrentG1Refine(G1CollectedHeap* g1h, CardTableEntryClosure* refine_closure);
   ~ConcurrentG1Refine();
 
-  void init(G1RegionToSpaceMapper* card_counts_storage);
+  // Returns ConcurrentG1Refine instance if succeeded to create/initialize ConcurrentG1Refine and ConcurrentG1RefineThread.
+  // Otherwise, returns NULL with error code.
+  static ConcurrentG1Refine* create(CardTableEntryClosure* refine_closure, jint* ecode);
+
   void stop();
 
-  void reinitialize_threads();
+  void adjust(double update_rs_time, size_t update_rs_processed_buffers, double goal_ms);
 
   // Iterate over all concurrent refinement threads
   void threads_do(ThreadClosure *tc);
@@ -86,27 +92,16 @@ class ConcurrentG1Refine: public CHeapObj<mtGC> {
   // Iterate over all worker refinement threads
   void worker_threads_do(ThreadClosure * tc);
 
-  // The RS sampling thread
-  ConcurrentG1RefineThread * sampling_thread() const;
+  // The RS sampling thread has nothing to do with refinement, but is here for now.
+  G1YoungRemSetSamplingThread * sampling_thread() const { return _sample_thread; }
 
   static uint thread_num();
 
   void print_worker_threads_on(outputStream* st) const;
 
-  void set_green_zone(int x)  { _green_zone = x;  }
-  void set_yellow_zone(int x) { _yellow_zone = x; }
-  void set_red_zone(int x)    { _red_zone = x;    }
-
-  int green_zone() const      { return _green_zone;  }
-  int yellow_zone() const     { return _yellow_zone; }
-  int red_zone() const        { return _red_zone;    }
-
-  uint total_thread_num() const  { return _n_threads;        }
-  uint worker_thread_num() const { return _n_worker_threads; }
-
-  int thread_threshold_step() const { return _thread_threshold_step; }
-
-  G1HotCardCache* hot_card_cache() { return &_hot_card_cache; }
+  size_t green_zone() const      { return _green_zone;  }
+  size_t yellow_zone() const     { return _yellow_zone; }
+  size_t red_zone() const        { return _red_zone;    }
 };
 
 #endif // SHARE_VM_GC_G1_CONCURRENTG1REFINE_HPP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,9 +44,9 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 
+import com.sun.tools.sjavac.comp.CompilationService;
 import com.sun.tools.sjavac.options.Options;
 import com.sun.tools.sjavac.pubapi.PubApi;
-import com.sun.tools.sjavac.server.Sjavac;
 
 /**
  * Compile properties transform a properties file into a Java source file.
@@ -71,10 +71,9 @@ public class CompileProperties implements Transformer {
     public void setExtra(Options a) {
     }
 
-    public boolean transform(Sjavac sjavac,
+    public boolean transform(CompilationService compilationService,
                              Map<String,Set<URI>> pkgSrcs,
                              Set<URI>             visibleSrcs,
-                             Map<URI,Set<String>> visibleClasses,
                              Map<String,Set<String>> oldPackageDependents,
                              URI destRoot,
                              Map<String,Set<URI>>    packageArtifacts,
@@ -84,9 +83,7 @@ public class CompileProperties implements Transformer {
                              Map<String, PubApi> dependencyPublicApis,
                              int debugLevel,
                              boolean incremental,
-                             int numCores,
-                             PrintStream out,
-                             PrintStream err) {
+                             int numCores) {
         boolean rc = true;
         for (String pkgName : pkgSrcs.keySet()) {
             String pkgNameF = Util.toFileSystemPath(pkgName);

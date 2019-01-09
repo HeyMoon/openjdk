@@ -44,7 +44,8 @@ import java.beans.PropertyChangeSupport;
 import java.beans.PropertyChangeListener;
 import java.lang.ref.SoftReference;
 
-import sun.misc.ManagedLocalsThread;
+import jdk.internal.misc.JavaAWTAccess;
+import jdk.internal.misc.SharedSecrets;
 import sun.util.logging.PlatformLogger;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
@@ -69,7 +70,7 @@ import java.util.function.Supplier;
  *
  * For example, here we have a Foo service, with its pre-AppContext
  * code:<p>
- * <code><pre>
+ * <pre>{@code
  *    public class Foo {
  *        private static Foo defaultFoo = new Foo();
  *
@@ -78,7 +79,8 @@ import java.util.function.Supplier;
  *        }
  *
  *    ... Foo service methods
- *    }</pre></code><p>
+ *    }
+ * }</pre><p>
  *
  * The problem with the above is that the Foo service is global in scope,
  * so that applets and other untrusted code can execute methods on the
@@ -88,7 +90,7 @@ import java.util.function.Supplier;
  * executes it.<p>
  *
  * Here's the Foo class written to use the AppContext:<p>
- * <code><pre>
+ * <pre>{@code
  *    public class Foo {
  *        public static Foo getDefaultFoo() {
  *            Foo foo = (Foo)AppContext.getAppContext().get(Foo.class);
@@ -100,7 +102,8 @@ import java.util.function.Supplier;
  *        }
  *
  *    ... Foo service methods
- *    }</pre></code><p>
+ *    }
+ * }</pre><p>
  *
  * Since a separate AppContext can exist for each ThreadGroup, trusted
  * and untrusted code have access to different Foo instances.  This allows
@@ -148,8 +151,8 @@ public final class AppContext {
     /*
      * The keys to store EventQueue push/pop lock and condition.
      */
-    public final static Object EVENT_QUEUE_LOCK_KEY = new StringBuilder("EventQueue.Lock");
-    public final static Object EVENT_QUEUE_COND_KEY = new StringBuilder("EventQueue.Condition");
+    public static final Object EVENT_QUEUE_LOCK_KEY = new StringBuilder("EventQueue.Lock");
+    public static final Object EVENT_QUEUE_COND_KEY = new StringBuilder("EventQueue.Condition");
 
     /* A map of AppContexts, referenced by ThreadGroup.
      */
@@ -157,7 +160,7 @@ public final class AppContext {
             Collections.synchronizedMap(new IdentityHashMap<ThreadGroup, AppContext>());
 
     /**
-     * Returns a set containing all <code>AppContext</code>s.
+     * Returns a set containing all {@code AppContext}s.
      */
     public static Set<AppContext> getAppContexts() {
         synchronized (threadGroup2appContext) {
@@ -172,7 +175,7 @@ public final class AppContext {
     private static volatile AppContext mainAppContext = null;
 
     private static class GetAppContextLock {};
-    private final static Object getAppContextLock = new GetAppContextLock();
+    private static final Object getAppContextLock = new GetAppContextLock();
 
     /*
      * The hash map associated with this AppContext.  A private delegate
@@ -185,8 +188,8 @@ public final class AppContext {
     private final ThreadGroup threadGroup;
 
     /**
-     * If any <code>PropertyChangeListeners</code> have been registered,
-     * the <code>changeSupport</code> field describes them.
+     * If any {@code PropertyChangeListeners} have been registered,
+     * the {@code changeSupport} field describes them.
      *
      * @see #addPropertyChangeListener
      * @see #removePropertyChangeListener
@@ -523,7 +526,10 @@ public final class AppContext {
         }
 
         // Then, we stop any remaining Threads
-        this.threadGroup.stop();
+        AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
+            threadGroup.stop();
+            return null;
+        });
 
         // Next, we sleep 10ms at a time, waiting for all of the active
         // Threads in the ThreadGroup to die.
@@ -591,8 +597,8 @@ public final class AppContext {
         }
 
         public Thread run() {
-            Thread t = new ManagedLocalsThread(appContext.getThreadGroup(),
-                                               runnable, "AppContext Disposer");
+            Thread t = new Thread(appContext.getThreadGroup(),
+                                  runnable, "AppContext Disposer", 0, false);
             t.setContextClassLoader(appContext.getContextClassLoader());
             t.setPriority(Thread.NORM_PRIORITY + 1);
             t.setDaemon(true);
@@ -628,7 +634,7 @@ public final class AppContext {
      *
      * @param   key   a key in the AppContext.
      * @return  the value to which the key is mapped in this AppContext;
-     *          <code>null</code> if the key is not mapped to any value.
+     *          {@code null} if the key is not mapped to any value.
      * @see     #put(Object, Object)
      * @since   1.2
      */
@@ -665,19 +671,19 @@ public final class AppContext {
     }
 
     /**
-     * Maps the specified <code>key</code> to the specified
-     * <code>value</code> in this AppContext.  Neither the key nor the
-     * value can be <code>null</code>.
+     * Maps the specified {@code key} to the specified
+     * {@code value} in this AppContext.  Neither the key nor the
+     * value can be {@code null}.
      * <p>
-     * The value can be retrieved by calling the <code>get</code> method
+     * The value can be retrieved by calling the {@code get} method
      * with a key that is equal to the original key.
      *
      * @param      key     the AppContext key.
      * @param      value   the value.
      * @return     the previous value of the specified key in this
-     *             AppContext, or <code>null</code> if it did not have one.
+     *             AppContext, or {@code null} if it did not have one.
      * @exception  NullPointerException  if the key or value is
-     *               <code>null</code>.
+     *               {@code null}.
      * @see     #get(Object)
      * @since   1.2
      */
@@ -697,7 +703,7 @@ public final class AppContext {
      *
      * @param   key   the key that needs to be removed.
      * @return  the value to which the key had been mapped in this AppContext,
-     *          or <code>null</code> if the key did not have a mapping.
+     *          or {@code null} if the key did not have a mapping.
      * @since   1.2
      */
     public Object remove(Object key) {
@@ -741,7 +747,7 @@ public final class AppContext {
      * Returns an array of all the property change listeners
      * registered on this component.
      *
-     * @return all of this component's <code>PropertyChangeListener</code>s
+     * @return all of this component's {@code PropertyChangeListener}s
      *         or an empty array if no property change
      *         listeners are currently registered
      *
@@ -820,7 +826,7 @@ public final class AppContext {
      * Returns an array of all the listeners which have been associated
      * with the named property.
      *
-     * @return all of the <code>PropertyChangeListeners</code> associated with
+     * @return all of the {@code PropertyChangeListeners} associated with
      *         the named property or an empty array if no listeners have
      *         been added
      *
@@ -839,7 +845,7 @@ public final class AppContext {
 
     // Set up JavaAWTAccess in SharedSecrets
     static {
-        sun.misc.SharedSecrets.setJavaAWTAccess(new sun.misc.JavaAWTAccess() {
+        SharedSecrets.setJavaAWTAccess(new JavaAWTAccess() {
             private boolean hasRootThreadGroup(final AppContext ecx) {
                 return AccessController.doPrivileged(new PrivilegedAction<Boolean>() {
                     @Override
@@ -878,13 +884,13 @@ public final class AppContext {
                 // the window of opportunity in which that issue could
                 // happen.
                 if (numAppContexts.get() > 0) {
-                   // Defaults to thread group caching.
-                   // This is probably not required as we only really need
-                   // isolation in a deployed applet environment, in which
-                   // case ecx will not be null when we reach here
-                   // However it helps emulate the deployed environment,
-                   // in tests for instance.
-                   ecx = ecx != null ? ecx : getAppContext();
+                    // Defaults to thread group caching.
+                    // This is probably not required as we only really need
+                    // isolation in a deployed applet environment, in which
+                    // case ecx will not be null when we reach here
+                    // However it helps emulate the deployed environment,
+                    // in tests for instance.
+                    ecx = ecx != null ? ecx : getAppContext();
                 }
 
                 // getAppletContext() may be called when initializing the main
@@ -895,8 +901,8 @@ public final class AppContext {
                 // the root TG as its thread group.
                 // See: JDK-8023258
                 final boolean isMainAppContext = ecx == null
-                    || mainAppContext == ecx
-                    || mainAppContext == null && hasRootThreadGroup(ecx);
+                        || mainAppContext == ecx
+                        || mainAppContext == null && hasRootThreadGroup(ecx);
 
                 return isMainAppContext ? null : ecx;
             }

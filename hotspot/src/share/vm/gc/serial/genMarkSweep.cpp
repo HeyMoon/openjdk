@@ -25,6 +25,7 @@
 #include "precompiled.hpp"
 #include "classfile/javaClasses.hpp"
 #include "classfile/stringTable.hpp"
+#include "classfile/symbolTable.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/codeCache.hpp"
@@ -34,7 +35,7 @@
 #include "gc/shared/gcHeapSummary.hpp"
 #include "gc/shared/gcTimer.hpp"
 #include "gc/shared/gcTrace.hpp"
-#include "gc/shared/gcTraceTime.hpp"
+#include "gc/shared/gcTraceTime.inline.hpp"
 #include "gc/shared/genCollectedHeap.hpp"
 #include "gc/shared/generation.hpp"
 #include "gc/shared/genOopClosures.inline.hpp"
@@ -67,10 +68,8 @@ void GenMarkSweep::invoke_at_safepoint(ReferenceProcessor* rp, bool clear_all_so
   // hook up weak ref data so it can be used during Mark-Sweep
   assert(ref_processor() == NULL, "no stomping");
   assert(rp != NULL, "should be non-NULL");
-  _ref_processor = rp;
+  set_ref_processor(rp);
   rp->setup_policy(clear_all_softrefs);
-
-  GCTraceTime t1(GCCauseString("Full GC", gch->gc_cause()), PrintGC && !PrintGCDetails, true, NULL, _gc_tracer->gc_id());
 
   gch->trace_heap_before_gc(_gc_tracer);
 
@@ -80,9 +79,6 @@ void GenMarkSweep::invoke_at_safepoint(ReferenceProcessor* rp, bool clear_all_so
 
   // Increment the invocation count
   _total_invocations++;
-
-  // Capture heap size before collection for printing.
-  size_t gch_prev_used = gch->used();
 
   // Capture used regions for each generation that will be
   // subject to collection, so that card table adjustments can
@@ -96,8 +92,10 @@ void GenMarkSweep::invoke_at_safepoint(ReferenceProcessor* rp, bool clear_all_so
   mark_sweep_phase2();
 
   // Don't add any more derived pointers during phase3
-  COMPILER2_PRESENT(assert(DerivedPointerTable::is_active(), "Sanity"));
-  COMPILER2_PRESENT(DerivedPointerTable::set_active(false));
+#if defined(COMPILER2) || INCLUDE_JVMCI
+  assert(DerivedPointerTable::is_active(), "Sanity");
+  DerivedPointerTable::set_active(false);
+#endif
 
   mark_sweep_phase3();
 
@@ -115,7 +113,7 @@ void GenMarkSweep::invoke_at_safepoint(ReferenceProcessor* rp, bool clear_all_so
   // can clear the card table.  Otherwise, we must invalidate
   // it (consider all cards dirty).  In the future, we might consider doing
   // compaction within generations only, and doing card-table sliding.
-  GenRemSet* rs = gch->rem_set();
+  CardTableRS* rs = gch->rem_set();
   Generation* old_gen = gch->old_gen();
 
   // Clear/invalidate below make use of the "prev_used_regions" saved earlier.
@@ -131,12 +129,8 @@ void GenMarkSweep::invoke_at_safepoint(ReferenceProcessor* rp, bool clear_all_so
   CodeCache::gc_epilogue();
   JvmtiExport::gc_epilogue();
 
-  if (PrintGC && !PrintGCDetails) {
-    gch->print_heap_change(gch_prev_used);
-  }
-
   // refs processing: clean slate
-  _ref_processor = NULL;
+  set_ref_processor(NULL);
 
   // Update heap occupancy information which is used as
   // input to soft ref clearing policy at the next gc.
@@ -186,7 +180,7 @@ void GenMarkSweep::deallocate_stacks() {
 
 void GenMarkSweep::mark_sweep_phase1(bool clear_all_softrefs) {
   // Recursively traverse all live objects and mark them
-  GCTraceTime tm("phase 1", PrintGC && Verbose, true, _gc_timer, _gc_tracer->gc_id());
+  GCTraceTime(Info, gc, phases) tm("Phase 1: Mark live objects", _gc_timer);
 
   GenCollectedHeap* gch = GenCollectedHeap::heap();
 
@@ -202,42 +196,53 @@ void GenMarkSweep::mark_sweep_phase1(bool clear_all_softrefs) {
   {
     StrongRootsScope srs(1);
 
-    gch->gen_process_roots(&srs,
-                           GenCollectedHeap::OldGen,
-                           false, // Younger gens are not roots.
-                           GenCollectedHeap::SO_None,
-                           ClassUnloading,
-                           &follow_root_closure,
-                           &follow_root_closure,
-                           &follow_cld_closure);
+    gch->full_process_roots(&srs,
+                            false, // not the adjust phase
+                            GenCollectedHeap::SO_None,
+                            ClassUnloading, // only strong roots if ClassUnloading
+                                            // is enabled
+                            &follow_root_closure,
+                            &follow_cld_closure);
   }
 
   // Process reference objects found during marking
   {
+    GCTraceTime(Debug, gc, phases) tm_m("Reference Processing", gc_timer());
+
     ref_processor()->setup_policy(clear_all_softrefs);
     const ReferenceProcessorStats& stats =
       ref_processor()->process_discovered_references(
-        &is_alive, &keep_alive, &follow_stack_closure, NULL, _gc_timer, _gc_tracer->gc_id());
+        &is_alive, &keep_alive, &follow_stack_closure, NULL, _gc_timer);
     gc_tracer()->report_gc_reference_stats(stats);
   }
 
   // This is the point where the entire marking should have completed.
   assert(_marking_stack.is_empty(), "Marking should have completed");
 
-  // Unload classes and purge the SystemDictionary.
-  bool purged_class = SystemDictionary::do_unloading(&is_alive);
+  {
+    GCTraceTime(Debug, gc, phases) tm_m("Class Unloading", gc_timer());
 
-  // Unload nmethods.
-  CodeCache::do_unloading(&is_alive, purged_class);
+    // Unload classes and purge the SystemDictionary.
+    bool purged_class = SystemDictionary::do_unloading(&is_alive);
 
-  // Prune dead klasses from subklass/sibling/implementor lists.
-  Klass::clean_weak_klass_links(&is_alive);
+    // Unload nmethods.
+    CodeCache::do_unloading(&is_alive, purged_class);
 
-  // Delete entries for dead interned strings.
-  StringTable::unlink(&is_alive);
+    // Prune dead klasses from subklass/sibling/implementor lists.
+    Klass::clean_weak_klass_links(&is_alive);
+  }
 
-  // Clean up unreferenced symbols in symbol table.
-  SymbolTable::unlink();
+  {
+    GCTraceTime(Debug, gc, phases) t("Scrub String Table", gc_timer());
+    // Delete entries for dead interned strings.
+    StringTable::unlink(&is_alive);
+  }
+
+  {
+    GCTraceTime(Debug, gc, phases) t("Scrub Symbol Table", gc_timer());
+    // Clean up unreferenced symbols in symbol table.
+    SymbolTable::unlink();
+  }
 
   gc_tracer()->report_object_count_after_gc(&is_alive);
 }
@@ -259,7 +264,7 @@ void GenMarkSweep::mark_sweep_phase2() {
 
   GenCollectedHeap* gch = GenCollectedHeap::heap();
 
-  GCTraceTime tm("phase 2", PrintGC && Verbose, true, _gc_timer, _gc_tracer->gc_id());
+  GCTraceTime(Info, gc, phases) tm("Phase 2: Compute new object addresses", _gc_timer);
 
   gch->prepare_for_compaction();
 }
@@ -275,7 +280,7 @@ void GenMarkSweep::mark_sweep_phase3() {
   GenCollectedHeap* gch = GenCollectedHeap::heap();
 
   // Adjust the pointers to reflect the new locations
-  GCTraceTime tm("phase 3", PrintGC && Verbose, true, _gc_timer, _gc_tracer->gc_id());
+  GCTraceTime(Info, gc, phases) tm("Phase 3: Adjust pointers", gc_timer());
 
   // Need new claim bits for the pointer adjustment tracing.
   ClassLoaderDataGraph::clear_claimed_marks();
@@ -289,14 +294,12 @@ void GenMarkSweep::mark_sweep_phase3() {
   {
     StrongRootsScope srs(1);
 
-    gch->gen_process_roots(&srs,
-                           GenCollectedHeap::OldGen,
-                           false, // Younger gens are not roots.
-                           GenCollectedHeap::SO_AllCodeCache,
-                           GenCollectedHeap::StrongAndWeakRoots,
-                           &adjust_pointer_closure,
-                           &adjust_pointer_closure,
-                           &adjust_cld_closure);
+    gch->full_process_roots(&srs,
+                            true,  // this is the adjust phase
+                            GenCollectedHeap::SO_AllCodeCache,
+                            false, // all roots
+                            &adjust_pointer_closure,
+                            &adjust_cld_closure);
   }
 
   gch->gen_process_weak_roots(&adjust_pointer_closure);
@@ -327,7 +330,7 @@ void GenMarkSweep::mark_sweep_phase4() {
   // to use a higher index (saved from phase2) when verifying perm_gen.
   GenCollectedHeap* gch = GenCollectedHeap::heap();
 
-  GCTraceTime tm("phase 4", PrintGC && Verbose, true, _gc_timer, _gc_tracer->gc_id());
+  GCTraceTime(Info, gc, phases) tm("Phase 4: Move objects", _gc_timer);
 
   GenCompactClosure blk;
   gch->generation_iterate(&blk, true);

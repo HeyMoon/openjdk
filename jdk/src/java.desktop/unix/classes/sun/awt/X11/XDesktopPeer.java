@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,8 @@
 package sun.awt.X11;
 
 
+import sun.awt.UNIXToolkit;
+
 import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
@@ -39,7 +41,7 @@ import java.util.List;
 
 
 /**
- * Concrete implementation of the interface <code>DesktopPeer</code> for
+ * Concrete implementation of the interface {@code DesktopPeer} for
  * the Gnome desktop on Linux and Unix platforms.
  *
  * @see DesktopPeer
@@ -57,7 +59,8 @@ public class XDesktopPeer implements DesktopPeer {
         XToolkit.awtLock();
         try {
             if (!initExecuted) {
-                nativeLibraryLoaded = init();
+                nativeLibraryLoaded = init(UNIXToolkit.getEnabledGtkVersion()
+                        .getNumber(), UNIXToolkit.isGtkVerbose());
             }
         } finally {
             initExecuted = true;
@@ -123,5 +126,5 @@ public class XDesktopPeer implements DesktopPeer {
     }
 
     private native boolean gnome_url_show(byte[] url);
-    private static native boolean init();
+    private static native boolean init(int gtkVersion, boolean verbose);
 }

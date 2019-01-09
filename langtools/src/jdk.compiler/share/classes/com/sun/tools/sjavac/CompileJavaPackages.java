@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,18 +26,26 @@
 package com.sun.tools.sjavac;
 
 import java.io.File;
-import java.io.PrintStream;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
+import com.sun.tools.javac.main.Main.Result;
+import com.sun.tools.sjavac.comp.CompilationService;
 import com.sun.tools.sjavac.options.Options;
 import com.sun.tools.sjavac.pubapi.PubApi;
-import com.sun.tools.sjavac.server.CompilationResult;
-import com.sun.tools.sjavac.server.Sjavac;
+import com.sun.tools.sjavac.server.CompilationSubResult;
 import com.sun.tools.sjavac.server.SysInfo;
 
 /**
@@ -68,10 +76,9 @@ public class CompileJavaPackages implements Transformer {
         args = a;
     }
 
-    public boolean transform(final Sjavac sjavac,
+    public boolean transform(final CompilationService sjavac,
                              Map<String,Set<URI>> pkgSrcs,
                              final Set<URI>             visibleSources,
-                             final Map<URI,Set<String>> visibleClasses,
                              Map<String,Set<String>> oldPackageDependents,
                              URI destRoot,
                              final Map<String,Set<URI>>    packageArtifacts,
@@ -81,9 +88,7 @@ public class CompileJavaPackages implements Transformer {
                              final Map<String, PubApi> dependencyPubapis,
                              int debugLevel,
                              boolean incremental,
-                             int numCores,
-                             final PrintStream out,
-                             final PrintStream err) {
+                             int numCores) {
 
         Log.debug("Performing CompileJavaPackages transform...");
 
@@ -91,16 +96,11 @@ public class CompileJavaPackages implements Transformer {
         boolean concurrentCompiles = true;
 
         // Fetch the id.
-        final String id = Util.extractStringOption("id", sjavac.serverSettings());
+        final String id = String.valueOf(new Random().nextInt());
         // Only keep portfile and sjavac settings..
         //String psServerSettings = Util.cleanSubOptions(Util.set("portfile","sjavac","background","keepalive"), sjavac.serverSettings());
 
-        // Get maximum heap size from the server!
         SysInfo sysinfo = sjavac.getSysInfo();
-        if (sysinfo == null) {
-            Log.error("Could not query server for sysinfo!");
-            return false;
-        }
         int numMBytes = (int)(sysinfo.maxMemory / ((long)(1024*1024)));
         Log.debug("Server reports "+numMBytes+"MiB of memory and "+sysinfo.numCores+" cores");
 
@@ -204,102 +204,87 @@ public class CompileJavaPackages implements Transformer {
             }
         }
 
-        // The return values for each chunked compile.
-        final CompilationResult[] rn = new CompilationResult[numCompiles];
-        // The requets, might or might not run as a background thread.
-        final Thread[] requests  = new Thread[numCompiles];
-
         long start = System.currentTimeMillis();
 
-        for (int i=0; i<numCompiles; ++i) {
-            final int ii = i;
-            final CompileChunk cc = compileChunks[i];
-
-            // Pass the num_cores and the id (appended with the chunk number) to the server.
-            Object lock = new Object();
-            requests[i] = new Thread() {
-                @Override
-                public void run() {
-                    rn[ii] = sjavac.compile("n/a",
-                                            id + "-" + ii,
-                                            args.prepJavacArgs(),
-                                            Collections.<File>emptyList(),
-                                            cc.srcs,
-                                            visibleSources);
-                    // In the code below we have to keep in mind that two
-                    // different compilation results may include results for
-                    // the same package.
-                    synchronized (lock) {
-
-                        for (String pkg : rn[ii].packageArtifacts.keySet()) {
-                            Set<URI> pkgArtifacts = rn[ii].packageArtifacts.get(pkg);
-                            packageArtifacts.merge(pkg, pkgArtifacts, Util::union);
-                        }
-
-                        for (String pkg : rn[ii].packageDependencies.keySet()) {
-                            packageDependencies.putIfAbsent(pkg, new HashMap<>());
-                            packageDependencies.get(pkg).putAll(rn[ii].packageDependencies.get(pkg));
-                        }
-
-                        for (String pkg : rn[ii].packageCpDependencies.keySet()) {
-                            packageCpDependencies.putIfAbsent(pkg, new HashMap<>());
-                            packageCpDependencies.get(pkg).putAll(rn[ii].packageCpDependencies.get(pkg));
-                        }
-
-                        for (String pkg : rn[ii].packagePubapis.keySet()) {
-                            packagePubapis.merge(pkg, rn[ii].packagePubapis.get(pkg), PubApi::mergeTypes);
-                        }
-
-                        for (String pkg : rn[ii].dependencyPubapis.keySet()) {
-                            dependencyPubapis.merge(pkg, rn[ii].dependencyPubapis.get(pkg), PubApi::mergeTypes);
-                        }
-                    }
-                }
-            };
-
-            if (cc.srcs.size() > 0) {
-                String numdeps = "";
-                if (cc.numDependents > 0) numdeps = "(with "+cc.numDependents+" dependents) ";
-                if (!incremental || cc.numPackages > 16) {
-                    String info = "("+cc.pkgFromTos+")";
-                    if (info.equals("( to )")) {
-                        info = "";
-                    }
-                    Log.info("Compiling "+cc.srcs.size()+" files "+numdeps+"in "+cc.numPackages+" packages "+info);
-                } else {
-                    Log.info("Compiling "+cc.pkgNames+numdeps);
-                }
-                if (concurrentCompiles) {
-                    requests[ii].start();
-                }
-                else {
-                    requests[ii].run();
-                    // If there was an error, then stop early when running single threaded.
-                    if (rn[i].returnCode != 0) {
-                        Log.info(rn[i].stdout);
-                        Log.error(rn[i].stderr);
-                        return false;
-                    }
-                }
+        // Prepare compilation calls
+        List<Callable<CompilationSubResult>> compilationCalls = new ArrayList<>();
+        final Object lock = new Object();
+        for (int i = 0; i < numCompiles; i++) {
+            CompileChunk cc = compileChunks[i];
+            if (cc.srcs.isEmpty()) {
+                continue;
             }
-        }
-        if (concurrentCompiles) {
-            // If there are background threads for the concurrent compiles, then join them.
-            for (int i=0; i<numCompiles; ++i) {
-                try { requests[i].join(); } catch (InterruptedException e) { }
-            }
+
+            String chunkId = id + "-" + String.valueOf(i);
+            Log log = Log.get();
+            compilationCalls.add(() -> {
+                Log.setLogForCurrentThread(log);
+                CompilationSubResult result = sjavac.compile("n/a",
+                                                             chunkId,
+                                                             args.prepJavacArgs(),
+                                                             Collections.emptyList(),
+                                                             cc.srcs,
+                                                             visibleSources);
+                synchronized (lock) {
+                    Util.getLines(result.stdout).forEach(Log::info);
+                    Util.getLines(result.stderr).forEach(Log::error);
+                }
+                return result;
+            });
         }
 
-        // Check the return values.
-        for (int i=0; i<numCompiles; ++i) {
-            if (compileChunks[i].srcs.size() > 0) {
-                if (rn[i].returnCode != 0) {
-                    Log.info(rn[i].stdout);
-                    Log.error(rn[i].stderr);
-                    rc = false;
-                }
+        // Perform compilations and collect results
+        List<CompilationSubResult> subResults = new ArrayList<>();
+        List<Future<CompilationSubResult>> futs = new ArrayList<>();
+        ExecutorService exec = Executors.newFixedThreadPool(concurrentCompiles ? compilationCalls.size() : 1);
+        for (Callable<CompilationSubResult> compilationCall : compilationCalls) {
+            futs.add(exec.submit(compilationCall));
+        }
+        for (Future<CompilationSubResult> fut : futs) {
+            try {
+                subResults.add(fut.get());
+            } catch (ExecutionException ee) {
+                Log.error("Compilation failed: " + ee.getMessage());
+                Log.error(ee);
+            } catch (InterruptedException ie) {
+                Log.error("Compilation interrupted: " + ie.getMessage());
+                Log.error(ie);
+                Thread.currentThread().interrupt();
             }
         }
+        exec.shutdownNow();
+
+        // Process each sub result
+        for (CompilationSubResult subResult : subResults) {
+            for (String pkg : subResult.packageArtifacts.keySet()) {
+                Set<URI> pkgArtifacts = subResult.packageArtifacts.get(pkg);
+                packageArtifacts.merge(pkg, pkgArtifacts, Util::union);
+            }
+
+            for (String pkg : subResult.packageDependencies.keySet()) {
+                packageDependencies.putIfAbsent(pkg, new HashMap<>());
+                packageDependencies.get(pkg).putAll(subResult.packageDependencies.get(pkg));
+            }
+
+            for (String pkg : subResult.packageCpDependencies.keySet()) {
+                packageCpDependencies.putIfAbsent(pkg, new HashMap<>());
+                packageCpDependencies.get(pkg).putAll(subResult.packageCpDependencies.get(pkg));
+            }
+
+            for (String pkg : subResult.packagePubapis.keySet()) {
+                packagePubapis.merge(pkg, subResult.packagePubapis.get(pkg), PubApi::mergeTypes);
+            }
+
+            for (String pkg : subResult.dependencyPubapis.keySet()) {
+                dependencyPubapis.merge(pkg, subResult.dependencyPubapis.get(pkg), PubApi::mergeTypes);
+            }
+
+            // Check the return values.
+            if (subResult.result != Result.OK) {
+                rc = false;
+            }
+        }
+
         long duration = System.currentTimeMillis() - start;
         long minutes = duration/60000;
         long seconds = (duration-minutes*60000)/1000;

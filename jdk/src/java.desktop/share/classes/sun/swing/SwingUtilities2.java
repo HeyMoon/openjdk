@@ -30,6 +30,11 @@ import java.awt.*;
 import static java.awt.RenderingHints.*;
 import java.awt.event.*;
 import java.awt.font.*;
+import java.awt.geom.Rectangle2D;
+import java.awt.geom.AffineTransform;
+import static java.awt.geom.AffineTransform.TYPE_FLIP;
+import static java.awt.geom.AffineTransform.TYPE_MASK_SCALE;
+import static java.awt.geom.AffineTransform.TYPE_TRANSLATION;
 import java.awt.print.PrinterGraphics;
 import java.text.BreakIterator;
 import java.text.CharacterIterator;
@@ -72,7 +77,7 @@ import java.util.concurrent.FutureTask;
  */
 public class SwingUtilities2 {
     /**
-     * The <code>AppContext</code> key for our one <code>LAFState</code>
+     * The {@code AppContext} key for our one {@code LAFState}
      * instance.
      */
     public static final Object LAF_STATE_KEY =
@@ -103,14 +108,6 @@ public class SwingUtilities2 {
         new FontRenderContext(null, false, false);
 
     /**
-     * A JComponent client property is used to determine text aa settings.
-     * To avoid having this property persist between look and feels changes
-     * the value of the property is set to null in JComponent.setUI
-     */
-    public static final Object AA_TEXT_PROPERTY_KEY =
-                          new StringBuffer("AATextInfoPropertyKey");
-
-    /**
      * Attribute key for the content elements.  If it is set on an element, the
      * element is considered to be a line break.
      */
@@ -123,67 +120,25 @@ public class SwingUtilities2 {
     private static final StringBuilder SKIP_CLICK_COUNT =
         new StringBuilder("skipClickCount");
 
-    /* Presently this class assumes default fractional metrics.
-     * This may need to change to emulate future platform L&Fs.
-     */
-    public static class AATextInfo {
+    @SuppressWarnings("unchecked")
+    public static void putAATextInfo(boolean lafCondition,
+            Map<Object, Object> map) {
+        SunToolkit.setAAFontSettingsCondition(lafCondition);
+        Toolkit tk = Toolkit.getDefaultToolkit();
+        Object desktopHints = tk.getDesktopProperty(SunToolkit.DESKTOPFONTHINTS);
 
-        private static AATextInfo getAATextInfoFromMap(Map<java.awt.RenderingHints.Key, Object> hints) {
-
-            Object aaHint   = hints.get(KEY_TEXT_ANTIALIASING);
-            Object contHint = hints.get(KEY_TEXT_LCD_CONTRAST);
-
-            if (aaHint == null ||
-                aaHint == VALUE_TEXT_ANTIALIAS_OFF ||
-                aaHint == VALUE_TEXT_ANTIALIAS_DEFAULT) {
-                return null;
-            } else {
-                return new AATextInfo(aaHint, (Integer)contHint);
+        if (desktopHints instanceof Map) {
+            Map<Object, Object> hints = (Map<Object, Object>) desktopHints;
+            Object aaHint = hints.get(KEY_TEXT_ANTIALIASING);
+            if (aaHint == null
+                    || aaHint == VALUE_TEXT_ANTIALIAS_OFF
+                    || aaHint == VALUE_TEXT_ANTIALIAS_DEFAULT) {
+                return;
             }
-        }
-
-        @SuppressWarnings("unchecked")
-        public static AATextInfo getAATextInfo(boolean lafCondition) {
-            SunToolkit.setAAFontSettingsCondition(lafCondition);
-            Toolkit tk = Toolkit.getDefaultToolkit();
-            Object map = tk.getDesktopProperty(SunToolkit.DESKTOPFONTHINTS);
-            if (map instanceof Map) {
-                return getAATextInfoFromMap((Map<java.awt.RenderingHints.Key, Object>)map);
-            } else {
-                return null;
-            }
-        }
-
-        Object aaHint;
-        Integer lcdContrastHint;
-        FontRenderContext frc;
-
-        /* These are rarely constructed objects, and only when a complete
-         * UI is being updated, so the cost of the tests here is minimal
-         * and saves tests elsewhere.
-         * We test that the values are ones we support/expect.
-         */
-        public AATextInfo(Object aaHint, Integer lcdContrastHint) {
-            if (aaHint == null) {
-                throw new InternalError("null not allowed here");
-            }
-            if (aaHint == VALUE_TEXT_ANTIALIAS_OFF ||
-                aaHint == VALUE_TEXT_ANTIALIAS_DEFAULT) {
-                throw new InternalError("AA must be on");
-            }
-            this.aaHint = aaHint;
-            this.lcdContrastHint = lcdContrastHint;
-            this.frc = new FontRenderContext(null, aaHint,
-                                             VALUE_FRACTIONALMETRICS_DEFAULT);
+            map.put(KEY_TEXT_ANTIALIASING, aaHint);
+            map.put(KEY_TEXT_LCD_CONTRAST, hints.get(KEY_TEXT_LCD_CONTRAST));
         }
     }
-
-    /**
-     * Key used in client properties used to indicate that the
-     * <code>ComponentUI</code> of the JComponent instance should be returned.
-     */
-    public static final Object COMPONENT_UI_PROPERTY_KEY =
-                            new StringBuffer("ComponentUIPropertyKey");
 
     /** Client Property key for the text maximal offsets for BasicMenuItemUI */
     public static final StringUIClientPropertyKey BASICMENUITEMUI_MAX_TEXT_OFFSET =
@@ -221,8 +176,8 @@ public class SwingUtilities2 {
      * @param text characters to be tested
      * @param start start
      * @param limit limit
-     * @return <tt>true</tt>  if TextLayout is required
-     *         <tt>false</tt> if TextLayout is not required
+     * @return {@code true}  if TextLayout is required
+     *         {@code false} if TextLayout is not required
      */
     public static final boolean isComplexLayout(char[] text, int start, int limit) {
         return FontUtilities.isComplexText(text, start, limit);
@@ -239,22 +194,6 @@ public class SwingUtilities2 {
     // In other words, if you add new functionality to these methods you
     // need to gracefully handle null.
     //
-
-    /**
-     * Returns whether or not text should be drawn antialiased.
-     *
-     * @param c JComponent to test.
-     * @return Whether or not text should be drawn antialiased for the
-     *         specified component.
-     */
-    public static AATextInfo drawTextAntialiased(JComponent c) {
-        if (c != null) {
-            /* a non-null property implies some form of AA requested */
-            return (AATextInfo)c.getClientProperty(AA_TEXT_PROPERTY_KEY);
-        }
-        // No component, assume aa is off
-        return null;
-    }
 
     /**
      * Returns the left side bearing of the first character of string. The
@@ -374,13 +313,27 @@ public class SwingUtilities2 {
 
     /**
      * Returns the width of the passed in String.
-     * If the passed String is <code>null</code>, returns zero.
+     * If the passed String is {@code null}, returns zero.
      *
      * @param c JComponent that will display the string, may be null
      * @param fm FontMetrics used to measure the String width
      * @param string String to get the width of
      */
-    public static int stringWidth(JComponent c, FontMetrics fm, String string){
+    public static int stringWidth(JComponent c, FontMetrics fm, String string) {
+        return (int) stringWidth(c, fm, string, false);
+    }
+
+    /**
+     * Returns the width of the passed in String.
+     * If the passed String is {@code null}, returns zero.
+     *
+     * @param c JComponent that will display the string, may be null
+     * @param fm FontMetrics used to measure the String width
+     * @param string String to get the width of
+     * @param useFPAPI use floating point API
+     */
+    public static float stringWidth(JComponent c, FontMetrics fm, String string,
+            boolean useFPAPI){
         if (string == null || string.equals("")) {
             return 0;
         }
@@ -395,9 +348,9 @@ public class SwingUtilities2 {
         if (needsTextLayout) {
             TextLayout layout = createTextLayout(c, string,
                                     fm.getFont(), fm.getFontRenderContext());
-            return (int) layout.getAdvance();
+            return layout.getAdvance();
         } else {
-            return fm.stringWidth(string);
+            return getFontStringWidth(string, fm, useFPAPI);
         }
     }
 
@@ -488,6 +441,21 @@ public class SwingUtilities2 {
      */
     public static void drawString(JComponent c, Graphics g, String text,
                                   int x, int y) {
+        drawString(c, g, text, x, y, false);
+    }
+
+    /**
+     * Draws the string at the specified location.
+     *
+     * @param c JComponent that will display the string, may be null
+     * @param g Graphics to draw the text to
+     * @param text String to display
+     * @param x X coordinate to draw the text at
+     * @param y Y coordinate to draw the text at
+     * @param useFPAPI use floating point API
+     */
+    public static void drawString(JComponent c, Graphics g, String text,
+                                  float x, float y, boolean useFPAPI) {
         // c may be null
 
         // All non-editable widgets that draw strings call into this
@@ -530,7 +498,6 @@ public class SwingUtilities2 {
 
         // If we get here we're not printing
         if (g instanceof Graphics2D) {
-            AATextInfo info = drawTextAntialiased(c);
             Graphics2D g2 = (Graphics2D)g;
 
             boolean needsTextLayout = ((c != null) &&
@@ -543,21 +510,27 @@ public class SwingUtilities2 {
                 }
             }
 
-            if (info != null) {
+            Object aaHint = (c == null)
+                                ? null
+                                : c.getClientProperty(KEY_TEXT_ANTIALIASING);
+            if (aaHint != null) {
                 Object oldContrast = null;
                 Object oldAAValue = g2.getRenderingHint(KEY_TEXT_ANTIALIASING);
-                if (info.aaHint != oldAAValue) {
-                    g2.setRenderingHint(KEY_TEXT_ANTIALIASING, info.aaHint);
+                if (aaHint != oldAAValue) {
+                    g2.setRenderingHint(KEY_TEXT_ANTIALIASING, aaHint);
                 } else {
                     oldAAValue = null;
                 }
-                if (info.lcdContrastHint != null) {
+
+                Object lcdContrastHint = c.getClientProperty(
+                        KEY_TEXT_LCD_CONTRAST);
+                if (lcdContrastHint != null) {
                     oldContrast = g2.getRenderingHint(KEY_TEXT_LCD_CONTRAST);
-                    if (info.lcdContrastHint.equals(oldContrast)) {
+                    if (lcdContrastHint.equals(oldContrast)) {
                         oldContrast = null;
                     } else {
                         g2.setRenderingHint(KEY_TEXT_LCD_CONTRAST,
-                                            info.lcdContrastHint);
+                                            lcdContrastHint);
                     }
                 }
 
@@ -566,7 +539,7 @@ public class SwingUtilities2 {
                                                     g2.getFontRenderContext());
                     layout.draw(g2, x, y);
                 } else {
-                    g.drawString(text, x, y);
+                    g2.drawString(text, x, y);
                 }
 
                 if (oldAAValue != null) {
@@ -587,7 +560,7 @@ public class SwingUtilities2 {
             }
         }
 
-        g.drawString(text, x, y);
+        g.drawString(text, (int) x, (int) y);
     }
 
     /**
@@ -601,17 +574,36 @@ public class SwingUtilities2 {
      * @param x X coordinate to draw the text at
      * @param y Y coordinate to draw the text at
      */
+
     public static void drawStringUnderlineCharAt(JComponent c,Graphics g,
-                           String text, int underlinedIndex, int x,int y) {
+                           String text, int underlinedIndex, int x, int y) {
+        drawStringUnderlineCharAt(c, g, text, underlinedIndex, x, y, false);
+    }
+    /**
+     * Draws the string at the specified location underlining the specified
+     * character.
+     *
+     * @param c JComponent that will display the string, may be null
+     * @param g Graphics to draw the text to
+     * @param text String to display
+     * @param underlinedIndex Index of a character in the string to underline
+     * @param x X coordinate to draw the text at
+     * @param y Y coordinate to draw the text at
+     * @param useFPAPI use floating point API
+     */
+    public static void drawStringUnderlineCharAt(JComponent c, Graphics g,
+                                                 String text, int underlinedIndex,
+                                                 float x, float y,
+                                                 boolean useFPAPI) {
         if (text == null || text.length() <= 0) {
             return;
         }
-        SwingUtilities2.drawString(c, g, text, x, y);
+        SwingUtilities2.drawString(c, g, text, x, y, useFPAPI);
         int textLength = text.length();
         if (underlinedIndex >= 0 && underlinedIndex < textLength ) {
-            int underlineRectY = y;
+            float underlineRectY = y;
             int underlineRectHeight = 1;
-            int underlineRectX = 0;
+            float underlineRectX = 0;
             int underlineRectWidth = 0;
             boolean isPrinting = isPrinting(g);
             boolean needsTextLayout = isPrinting;
@@ -651,7 +643,7 @@ public class SwingUtilities2 {
                     underlineRectWidth = rect.width;
                 }
             }
-            g.fillRect(underlineRectX, underlineRectY + 1,
+            g.fillRect((int) underlineRectX, (int) underlineRectY + 1,
                        underlineRectWidth, underlineRectHeight);
         }
     }
@@ -761,7 +753,7 @@ public class SwingUtilities2 {
 
     /**
      * Request focus on the given component if it doesn't already have it
-     * and <code>isRequestFocusEnabled()</code> returns true.
+     * and {@code isRequestFocusEnabled()} returns true.
      */
     public static void adjustFocus(JComponent c) {
         if (!c.hasFocus() && c.isRequestFocusEnabled()) {
@@ -781,10 +773,31 @@ public class SwingUtilities2 {
                                  int length,
                                  int x,
                                  int y) {
+        return (int) drawChars(c, g, data, offset, length, x, y, false);
+    }
+
+    public static float drawChars(JComponent c, Graphics g,
+                                 char[] data,
+                                 int offset,
+                                 int length,
+                                 float x,
+                                 float y) {
+        return drawChars(c, g, data, offset, length, x, y, true);
+    }
+
+    public static float drawChars(JComponent c, Graphics g,
+                                 char[] data,
+                                 int offset,
+                                 int length,
+                                 float x,
+                                 float y,
+                                 boolean useFPAPI) {
         if ( length <= 0 ) { //no need to paint empty strings
             return x;
         }
-        int nextX = x + getFontMetrics(c, g).charsWidth(data, offset, length);
+        float nextX = x + getFontCharsWidth(data, offset, length,
+                                            getFontMetrics(c, g),
+                                            useFPAPI);
         if (isPrinting(g)) {
             Graphics2D g2d = getGraphics2D(g);
             if (g2d != null) {
@@ -821,28 +834,38 @@ public class SwingUtilities2 {
         }
         // Assume we're not printing if we get here, or that we are invoked
         // via Swing text printing which is laid out for the printer.
-        AATextInfo info = drawTextAntialiased(c);
-        if (info != null && (g instanceof Graphics2D)) {
-            Graphics2D g2 = (Graphics2D)g;
+        Object aaHint = (c == null)
+                            ? null
+                            : c.getClientProperty(KEY_TEXT_ANTIALIASING);
+
+        if (!(g instanceof Graphics2D)) {
+            g.drawChars(data, offset, length, (int) x, (int) y);
+            return nextX;
+        }
+
+        Graphics2D g2 = (Graphics2D) g;
+        if (aaHint != null) {
 
             Object oldContrast = null;
             Object oldAAValue = g2.getRenderingHint(KEY_TEXT_ANTIALIASING);
-            if (info.aaHint != null && info.aaHint != oldAAValue) {
-                g2.setRenderingHint(KEY_TEXT_ANTIALIASING, info.aaHint);
+            if (aaHint != null && aaHint != oldAAValue) {
+                g2.setRenderingHint(KEY_TEXT_ANTIALIASING, aaHint);
             } else {
                 oldAAValue = null;
             }
-            if (info.lcdContrastHint != null) {
+
+            Object lcdContrastHint = c.getClientProperty(KEY_TEXT_LCD_CONTRAST);
+            if (lcdContrastHint != null) {
                 oldContrast = g2.getRenderingHint(KEY_TEXT_LCD_CONTRAST);
-                if (info.lcdContrastHint.equals(oldContrast)) {
+                if (lcdContrastHint.equals(oldContrast)) {
                     oldContrast = null;
                 } else {
                     g2.setRenderingHint(KEY_TEXT_LCD_CONTRAST,
-                                        info.lcdContrastHint);
+                                        lcdContrastHint);
                 }
             }
 
-            g.drawChars(data, offset, length, x, y);
+            g2.drawString(new String(data, offset, length), x, y);
 
             if (oldAAValue != null) {
                 g2.setRenderingHint(KEY_TEXT_ANTIALIASING, oldAAValue);
@@ -852,9 +875,35 @@ public class SwingUtilities2 {
             }
         }
         else {
-            g.drawChars(data, offset, length, x, y);
+            g2.drawString(new String(data, offset, length), x, y);
         }
         return nextX;
+    }
+
+    public static float getFontCharWidth(char c, FontMetrics fm,
+                                         boolean useFPAPI)
+    {
+        return getFontCharsWidth(new char[]{c}, 0, 1, fm, useFPAPI);
+    }
+
+    public static float getFontCharsWidth(char[] data, int offset, int len,
+                                          FontMetrics fm,
+                                          boolean useFPAPI)
+    {
+        return len == 0 ? 0 : getFontStringWidth(new String(data, offset, len),
+                                                 fm, useFPAPI);
+    }
+
+    public static float getFontStringWidth(String data, FontMetrics fm,
+                                           boolean useFPAPI)
+    {
+        if (useFPAPI) {
+            Rectangle2D bounds = fm.getFont()
+                    .getStringBounds(data, fm.getFontRenderContext());
+            return (float) bounds.getWidth();
+        } else {
+            return fm.stringWidth(data);
+        }
     }
 
     /*
@@ -863,8 +912,22 @@ public class SwingUtilities2 {
      */
     public static float drawString(JComponent c, Graphics g,
                                    AttributedCharacterIterator iterator,
-                                   int x,
-                                   int y) {
+                                   int x, int y)
+    {
+        return drawStringImpl(c, g, iterator, x, y);
+    }
+
+    public static float drawString(JComponent c, Graphics g,
+                                   AttributedCharacterIterator iterator,
+                                   float x, float y)
+    {
+        return drawStringImpl(c, g, iterator, x, y);
+    }
+
+    private static float drawStringImpl(JComponent c, Graphics g,
+                                   AttributedCharacterIterator iterator,
+                                   float x, float y)
+    {
 
         float retVal;
         boolean isPrinting = isPrinting(g);
@@ -879,8 +942,8 @@ public class SwingUtilities2 {
 
         Graphics2D g2d = getGraphics2D(g);
         if (g2d == null) {
-            g.drawString(iterator,x,y); //for the cases where advance
-                                        //matters it should not happen
+            g.drawString(iterator, (int)x, (int)y); //for the cases where advance
+                                                    //matters it should not happen
             retVal = x;
 
         } else {
@@ -1117,13 +1180,69 @@ public class SwingUtilities2 {
      */
     private static FontRenderContext getFRCProperty(JComponent c) {
         if (c != null) {
-            AATextInfo info =
-                (AATextInfo)c.getClientProperty(AA_TEXT_PROPERTY_KEY);
-            if (info != null) {
-                return info.frc;
-            }
+
+            GraphicsConfiguration gc = c.getGraphicsConfiguration();
+            AffineTransform tx = (gc == null) ? null : gc.getDefaultTransform();
+            Object aaHint = c.getClientProperty(KEY_TEXT_ANTIALIASING);
+            return getFRCFromCache(tx, aaHint);
         }
         return null;
+    }
+
+    private static final Object APP_CONTEXT_FRC_CACHE_KEY = new Object();
+
+    private static FontRenderContext getFRCFromCache(AffineTransform tx,
+                                                     Object aaHint) {
+        if (tx == null && aaHint == null) {
+            return null;
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<Object, FontRenderContext> cache = (Map<Object, FontRenderContext>)
+                AppContext.getAppContext().get(APP_CONTEXT_FRC_CACHE_KEY);
+
+        if (cache == null) {
+            cache = new HashMap<>();
+            AppContext.getAppContext().put(APP_CONTEXT_FRC_CACHE_KEY, cache);
+        }
+
+        Object key = (tx == null)
+                ? aaHint
+                : (aaHint == null ? tx : new KeyPair(tx, aaHint));
+
+        FontRenderContext frc = cache.get(key);
+        if (frc == null) {
+            aaHint = (aaHint == null) ? VALUE_TEXT_ANTIALIAS_OFF : aaHint;
+            frc = new FontRenderContext(tx, aaHint,
+                                        VALUE_FRACTIONALMETRICS_DEFAULT);
+            cache.put(key, frc);
+        }
+        return frc;
+    }
+
+    private static class KeyPair {
+
+        private final Object key1;
+        private final Object key2;
+
+        public KeyPair(Object key1, Object key2) {
+            this.key1 = key1;
+            this.key2 = key2;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (!(obj instanceof KeyPair)) {
+                return false;
+            }
+            KeyPair that = (KeyPair) obj;
+            return this.key1.equals(that.key1) && this.key2.equals(that.key2);
+        }
+
+        @Override
+        public int hashCode() {
+            return key1.hashCode() + 37 * key2.hashCode();
+        }
     }
 
     /*
@@ -1200,9 +1319,9 @@ public class SwingUtilities2 {
 
     /**
      * LSBCacheEntry is used to cache the left side bearing (lsb) for
-     * a particular <code>Font</code> and <code>FontRenderContext</code>.
+     * a particular {@code Font} and {@code FontRenderContext}.
      * This only caches characters that fall in the range
-     * <code>MIN_CHAR_INDEX</code> to <code>MAX_CHAR_INDEX</code>.
+     * {@code MIN_CHAR_INDEX} to {@code MAX_CHAR_INDEX}.
      */
     private static class LSBCacheEntry {
         // Used to indicate a particular entry in lsb has not been set.
@@ -1341,7 +1460,7 @@ public class SwingUtilities2 {
      *
      * @param ie InputEvent to check
      */
-
+    @SuppressWarnings("deprecation")
     private static boolean isAccessClipboardGesture(InputEvent ie) {
         boolean allowedGesture = false;
         if (ie instanceof KeyEvent) { //we can validate only keyboard gestures
@@ -1472,20 +1591,20 @@ public class SwingUtilities2 {
     }
 
     /**
-     * Utility method that creates a <code>UIDefaults.LazyValue</code> that
-     * creates an <code>ImageIcon</code> <code>UIResource</code> for the
+     * Utility method that creates a {@code UIDefaults.LazyValue} that
+     * creates an {@code ImageIcon} {@code UIResource} for the
      * specified image file name. The image is loaded using
-     * <code>getResourceAsStream</code>, starting with a call to that method
+     * {@code getResourceAsStream}, starting with a call to that method
      * on the base class parameter. If it cannot be found, searching will
      * continue through the base class' inheritance hierarchy, up to and
-     * including <code>rootClass</code>.
+     * including {@code rootClass}.
      *
      * @param baseClass the first class to use in searching for the resource
-     * @param rootClass an ancestor of <code>baseClass</code> to finish the
+     * @param rootClass an ancestor of {@code baseClass} to finish the
      *                  search at
      * @param imageFile the name of the file to be found
-     * @return a lazy value that creates the <code>ImageIcon</code>
-     *         <code>UIResource</code> for the image,
+     * @return a lazy value that creates the {@code ImageIcon}
+     *         {@code UIResource} for the image,
      *         or null if it cannot be found
      */
     public static Object makeIcon(final Class<?> baseClass,
@@ -1495,22 +1614,22 @@ public class SwingUtilities2 {
     }
 
     /**
-     * Utility method that creates a <code>UIDefaults.LazyValue</code> that
-     * creates an <code>ImageIcon</code> <code>UIResource</code> for the
+     * Utility method that creates a {@code UIDefaults.LazyValue} that
+     * creates an {@code ImageIcon} {@code UIResource} for the
      * specified image file name. The image is loaded using
-     * <code>getResourceAsStream</code>, starting with a call to that method
+     * {@code getResourceAsStream}, starting with a call to that method
      * on the base class parameter. If it cannot be found, searching will
      * continue through the base class' inheritance hierarchy, up to and
-     * including <code>rootClass</code>.
+     * including {@code rootClass}.
      *
      * Finds an image with a given name without privileges enabled.
      *
      * @param baseClass the first class to use in searching for the resource
-     * @param rootClass an ancestor of <code>baseClass</code> to finish the
+     * @param rootClass an ancestor of {@code baseClass} to finish the
      *                  search at
      * @param imageFile the name of the file to be found
-     * @return a lazy value that creates the <code>ImageIcon</code>
-     *         <code>UIResource</code> for the image,
+     * @return a lazy value that creates the {@code ImageIcon}
+     *         {@code UIResource} for the image,
      *         or null if it cannot be found
      */
     public static Object makeIcon_Unprivileged(final Class<?> baseClass,
@@ -1604,11 +1723,11 @@ public class SwingUtilities2 {
     }
 
     /**
-     * Returns an integer from the defaults table. If <code>key</code> does
-     * not map to a valid <code>Integer</code>, or can not be convered from
-     * a <code>String</code> to an integer, the value 0 is returned.
+     * Returns an integer from the defaults table. If {@code key} does
+     * not map to a valid {@code Integer}, or can not be convered from
+     * a {@code String} to an integer, the value 0 is returned.
      *
-     * @param key  an <code>Object</code> specifying the int.
+     * @param key  an {@code Object} specifying the int.
      * @return the int
      */
     public static int getUIDefaultsInt(Object key) {
@@ -1617,13 +1736,13 @@ public class SwingUtilities2 {
 
     /**
      * Returns an integer from the defaults table that is appropriate
-     * for the given locale. If <code>key</code> does not map to a valid
-     * <code>Integer</code>, or can not be convered from a <code>String</code>
+     * for the given locale. If {@code key} does not map to a valid
+     * {@code Integer}, or can not be convered from a {@code String}
      * to an integer, the value 0 is returned.
      *
-     * @param key  an <code>Object</code> specifying the int. Returned value
-     *             is 0 if <code>key</code> is not available,
-     * @param l the <code>Locale</code> for which the int is desired
+     * @param key  an {@code Object} specifying the int. Returned value
+     *             is 0 if {@code key} is not available,
+     * @param l the {@code Locale} for which the int is desired
      * @return the int
      */
     public static int getUIDefaultsInt(Object key, Locale l) {
@@ -1631,14 +1750,14 @@ public class SwingUtilities2 {
     }
 
     /**
-     * Returns an integer from the defaults table. If <code>key</code> does
-     * not map to a valid <code>Integer</code>, or can not be convered from
-     * a <code>String</code> to an integer, <code>default</code> is
+     * Returns an integer from the defaults table. If {@code key} does
+     * not map to a valid {@code Integer}, or can not be convered from
+     * a {@code String} to an integer, {@code default} is
      * returned.
      *
-     * @param key  an <code>Object</code> specifying the int. Returned value
-     *             is 0 if <code>key</code> is not available,
-     * @param defaultValue Returned value if <code>key</code> is not available,
+     * @param key  an {@code Object} specifying the int. Returned value
+     *             is 0 if {@code key} is not available,
+     * @param defaultValue Returned value if {@code key} is not available,
      *                     or is not an Integer
      * @return the int
      */
@@ -1648,14 +1767,14 @@ public class SwingUtilities2 {
 
     /**
      * Returns an integer from the defaults table that is appropriate
-     * for the given locale. If <code>key</code> does not map to a valid
-     * <code>Integer</code>, or can not be convered from a <code>String</code>
-     * to an integer, <code>default</code> is returned.
+     * for the given locale. If {@code key} does not map to a valid
+     * {@code Integer}, or can not be convered from a {@code String}
+     * to an integer, {@code default} is returned.
      *
-     * @param key  an <code>Object</code> specifying the int. Returned value
-     *             is 0 if <code>key</code> is not available,
-     * @param l the <code>Locale</code> for which the int is desired
-     * @param defaultValue Returned value if <code>key</code> is not available,
+     * @param key  an {@code Object} specifying the int. Returned value
+     *             is 0 if {@code key} is not available,
+     * @param l the {@code Locale} for which the int is desired
+     * @param defaultValue Returned value if {@code key} is not available,
      *                     or is not an Integer
      * @return the int
      */
@@ -1749,7 +1868,7 @@ public class SwingUtilities2 {
      * @param task the task to submit
      * @param result the result to return upon successful completion
      * @return a Future representing pending completion of the task,
-     *         and whose <tt>get()</tt> method will return the given
+     *         and whose {@code get()} method will return the given
      *         result value upon completion
      * @throws NullPointerException if the task is null
      */
@@ -2010,6 +2129,7 @@ public class SwingUtilities2 {
         return -1;
     }
 
+    @SuppressWarnings("deprecation")
     public static int getSystemMnemonicKeyMask() {
         Toolkit toolkit = Toolkit.getDefaultToolkit();
         if (toolkit instanceof SunToolkit) {
@@ -2034,6 +2154,110 @@ public class SwingUtilities2 {
             }
         }
         return path;
+    }
+
+    public static boolean isScaledGraphics(Graphics g) {
+        if (g instanceof Graphics2D) {
+            AffineTransform tx = ((Graphics2D) g).getTransform();
+            return (tx.getType() & ~(TYPE_TRANSLATION | TYPE_FLIP)) != 0;
+        }
+        return false;
+    }
+
+    /**
+     * Enables the antialiasing rendering hint for the scaled graphics and
+     * returns the previous hint value.
+     * The returned null value indicates that the passed graphics is not
+     * instance of Graphics2D.
+     *
+     * @param g the graphics
+     * @return the previous antialiasing rendering hint value if the passed
+     * graphics is instance of Graphics2D, null otherwise.
+     */
+    public static Object getAndSetAntialisingHintForScaledGraphics(Graphics g) {
+        if (isScaledGraphics(g) && isLocalDisplay()) {
+            Graphics2D g2d = (Graphics2D) g;
+            Object hint = g2d.getRenderingHint(RenderingHints.KEY_ANTIALIASING);
+            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                    RenderingHints.VALUE_ANTIALIAS_ON);
+            return hint;
+        }
+        return null;
+    }
+
+    /**
+     * Sets the antialiasing rendering hint if its value is not null.
+     * Null hint value indicates that the passed graphics is not instance of
+     * Graphics2D.
+     *
+     * @param g the graphics
+     * @param hint the antialiasing rendering hint
+     */
+    public static void setAntialiasingHintForScaledGraphics(Graphics g, Object hint) {
+        if (hint != null) {
+            ((Graphics2D) g).setRenderingHint(RenderingHints.KEY_ANTIALIASING, hint);
+        }
+    }
+
+    public static boolean isFloatingPointScale(AffineTransform tx) {
+        int type = tx.getType() & ~(TYPE_FLIP | TYPE_TRANSLATION);
+        if (type == 0) {
+            return false;
+        } else if ((type & ~TYPE_MASK_SCALE) == 0) {
+            double scaleX = tx.getScaleX();
+            double scaleY = tx.getScaleY();
+            return (scaleX != (int) scaleX) || (scaleY != (int) scaleY);
+        } else {
+            return false;
+        }
+    }
+
+    /**
+     * Returns the client property for the given key if it is set; otherwise
+     * returns the {@L&F} property.
+     *
+     * @param component the component
+     * @param key an {@code String} specifying the key for the desired boolean value
+     * @return the boolean value of the client property if it is set or the {@L&F}
+     *         property in other case.
+     */
+    public static boolean getBoolean(JComponent component, String key) {
+        Object clientProperty = component.getClientProperty(key);
+
+        if (clientProperty instanceof Boolean) {
+            return Boolean.TRUE.equals(clientProperty);
+        }
+
+        return UIManager.getBoolean(key);
+    }
+
+    /**
+     *
+     * Returns the graphics configuration which bounds contain the given
+     * point
+     *
+     * @param current the default configuration which is checked in the first place
+     * @param x the x coordinate of the given point
+     * @param y the y coordinate of the given point
+     * @return the graphics configuration
+     */
+    public static GraphicsConfiguration getGraphicsConfigurationAtPoint(GraphicsConfiguration current, double x, double y) {
+
+        if (current.getBounds().contains(x, y)) {
+            return current;
+        }
+
+        GraphicsEnvironment env = GraphicsEnvironment.getLocalGraphicsEnvironment();
+        GraphicsDevice[] devices = env.getScreenDevices();
+
+        for (GraphicsDevice device : devices) {
+            GraphicsConfiguration config = device.getDefaultConfiguration();
+            if (config.getBounds().contains(x, y)) {
+                return config;
+            }
+        }
+
+        return current;
     }
 
     /**

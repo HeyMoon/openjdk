@@ -1,12 +1,10 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -23,10 +21,15 @@
  * questions.
  */
 
-import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
-
+import java.util.List;
+import java.util.stream.Collectors;
 
 public class Wrapper {
     public static void main(String... args) throws Exception {
@@ -38,16 +41,28 @@ public class Wrapper {
         String testClassName = args[0];
         String[] testArgs = Arrays.copyOfRange(args, 1, args.length);
 
-        File srcDir = new File(System.getProperty("test.src"));
-        File clsDir = new File(System.getProperty("test.classes"));
+        Path srcDir = Paths.get(System.getProperty("test.src"));
+        Path clsDir = Paths.get(System.getProperty("test.classes"));
+        String clsPath = System.getProperty("test.class.path");
+        String tstMdls = System.getProperty("test.modules");
 
-        File src = new File(srcDir, testClassName + ".java");
-        File cls = new File(clsDir, testClassName + ".class");
+        Path src = srcDir.resolve(testClassName + ".java");
+        Path cls = clsDir.resolve(testClassName + ".class");
 
-        if (cls.lastModified() < src.lastModified()) {
+        if (isNewer(src, cls)) {
             System.err.println("Recompiling test class...");
-            String[] javacArgs = { "-d", clsDir.getPath(), src.getPath() };
-            int rc = com.sun.tools.javac.Main.compile(javacArgs);
+            List<String> javacArgs = new ArrayList<>();
+            javacArgs.addAll(Arrays.asList("-d", clsDir.toString()));
+            javacArgs.addAll(Arrays.asList("-sourcepath", srcDir.toString()));
+            javacArgs.addAll(Arrays.asList("-classpath", clsPath));
+            Arrays.stream(tstMdls.split("\\s+"))
+                .filter(s -> s.contains("/"))
+                .map(s -> "--add-exports=" + s + "=ALL-UNNAMED")
+                .collect(Collectors.toCollection(() -> javacArgs));
+            javacArgs.add(src.toString());
+            System.out.println("javac: " + javacArgs);
+            int rc = com.sun.tools.javac.Main.compile(
+                javacArgs.toArray(new String[javacArgs.size()]));
             if (rc != 0)
                 throw new Exception("compilation failed");
         }
@@ -55,6 +70,12 @@ public class Wrapper {
         Class<?> sjavac = Class.forName(testClassName);
         Method main = sjavac.getMethod("main", String[].class);
         main.invoke(null, new Object[] { testArgs });
+    }
+
+    private static boolean isNewer(Path a, Path b) throws IOException {
+        if (Files.notExists(b))
+            return true;
+        return Files.getLastModifiedTime(a).compareTo(Files.getLastModifiedTime(b)) > 0;
     }
 
     private static boolean isSJavacOnClassPath() {

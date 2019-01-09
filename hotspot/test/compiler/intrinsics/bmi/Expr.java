@@ -19,14 +19,14 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
+
+package compiler.intrinsics.bmi;
 
 /**
  * Expression that should be replaced by particular instrinsic
  * or intruction during compilation.
  */
-
 public abstract class Expr {
 
     public static class MemI {

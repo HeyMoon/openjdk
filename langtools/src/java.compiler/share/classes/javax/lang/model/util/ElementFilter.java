@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,6 +33,13 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 
 import javax.lang.model.element.*;
+import javax.lang.model.element.ModuleElement.Directive;
+import javax.lang.model.element.ModuleElement.DirectiveKind;
+import javax.lang.model.element.ModuleElement.ExportsDirective;
+import javax.lang.model.element.ModuleElement.OpensDirective;
+import javax.lang.model.element.ModuleElement.ProvidesDirective;
+import javax.lang.model.element.ModuleElement.RequiresDirective;
+import javax.lang.model.element.ModuleElement.UsesDirective;
 
 
 /**
@@ -47,15 +54,6 @@ import javax.lang.model.element.*;
  * <p>If iterables and sets containing {@code null} are passed as
  * arguments to methods in this class, a {@code NullPointerException}
  * will be thrown.
- *
- * <p>Note that a <i>static import</i> statement can make the text of
- * calls to the methods in this class more concise; for example:
- *
- * <blockquote><pre>
- *     import static javax.lang.model.util.ElementFilter.*;
- *     ...
- *         {@code List<VariableElement>} fs = fieldsIn(someClass.getEnclosedElements());
- * </pre></blockquote>
  *
  * @author Joseph D. Darcy
  * @author Scott Seligman
@@ -77,6 +75,9 @@ public class ElementFilter {
 
     private static final Set<ElementKind> PACKAGE_KIND =
         Collections.unmodifiableSet(EnumSet.of(ElementKind.PACKAGE));
+
+    private static final Set<ElementKind> MODULE_KIND =
+        Collections.unmodifiableSet(EnumSet.of(ElementKind.MODULE));
 
     private static final Set<ElementKind> TYPE_KINDS =
         Collections.unmodifiableSet(EnumSet.of(ElementKind.CLASS,
@@ -183,6 +184,30 @@ public class ElementFilter {
         return setFilter(elements, PACKAGE_KIND, PackageElement.class);
     }
 
+    /**
+     * Returns a list of modules in {@code elements}.
+     * @return a list of modules in {@code elements}
+     * @param elements the elements to filter
+     * @since 9
+     * @spec JPMS
+     */
+    public static List<ModuleElement>
+            modulesIn(Iterable<? extends Element> elements) {
+        return listFilter(elements, MODULE_KIND, ModuleElement.class);
+    }
+
+    /**
+     * Returns a set of modules in {@code elements}.
+     * @return a set of modules in {@code elements}
+     * @param elements the elements to filter
+     * @since 9
+     * @spec JPMS
+     */
+    public static Set<ModuleElement>
+            modulesIn(Set<? extends Element> elements) {
+        return setFilter(elements, MODULE_KIND, ModuleElement.class);
+    }
+
     // Assumes targetKinds and E are sensible.
     private static <E extends Element> List<E> listFilter(Iterable<? extends Element> elements,
                                                           Set<ElementKind> targetKinds,
@@ -206,5 +231,76 @@ public class ElementFilter {
                 set.add(clazz.cast(e));
         }
         return set;
+    }
+
+    /**
+     * Returns a list of {@code exports} directives in {@code directives}.
+     * @return a list of {@code exports} directives in {@code directives}
+     * @param directives the directives to filter
+     * @since 9
+     * @spec JPMS
+     */
+    public static List<ExportsDirective>
+            exportsIn(Iterable<? extends Directive> directives) {
+        return listFilter(directives, DirectiveKind.EXPORTS, ExportsDirective.class);
+    }
+
+    /**
+     * Returns a list of {@code opens} directives in {@code directives}.
+     * @return a list of {@code opens} directives in {@code directives}
+     * @param directives the directives to filter
+     * @since 9
+     */
+    public static List<OpensDirective>
+            opensIn(Iterable<? extends Directive> directives) {
+        return listFilter(directives, DirectiveKind.OPENS, OpensDirective.class);
+    }
+
+    /**
+     * Returns a list of {@code provides} directives in {@code directives}.
+     * @return a list of {@code provides} directives in {@code directives}
+     * @param directives the directives to filter
+     * @since 9
+     * @spec JPMS
+     */
+    public static List<ProvidesDirective>
+            providesIn(Iterable<? extends Directive> directives) {
+        return listFilter(directives, DirectiveKind.PROVIDES, ProvidesDirective.class);
+    }
+
+    /**
+     * Returns a list of {@code requires} directives in {@code directives}.
+     * @return a list of {@code requires} directives in {@code directives}
+     * @param directives the directives to filter
+     * @since 9
+     * @spec JPMS
+     */
+    public static List<RequiresDirective>
+            requiresIn(Iterable<? extends Directive> directives) {
+        return listFilter(directives, DirectiveKind.REQUIRES, RequiresDirective.class);
+    }
+
+    /**
+     * Returns a list of {@code uses} directives in {@code directives}.
+     * @return a list of {@code uses} directives in {@code directives}
+     * @param directives the directives to filter
+     * @since 9
+     * @spec JPMS
+     */
+    public static List<UsesDirective>
+            usesIn(Iterable<? extends Directive> directives) {
+        return listFilter(directives, DirectiveKind.USES, UsesDirective.class);
+    }
+
+    // Assumes directiveKind and D are sensible.
+    private static <D extends Directive> List<D> listFilter(Iterable<? extends Directive> directives,
+                                                          DirectiveKind directiveKind,
+                                                          Class<D> clazz) {
+        List<D> list = new ArrayList<>();
+        for (Directive d : directives) {
+            if (d.getKind() == directiveKind)
+                list.add(clazz.cast(d));
+        }
+        return list;
     }
 }

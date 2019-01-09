@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,16 +27,13 @@
 #include "gc/shared/collectedHeap.inline.hpp"
 #include "gc/shared/genCollectedHeap.hpp"
 #include "memory/resourceArea.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/init.hpp"
 #include "runtime/interfaceSupport.hpp"
 #include "runtime/orderAccess.inline.hpp"
 #include "runtime/os.inline.hpp"
-#include "runtime/threadLocalStorage.hpp"
 #include "runtime/vframe.hpp"
 #include "utilities/preserveException.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 // Implementation of InterfaceSupport
 
@@ -72,10 +69,6 @@ RuntimeHistogramElement::RuntimeHistogramElement(const char* elementName) {
   Atomic::dec(&RuntimeHistogram_lock);
 }
 
-void InterfaceSupport::trace(const char* result_type, const char* header) {
-  tty->print_cr("%6d  %s", _number_of_calls, header);
-}
-
 void InterfaceSupport::gc_alot() {
   Thread *thread = Thread::current();
   if (!thread->is_Java_thread()) return; // Avoid concurrent calls
@@ -108,16 +101,13 @@ void InterfaceSupport::gc_alot() {
       // Compute new interval
       if (FullGCALotInterval > 1) {
         _fullgc_alot_counter = 1+(long)((double)FullGCALotInterval*os::random()/(max_jint+1.0));
-        if (PrintGCDetails && Verbose) {
-          tty->print_cr("Full gc no: %u\tInterval: %d", invocations,
-                        _fullgc_alot_counter);
-        }
+        log_trace(gc)("Full gc no: %u\tInterval: %ld", invocations, _fullgc_alot_counter);
       } else {
         _fullgc_alot_counter = 1;
       }
       // Print progress message
       if (invocations % 100 == 0) {
-        if (PrintGCDetails && Verbose) tty->print_cr("Full gc no: %u", invocations);
+        log_trace(gc)("Full gc no: %u", invocations);
       }
     } else {
       if (ScavengeALot) _scavenge_alot_counter--;
@@ -129,16 +119,13 @@ void InterfaceSupport::gc_alot() {
         // Compute new interval
         if (ScavengeALotInterval > 1) {
           _scavenge_alot_counter = 1+(long)((double)ScavengeALotInterval*os::random()/(max_jint+1.0));
-          if (PrintGCDetails && Verbose) {
-            tty->print_cr("Scavenge no: %u\tInterval: %d", invocations,
-                          _scavenge_alot_counter);
-          }
+          log_trace(gc)("Scavenge no: %u\tInterval: %ld", invocations, _scavenge_alot_counter);
         } else {
           _scavenge_alot_counter = 1;
         }
         // Print progress message
         if (invocations % 1000 == 0) {
-          if (PrintGCDetails && Verbose) tty->print_cr("Scavenge no: %u", invocations);
+          log_trace(gc)("Scavenge no: %u", invocations);
         }
       }
     }
@@ -166,25 +153,6 @@ void InterfaceSupport::walk_stack() {
   RegisterMap reg_map(thread);
   walk_stack_from(thread->last_java_vframe(&reg_map));
 }
-
-
-# ifdef ENABLE_ZAP_DEAD_LOCALS
-
-static int zap_traversals = 0;
-
-void InterfaceSupport::zap_dead_locals_old() {
-  JavaThread* thread = JavaThread::current();
-  if (zap_traversals == -1) // edit constant for debugging
-    warning("I am here");
-  int zap_frame_count = 0; // count frames to help debugging
-  for (StackFrameStream sfs(thread); !sfs.is_done(); sfs.next()) {
-    sfs.current()->zap_dead_locals(thread, sfs.register_map());
-    ++zap_frame_count;
-  }
-  ++zap_traversals;
-}
-
-# endif
 
 // invocation counter for InterfaceSupport::deoptimizeAll/zombieAll functions
 int deoptimizeAllCounter = 0;

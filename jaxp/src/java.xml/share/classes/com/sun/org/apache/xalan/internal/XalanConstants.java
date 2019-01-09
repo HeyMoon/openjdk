@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -80,6 +80,14 @@ public final class XalanConstants {
      */
     public static final String JDK_GENERAL_ENTITY_SIZE_LIMIT =
             ORACLE_JAXP_PROPERTY_PREFIX + "maxGeneralEntitySizeLimit";
+
+    /**
+     * JDK node count limit in entities that limits the total number of nodes
+     * in all of entity references.
+     */
+    public static final String JDK_ENTITY_REPLACEMENT_LIMIT =
+            ORACLE_JAXP_PROPERTY_PREFIX + "entityReplacementLimit";
+
     /**
      * JDK maximum parameter entity size limit
      */
@@ -136,6 +144,13 @@ public final class XalanConstants {
      * JDK maximum general entity size limit
      */
     public static final String SP_GENERAL_ENTITY_SIZE_LIMIT = "jdk.xml.maxGeneralEntitySizeLimit";
+
+    /**
+     * JDK node count limit in entities that limits the total number of nodes
+     * in all of entity references.
+     */
+    public static final String SP_ENTITY_REPLACEMENT_LIMIT = "jdk.xml.entityReplacementLimit";
+
     /**
      * JDK maximum parameter entity size limit
      */
@@ -208,12 +223,6 @@ public final class XalanConstants {
     public static final String XML_SECURITY_PROPERTY_MANAGER =
             ORACLE_JAXP_PROPERTY_PREFIX + "xmlSecurityPropertyManager";
 
-    /**
-     * Feature enableExtensionFunctions
-     */
-    public static final String ORACLE_ENABLE_EXTENSION_FUNCTION =
-            ORACLE_JAXP_PROPERTY_PREFIX + "enableExtensionFunctions";
-    public static final String SP_ORACLE_ENABLE_EXTENSION_FUNCTION = "javax.xml.enableExtensionFunctions";
 
     /**
      * Values for a feature
@@ -221,30 +230,4 @@ public final class XalanConstants {
     public static final String FEATURE_TRUE = "true";
     public static final String FEATURE_FALSE = "false";
 
-    /**
-     * Check if we're in jdk8 or above
-     */
-    public static final boolean IS_JDK8_OR_ABOVE = isJavaVersionAtLeast(8);
-
-    /*
-     * Check the version of the current JDK against that specified in the
-     * parameter
-     *
-     * There is a proposal to change the java version string to:
-     * MAJOR.MINOR.FU.CPU.PSU-BUILDNUMBER_BUGIDNUMBER_OPTIONAL
-     * This method would work with both the current format and that proposed
-     *
-     * @param compareTo a JDK version to be compared to
-     * @return true if the current version is the same or above that represented
-     * by the parameter
-     */
-    public static boolean isJavaVersionAtLeast(int compareTo) {
-        String javaVersion = SecuritySupport.getSystemProperty("java.version");
-        String versions[] = javaVersion.split("\\.", 3);
-        if (Integer.parseInt(versions[0]) >= compareTo ||
-            Integer.parseInt(versions[1]) >= compareTo) {
-            return true;
-        }
-        return false;
-    }
 } // class Constants

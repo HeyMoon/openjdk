@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1994, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1994, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,6 @@
 package java.io;
 
 import java.nio.channels.FileChannel;
-import java.util.concurrent.atomic.AtomicBoolean;
 import sun.nio.ch.FileChannelImpl;
 
 
@@ -60,7 +59,9 @@ class FileInputStream extends InputStream
 
     private volatile FileChannel channel;
 
-    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final Object closeLock = new Object();
+
+    private volatile boolean closed;
 
     /**
      * Creates a <code>FileInputStream</code> by
@@ -279,7 +280,11 @@ class FileInputStream extends InputStream
      * @exception  IOException  if n is negative, if the stream does not
      *             support seek, or if an I/O error occurs.
      */
-    public native long skip(long n) throws IOException;
+    public long skip(long n) throws IOException {
+        return skip0(n);
+    }
+
+    private native long skip0(long n) throws IOException;
 
     /**
      * Returns an estimate of the number of remaining bytes that can be read (or
@@ -298,7 +303,11 @@ class FileInputStream extends InputStream
      * @exception  IOException  if this file input stream has been closed by calling
      *             {@code close} or an I/O error occurs.
      */
-    public native int available() throws IOException;
+    public int available() throws IOException {
+        return available0();
+    }
+
+    private native int available0() throws IOException;
 
     /**
      * Closes this file input stream and releases any system resources
@@ -313,14 +322,21 @@ class FileInputStream extends InputStream
      * @spec JSR-51
      */
     public void close() throws IOException {
-        if (!closed.compareAndSet(false, true)) {
-            // if compareAndSet() returns false closed was already true
+        if (closed) {
             return;
+        }
+        synchronized (closeLock) {
+            if (closed) {
+                return;
+            }
+            closed = true;
         }
 
         FileChannel fc = channel;
         if (fc != null) {
-           fc.close();
+            // possible race with getChannel(), benign since
+            // FileChannel.close is final and idempotent
+            fc.close();
         }
 
         fd.closeAll(new Closeable() {
@@ -370,8 +386,10 @@ class FileInputStream extends InputStream
                 fc = this.channel;
                 if (fc == null) {
                     this.channel = fc = FileChannelImpl.open(fd, path, true, false, this);
-                    if (closed.get()) {
+                    if (closed) {
                         try {
+                            // possible race with close(), benign since
+                            // FileChannel.close is final and idempotent
                             fc.close();
                         } catch (IOException ioe) {
                             throw new InternalError(ioe); // should not happen
@@ -395,9 +413,19 @@ class FileInputStream extends InputStream
      * Ensures that the <code>close</code> method of this file input stream is
      * called when there are no more references to it.
      *
+     * @deprecated The {@code finalize} method has been deprecated.
+     *     Subclasses that override {@code finalize} in order to perform cleanup
+     *     should be modified to use alternative cleanup mechanisms and
+     *     to remove the overriding {@code finalize} method.
+     *     When overriding the {@code finalize} method, its implementation must explicitly
+     *     ensure that {@code super.finalize()} is invoked as described in {@link Object#finalize}.
+     *     See the specification for {@link Object#finalize()} for further
+     *     information about migration options.
+     *
      * @exception  IOException  if an I/O error occurs.
      * @see        java.io.FileInputStream#close()
      */
+    @Deprecated(since="9")
     protected void finalize() throws IOException {
         if ((fd != null) &&  (fd != FileDescriptor.in)) {
             /* if fd is shared, the references in FileDescriptor

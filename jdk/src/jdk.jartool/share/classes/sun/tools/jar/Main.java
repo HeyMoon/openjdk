@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,43 +26,116 @@
 package sun.tools.jar;
 
 import java.io.*;
+import java.lang.module.Configuration;
+import java.lang.module.FindException;
+import java.lang.module.InvalidModuleDescriptorException;
+import java.lang.module.ModuleDescriptor;
+import java.lang.module.ModuleDescriptor.Exports;
+import java.lang.module.ModuleDescriptor.Provides;
+import java.lang.module.ModuleDescriptor.Opens;
+import java.lang.module.ModuleDescriptor.Requires;
+import java.lang.module.ModuleDescriptor.Version;
+import java.lang.module.ModuleFinder;
+import java.lang.module.ModuleReader;
+import java.lang.module.ModuleReference;
+import java.lang.module.ResolutionException;
+import java.lang.module.ResolvedModule;
+import java.net.URI;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import java.util.zip.*;
 import java.util.jar.*;
 import java.util.jar.Pack200.*;
 import java.util.jar.Manifest;
 import java.text.MessageFormat;
-import sun.misc.JarIndex;
-import static sun.misc.JarIndex.INDEX_NAME;
+
+import jdk.internal.module.Checks;
+import jdk.internal.module.ModuleHashes;
+import jdk.internal.module.ModuleHashesBuilder;
+import jdk.internal.module.ModuleInfo;
+import jdk.internal.module.ModuleInfoExtender;
+import jdk.internal.module.ModuleResolution;
+import jdk.internal.module.ModuleTarget;
+import jdk.internal.util.jar.JarIndex;
+
+import static jdk.internal.util.jar.JarIndex.INDEX_NAME;
 import static java.util.jar.JarFile.MANIFEST_NAME;
+import static java.util.stream.Collectors.joining;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+import static sun.tools.jar.Validator.ENTRYNAME_COMPARATOR;
 
 /**
  * This class implements a simple utility for creating files in the JAR
  * (Java Archive) file format. The JAR format is based on the ZIP file
  * format, with optional meta-information stored in a MANIFEST entry.
  */
-public
-class Main {
+public class Main {
     String program;
-    PrintStream out, err;
+    PrintWriter out, err;
     String fname, mname, ename;
     String zname = "";
-    String[] files;
     String rootjar = null;
 
-    // An entryName(path)->File map generated during "expand", it helps to
+    private static final int BASE_VERSION = 0;
+
+    private static class Entry {
+        final String name;
+        final File file;
+        final boolean isDir;
+
+        Entry(File file, String name, boolean isDir) {
+            this.file = file;
+            this.isDir = isDir;
+            this.name = name;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof Entry)) return false;
+            return this.file.equals(((Entry)o).file);
+        }
+
+        @Override
+        public int hashCode() {
+            return file.hashCode();
+        }
+    }
+
+    // An entryName(path)->Entry map generated during "expand", it helps to
     // decide whether or not an existing entry in a jar file needs to be
     // replaced, during the "update" operation.
-    Map<String, File> entryMap = new HashMap<String, File>();
+    Map<String, Entry> entryMap = new HashMap<>();
 
-    // All files need to be added/updated.
-    Set<File> entries = new LinkedHashSet<File>();
+    // All entries need to be added/updated.
+    Set<Entry> entries = new LinkedHashSet<>();
 
-    // Directories specified by "-C" operation.
-    Set<String> paths = new HashSet<String>();
+    // module-info.class entries need to be added/updated.
+    Map<String,byte[]> moduleInfos = new HashMap<>();
+
+    // A paths Set for each version, where each Set contains directories
+    // specified by the "-C" operation.
+    Map<Integer,Set<String>> pathsMap = new HashMap<>();
+
+    // There's also a files array per version
+    Map<Integer,String[]> filesMap = new HashMap<>();
+
+    // Do we think this is a multi-release jar?  Set to true
+    // if --release option found followed by at least file
+    boolean isMultiRelease;
+
+    // The last parsed --release value, if any. Used in conjunction with
+    // "-d,--describe-module" to select the operative module descriptor.
+    int releaseValue = -1;
 
     /*
      * cflag: create
@@ -75,12 +148,24 @@ class Main {
      * iflag: generate jar index
      * nflag: Perform jar normalization at the end
      * pflag: preserve/don't strip leading slash and .. component from file name
+     * dflag: print module descriptor
      */
-    boolean cflag, uflag, xflag, tflag, vflag, flag0, Mflag, iflag, nflag, pflag;
+    boolean cflag, uflag, xflag, tflag, vflag, flag0, Mflag, iflag, nflag, pflag, dflag;
 
+    /* To support additional GNU Style informational options */
+    Consumer<PrintWriter> info;
+
+    /* Modular jar related options */
+    Version moduleVersion;
+    Pattern modulesToHash;
+    ModuleResolution moduleResolution = ModuleResolution.empty();
+    ModuleFinder moduleFinder = ModuleFinder.of();
+
+    static final String MODULE_INFO = "module-info.class";
     static final String MANIFEST_DIR = "META-INF/";
+    static final String VERSIONS_DIR = MANIFEST_DIR + "versions/";
     static final String VERSION = "1.0";
-
+    static final int VERSIONS_DIR_LENGTH = VERSIONS_DIR.length();
     private static ResourceBundle rsrc;
 
     /**
@@ -102,7 +187,7 @@ class Main {
         }
     }
 
-    private String getMsg(String key) {
+    static String getMsg(String key) {
         try {
             return (rsrc.getString(key));
         } catch (MissingResourceException e) {
@@ -110,14 +195,14 @@ class Main {
         }
     }
 
-    private String formatMsg(String key, String arg) {
+    static String formatMsg(String key, String arg) {
         String msg = getMsg(key);
         String[] args = new String[1];
         args[0] = arg;
         return MessageFormat.format(msg, (Object[]) args);
     }
 
-    private String formatMsg2(String key, String arg, String arg1) {
+    static String formatMsg2(String key, String arg, String arg1) {
         String msg = getMsg(key);
         String[] args = new String[2];
         args[0] = arg;
@@ -126,6 +211,12 @@ class Main {
     }
 
     public Main(PrintStream out, PrintStream err, String program) {
+        this.out = new PrintWriter(out, true);
+        this.err = new PrintWriter(err, true);
+        this.program = program;
+    }
+
+    public Main(PrintWriter out, PrintWriter err, String program) {
         this.out = out;
         this.err = err;
         this.program = program;
@@ -153,6 +244,7 @@ class Main {
         if (!parseArgs(args)) {
             return false;
         }
+        File tmpFile = null;
         try {
             if (cflag || uflag) {
                 if (fname != null) {
@@ -167,130 +259,117 @@ class Main {
             }
             if (cflag) {
                 Manifest manifest = null;
-                InputStream in = null;
-
                 if (!Mflag) {
                     if (mname != null) {
-                        in = new FileInputStream(mname);
-                        manifest = new Manifest(new BufferedInputStream(in));
+                        try (InputStream in = new FileInputStream(mname)) {
+                            manifest = new Manifest(new BufferedInputStream(in));
+                        }
                     } else {
                         manifest = new Manifest();
                     }
                     addVersion(manifest);
                     addCreatedBy(manifest);
                     if (isAmbiguousMainClass(manifest)) {
-                        if (in != null) {
-                            in.close();
-                        }
                         return false;
                     }
                     if (ename != null) {
                         addMainClass(manifest, ename);
                     }
-                }
-                expand(null, files, false);
-                OutputStream out;
-                if (fname != null) {
-                    out = new FileOutputStream(fname);
-                } else {
-                    out = new FileOutputStream(FileDescriptor.out);
-                    if (vflag) {
-                        // Disable verbose output so that it does not appear
-                        // on stdout along with file data
-                        // error("Warning: -v option ignored");
-                        vflag = false;
+                    if (isMultiRelease) {
+                        addMultiRelease(manifest);
                     }
                 }
-                File tmpfile = null;
-                final OutputStream finalout = out;
+                expand();
+                if (!moduleInfos.isEmpty()) {
+                    // All actual file entries (excl manifest and module-info.class)
+                    Set<String> jentries = new HashSet<>();
+                    // all packages if it's a class or resource
+                    Set<String> packages = new HashSet<>();
+                    entries.stream()
+                           .filter(e -> !e.isDir)
+                           .forEach( e -> {
+                               addPackageIfNamed(packages, e.name);
+                               jentries.add(e.name);
+                    });
+                    addExtendedModuleAttributes(moduleInfos, packages);
+
+                    // Basic consistency checks for modular jars.
+                    if (!checkModuleInfo(moduleInfos.get(MODULE_INFO), jentries))
+                        return false;
+
+                } else if (moduleVersion != null || modulesToHash != null) {
+                    error(getMsg("error.module.options.without.info"));
+                    return false;
+                }
+                if (vflag && fname == null) {
+                    // Disable verbose output so that it does not appear
+                    // on stdout along with file data
+                    // error("Warning: -v option ignored");
+                    vflag = false;
+                }
                 final String tmpbase = (fname == null)
                         ? "tmpjar"
                         : fname.substring(fname.indexOf(File.separatorChar) + 1);
-                if (nflag) {
-                    tmpfile = createTemporaryFile(tmpbase, ".jar");
-                    out = new FileOutputStream(tmpfile);
+
+                tmpFile = createTemporaryFile(tmpbase, ".jar");
+                try (OutputStream out = new FileOutputStream(tmpFile)) {
+                    create(new BufferedOutputStream(out, 4096), manifest);
                 }
-                create(new BufferedOutputStream(out, 4096), manifest);
-                if (in != null) {
-                    in.close();
-                }
-                out.close();
                 if (nflag) {
-                    JarFile jarFile = null;
-                    File packFile = null;
-                    JarOutputStream jos = null;
+                    File packFile = createTemporaryFile(tmpbase, ".pack");
                     try {
                         Packer packer = Pack200.newPacker();
                         Map<String, String> p = packer.properties();
                         p.put(Packer.EFFORT, "1"); // Minimal effort to conserve CPU
-                        jarFile = new JarFile(tmpfile.getCanonicalPath());
-                        packFile = createTemporaryFile(tmpbase, ".pack");
-                        out = new FileOutputStream(packFile);
-                        packer.pack(jarFile, out);
-                        jos = new JarOutputStream(finalout);
-                        Unpacker unpacker = Pack200.newUnpacker();
-                        unpacker.unpack(packFile, jos);
-                    } catch (IOException ioe) {
-                        fatalError(ioe);
+                        try (JarFile jarFile = new JarFile(tmpFile.getCanonicalPath());
+                             OutputStream pack = new FileOutputStream(packFile))
+                        {
+                            packer.pack(jarFile, pack);
+                        }
+                        if (tmpFile.exists()) {
+                            tmpFile.delete();
+                        }
+                        tmpFile = createTemporaryFile(tmpbase, ".jar");
+                        try (OutputStream out = new FileOutputStream(tmpFile);
+                             JarOutputStream jos = new JarOutputStream(out))
+                        {
+                            Unpacker unpacker = Pack200.newUnpacker();
+                            unpacker.unpack(packFile, jos);
+                        }
                     } finally {
-                        if (jarFile != null) {
-                            jarFile.close();
-                        }
-                        if (out != null) {
-                            out.close();
-                        }
-                        if (jos != null) {
-                            jos.close();
-                        }
-                        if (tmpfile != null && tmpfile.exists()) {
-                            tmpfile.delete();
-                        }
-                        if (packFile != null && packFile.exists()) {
-                            packFile.delete();
-                        }
+                        Files.deleteIfExists(packFile.toPath());
                     }
                 }
+                validateAndClose(tmpFile);
             } else if (uflag) {
-                File inputFile = null, tmpFile = null;
-                FileInputStream in;
-                FileOutputStream out;
+                File inputFile = null;
                 if (fname != null) {
                     inputFile = new File(fname);
                     tmpFile = createTempFileInSameDirectoryAs(inputFile);
-                    in = new FileInputStream(inputFile);
-                    out = new FileOutputStream(tmpFile);
                 } else {
-                    in = new FileInputStream(FileDescriptor.in);
-                    out = new FileOutputStream(FileDescriptor.out);
                     vflag = false;
+                    tmpFile = createTemporaryFile("tmpjar", ".jar");
                 }
-                InputStream manifest = (!Mflag && (mname != null)) ?
-                    (new FileInputStream(mname)) : null;
-                expand(null, files, true);
-                boolean updateOk = update(in, new BufferedOutputStream(out),
-                                          manifest, null);
-                if (ok) {
-                    ok = updateOk;
-                }
-                in.close();
-                out.close();
-                if (manifest != null) {
-                    manifest.close();
-                }
-                if (ok && fname != null) {
-                    // on Win32, we need this delete
-                    inputFile.delete();
-                    if (!tmpFile.renameTo(inputFile)) {
-                        tmpFile.delete();
-                        throw new IOException(getMsg("error.write.file"));
+                expand();
+                try (FileInputStream in = (fname != null) ? new FileInputStream(inputFile)
+                        : new FileInputStream(FileDescriptor.in);
+                     FileOutputStream out = new FileOutputStream(tmpFile);
+                     InputStream manifest = (!Mflag && (mname != null)) ?
+                            (new FileInputStream(mname)) : null;
+                ) {
+                    boolean updateOk = update(in, new BufferedOutputStream(out),
+                        manifest, moduleInfos, null);
+                    if (ok) {
+                        ok = updateOk;
                     }
-                    tmpFile.delete();
                 }
+                validateAndClose(tmpFile);
             } else if (tflag) {
-                replaceFSC(files);
+                replaceFSC(filesMap);
                 // For the "list table contents" action, access using the
                 // ZipFile class is always most efficient since only a
                 // "one-finger" scan through the central directory is required.
+                String[] files = filesMapToFiles(filesMap);
                 if (fname != null) {
                     list(fname, files);
                 } else {
@@ -302,7 +381,7 @@ class Main {
                     }
                 }
             } else if (xflag) {
-                replaceFSC(files);
+                replaceFSC(filesMap);
                 // For the extract action, when extracting all the entries,
                 // access using the ZipInputStream class is most efficient,
                 // since only a single sequential scan through the zip file is
@@ -312,6 +391,8 @@ class Main {
                 // "leading garbage", we fall back from the ZipInputStream
                 // implementation to the ZipFile implementation, since only the
                 // latter can handle it.
+
+                String[] files = filesMapToFiles(filesMap);
                 if (fname != null && files != null) {
                     extract(fname, files);
                 } else {
@@ -327,7 +408,21 @@ class Main {
                     }
                 }
             } else if (iflag) {
+                String[] files = filesMap.get(BASE_VERSION);  // base entries only, can be null
                 genIndex(rootjar, files);
+            } else if (dflag) {
+                boolean found;
+                if (fname != null) {
+                    try (ZipFile zf = new ZipFile(fname)) {
+                        found = describeModule(zf);
+                    }
+                } else {
+                    try (FileInputStream fin = new FileInputStream(FileDescriptor.in)) {
+                        found = describeModuleFromStream(fin);
+                    }
+                }
+                if (!found)
+                    error(getMsg("error.module.descriptor.not.found"));
             }
         } catch (IOException e) {
             fatalError(e);
@@ -338,10 +433,53 @@ class Main {
         } catch (Throwable t) {
             t.printStackTrace();
             ok = false;
+        } finally {
+            if (tmpFile != null && tmpFile.exists())
+                tmpFile.delete();
         }
         out.flush();
         err.flush();
         return ok;
+    }
+
+    private void validateAndClose(File tmpfile) throws IOException {
+        if (ok && isMultiRelease) {
+            try (JarFile jf = new JarFile(tmpfile)) {
+                ok = Validator.validate(this, jf);
+                if (!ok) {
+                    error(formatMsg("error.validator.jarfile.invalid", fname));
+                }
+            } catch (IOException e) {
+                error(formatMsg2("error.validator.jarfile.exception", fname, e.getMessage()));
+            }
+        }
+        Path path = tmpfile.toPath();
+        try {
+            if (ok) {
+                if (fname != null) {
+                    Files.move(path, Paths.get(fname), StandardCopyOption.REPLACE_EXISTING);
+                } else {
+                    Files.copy(path, new FileOutputStream(FileDescriptor.out));
+                }
+            }
+        } finally {
+            Files.deleteIfExists(path);
+        }
+    }
+
+    private String[] filesMapToFiles(Map<Integer,String[]> filesMap) {
+        if (filesMap.isEmpty()) return null;
+        return filesMap.entrySet()
+                .stream()
+                .flatMap(this::filesToEntryNames)
+                .toArray(String[]::new);
+    }
+
+    Stream<String> filesToEntryNames(Map.Entry<Integer,String[]> fileEntries) {
+        int version = fileEntries.getKey();
+        Set<String> cpaths = pathsMap.get(version);
+        return Stream.of(fileEntries.getValue())
+            .map(f -> toVersionedName(toEntryName(f, cpaths, false), version));
     }
 
     /**
@@ -362,96 +500,128 @@ class Main {
         int count = 1;
         try {
             String flags = args[0];
-            if (flags.startsWith("-")) {
-                flags = flags.substring(1);
-            }
-            for (int i = 0; i < flags.length(); i++) {
-                switch (flags.charAt(i)) {
-                case 'c':
-                    if (xflag || tflag || uflag || iflag) {
-                        usageError();
+
+            // Note: flags.length == 2 can be treated as the short version of
+            // the GNU option since the there cannot be any other options,
+            // excluding -C, as per the old way.
+            if (flags.startsWith("--") ||
+                (flags.startsWith("-") && flags.length() == 2)) {
+                try {
+                    count = GNUStyleOptions.parseOptions(this, args);
+                } catch (GNUStyleOptions.BadArgs x) {
+                    if (info == null) {
+                        if (x.showUsage) {
+                            usageError(x.getMessage());
+                        } else {
+                            error(x.getMessage());
+                        }
                         return false;
                     }
-                    cflag = true;
-                    break;
-                case 'u':
-                    if (cflag || xflag || tflag || iflag) {
-                        usageError();
-                        return false;
+                }
+                if (info != null) {
+                    info.accept(out);
+                    return true;
+                }
+            } else {
+                // Legacy/compatibility options
+                if (flags.startsWith("-")) {
+                    flags = flags.substring(1);
+                }
+                for (int i = 0; i < flags.length(); i++) {
+                    switch (flags.charAt(i)) {
+                        case 'c':
+                            if (xflag || tflag || uflag || iflag) {
+                                usageError(getMsg("error.multiple.main.operations"));
+                                return false;
+                            }
+                            cflag = true;
+                            break;
+                        case 'u':
+                            if (cflag || xflag || tflag || iflag) {
+                                usageError(getMsg("error.multiple.main.operations"));
+                                return false;
+                            }
+                            uflag = true;
+                            break;
+                        case 'x':
+                            if (cflag || uflag || tflag || iflag) {
+                                usageError(getMsg("error.multiple.main.operations"));
+                                return false;
+                            }
+                            xflag = true;
+                            break;
+                        case 't':
+                            if (cflag || uflag || xflag || iflag) {
+                                usageError(getMsg("error.multiple.main.operations"));
+                                return false;
+                            }
+                            tflag = true;
+                            break;
+                        case 'M':
+                            Mflag = true;
+                            break;
+                        case 'v':
+                            vflag = true;
+                            break;
+                        case 'f':
+                            fname = args[count++];
+                            break;
+                        case 'm':
+                            mname = args[count++];
+                            break;
+                        case '0':
+                            flag0 = true;
+                            break;
+                        case 'i':
+                            if (cflag || uflag || xflag || tflag) {
+                                usageError(getMsg("error.multiple.main.operations"));
+                                return false;
+                            }
+                            // do not increase the counter, files will contain rootjar
+                            rootjar = args[count++];
+                            iflag = true;
+                            break;
+                        case 'n':
+                            nflag = true;
+                            break;
+                        case 'e':
+                            ename = args[count++];
+                            break;
+                        case 'P':
+                            pflag = true;
+                            break;
+                        default:
+                            usageError(formatMsg("error.illegal.option",
+                                       String.valueOf(flags.charAt(i))));
+                            return false;
                     }
-                    uflag = true;
-                    break;
-                case 'x':
-                    if (cflag || uflag || tflag || iflag) {
-                        usageError();
-                        return false;
-                    }
-                    xflag = true;
-                    break;
-                case 't':
-                    if (cflag || uflag || xflag || iflag) {
-                        usageError();
-                        return false;
-                    }
-                    tflag = true;
-                    break;
-                case 'M':
-                    Mflag = true;
-                    break;
-                case 'v':
-                    vflag = true;
-                    break;
-                case 'f':
-                    fname = args[count++];
-                    break;
-                case 'm':
-                    mname = args[count++];
-                    break;
-                case '0':
-                    flag0 = true;
-                    break;
-                case 'i':
-                    if (cflag || uflag || xflag || tflag) {
-                        usageError();
-                        return false;
-                    }
-                    // do not increase the counter, files will contain rootjar
-                    rootjar = args[count++];
-                    iflag = true;
-                    break;
-                case 'n':
-                    nflag = true;
-                    break;
-                case 'e':
-                     ename = args[count++];
-                     break;
-                case 'P':
-                     pflag = true;
-                     break;
-                default:
-                    error(formatMsg("error.illegal.option",
-                                String.valueOf(flags.charAt(i))));
-                    usageError();
-                    return false;
                 }
             }
         } catch (ArrayIndexOutOfBoundsException e) {
-            usageError();
+            usageError(getMsg("main.usage.summary"));
             return false;
         }
-        if (!cflag && !tflag && !xflag && !uflag && !iflag) {
-            error(getMsg("error.bad.option"));
-            usageError();
+        if (!cflag && !tflag && !xflag && !uflag && !iflag && !dflag) {
+            usageError(getMsg("error.bad.option"));
             return false;
         }
+
         /* parse file arguments */
         int n = args.length - count;
         if (n > 0) {
+            int version = BASE_VERSION;
             int k = 0;
             String[] nameBuf = new String[n];
+            pathsMap.put(version, new HashSet<>());
             try {
                 for (int i = count; i < args.length; i++) {
                     if (args[i].equals("-C")) {
+                        if (dflag) {
+                            // "--describe-module/-d" does not require file argument(s),
+                            // but does accept --release
+                            usageError(getMsg("error.bad.dflag"));
+                            return false;
+                        }
                         /* change the directory */
                         String dir = args[++i];
                         dir = (dir.endsWith(File.separator) ?
@@ -460,64 +630,203 @@ class Main {
                         while (dir.indexOf("//") > -1) {
                             dir = dir.replace("//", "/");
                         }
-                        paths.add(dir.replace(File.separatorChar, '/'));
+                        pathsMap.get(version).add(dir.replace(File.separatorChar, '/'));
                         nameBuf[k++] = dir + args[++i];
+                    } else if (args[i].startsWith("--release")) {
+                        int v = BASE_VERSION;
+                        try {
+                            v = Integer.valueOf(args[++i]);
+                        } catch (NumberFormatException x) {
+                            error(formatMsg("error.release.value.notnumber", args[i]));
+                            // this will fall into the next error, thus returning false
+                        }
+                        if (v < 9) {
+                            usageError(formatMsg("error.release.value.toosmall", String.valueOf(v)));
+                            return false;
+                        }
+                        // associate the files, if any, with the previous version number
+                        if (k > 0) {
+                            String[] files = new String[k];
+                            System.arraycopy(nameBuf, 0, files, 0, k);
+                            filesMap.put(version, files);
+                            isMultiRelease = version > BASE_VERSION;
+                        }
+                        // reset the counters and start with the new version number
+                        k = 0;
+                        nameBuf = new String[n];
+                        version = v;
+                        releaseValue = version;
+                        pathsMap.put(version, new HashSet<>());
                     } else {
+                        if (dflag) {
+                            // "--describe-module/-d" does not require file argument(s),
+                            // but does accept --release
+                            usageError(getMsg("error.bad.dflag"));
+                            return false;
+                        }
                         nameBuf[k++] = args[i];
                     }
                 }
             } catch (ArrayIndexOutOfBoundsException e) {
-                usageError();
+                usageError(getMsg("error.bad.file.arg"));
                 return false;
             }
-            files = new String[k];
-            System.arraycopy(nameBuf, 0, files, 0, k);
+            // associate remaining files, if any, with a version
+            if (k > 0) {
+                String[] files = new String[k];
+                System.arraycopy(nameBuf, 0, files, 0, k);
+                filesMap.put(version, files);
+                isMultiRelease = version > BASE_VERSION;
+            }
         } else if (cflag && (mname == null)) {
-            error(getMsg("error.bad.cflag"));
-            usageError();
+            usageError(getMsg("error.bad.cflag"));
             return false;
         } else if (uflag) {
             if ((mname != null) || (ename != null)) {
                 /* just want to update the manifest */
                 return true;
             } else {
-                error(getMsg("error.bad.uflag"));
-                usageError();
+                usageError(getMsg("error.bad.uflag"));
                 return false;
             }
         }
         return true;
     }
 
+    /*
+     * Add the package of the given resource name if it's a .class
+     * or a resource in a named package.
+     */
+    void addPackageIfNamed(Set<String> packages, String name) {
+        if (name.startsWith(VERSIONS_DIR)) {
+            // trim the version dir prefix
+            int i0 = VERSIONS_DIR_LENGTH;
+            int i = name.indexOf('/', i0);
+            if (i <= 0) {
+                warn(formatMsg("warn.release.unexpected.versioned.entry", name));
+                return;
+            }
+            while (i0 < i) {
+                char c = name.charAt(i0);
+                if (c < '0' || c > '9') {
+                    warn(formatMsg("warn.release.unexpected.versioned.entry", name));
+                    return;
+                }
+                i0++;
+            }
+            name = name.substring(i + 1, name.length());
+        }
+        String pn = toPackageName(name);
+        // add if this is a class or resource in a package
+        if (Checks.isPackageName(pn)) {
+            packages.add(pn);
+        }
+    }
+
+    private String toEntryName(String name, Set<String> cpaths, boolean isDir) {
+        name = name.replace(File.separatorChar, '/');
+        if (isDir) {
+            name = name.endsWith("/") ? name : name + "/";
+        }
+        String matchPath = "";
+        for (String path : cpaths) {
+            if (name.startsWith(path) && path.length() > matchPath.length()) {
+                matchPath = path;
+            }
+        }
+        name = safeName(name.substring(matchPath.length()));
+        // the old implementaton doesn't remove
+        // "./" if it was led by "/" (?)
+        if (name.startsWith("./")) {
+            name = name.substring(2);
+        }
+        return name;
+    }
+
+    private static String toVersionedName(String name, int version) {
+        return version > BASE_VERSION
+                ? VERSIONS_DIR + version + "/" + name : name;
+    }
+
+    private static String toPackageName(String path) {
+        int index = path.lastIndexOf('/');
+        if (index != -1) {
+            return path.substring(0, index).replace('/', '.');
+        } else {
+            return "";
+        }
+    }
+
+    private void expand() throws IOException {
+        for (int version : filesMap.keySet()) {
+            String[] files = filesMap.get(version);
+            expand(null, files, pathsMap.get(version), version);
+        }
+    }
+
     /**
      * Expands list of files to process into full list of all files that
      * can be found by recursively descending directories.
+     *
+     * @param dir    parent directory
+     * @param files  list of files to expand
+     * @param cpaths set of directories specified by -C option for the files
+     * @throws IOException if an I/O error occurs
      */
-    void expand(File dir, String[] files, boolean isUpdate) {
-        if (files == null) {
+    private void expand(File dir, String[] files, Set<String> cpaths, int version)
+        throws IOException
+    {
+        if (files == null)
             return;
-        }
+
         for (int i = 0; i < files.length; i++) {
             File f;
-            if (dir == null) {
+            if (dir == null)
                 f = new File(files[i]);
-            } else {
+            else
                 f = new File(dir, files[i]);
-            }
-            if (f.isFile()) {
-                if (entries.add(f)) {
-                    if (isUpdate)
-                        entryMap.put(entryName(f.getPath()), f);
+
+            boolean isDir = f.isDirectory();
+            String name = toEntryName(f.getPath(), cpaths, isDir);
+
+            if (version != BASE_VERSION) {
+                if (name.startsWith(VERSIONS_DIR)) {
+                    // the entry starts with VERSIONS_DIR and version != BASE_VERSION,
+                    // which means the "[dirs|files]" in --release v [dirs|files]
+                    // includes VERSIONS_DIR-ed entries --> warning and skip (?)
+                    error(formatMsg2("error.release.unexpected.versioned.entry",
+                                     name, String.valueOf(version)));
+                    ok = false;
+                    return;
                 }
-            } else if (f.isDirectory()) {
-                if (entries.add(f)) {
-                    if (isUpdate) {
-                        String dirPath = f.getPath();
-                        dirPath = (dirPath.endsWith(File.separator)) ? dirPath :
-                            (dirPath + File.separator);
-                        entryMap.put(entryName(dirPath), f);
+                name = toVersionedName(name, version);
+            }
+
+            if (f.isFile()) {
+                Entry e = new Entry(f, name, false);
+                if (isModuleInfoEntry(name)) {
+                    moduleInfos.putIfAbsent(name, Files.readAllBytes(f.toPath()));
+                    if (uflag)
+                        entryMap.put(name, e);
+                } else if (entries.add(e)) {
+                    if (uflag)
+                        entryMap.put(name, e);
+                }
+            } else if (isDir) {
+                Entry e = new Entry(f, name, true);
+                if (entries.add(e)) {
+                    // utilize entryMap for the duplicate dir check even in
+                    // case of cflag == true.
+                    // dir name confilict/duplicate could happen with -C option.
+                    // just remove the last "e" from the "entries" (zos will fail
+                    // with "duplicated" entries), but continue expanding the
+                    // sub tree
+                    if (entryMap.containsKey(name)) {
+                        entries.remove(e);
+                    } else {
+                        entryMap.put(name, e);
                     }
-                    expand(f, f.list(), isUpdate);
+                    expand(f, f.list(), cpaths, version);
                 }
             } else {
                 error(formatMsg("error.nosuch.fileordir", String.valueOf(f)));
@@ -529,35 +838,36 @@ class Main {
     /**
      * Creates a new JAR file.
      */
-    void create(OutputStream out, Manifest manifest)
-        throws IOException
+    void create(OutputStream out, Manifest manifest) throws IOException
     {
-        ZipOutputStream zos = new JarOutputStream(out);
-        if (flag0) {
-            zos.setMethod(ZipOutputStream.STORED);
-        }
-        if (manifest != null) {
-            if (vflag) {
-                output(getMsg("out.added.manifest"));
-            }
-            ZipEntry e = new ZipEntry(MANIFEST_DIR);
-            e.setTime(System.currentTimeMillis());
-            e.setSize(0);
-            e.setCrc(0);
-            zos.putNextEntry(e);
-            e = new ZipEntry(MANIFEST_NAME);
-            e.setTime(System.currentTimeMillis());
+        try (ZipOutputStream zos = new JarOutputStream(out)) {
             if (flag0) {
-                crc32Manifest(e, manifest);
+                zos.setMethod(ZipOutputStream.STORED);
             }
-            zos.putNextEntry(e);
-            manifest.write(zos);
-            zos.closeEntry();
+            // TODO: check module-info attributes against manifest ??
+            if (manifest != null) {
+                if (vflag) {
+                    output(getMsg("out.added.manifest"));
+                }
+                ZipEntry e = new ZipEntry(MANIFEST_DIR);
+                e.setTime(System.currentTimeMillis());
+                e.setSize(0);
+                e.setCrc(0);
+                zos.putNextEntry(e);
+                e = new ZipEntry(MANIFEST_NAME);
+                e.setTime(System.currentTimeMillis());
+                if (flag0) {
+                    crc32Manifest(e, manifest);
+                }
+                zos.putNextEntry(e);
+                manifest.write(zos);
+                zos.closeEntry();
+            }
+            updateModuleInfo(moduleInfos, zos);
+            for (Entry entry : entries) {
+                addFile(zos, entry);
+            }
         }
-        for (File file: entries) {
-            addFile(zos, file);
-        }
-        zos.close();
     }
 
     private char toUpperCaseASCII(char c) {
@@ -589,6 +899,7 @@ class Main {
      */
     boolean update(InputStream in, OutputStream out,
                    InputStream newManifest,
+                   Map<String,byte[]> moduleInfos,
                    JarIndex jarIndex) throws IOException
     {
         ZipInputStream zis = new ZipInputStream(in);
@@ -596,6 +907,10 @@ class Main {
         ZipEntry e = null;
         boolean foundManifest = false;
         boolean updateOk = true;
+
+        // All actual entries added/updated/existing, in the jar file (excl manifest
+        // and module-info.class ).
+        Set<String> jentries = new HashSet<>();
 
         if (jarIndex != null) {
             addIndex(jarIndex, zos);
@@ -606,12 +921,13 @@ class Main {
             String name = e.getName();
 
             boolean isManifestEntry = equalsIgnoreCase(name, MANIFEST_NAME);
+            boolean isModuleInfoEntry = isModuleInfoEntry(name);
 
             if ((jarIndex != null && equalsIgnoreCase(name, INDEX_NAME))
                 || (Mflag && isManifestEntry)) {
                 continue;
             } else if (isManifestEntry && ((newManifest != null) ||
-                        (ename != null))) {
+                        (ename != null) || isMultiRelease)) {
                 foundManifest = true;
                 if (newManifest != null) {
                     // Don't read from the newManifest InputStream, as we
@@ -624,7 +940,6 @@ class Main {
                         return false;
                     }
                 }
-
                 // Update the manifest.
                 Manifest old = new Manifest(zis);
                 if (newManifest != null) {
@@ -633,7 +948,10 @@ class Main {
                 if (!updateManifest(old, zos)) {
                     return false;
                 }
+            } else if (moduleInfos != null && isModuleInfoEntry) {
+                moduleInfos.putIfAbsent(name, zis.readAllBytes());
             } else {
+                boolean isDir = e.isDirectory();
                 if (!entryMap.containsKey(name)) { // copy the old stuff
                     // do our own compression
                     ZipEntry e2 = new ZipEntry(name);
@@ -648,17 +966,24 @@ class Main {
                     zos.putNextEntry(e2);
                     copy(zis, zos);
                 } else { // replace with the new files
-                    File f = entryMap.get(name);
-                    addFile(zos, f);
+                    Entry ent = entryMap.get(name);
+                    addFile(zos, ent);
                     entryMap.remove(name);
-                    entries.remove(f);
+                    entries.remove(ent);
+                    isDir = ent.isDir;
+                }
+                if (!isDir) {
+                    jentries.add(name);
                 }
             }
         }
 
         // add the remaining new files
-        for (File f: entries) {
-            addFile(zos, f);
+        for (Entry entry : entries) {
+            addFile(zos, entry);
+            if (!entry.isDir) {
+                jentries.add(entry.name);
+            }
         }
         if (!foundManifest) {
             if (newManifest != null) {
@@ -675,11 +1000,23 @@ class Main {
                 }
             }
         }
+        if (updateOk) {
+            if (moduleInfos != null && !moduleInfos.isEmpty()) {
+                Set<String> pkgs = new HashSet<>();
+                jentries.forEach( je -> addPackageIfNamed(pkgs, je));
+                addExtendedModuleAttributes(moduleInfos, pkgs);
+                updateOk = checkModuleInfo(moduleInfos.get(MODULE_INFO), jentries);
+                updateModuleInfo(moduleInfos, zos);
+                // TODO: check manifest main classes, etc
+            } else if (moduleVersion != null || modulesToHash != null) {
+                error(getMsg("error.module.options.without.info"));
+                updateOk = false;
+            }
+        }
         zis.close();
         zos.close();
         return updateOk;
     }
-
 
     private void addIndex(JarIndex index, ZipOutputStream zos)
         throws IOException
@@ -696,6 +1033,27 @@ class Main {
         zos.closeEntry();
     }
 
+    private void updateModuleInfo(Map<String,byte[]> moduleInfos, ZipOutputStream zos)
+        throws IOException
+    {
+        String fmt = uflag ? "out.update.module-info": "out.added.module-info";
+        for (Map.Entry<String,byte[]> mi : moduleInfos.entrySet()) {
+            String name = mi.getKey();
+            byte[] bytes = mi.getValue();
+            ZipEntry e = new ZipEntry(name);
+            e.setTime(System.currentTimeMillis());
+            if (flag0) {
+                crc32ModuleInfo(e, bytes);
+            }
+            zos.putNextEntry(e);
+            zos.write(bytes);
+            zos.closeEntry();
+            if (vflag) {
+                output(formatMsg(fmt, name));
+            }
+        }
+    }
+
     private boolean updateManifest(Manifest m, ZipOutputStream zos)
         throws IOException
     {
@@ -703,6 +1061,9 @@ class Main {
         addCreatedBy(m);
         if (ename != null) {
             addMainClass(m, ename);
+        }
+        if (isMultiRelease) {
+            addMultiRelease(m);
         }
         ZipEntry e = new ZipEntry(MANIFEST_NAME);
         e.setTime(System.currentTimeMillis());
@@ -759,24 +1120,6 @@ class Main {
         return name;
     }
 
-    private String entryName(String name) {
-        name = name.replace(File.separatorChar, '/');
-        String matchPath = "";
-        for (String path : paths) {
-            if (name.startsWith(path)
-                && (path.length() > matchPath.length())) {
-                matchPath = path;
-            }
-        }
-        name = safeName(name.substring(matchPath.length()));
-        // the old implementaton doesn't remove
-        // "./" if it was led by "/" (?)
-        if (name.startsWith("./")) {
-            name = name.substring(2);
-        }
-        return name;
-    }
-
     private void addVersion(Manifest m) {
         Attributes global = m.getMainAttributes();
         if (global.getValue(Attributes.Name.MANIFEST_VERSION) == null) {
@@ -801,12 +1144,16 @@ class Main {
         global.put(Attributes.Name.MAIN_CLASS, mainApp);
     }
 
+    private void addMultiRelease(Manifest m) {
+        Attributes global = m.getMainAttributes();
+        global.put(Attributes.Name.MULTI_RELEASE, "true");
+    }
+
     private boolean isAmbiguousMainClass(Manifest m) {
         if (ename != null) {
             Attributes global = m.getMainAttributes();
             if ((global.get(Attributes.Name.MAIN_CLASS) != null)) {
-                error(getMsg("error.bad.eflag"));
-                usageError();
+                usageError(getMsg("error.bad.eflag"));
                 return true;
             }
         }
@@ -816,14 +1163,11 @@ class Main {
     /**
      * Adds a new file entry to the ZIP output stream.
      */
-    void addFile(ZipOutputStream zos, File file) throws IOException {
-        String name = file.getPath();
-        boolean isDir = file.isDirectory();
-        if (isDir) {
-            name = name.endsWith(File.separator) ? name :
-                (name + File.separator);
-        }
-        name = entryName(name);
+    void addFile(ZipOutputStream zos, Entry entry) throws IOException {
+
+        File file = entry.file;
+        String name = entry.name;
+        boolean isDir = entry.isDir;
 
         if (name.equals("") || name.equals(".") || name.equals(zname)) {
             return;
@@ -833,6 +1177,8 @@ class Main {
                 output(formatMsg("out.ignore.entry", name));
             }
             return;
+        } else if (name.equals(MODULE_INFO)) {
+            throw new Error("Unexpected module info: " + name);
         }
 
         long size = isDir ? 0 : file.length();
@@ -902,11 +1248,8 @@ class Main {
      * @throws IOException if an I/O error occurs
      */
     private void copy(File from, OutputStream to) throws IOException {
-        InputStream in = new FileInputStream(from);
-        try {
+        try (InputStream in = new FileInputStream(from)) {
             copy(in, to);
-        } finally {
-            in.close();
         }
     }
 
@@ -919,12 +1262,20 @@ class Main {
      * @throws IOException if an I/O error occurs
      */
     private void copy(InputStream from, File to) throws IOException {
-        OutputStream out = new FileOutputStream(to);
-        try {
+        try (OutputStream out = new FileOutputStream(to)) {
             copy(from, out);
-        } finally {
-            out.close();
         }
+    }
+
+    /**
+     * Computes the crc32 of a module-info.class.  This is necessary when the
+     * ZipOutputStream is in STORED mode.
+     */
+    private void crc32ModuleInfo(ZipEntry e, byte[] bytes) throws IOException {
+        CRC32OutputStream os = new CRC32OutputStream();
+        ByteArrayInputStream in = new ByteArrayInputStream(bytes);
+        in.transferTo(os);
+        os.updateEntry(e);
     }
 
     /**
@@ -951,12 +1302,15 @@ class Main {
         os.updateEntry(e);
     }
 
-    void replaceFSC(String files[]) {
-        if (files != null) {
-            for (int i = 0; i < files.length; i++) {
-                files[i] = files[i].replace(File.separatorChar, '/');
+    void replaceFSC(Map<Integer, String []> filesMap) {
+        filesMap.keySet().forEach(version -> {
+            String[] files = filesMap.get(version);
+            if (files != null) {
+                for (int i = 0; i < files.length; i++) {
+                    files[i] = files[i].replace(File.separatorChar, '/');
+                }
             }
-        }
+        });
     }
 
     @SuppressWarnings("serial")
@@ -1151,7 +1505,7 @@ class Main {
         try {
             if (update(Files.newInputStream(jarPath),
                        Files.newOutputStream(tmpPath),
-                       null, index)) {
+                       null, null, index)) {
                 try {
                     Files.move(tmpPath, jarPath, REPLACE_EXISTING);
                 } catch (IOException e) {
@@ -1267,8 +1621,9 @@ class Main {
     /**
      * Prints usage message.
      */
-    void usageError() {
-        error(getMsg("usage"));
+    void usageError(String s) {
+        err.println(s);
+        err.println(getMsg("main.usage.summary.try"));
     }
 
     /**
@@ -1296,7 +1651,14 @@ class Main {
     /**
      * Print an error message; like something is broken
      */
-    protected void error(String s) {
+    void error(String s) {
+        err.println(s);
+    }
+
+    /**
+     * Print a warning message
+     */
+    void warn(String s) {
         err.println(s);
     }
 
@@ -1368,5 +1730,490 @@ class Main {
             }
         }
         return tmpfile;
+    }
+
+    // Modular jar support
+
+    /**
+     * Associates a module descriptor's zip entry name along with its
+     * bytes and an optional URI. Used when describing modules.
+     */
+    interface ModuleInfoEntry {
+       String name();
+       Optional<String> uriString();
+       InputStream bytes() throws IOException;
+    }
+
+    static class ZipFileModuleInfoEntry implements ModuleInfoEntry {
+        private final ZipFile zipFile;
+        private final ZipEntry entry;
+        ZipFileModuleInfoEntry(ZipFile zipFile, ZipEntry entry) {
+            this.zipFile = zipFile;
+            this.entry = entry;
+        }
+        @Override public String name() { return entry.getName(); }
+        @Override public InputStream bytes() throws IOException {
+            return zipFile.getInputStream(entry);
+        }
+        /** Returns an optional containing the effective URI. */
+        @Override public Optional<String> uriString() {
+            String uri = (Paths.get(zipFile.getName())).toUri().toString();
+            uri = "jar:" + uri + "/!" + entry.getName();
+            return Optional.of(uri);
+        }
+    }
+
+    static class StreamedModuleInfoEntry implements ModuleInfoEntry {
+        private final String name;
+        private final byte[] bytes;
+        StreamedModuleInfoEntry(String name, byte[] bytes) {
+            this.name = name;
+            this.bytes = bytes;
+        }
+        @Override public String name() { return name; }
+        @Override public InputStream bytes() throws IOException {
+            return new ByteArrayInputStream(bytes);
+        }
+        /** Returns an empty optional. */
+        @Override public Optional<String> uriString() {
+            return Optional.empty();  // no URI can be derived
+        }
+    }
+
+    /** Describes a module from a given zip file. */
+    private boolean describeModule(ZipFile zipFile) throws IOException {
+        ZipFileModuleInfoEntry[] infos = zipFile.stream()
+                .filter(e -> isModuleInfoEntry(e.getName()))
+                .sorted(Validator.ENTRY_COMPARATOR)
+                .map(e -> new ZipFileModuleInfoEntry(zipFile, e))
+                .toArray(ZipFileModuleInfoEntry[]::new);
+
+        if (infos.length == 0) {
+            // No module descriptor found, derive and describe the automatic module
+            String fn = zipFile.getName();
+            ModuleFinder mf = ModuleFinder.of(Paths.get(fn));
+            try {
+                Set<ModuleReference> mref = mf.findAll();
+                if (mref.isEmpty()) {
+                    output(formatMsg("error.unable.derive.automodule", fn));
+                    return true;
+                }
+                ModuleDescriptor md = mref.iterator().next().descriptor();
+                output(getMsg("out.automodule") + "\n");
+                describeModule(md, null, null, "");
+            } catch (FindException e) {
+                String msg = formatMsg("error.unable.derive.automodule", fn);
+                Throwable t = e.getCause();
+                if (t != null)
+                    msg = msg + "\n" + t.getMessage();
+                output(msg);
+            }
+        } else {
+            return describeModuleFromEntries(infos);
+        }
+        return true;
+    }
+
+    private boolean describeModuleFromStream(FileInputStream fis)
+        throws IOException
+    {
+        List<ModuleInfoEntry> infos = new LinkedList<>();
+
+        try (BufferedInputStream bis = new BufferedInputStream(fis);
+             ZipInputStream zis = new ZipInputStream(bis)) {
+            ZipEntry e;
+            while ((e = zis.getNextEntry()) != null) {
+                String ename = e.getName();
+                if (isModuleInfoEntry(ename)) {
+                    infos.add(new StreamedModuleInfoEntry(ename, zis.readAllBytes()));
+                }
+            }
+        }
+
+        if (infos.size() == 0)
+            return false;
+
+        ModuleInfoEntry[] sorted = infos.stream()
+                .sorted(Comparator.comparing(ModuleInfoEntry::name, ENTRYNAME_COMPARATOR))
+                .toArray(ModuleInfoEntry[]::new);
+
+        return describeModuleFromEntries(sorted);
+    }
+
+    private boolean lessThanEqualReleaseValue(ModuleInfoEntry entry) {
+        return intVersionFromEntry(entry) <= releaseValue ? true : false;
+    }
+
+    private static String versionFromEntryName(String name) {
+        String s = name.substring(VERSIONS_DIR_LENGTH);
+        return s.substring(0, s.indexOf("/"));
+    }
+
+    private static int intVersionFromEntry(ModuleInfoEntry entry) {
+        String name = entry.name();
+        if (!name.startsWith(VERSIONS_DIR))
+            return BASE_VERSION;
+
+        String s = name.substring(VERSIONS_DIR_LENGTH);
+        s = s.substring(0, s.indexOf('/'));
+        return Integer.valueOf(s);
+    }
+
+    /**
+     * Describes a single module descriptor, determined by the specified
+     * --release, if any, from the given ordered entries.
+     * The given infos must be ordered as per ENTRY_COMPARATOR.
+     */
+    private boolean describeModuleFromEntries(ModuleInfoEntry[] infos)
+        throws IOException
+    {
+        assert infos.length > 0;
+
+        // Informative: output all non-root descriptors, if any
+        String releases = Arrays.stream(infos)
+                .filter(e -> !e.name().equals(MODULE_INFO))
+                .map(ModuleInfoEntry::name)
+                .map(Main::versionFromEntryName)
+                .collect(joining(" "));
+        if (!releases.equals(""))
+            output("releases: " + releases + "\n");
+
+        // Describe the operative descriptor for the specified --release, if any
+        if (releaseValue != -1) {
+            ModuleInfoEntry entry = null;
+            int i = 0;
+            while (i < infos.length && lessThanEqualReleaseValue(infos[i])) {
+                entry = infos[i];
+                i++;
+            }
+
+            if (entry == null) {
+                output(formatMsg("error.no.operative.descriptor",
+                                 String.valueOf(releaseValue)));
+                return false;
+            }
+
+            String uriString = entry.uriString().orElse("");
+            try (InputStream is = entry.bytes()) {
+                describeModule(is, uriString);
+            }
+        } else {
+            // no specific --release specified, output the root, if any
+            if (infos[0].name().equals(MODULE_INFO)) {
+                String uriString = infos[0].uriString().orElse("");
+                try (InputStream is = infos[0].bytes()) {
+                    describeModule(is, uriString);
+                }
+            } else {
+                // no root, output message to specify --release
+                output(getMsg("error.no.root.descriptor"));
+            }
+        }
+        return true;
+    }
+
+    static <T> String toString(Collection<T> set) {
+        if (set.isEmpty()) { return ""; }
+        return " " + set.stream().map(e -> e.toString().toLowerCase(Locale.ROOT))
+                  .sorted().collect(joining(" "));
+    }
+
+
+    private void describeModule(InputStream entryInputStream, String uriString)
+        throws IOException
+    {
+        ModuleInfo.Attributes attrs = ModuleInfo.read(entryInputStream, null);
+        ModuleDescriptor md = attrs.descriptor();
+        ModuleTarget target = attrs.target();
+        ModuleHashes hashes = attrs.recordedHashes();
+
+        describeModule(md, target, hashes, uriString);
+    }
+
+    private void describeModule(ModuleDescriptor md,
+                                ModuleTarget target,
+                                ModuleHashes hashes,
+                                String uriString)
+        throws IOException
+    {
+        StringBuilder sb = new StringBuilder();
+
+        sb.append(md.toNameAndVersion());
+
+        if (!uriString.equals(""))
+            sb.append(" ").append(uriString);
+        if (md.isOpen())
+            sb.append(" open");
+        if (md.isAutomatic())
+            sb.append(" automatic");
+        sb.append("\n");
+
+        // unqualified exports (sorted by package)
+        md.exports().stream()
+                .sorted(Comparator.comparing(Exports::source))
+                .filter(e -> !e.isQualified())
+                .forEach(e -> sb.append("exports ").append(e.source())
+                                .append(toString(e.modifiers())).append("\n"));
+
+        // dependences
+        md.requires().stream().sorted()
+                .forEach(r -> sb.append("requires ").append(r.name())
+                                .append(toString(r.modifiers())).append("\n"));
+
+        // service use and provides
+        md.uses().stream().sorted()
+                .forEach(s -> sb.append("uses ").append(s).append("\n"));
+
+        md.provides().stream()
+                .sorted(Comparator.comparing(Provides::service))
+                .forEach(p -> sb.append("provides ").append(p.service())
+                                .append(" with")
+                                .append(toString(p.providers()))
+                                .append("\n"));
+
+        // qualified exports
+        md.exports().stream()
+                .sorted(Comparator.comparing(Exports::source))
+                .filter(Exports::isQualified)
+                .forEach(e -> sb.append("qualified exports ").append(e.source())
+                                .append(" to").append(toString(e.targets()))
+                                .append("\n"));
+
+        // open packages
+        md.opens().stream()
+                .sorted(Comparator.comparing(Opens::source))
+                .filter(o -> !o.isQualified())
+                .forEach(o -> sb.append("opens ").append(o.source())
+                                 .append(toString(o.modifiers()))
+                                 .append("\n"));
+
+        md.opens().stream()
+                .sorted(Comparator.comparing(Opens::source))
+                .filter(Opens::isQualified)
+                .forEach(o -> sb.append("qualified opens ").append(o.source())
+                                 .append(toString(o.modifiers()))
+                                 .append(" to").append(toString(o.targets()))
+                                 .append("\n"));
+
+        // non-exported/non-open packages
+        Set<String> concealed = new TreeSet<>(md.packages());
+        md.exports().stream().map(Exports::source).forEach(concealed::remove);
+        md.opens().stream().map(Opens::source).forEach(concealed::remove);
+        concealed.forEach(p -> sb.append("contains ").append(p).append("\n"));
+
+        md.mainClass().ifPresent(v -> sb.append("main-class ").append(v).append("\n"));
+
+        if (target != null) {
+            String targetPlatform = target.targetPlatform();
+            if (!targetPlatform.isEmpty())
+                sb.append("platform ").append(targetPlatform).append("\n");
+       }
+
+       if (hashes != null) {
+           hashes.names().stream().sorted().forEach(
+                   mod -> sb.append("hashes ").append(mod).append(" ")
+                            .append(hashes.algorithm()).append(" ")
+                            .append(toHex(hashes.hashFor(mod)))
+                            .append("\n"));
+        }
+
+        output(sb.toString());
+    }
+
+    private static String toHex(byte[] ba) {
+        StringBuilder sb = new StringBuilder(ba.length << 1);
+        for (byte b: ba) {
+            sb.append(String.format("%02x", b & 0xff));
+        }
+        return sb.toString();
+    }
+
+    static String toBinaryName(String classname) {
+        return (classname.replace('.', '/')) + ".class";
+    }
+
+    private boolean checkModuleInfo(byte[] moduleInfoBytes, Set<String> entries)
+        throws IOException
+    {
+        boolean ok = true;
+        if (moduleInfoBytes != null) {  // no root module-info.class if null
+            try {
+                // ModuleDescriptor.read() checks open/exported pkgs vs packages
+                ModuleDescriptor md = ModuleDescriptor.read(ByteBuffer.wrap(moduleInfoBytes));
+                // A module must have the implementation class of the services it 'provides'.
+                if (md.provides().stream().map(Provides::providers).flatMap(List::stream)
+                      .filter(p -> !entries.contains(toBinaryName(p)))
+                      .peek(p -> fatalError(formatMsg("error.missing.provider", p)))
+                      .count() != 0) {
+                    ok = false;
+                }
+            } catch (InvalidModuleDescriptorException x) {
+                fatalError(x.getMessage());
+                ok = false;
+            }
+        }
+        return ok;
+    }
+
+    /**
+     * Adds extended modules attributes to the given module-info's.  The given
+     * Map values are updated in-place. Returns false if an error occurs.
+     */
+    private void addExtendedModuleAttributes(Map<String,byte[]> moduleInfos,
+                                                Set<String> packages)
+        throws IOException
+    {
+        for (Map.Entry<String,byte[]> e: moduleInfos.entrySet()) {
+            ModuleDescriptor md = ModuleDescriptor.read(ByteBuffer.wrap(e.getValue()));
+            e.setValue(extendedInfoBytes(md, e.getValue(), packages));
+        }
+    }
+
+    static boolean isModuleInfoEntry(String name) {
+        // root or versioned module-info.class
+        if (name.endsWith(MODULE_INFO)) {
+            int end = name.length() - MODULE_INFO.length();
+            if (end == 0)
+                return true;
+            if (name.startsWith(VERSIONS_DIR)) {
+                int off = VERSIONS_DIR_LENGTH;
+                if (off == end)      // meta-inf/versions/module-info.class
+                    return false;
+                while (off < end - 1) {
+                    char c = name.charAt(off++);
+                    if (c < '0' || c > '9')
+                        return false;
+                }
+                return name.charAt(off) == '/';
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns a byte array containing the given module-info.class plus any
+     * extended attributes.
+     *
+     * If --module-version, --main-class, or other options were provided
+     * then the corresponding class file attributes are added to the
+     * module-info here.
+     */
+    private byte[] extendedInfoBytes(ModuleDescriptor md,
+                                     byte[] miBytes,
+                                     Set<String> packages)
+        throws IOException
+    {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        InputStream is = new ByteArrayInputStream(miBytes);
+        ModuleInfoExtender extender = ModuleInfoExtender.newExtender(is);
+
+        // Add (or replace) the Packages attribute
+        extender.packages(packages);
+
+        // --main-class
+        if (ename != null)
+            extender.mainClass(ename);
+
+        // --module-version
+        if (moduleVersion != null)
+            extender.version(moduleVersion);
+
+        // --hash-modules
+        if (modulesToHash != null) {
+            String mn = md.name();
+            Hasher hasher = new Hasher(md, fname);
+            ModuleHashes moduleHashes = hasher.computeHashes(mn);
+            if (moduleHashes != null) {
+                extender.hashes(moduleHashes);
+            } else {
+                warn("warning: no module is recorded in hash in " + mn);
+            }
+        }
+
+        if (moduleResolution.value() != 0) {
+            extender.moduleResolution(moduleResolution);
+        }
+
+        extender.write(baos);
+        return baos.toByteArray();
+    }
+
+    /**
+     * Compute and record hashes
+     */
+    private class Hasher {
+        final ModuleHashesBuilder hashesBuilder;
+        final ModuleFinder finder;
+        final Set<String> modules;
+        Hasher(ModuleDescriptor descriptor, String fname) throws IOException {
+            // Create a module finder that finds the modular JAR
+            // being created/updated
+            URI uri = Paths.get(fname).toUri();
+            ModuleReference mref = new ModuleReference(descriptor, uri) {
+                @Override
+                public ModuleReader open() {
+                    throw new UnsupportedOperationException("should not reach here");
+                }
+            };
+
+            // Compose a module finder with the module path and
+            // the modular JAR being created or updated
+            this.finder = ModuleFinder.compose(moduleFinder,
+                new ModuleFinder() {
+                    @Override
+                    public Optional<ModuleReference> find(String name) {
+                        if (descriptor.name().equals(name))
+                            return Optional.of(mref);
+                        else
+                            return Optional.empty();
+                    }
+
+                    @Override
+                    public Set<ModuleReference> findAll() {
+                        return Collections.singleton(mref);
+                    }
+                });
+
+            // Determine the modules that matches the pattern {@code modulesToHash}
+            Set<String> roots = finder.findAll().stream()
+                .map(ref -> ref.descriptor().name())
+                .filter(mn -> modulesToHash.matcher(mn).find())
+                .collect(Collectors.toSet());
+
+            // use system module path unless it creates a modular JAR for
+            // a module that is present in the system image e.g. upgradeable
+            // module
+            ModuleFinder system;
+            String name = descriptor.name();
+            if (name != null && ModuleFinder.ofSystem().find(name).isPresent()) {
+                system = ModuleFinder.of();
+            } else {
+                system = ModuleFinder.ofSystem();
+            }
+            // get a resolved module graph
+            Configuration config =
+                Configuration.empty().resolve(system, finder, roots);
+
+            // filter modules resolved from the system module finder
+            this.modules = config.modules().stream()
+                .map(ResolvedModule::name)
+                .filter(mn -> roots.contains(mn) && !system.find(mn).isPresent())
+                .collect(Collectors.toSet());
+
+            this.hashesBuilder = new ModuleHashesBuilder(config, modules);
+        }
+
+        /**
+         * Compute hashes of the specified module.
+         *
+         * It records the hashing modules that depend upon the specified
+         * module directly or indirectly.
+         */
+        ModuleHashes computeHashes(String name) {
+            if (hashesBuilder == null)
+                return null;
+
+            return hashesBuilder.computeHashes(Set.of(name)).get(name);
+        }
     }
 }

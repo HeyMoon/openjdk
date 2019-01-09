@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,11 +34,14 @@ import java.net.UnknownHostException;
 import java.net.URL;
 import java.security.GeneralSecurityException;
 import java.util.Base64;
+import java.util.Objects;
+import java.util.Properties;
 
 import sun.net.www.HeaderParser;
 import sun.net.www.protocol.http.AuthenticationInfo;
 import sun.net.www.protocol.http.AuthScheme;
 import sun.net.www.protocol.http.HttpURLConnection;
+import sun.security.action.GetPropertyAction;
 
 /**
  * NTLMAuthentication:
@@ -73,12 +76,16 @@ public class NTLMAuthentication extends AuthenticationInfo {
         NTLMAuthenticationCallback.getNTLMAuthenticationCallback();
 
     private String hostname;
-    private static String defaultDomain; /* Domain to use if not specified by user */
-
+    /* Domain to use if not specified by user */
+    private static final String defaultDomain;
+    /* Whether cache is enabled for NTLM */
+    private static final boolean ntlmCache;
     static {
-        defaultDomain = java.security.AccessController.doPrivileged(
-            new sun.security.action.GetPropertyAction("http.auth.ntlm.domain", ""));
-    };
+        Properties props = GetPropertyAction.privilegedGetProperties();
+        defaultDomain = props.getProperty("http.auth.ntlm.domain", "");
+        String ntlmCacheProp = props.getProperty("jdk.ntlm.cache", "true");
+        ntlmCache = Boolean.parseBoolean(ntlmCacheProp);
+    }
 
     public static boolean supportsTransparentAuth () {
         return false;
@@ -118,11 +125,13 @@ public class NTLMAuthentication extends AuthenticationInfo {
      * If this notation is not used, then the domain will be taken
      * from a system property: "http.auth.ntlm.domain".
      */
-    public NTLMAuthentication(boolean isProxy, URL url, PasswordAuthentication pw) {
+    public NTLMAuthentication(boolean isProxy, URL url, PasswordAuthentication pw,
+                              String authenticatorKey) {
         super(isProxy ? PROXY_AUTHENTICATION : SERVER_AUTHENTICATION,
                 AuthScheme.NTLM,
                 url,
-                "");
+                "",
+                Objects.requireNonNull(authenticatorKey));
         init (pw);
     }
 
@@ -143,8 +152,8 @@ public class NTLMAuthentication extends AuthenticationInfo {
         password = pw.getPassword();
         init0();
         try {
-            client = new Client(System.getProperty("ntlm.version"), hostname,
-                    username, ntdomain, password);
+            String version = GetPropertyAction.privilegedGetProperty("ntlm.version");
+            client = new Client(version, hostname, username, ntdomain, password);
         } catch (NTLMException ne) {
             try {
                 client = new Client(null, hostname, username, ntdomain, password);
@@ -159,13 +168,20 @@ public class NTLMAuthentication extends AuthenticationInfo {
     * Constructor used for proxy entries
     */
     public NTLMAuthentication(boolean isProxy, String host, int port,
-                                PasswordAuthentication pw) {
+                              PasswordAuthentication pw,
+                              String authenticatorKey) {
         super(isProxy ? PROXY_AUTHENTICATION : SERVER_AUTHENTICATION,
                 AuthScheme.NTLM,
                 host,
                 port,
-                "");
+                "",
+                Objects.requireNonNull(authenticatorKey));
         init (pw);
+    }
+
+    @Override
+    protected boolean useAuthCache() {
+        return ntlmCache && super.useAuthCache();
     }
 
     /**
@@ -244,4 +260,3 @@ public class NTLMAuthentication extends AuthenticationInfo {
         return result;
     }
 }
-

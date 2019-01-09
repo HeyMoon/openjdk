@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2004, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,7 +48,7 @@ GetDoubleField_t  JNI_FastGetField::jni_fast_GetDoubleField_fp;
 // between loads, which is much more efficient than lfence.
 
 address JNI_FastGetField::generate_fast_get_int_field0(BasicType type) {
-  const char *name;
+  const char *name = NULL;
   switch (type) {
     case T_BOOLEAN: name = "jni_fast_GetBooleanField"; break;
     case T_BYTE:    name = "jni_fast_GetByteField";    break;
@@ -85,6 +85,9 @@ address JNI_FastGetField::generate_fast_get_int_field0(BasicType type) {
     __ movptr (rdx, Address(rsp, 2*wordSize));  // obj
   }
   __ movptr(rax, Address(rsp, 3*wordSize));  // jfieldID
+
+  __ clear_jweak_tag(rdx);
+
   __ movptr(rdx, Address(rdx, 0));           // *obj
   __ shrptr (rax, 2);                         // offset
 
@@ -122,7 +125,7 @@ address JNI_FastGetField::generate_fast_get_int_field0(BasicType type) {
 
   slowcase_entry_pclist[count++] = __ pc();
   __ bind (slow);
-  address slow_case_addr;
+  address slow_case_addr = NULL;
   switch (type) {
     case T_BOOLEAN: slow_case_addr = jni_GetBooleanField_addr(); break;
     case T_BYTE:    slow_case_addr = jni_GetByteField_addr();    break;
@@ -202,6 +205,9 @@ address JNI_FastGetField::generate_fast_get_long_field() {
     __ movptr(rdx, Address(rsp, 3*wordSize));  // obj
   }
   __ movptr(rsi, Address(rsp, 4*wordSize));  // jfieldID
+
+  __ clear_jweak_tag(rdx);
+
   __ movptr(rdx, Address(rdx, 0));           // *obj
   __ shrptr(rsi, 2);                         // offset
 
@@ -256,7 +262,7 @@ address JNI_FastGetField::generate_fast_get_long_field() {
 }
 
 address JNI_FastGetField::generate_fast_get_float_field0(BasicType type) {
-  const char *name;
+  const char *name = NULL;
   switch (type) {
     case T_FLOAT:  name = "jni_fast_GetFloatField";  break;
     case T_DOUBLE: name = "jni_fast_GetDoubleField"; break;
@@ -291,6 +297,9 @@ address JNI_FastGetField::generate_fast_get_float_field0(BasicType type) {
     __ movptr(rdx, Address(rsp, 2*wordSize)); // obj
   }
   __ movptr(rax, Address(rsp, 3*wordSize));  // jfieldID
+
+  __ clear_jweak_tag(rdx);
+
   __ movptr(rdx, Address(rdx, 0));           // *obj
   __ shrptr(rax, 2);                         // offset
 
@@ -337,7 +346,7 @@ address JNI_FastGetField::generate_fast_get_float_field0(BasicType type) {
 
   slowcase_entry_pclist[count++] = __ pc();
   __ bind (slow);
-  address slow_case_addr;
+  address slow_case_addr = NULL;
   switch (type) {
     case T_FLOAT:  slow_case_addr = jni_GetFloatField_addr();  break;
     case T_DOUBLE: slow_case_addr = jni_GetDoubleField_addr(); break;

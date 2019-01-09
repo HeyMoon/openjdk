@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
  */
 
 #include "precompiled.hpp"
+#include "logging/log.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/timer.hpp"
 #include "utilities/ostream.hpp"
@@ -34,6 +35,22 @@ double TimeHelper::counter_to_seconds(jlong counter) {
 
 double TimeHelper::counter_to_millis(jlong counter) {
   return counter_to_seconds(counter) * 1000.0;
+}
+
+elapsedTimer::elapsedTimer(jlong time, jlong timeUnitsPerSecond) {
+  _active = false;
+  jlong osTimeUnitsPerSecond = os::elapsed_frequency();
+  assert(osTimeUnitsPerSecond % 1000 == 0, "must be");
+  assert(timeUnitsPerSecond % 1000 == 0, "must be");
+  while (osTimeUnitsPerSecond < timeUnitsPerSecond) {
+    timeUnitsPerSecond /= 1000;
+    time *= 1000;
+  }
+  while (osTimeUnitsPerSecond > timeUnitsPerSecond) {
+    timeUnitsPerSecond *= 1000;
+    time /= 1000;
+  }
+  _counter = time;
 }
 
 void elapsedTimer::add(elapsedTimer t) {
@@ -97,48 +114,6 @@ jlong TimeStamp::ticks_since_update() const {
   return os::elapsed_counter() - _counter;
 }
 
-TraceTime::TraceTime(const char* title,
-                     bool doit) {
-  _active   = doit;
-  _verbose  = true;
-
-  if (_active) {
-    _accum = NULL;
-    tty->stamp(PrintGCTimeStamps);
-    tty->print("[%s", title);
-    tty->flush();
-    _t.start();
-  }
-}
-
-TraceTime::TraceTime(const char* title,
-                     elapsedTimer* accumulator,
-                     bool doit,
-                     bool verbose) {
-  _active = doit;
-  _verbose = verbose;
-  if (_active) {
-    if (_verbose) {
-      tty->stamp(PrintGCTimeStamps);
-      tty->print("[%s", title);
-      tty->flush();
-    }
-    _accum = accumulator;
-    _t.start();
-  }
-}
-
-TraceTime::~TraceTime() {
-  if (_active) {
-    _t.stop();
-    if (_accum!=NULL) _accum->add(_t);
-    if (_verbose) {
-      tty->print_cr(", %3.7f secs]", _t.seconds());
-      tty->flush();
-    }
-  }
-}
-
 TraceCPUTime::TraceCPUTime(bool doit,
                bool print_cr,
                outputStream *logfile) :
@@ -193,3 +168,4 @@ TraceCPUTime::~TraceCPUTime() {
     _logfile->flush();
   }
 }
+

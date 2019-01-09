@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,10 +34,9 @@ import java.util.zip.ZipFile;
  *
  * @since 1.5
  * @author Vincent Ryan
- * @deprecated This package has been deprecated.
+ * @deprecated This class has been deprecated.
  */
-@jdk.Exported
-@Deprecated
+@Deprecated(since="9")
 public interface ContentSignerParameters {
 
     /**
@@ -74,7 +73,7 @@ public interface ContentSignerParameters {
      * Retreives the message digest algorithm that is used to generate
      * the message imprint to be sent to the TSA server.
      *
-     * @since 1.9
+     * @since 9
      * @return The non-null string of the message digest algorithm name.
      */
     public default String getTSADigestAlg() {

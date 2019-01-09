@@ -47,7 +47,6 @@ import javax.swing.tree.TreeCellEditor;
 import javax.swing.tree.TreeCellRenderer;
 import javax.swing.tree.TreeModel;
 import javax.swing.tree.TreePath;
-import sun.swing.plaf.synth.SynthIcon;
 
 /**
  * Provides the Synth L&amp;F UI delegate for
@@ -148,11 +147,9 @@ public class SynthTreeUI extends BasicTreeUI
                 installKeyboardActions();
             }
         }
-        context.dispose();
 
         context = getContext(tree, Region.TREE_CELL, ENABLED);
         cellStyle = SynthLookAndFeel.updateStyle(context, this);
-        context.dispose();
     }
 
     /**
@@ -224,12 +221,10 @@ public class SynthTreeUI extends BasicTreeUI
         SynthContext context = getContext(tree, ENABLED);
 
         style.uninstallDefaults(context);
-        context.dispose();
         style = null;
 
         context = getContext(tree, Region.TREE_CELL, ENABLED);
         cellStyle.uninstallDefaults(context);
-        context.dispose();
         cellStyle = null;
 
 
@@ -267,7 +262,6 @@ public class SynthTreeUI extends BasicTreeUI
         context.getPainter().paintTreeBackground(context,
                           g, 0, 0, c.getWidth(), c.getHeight());
         paint(context, g);
-        context.dispose();
     }
 
     /**
@@ -293,7 +287,6 @@ public class SynthTreeUI extends BasicTreeUI
         SynthContext context = getContext(c);
 
         paint(context, g);
-        context.dispose();
     }
 
     /**
@@ -426,7 +419,6 @@ public class SynthTreeUI extends BasicTreeUI
                 row++;
             }
         }
-        cellContext.dispose();
 
         paintDropLine(g);
 
@@ -610,10 +602,10 @@ public class SynthTreeUI extends BasicTreeUI
     @Override
     protected void drawCentered(Component c, Graphics graphics, Icon icon,
                                 int x, int y) {
-        int w = SynthIcon.getIconWidth(icon, paintContext);
-        int h = SynthIcon.getIconHeight(icon, paintContext);
+        int w = SynthGraphicsUtils.getIconWidth(icon, paintContext);
+        int h = SynthGraphicsUtils.getIconHeight(icon, paintContext);
 
-        SynthIcon.paintIcon(icon, paintContext, graphics,
+        SynthGraphicsUtils.paintIcon(icon, paintContext, graphics,
                             findCenteredX(x, w),
                             y - h/2, w, h);
     }
@@ -744,7 +736,6 @@ public class SynthTreeUI extends BasicTreeUI
                     context.getPainter().paintTreeCellFocus(context, g,
                             0, 0, getWidth() - imageOffset, getHeight());
                 }
-                context.dispose();
             }
             SynthLookAndFeel.resetSelectedUI();
         }
@@ -780,16 +771,15 @@ public class SynthTreeUI extends BasicTreeUI
     // To get the correct context we return an instance of this that fetches
     // the SynthContext as needed.
     //
-    private class ExpandedIconWrapper extends SynthIcon {
+    private class ExpandedIconWrapper implements SynthIcon {
         public void paintIcon(SynthContext context, Graphics g, int x,
                               int y, int w, int h) {
             if (context == null) {
                 context = getContext(tree);
-                SynthIcon.paintIcon(expandedIcon, context, g, x, y, w, h);
-                context.dispose();
+                SynthGraphicsUtils.paintIcon(expandedIcon, context, g, x, y, w, h);
             }
             else {
-                SynthIcon.paintIcon(expandedIcon, context, g, x, y, w, h);
+                SynthGraphicsUtils.paintIcon(expandedIcon, context, g, x, y, w, h);
             }
         }
 
@@ -797,11 +787,10 @@ public class SynthTreeUI extends BasicTreeUI
             int width;
             if (context == null) {
                 context = getContext(tree);
-                width = SynthIcon.getIconWidth(expandedIcon, context);
-                context.dispose();
+                width = SynthGraphicsUtils.getIconWidth(expandedIcon, context);
             }
             else {
-                width = SynthIcon.getIconWidth(expandedIcon, context);
+                width = SynthGraphicsUtils.getIconWidth(expandedIcon, context);
             }
             return width;
         }
@@ -810,11 +799,10 @@ public class SynthTreeUI extends BasicTreeUI
             int height;
             if (context == null) {
                 context = getContext(tree);
-                height = SynthIcon.getIconHeight(expandedIcon, context);
-                context.dispose();
+                height = SynthGraphicsUtils.getIconHeight(expandedIcon, context);
             }
             else {
-                height = SynthIcon.getIconHeight(expandedIcon, context);
+                height = SynthGraphicsUtils.getIconHeight(expandedIcon, context);
             }
             return height;
         }

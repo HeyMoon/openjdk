@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,8 +26,7 @@
  * @bug 8076987
  * @bug 8078438
  * @summary Verify UseCondCardMark works
- * @library /testlibrary /../../test/lib
- * @build Basic
+ * @modules java.base/jdk.internal.misc
  * @run main/othervm -Xint Basic
  * @run main/othervm -Xint -XX:+UseCondCardMark Basic
  * @run main/othervm -XX:TieredStopAtLevel=1 Basic

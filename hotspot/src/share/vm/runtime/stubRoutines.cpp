@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,13 +24,12 @@
 
 #include "precompiled.hpp"
 #include "asm/codeBuffer.hpp"
-#include "code/codeCacheExtensions.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/interfaceSupport.hpp"
+#include "runtime/timerTrace.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
-#include "runtime/timer.hpp"
 #include "utilities/copy.hpp"
 #ifdef COMPILER2
 #include "opto/runtime.hpp"
@@ -54,7 +53,7 @@ address StubRoutines::_throw_AbstractMethodError_entry          = NULL;
 address StubRoutines::_throw_IncompatibleClassChangeError_entry = NULL;
 address StubRoutines::_throw_NullPointerException_at_call_entry = NULL;
 address StubRoutines::_throw_StackOverflowError_entry           = NULL;
-address StubRoutines::_handler_for_unsafe_access_entry          = NULL;
+address StubRoutines::_throw_delayed_StackOverflowError_entry   = NULL;
 jint    StubRoutines::_verify_oop_count                         = 0;
 address StubRoutines::_verify_oop_subroutine_entry              = NULL;
 address StubRoutines::_atomic_xchg_entry                        = NULL;
@@ -126,6 +125,7 @@ address StubRoutines::_aescrypt_encryptBlock               = NULL;
 address StubRoutines::_aescrypt_decryptBlock               = NULL;
 address StubRoutines::_cipherBlockChaining_encryptAESCrypt = NULL;
 address StubRoutines::_cipherBlockChaining_decryptAESCrypt = NULL;
+address StubRoutines::_counterMode_AESCrypt                = NULL;
 address StubRoutines::_ghash_processBlocks                 = NULL;
 
 address StubRoutines::_sha1_implCompress     = NULL;
@@ -136,9 +136,11 @@ address StubRoutines::_sha512_implCompress   = NULL;
 address StubRoutines::_sha512_implCompressMB = NULL;
 
 address StubRoutines::_updateBytesCRC32 = NULL;
-address StubRoutines::_crc_table_adr = NULL;
+address StubRoutines::_crc_table_adr =    NULL;
 
+address StubRoutines::_crc32c_table_addr = NULL;
 address StubRoutines::_updateBytesCRC32C = NULL;
+address StubRoutines::_updateBytesAdler32 = NULL;
 
 address StubRoutines::_multiplyToLen = NULL;
 address StubRoutines::_squareToLen = NULL;
@@ -146,10 +148,20 @@ address StubRoutines::_mulAdd = NULL;
 address StubRoutines::_montgomeryMultiply = NULL;
 address StubRoutines::_montgomerySquare = NULL;
 
-double (* StubRoutines::_intrinsic_log   )(double) = NULL;
+address StubRoutines::_vectorizedMismatch = NULL;
+
+address StubRoutines::_dexp = NULL;
+address StubRoutines::_dlog = NULL;
+address StubRoutines::_dlog10 = NULL;
+address StubRoutines::_dpow = NULL;
+address StubRoutines::_dsin = NULL;
+address StubRoutines::_dcos = NULL;
+address StubRoutines::_dlibm_sin_cos_huge = NULL;
+address StubRoutines::_dlibm_reduce_pi04l = NULL;
+address StubRoutines::_dlibm_tan_cot_huge = NULL;
+address StubRoutines::_dtan = NULL;
+
 double (* StubRoutines::_intrinsic_log10 )(double) = NULL;
-double (* StubRoutines::_intrinsic_exp   )(double) = NULL;
-double (* StubRoutines::_intrinsic_pow   )(double, double) = NULL;
 double (* StubRoutines::_intrinsic_sin   )(double) = NULL;
 double (* StubRoutines::_intrinsic_cos   )(double) = NULL;
 double (* StubRoutines::_intrinsic_tan   )(double) = NULL;
@@ -172,7 +184,7 @@ extern void StubGenerator_generate(CodeBuffer* code, bool all); // only interfac
 void StubRoutines::initialize1() {
   if (_code1 == NULL) {
     ResourceMark rm;
-    TraceTime timer("StubRoutines generation 1", TraceStartupTime);
+    TraceTime timer("StubRoutines generation 1", TRACETIME_LOG(Info, startuptime));
     _code1 = BufferBlob::create("StubRoutines (1)", code_size1);
     if (_code1 == NULL) {
       vm_exit_out_of_memory(code_size1, OOM_MALLOC_ERROR, "CodeCache: no room for StubRoutines (1)");
@@ -181,7 +193,7 @@ void StubRoutines::initialize1() {
     StubGenerator_generate(&buffer, false);
     // When new stubs added we need to make sure there is some space left
     // to catch situation when we should increase size again.
-    assert(buffer.insts_remaining() > 200, "increase code_size1");
+    assert(code_size1 == 0 || buffer.insts_remaining() > 200, "increase code_size1");
   }
 }
 
@@ -191,12 +203,6 @@ typedef void (*arraycopy_fn)(address src, address dst, int count);
 
 // simple tests of generated arraycopy functions
 static void test_arraycopy_func(address func, int alignment) {
-  if (CodeCacheExtensions::use_pregenerated_interpreter() || !CodeCacheExtensions::is_executable(func)) {
-    // Exit safely if stubs were generated but cannot be used.
-    // Also excluding pregenerated interpreter since the code may depend on
-    // some registers being properly initialized (for instance Rthread)
-    return;
-  }
   int v = 0xcc;
   int v2 = 0x11;
   jlong lbuffer[8];
@@ -265,7 +271,7 @@ static void test_safefetchN() {
 void StubRoutines::initialize2() {
   if (_code2 == NULL) {
     ResourceMark rm;
-    TraceTime timer("StubRoutines generation 2", TraceStartupTime);
+    TraceTime timer("StubRoutines generation 2", TRACETIME_LOG(Info, startuptime));
     _code2 = BufferBlob::create("StubRoutines (2)", code_size2);
     if (_code2 == NULL) {
       vm_exit_out_of_memory(code_size2, OOM_MALLOC_ERROR, "CodeCache: no room for StubRoutines (2)");
@@ -274,7 +280,7 @@ void StubRoutines::initialize2() {
     StubGenerator_generate(&buffer, true);
     // When new stubs added we need to make sure there is some space left
     // to catch situation when we should increase size again.
-    assert(buffer.insts_remaining() > 200, "increase code_size2");
+    assert(code_size2 == 0 || buffer.insts_remaining() > 200, "increase code_size2");
   }
 
 #ifdef ASSERT

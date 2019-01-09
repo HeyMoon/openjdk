@@ -35,6 +35,7 @@
 #include "services/diagnosticFramework.hpp"
 #include "utilities/macros.hpp"
 #include "utilities/ostream.hpp"
+#include "oops/method.hpp"
 
 class HelpDCmd : public DCmdWithParser {
 protected:
@@ -173,6 +174,30 @@ public:
   virtual void execute(DCmdSource source, TRAPS);
 };
 
+#if INCLUDE_SERVICES
+#if INCLUDE_JVMTI
+class JVMTIAgentLoadDCmd : public DCmdWithParser {
+protected:
+  DCmdArgument<char*> _libpath;
+  DCmdArgument<char*> _option;
+public:
+  JVMTIAgentLoadDCmd(outputStream* output, bool heap);
+  static const char* name() { return "JVMTI.agent_load"; }
+  static const char* description() {
+    return "Load JVMTI native agent.";
+  }
+  static const char* impact() { return "Low"; }
+  static const JavaPermission permission() {
+    JavaPermission p = {"java.lang.management.ManagementPermission",
+                        "control", NULL};
+    return p;
+  }
+  static int num_arguments();
+  virtual void execute(DCmdSource source, TRAPS);
+};
+#endif // INCLUDE_JVMTI
+#endif // INCLUDE_SERVICES
+
 class VMDynamicLibrariesDCmd : public DCmd {
 public:
   VMDynamicLibrariesDCmd(outputStream* output, bool heap);
@@ -212,6 +237,23 @@ public:
   virtual void execute(DCmdSource source, TRAPS);
 };
 
+class VMInfoDCmd : public DCmd {
+public:
+  VMInfoDCmd(outputStream* output, bool heap) : DCmd(output, heap) { }
+  static const char* name() { return "VM.info"; }
+  static const char* description() {
+    return "Print information about JVM environment and status.";
+  }
+  static const char* impact() { return "Low"; }
+  static const JavaPermission permission() {
+    JavaPermission p = {"java.lang.management.ManagementPermission",
+                        "monitor", NULL};
+    return p;
+  }
+  static int num_arguments() { return 0; }
+  virtual void execute(DCmdSource source, TRAPS);
+};
+
 class SystemGCDCmd : public DCmd {
 public:
   SystemGCDCmd(outputStream* output, bool heap) : DCmd(output, heap) { }
@@ -238,6 +280,46 @@ public:
     }
     static int num_arguments() { return 0; }
     virtual void execute(DCmdSource source, TRAPS);
+};
+
+class HeapInfoDCmd : public DCmd {
+public:
+  HeapInfoDCmd(outputStream* output, bool heap) : DCmd(output, heap) { }
+  static const char* name() { return "GC.heap_info"; }
+  static const char* description() {
+    return "Provide generic Java heap information.";
+  }
+  static const char* impact() {
+    return "Medium";
+  }
+  static int num_arguments() { return 0; }
+  static const JavaPermission permission() {
+    JavaPermission p = {"java.lang.management.ManagementPermission",
+      "monitor", NULL};
+      return p;
+  }
+
+  virtual void execute(DCmdSource source, TRAPS);
+};
+
+class FinalizerInfoDCmd : public DCmd {
+public:
+  FinalizerInfoDCmd(outputStream* output, bool heap) : DCmd(output, heap) { }
+  static const char* name() { return "GC.finalizer_info"; }
+  static const char* description() {
+    return "Provide information about Java finalization queue.";
+  }
+  static const char* impact() {
+    return "Medium";
+  }
+  static int num_arguments() { return 0; }
+  static const JavaPermission permission() {
+    JavaPermission p = {"java.lang.management.ManagementPermission",
+      "monitor", NULL};
+      return p;
+  }
+
+  virtual void execute(DCmdSource source, TRAPS);
 };
 
 #if INCLUDE_SERVICES   // Heap dumping supported
@@ -304,7 +386,7 @@ public:
     return "GC.class_stats";
   }
   static const char* description() {
-    return "Provide statistics about Java class meta data. Requires -XX:+UnlockDiagnosticVMOptions.";
+    return "Provide statistics about Java class meta data.";
   }
   static const char* impact() {
     return "High: Depends on Java heap size and content.";
@@ -341,6 +423,22 @@ public:
   virtual void execute(DCmdSource source, TRAPS);
 };
 
+class TouchedMethodsDCmd : public DCmdWithParser {
+public:
+  TouchedMethodsDCmd(outputStream* output, bool heap);
+  static const char* name() {
+    return "VM.print_touched_methods";
+  }
+  static const char* description() {
+    return "Print all methods that have ever been touched during the lifetime of this JVM.";
+  }
+  static const char* impact() {
+    return "Medium: Depends on Java content.";
+  }
+  static int num_arguments();
+  virtual void execute(DCmdSource source, TRAPS);
+};
+
 // See also: thread_dump in attachListener.cpp
 class ThreadDumpDCmd : public DCmdWithParser {
 protected:
@@ -372,6 +470,7 @@ class JMXStartRemoteDCmd : public DCmdWithParser {
   // com.sun.management is omitted
 
   DCmdArgument<char *> _config_file;
+  DCmdArgument<char *> _jmxremote_host;
   DCmdArgument<char *> _jmxremote_port;
   DCmdArgument<char *> _jmxremote_rmi_port;
   DCmdArgument<char *> _jmxremote_ssl;
@@ -475,23 +574,6 @@ public:
 
 };
 
-class RotateGCLogDCmd : public DCmd {
-public:
-  RotateGCLogDCmd(outputStream* output, bool heap) : DCmd(output, heap) {}
-  static const char* name() { return "GC.rotate_log"; }
-  static const char* description() {
-    return "Force the GC log file to be rotated.";
-  }
-  static const char* impact() { return "Low"; }
-  virtual void execute(DCmdSource source, TRAPS);
-  static int num_arguments() { return 0; }
-  static const JavaPermission permission() {
-    JavaPermission p = {"java.lang.management.ManagementPermission",
-                        "control", NULL};
-    return p;
-  }
-};
-
 class CompileQueueDCmd : public DCmd {
 public:
   CompileQueueDCmd(outputStream* output, bool heap) : DCmd(output, heap) {}
@@ -543,6 +625,92 @@ public:
   }
   static const char* description() {
     return "Print code cache layout and bounds.";
+  }
+  static const char* impact() {
+    return "Low";
+  }
+  static const JavaPermission permission() {
+    JavaPermission p = {"java.lang.management.ManagementPermission",
+                        "monitor", NULL};
+    return p;
+  }
+  static int num_arguments() { return 0; }
+  virtual void execute(DCmdSource source, TRAPS);
+};
+
+class CompilerDirectivesPrintDCmd : public DCmd {
+public:
+  CompilerDirectivesPrintDCmd(outputStream* output, bool heap) : DCmd(output, heap) {}
+  static const char* name() {
+    return "Compiler.directives_print";
+  }
+  static const char* description() {
+    return "Print all active compiler directives.";
+  }
+  static const char* impact() {
+    return "Low";
+  }
+  static const JavaPermission permission() {
+    JavaPermission p = {"java.lang.management.ManagementPermission",
+                        "monitor", NULL};
+    return p;
+  }
+  static int num_arguments() { return 0; }
+  virtual void execute(DCmdSource source, TRAPS);
+};
+
+class CompilerDirectivesRemoveDCmd : public DCmd {
+public:
+  CompilerDirectivesRemoveDCmd(outputStream* output, bool heap) : DCmd(output, heap) {}
+  static const char* name() {
+    return "Compiler.directives_remove";
+  }
+  static const char* description() {
+    return "Remove latest added compiler directive.";
+  }
+  static const char* impact() {
+    return "Low";
+  }
+  static const JavaPermission permission() {
+    JavaPermission p = {"java.lang.management.ManagementPermission",
+                        "monitor", NULL};
+    return p;
+  }
+  static int num_arguments() { return 0; }
+  virtual void execute(DCmdSource source, TRAPS);
+};
+
+class CompilerDirectivesAddDCmd : public DCmdWithParser {
+protected:
+  DCmdArgument<char*> _filename;
+public:
+  CompilerDirectivesAddDCmd(outputStream* output, bool heap);
+  static const char* name() {
+    return "Compiler.directives_add";
+  }
+  static const char* description() {
+    return "Add compiler directives from file.";
+  }
+  static const char* impact() {
+    return "Low";
+  }
+  static const JavaPermission permission() {
+    JavaPermission p = {"java.lang.management.ManagementPermission",
+                        "monitor", NULL};
+    return p;
+  }
+  static int num_arguments();
+  virtual void execute(DCmdSource source, TRAPS);
+};
+
+class CompilerDirectivesClearDCmd : public DCmd {
+public:
+  CompilerDirectivesClearDCmd(outputStream* output, bool heap) : DCmd(output, heap) {}
+  static const char* name() {
+    return "Compiler.directives_clear";
+  }
+  static const char* description() {
+    return "Remove all compiler directives.";
   }
   static const char* impact() {
     return "Low";

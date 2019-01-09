@@ -47,7 +47,7 @@ import java.io.IOException;
  * If no content handler could be {@linkplain URLConnection#getContent() found},
  * URLConnection will look for a content handler in a user-definable set of places.
  * Users can define a vertical-bar delimited set of class prefixes
- * to search through by defining the <i>{@value java.net.URLConnection#contentPathProp}</i>
+ * to search through by defining the <i>{@link java.net.URLConnection#contentPathProp}</i>
  * property. The class name must be of the form:
  * <blockquote>
  *     <i>{package-prefix}.{major}.{minor}</i>
@@ -81,7 +81,7 @@ import java.io.IOException;
  * @see     java.net.URLConnection#setContentHandlerFactory(java.net.ContentHandlerFactory)
  * @since   1.0
  */
-abstract public class ContentHandler {
+public abstract class ContentHandler {
 
     /**
      * Given a URL connect stream positioned at the beginning of the
@@ -92,7 +92,7 @@ abstract public class ContentHandler {
      * @return     the object read by the {@code ContentHandler}.
      * @exception  IOException  if an I/O error occurs while reading the object.
      */
-    abstract public Object getContent(URLConnection urlc) throws IOException;
+    public abstract Object getContent(URLConnection urlc) throws IOException;
 
     /**
      * Given a URL connect stream positioned at the beginning of the

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -49,6 +49,8 @@ import sun.security.internal.spec.TlsPrfParameterSpec;
 import sun.security.ssl.CipherSuite.*;
 import static sun.security.ssl.CipherSuite.PRF.*;
 import sun.security.util.KeyUtil;
+import sun.security.util.MessageDigestSpi2;
+import sun.security.provider.certpath.OCSPResponse;
 
 /**
  * Many data structures are involved in the handshake messages.  These
@@ -296,7 +298,7 @@ static final class ClientHello extends HandshakeMessage {
 
     HelloExtensions extensions = new HelloExtensions();
 
-    private final static byte[]  NULL_COMPRESSION = new byte[] {0};
+    private static final byte[]  NULL_COMPRESSION = new byte[] {0};
 
     ClientHello(SecureRandom generator, ProtocolVersion protocolVersion,
             SessionId sessionId, CipherSuiteList cipherSuites,
@@ -310,11 +312,6 @@ static final class ClientHello extends HandshakeMessage {
             this.cookie = new byte[0];
         } else {
             this.cookie = null;
-        }
-
-        if (cipherSuites.containsEC()) {
-            extensions.add(SupportedEllipticCurvesExtension.DEFAULT);
-            extensions.add(SupportedEllipticPointFormatsExtension.DEFAULT);
         }
 
         clnt_random = new RandomCookie(generator);
@@ -391,6 +388,29 @@ static final class ClientHello extends HandshakeMessage {
         }
 
         cookieDigest.update(hos.toByteArray());
+    }
+
+    // Add status_request extension type
+    void addCertStatusRequestExtension() {
+        extensions.add(new CertStatusReqExtension(StatusRequestType.OCSP,
+                new OCSPStatusRequest()));
+    }
+
+    // Add status_request_v2 extension type
+    void addCertStatusReqListV2Extension() {
+        // Create a default OCSPStatusRequest that we can use for both
+        // OCSP_MULTI and OCSP request list items.
+        OCSPStatusRequest osr = new OCSPStatusRequest();
+        List<CertStatusReqItemV2> itemList = new ArrayList<>(2);
+        itemList.add(new CertStatusReqItemV2(StatusRequestType.OCSP_MULTI,
+                osr));
+        itemList.add(new CertStatusReqItemV2(StatusRequestType.OCSP, osr));
+        extensions.add(new CertStatusReqListV2Extension(itemList));
+    }
+
+    // add application_layer_protocol_negotiation extension
+    void addALPNExtension(String[] applicationProtocols) throws SSLException {
+        extensions.add(new ALPNExtension(applicationProtocols));
     }
 
     @Override
@@ -636,6 +656,240 @@ class CertificateMsg extends HandshakeMessage
 }
 
 /*
+ * CertificateStatus ... SERVER --> CLIENT
+ *
+ * When a ClientHello asserting the status_request or status_request_v2
+ * extensions is accepted by the server, it will fetch and return one
+ * or more status responses in this handshake message.
+ *
+ * NOTE: Like the Certificate handshake message, this can potentially
+ * be a very large message both due to the size of multiple status
+ * responses and the certificate chains that are often attached to them.
+ * Up to 2^24 bytes of status responses may be sent, possibly fragmented
+ * over multiple TLS records.
+ */
+static final class CertificateStatus extends HandshakeMessage
+{
+    private final StatusRequestType statusType;
+    private int encodedResponsesLen;
+    private int messageLength = -1;
+    private List<byte[]> encodedResponses;
+
+    @Override
+    int messageType() { return ht_certificate_status; }
+
+    /**
+     * Create a CertificateStatus message from the certificates and their
+     * respective OCSP responses
+     *
+     * @param type an indication of the type of response (OCSP or OCSP_MULTI)
+     * @param responses a {@code List} of OCSP responses in DER-encoded form.
+     *      For the OCSP type, only the first entry in the response list is
+     *      used, and must correspond to the end-entity certificate sent to the
+     *      peer.  Zero-length or null values for the response data are not
+     *      allowed for the OCSP type.  For the OCSP_MULTI type, each entry in
+     *      the list should match its corresponding certificate sent in the
+     *      Server Certificate message.  Where an OCSP response does not exist,
+     *      either a zero-length array or a null value should be used.
+     *
+     * @throws SSLException if an unsupported StatusRequestType or invalid
+     *      OCSP response data is provided.
+     */
+    CertificateStatus(StatusRequestType type, X509Certificate[] chain,
+            Map<X509Certificate, byte[]> responses) {
+        statusType = type;
+        encodedResponsesLen = 0;
+        encodedResponses = new ArrayList<>(chain.length);
+
+        Objects.requireNonNull(chain, "Null chain not allowed");
+        Objects.requireNonNull(responses, "Null responses not allowed");
+
+        if (statusType == StatusRequestType.OCSP) {
+            // Just get the response for the end-entity certificate
+            byte[] respDER = responses.get(chain[0]);
+            if (respDER != null && respDER.length > 0) {
+                encodedResponses.add(respDER);
+                encodedResponsesLen = 3 + respDER.length;
+            } else {
+                throw new IllegalArgumentException("Zero-length or null " +
+                        "OCSP Response");
+            }
+        } else if (statusType == StatusRequestType.OCSP_MULTI) {
+            for (X509Certificate cert : chain) {
+                byte[] respDER = responses.get(cert);
+                if (respDER != null) {
+                    encodedResponses.add(respDER);
+                    encodedResponsesLen += (respDER.length + 3);
+                } else {
+                    // If we cannot find a response for a given certificate
+                    // then use a zero-length placeholder.
+                    encodedResponses.add(new byte[0]);
+                    encodedResponsesLen += 3;
+                }
+            }
+        } else {
+            throw new IllegalArgumentException(
+                    "Unsupported StatusResponseType: " + statusType);
+        }
+    }
+
+    /**
+     * Decode the CertificateStatus handshake message coming from a
+     * {@code HandshakeInputStream}.
+     *
+     * @param input the {@code HandshakeInputStream} containing the
+     * CertificateStatus message bytes.
+     *
+     * @throws SSLHandshakeException if a zero-length response is found in the
+     * OCSP response type, or an unsupported response type is detected.
+     * @throws IOException if a decoding error occurs.
+     */
+    CertificateStatus(HandshakeInStream input) throws IOException {
+        encodedResponsesLen = 0;
+        encodedResponses = new ArrayList<>();
+
+        statusType = StatusRequestType.get(input.getInt8());
+        if (statusType == StatusRequestType.OCSP) {
+            byte[] respDER = input.getBytes24();
+            // Convert the incoming bytes to a OCSPResponse strucutre
+            if (respDER.length > 0) {
+                encodedResponses.add(respDER);
+                encodedResponsesLen = 3 + respDER.length;
+            } else {
+                throw new SSLHandshakeException("Zero-length OCSP Response");
+            }
+        } else if (statusType == StatusRequestType.OCSP_MULTI) {
+            int respListLen = input.getInt24();
+            encodedResponsesLen = respListLen;
+
+            // Add each OCSP reponse into the array list in the order
+            // we receive them off the wire.  A zero-length array is
+            // allowed for ocsp_multi, and means that a response for
+            // a given certificate is not available.
+            while (respListLen > 0) {
+                byte[] respDER = input.getBytes24();
+                encodedResponses.add(respDER);
+                respListLen -= (respDER.length + 3);
+            }
+
+            if (respListLen != 0) {
+                throw new SSLHandshakeException(
+                        "Bad OCSP response list length");
+            }
+        } else {
+            throw new SSLHandshakeException("Unsupported StatusResponseType: " +
+                    statusType);
+        }
+    }
+
+    /**
+     * Get the length of the CertificateStatus message.
+     *
+     * @return the length of the message in bytes.
+     */
+    @Override
+    int messageLength() {
+        int len = 1;            // Length + Status type
+
+        if (messageLength == -1) {
+            if (statusType == StatusRequestType.OCSP) {
+                len += encodedResponsesLen;
+            } else if (statusType == StatusRequestType.OCSP_MULTI) {
+                len += 3 + encodedResponsesLen;
+            }
+            messageLength = len;
+        }
+
+        return messageLength;
+    }
+
+    /**
+     * Encode the CertificateStatus handshake message and place it on a
+     * {@code HandshakeOutputStream}.
+     *
+     * @param s the HandshakeOutputStream that will the message bytes.
+     *
+     * @throws IOException if an encoding error occurs.
+     */
+    @Override
+    void send(HandshakeOutStream s) throws IOException {
+        s.putInt8(statusType.id);
+        if (statusType == StatusRequestType.OCSP) {
+            s.putBytes24(encodedResponses.get(0));
+        } else if (statusType == StatusRequestType.OCSP_MULTI) {
+            s.putInt24(encodedResponsesLen);
+            for (byte[] respBytes : encodedResponses) {
+                if (respBytes != null) {
+                    s.putBytes24(respBytes);
+                } else {
+                    s.putBytes24(null);
+                }
+            }
+        } else {
+            // It is highly unlikely that we will fall into this section of
+            // the code.
+            throw new SSLHandshakeException("Unsupported status_type: " +
+                    statusType.id);
+        }
+    }
+
+    /**
+     * Display a human-readable representation of the CertificateStatus message.
+     *
+     * @param s the PrintStream used to display the message data.
+     *
+     * @throws IOException if any errors occur while parsing the OCSP response
+     * bytes into a readable form.
+     */
+    @Override
+    void print(PrintStream s) throws IOException {
+        s.println("*** CertificateStatus");
+        if (debug != null && Debug.isOn("verbose")) {
+            s.println("Type: " + statusType);
+            if (statusType == StatusRequestType.OCSP) {
+                OCSPResponse oResp = new OCSPResponse(encodedResponses.get(0));
+                s.println(oResp);
+            } else if (statusType == StatusRequestType.OCSP_MULTI) {
+                int numResponses = encodedResponses.size();
+                s.println(numResponses +
+                        (numResponses == 1 ? " entry:" : " entries:"));
+                for (byte[] respDER : encodedResponses) {
+                    if (respDER.length > 0) {
+                        OCSPResponse oResp = new OCSPResponse(respDER);
+                        s.println(oResp);
+                    } else {
+                        s.println("<Zero-length entry>");
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Get the type of CertificateStatus message
+     *
+     * @return the {@code StatusRequestType} for this CertificateStatus
+     *      message.
+     */
+    StatusRequestType getType() {
+        return statusType;
+    }
+
+    /**
+     * Get the list of non-zero length OCSP responses.
+     * The responses returned in this list can be used to map to
+     * {@code X509Certificate} objects provided by the peer and
+     * provided to a {@code PKIXRevocationChecker}.
+     *
+     * @return an unmodifiable List of zero or more byte arrays, each one
+     *      consisting of a single status response.
+     */
+    List<byte[]> getResponses() {
+        return Collections.unmodifiableList(encodedResponses);
+    }
+}
+
+/*
  * ServerKeyExchange ... SERVER --> CLIENT
  *
  * The cipher suite selected, when combined with the certificate exchanged,
@@ -671,7 +925,7 @@ class CertificateMsg extends HandshakeMessage
  * exchange the premaster secret.  That's how RSA_EXPORT often works,
  * as well as how the DHE_* flavors work.
  */
-static abstract class ServerKeyExchange extends HandshakeMessage
+abstract static class ServerKeyExchange extends HandshakeMessage
 {
     @Override
     int messageType() { return ht_server_key_exchange; }
@@ -824,7 +1078,7 @@ static final
 class DH_ServerKeyExchange extends ServerKeyExchange
 {
     // Fix message encoding, see 4348279
-    private final static boolean dhKeyExchangeFix =
+    private static final boolean dhKeyExchangeFix =
         Debug.getBooleanProperty("com.sun.net.ssl.dhKeyExchangeFix", true);
 
     private byte[]                dh_p;        // 1 to 2^16 - 1 bytes
@@ -940,8 +1194,9 @@ class DH_ServerKeyExchange extends ServerKeyExchange
             if (!localSupportedSignAlgs.contains(
                     preferableSignatureAlgorithm)) {
                 throw new SSLHandshakeException(
-                        "Unsupported SignatureAndHashAlgorithm in " +
-                        "ServerKeyExchange message");
+                    "Unsupported SignatureAndHashAlgorithm in " +
+                    "ServerKeyExchange message: " +
+                    preferableSignatureAlgorithm);
             }
         } else {
             this.preferableSignatureAlgorithm = null;
@@ -974,7 +1229,8 @@ class DH_ServerKeyExchange extends ServerKeyExchange
                         sig = RSASignature.getInstance();
                         break;
                     default:
-                        throw new SSLKeyException("neither an RSA or a DSA key");
+                        throw new SSLKeyException(
+                            "neither an RSA or a DSA key: " + algorithm);
                 }
         }
 
@@ -1109,9 +1365,9 @@ static final
 class ECDH_ServerKeyExchange extends ServerKeyExchange {
 
     // constants for ECCurveType
-    private final static int CURVE_EXPLICIT_PRIME = 1;
-    private final static int CURVE_EXPLICIT_CHAR2 = 2;
-    private final static int CURVE_NAMED_CURVE    = 3;
+    private static final int CURVE_EXPLICIT_PRIME = 1;
+    private static final int CURVE_EXPLICIT_CHAR2 = 2;
+    private static final int CURVE_NAMED_CURVE    = 3;
 
     // id of the curve we are using
     private int curveId;
@@ -1141,7 +1397,7 @@ class ECDH_ServerKeyExchange extends ServerKeyExchange {
         ECParameterSpec params = publicKey.getParams();
         ECPoint point = publicKey.getW();
         pointBytes = JsseJce.encodePoint(point, params.getCurve());
-        curveId = SupportedEllipticCurvesExtension.getCurveIndex(params);
+        curveId = EllipticCurvesExtension.getCurveIndex(params);
 
         if (privateKey == null) {
             // ECDH_anon
@@ -1179,13 +1435,11 @@ class ECDH_ServerKeyExchange extends ServerKeyExchange {
         // the supported curves during the exchange of the Hello messages.
         if (curveType == CURVE_NAMED_CURVE) {
             curveId = input.getInt16();
-            if (SupportedEllipticCurvesExtension.isSupported(curveId)
-                    == false) {
+            if (!EllipticCurvesExtension.isSupported(curveId)) {
                 throw new SSLHandshakeException(
                     "Unsupported curveId: " + curveId);
             }
-            String curveOid =
-                SupportedEllipticCurvesExtension.getCurveOid(curveId);
+            String curveOid = EllipticCurvesExtension.getCurveOid(curveId);
             if (curveOid == null) {
                 throw new SSLHandshakeException(
                     "Unknown named curve: " + curveId);
@@ -1224,7 +1478,8 @@ class ECDH_ServerKeyExchange extends ServerKeyExchange {
                     preferableSignatureAlgorithm)) {
                 throw new SSLHandshakeException(
                         "Unsupported SignatureAndHashAlgorithm in " +
-                        "ServerKeyExchange message");
+                        "ServerKeyExchange message: " +
+                        preferableSignatureAlgorithm);
             }
         }
 
@@ -1264,7 +1519,8 @@ class ECDH_ServerKeyExchange extends ServerKeyExchange {
                 case "RSA":
                     return RSASignature.getInstance();
                 default:
-                    throw new NoSuchAlgorithmException("neither an RSA or a EC key");
+                    throw new NoSuchAlgorithmException(
+                        "neither an RSA or a EC key : " + keyAlgorithm);
             }
     }
 
@@ -1407,8 +1663,8 @@ class CertificateRequest extends HandshakeMessage
     static final int    cct_rsa_fixed_ecdh   = 65;
     static final int    cct_ecdsa_fixed_ecdh = 66;
 
-    private final static byte[] TYPES_NO_ECC = { cct_rsa_sign, cct_dss_sign };
-    private final static byte[] TYPES_ECC =
+    private static final byte[] TYPES_NO_ECC = { cct_rsa_sign, cct_dss_sign };
+    private static final byte[] TYPES_ECC =
         { cct_rsa_sign, cct_dss_sign, cct_ecdsa_sign };
 
     byte[]                types;               // 1 to 255 types
@@ -1471,7 +1727,8 @@ class CertificateRequest extends HandshakeMessage
             algorithmsLen = input.getInt16();
             if (algorithmsLen < 2) {
                 throw new SSLProtocolException(
-                        "Invalid supported_signature_algorithms field");
+                    "Invalid supported_signature_algorithms field: " +
+                    algorithmsLen);
             }
 
             algorithms = new ArrayList<SignatureAndHashAlgorithm>();
@@ -1490,7 +1747,8 @@ class CertificateRequest extends HandshakeMessage
 
             if (remains != 0) {
                 throw new SSLProtocolException(
-                        "Invalid supported_signature_algorithms field");
+                    "Invalid supported_signature_algorithms field. remains: " +
+                    remains);
             }
         } else {
             algorithms = new ArrayList<SignatureAndHashAlgorithm>();
@@ -1507,7 +1765,8 @@ class CertificateRequest extends HandshakeMessage
         }
 
         if (len != 0) {
-            throw new SSLProtocolException("Bad CertificateRequest DN length");
+            throw new SSLProtocolException(
+                "Bad CertificateRequest DN length: " + len);
         }
 
         authorities = v.toArray(new DistinguishedName[v.size()]);
@@ -1685,7 +1944,7 @@ static final class CertificateVerify extends HandshakeMessage {
     // the signature bytes
     private byte[] signature;
 
-    // protocol version being established using this ServerKeyExchange message
+    // protocol version being established using this CertificateVerify message
     ProtocolVersion protocolVersion;
 
     // the preferable signature algorithm used by this CertificateVerify message
@@ -1737,8 +1996,8 @@ static final class CertificateVerify extends HandshakeMessage {
             if (!localSupportedSignAlgs.contains(
                     preferableSignatureAlgorithm)) {
                 throw new SSLHandshakeException(
-                        "Unsupported SignatureAndHashAlgorithm in " +
-                        "ServerKeyExchange message");
+                    "Unsupported SignatureAndHashAlgorithm in " +
+                    "CertificateVerify message: " + preferableSignatureAlgorithm);
             }
         }
 
@@ -1866,63 +2125,14 @@ static final class CertificateVerify extends HandshakeMessage {
         md.update(temp);
     }
 
-    private final static Class<?> delegate;
-    private final static Field spiField;
-
-    static {
-        try {
-            delegate = Class.forName("java.security.MessageDigest$Delegate");
-            spiField = delegate.getDeclaredField("digestSpi");
-        } catch (Exception e) {
-            throw new RuntimeException("Reflection failed", e);
-        }
-        makeAccessible(spiField);
-    }
-
-    private static void makeAccessible(final AccessibleObject o) {
-        AccessController.doPrivileged(new PrivilegedAction<Object>() {
-            @Override
-            public Object run() {
-                o.setAccessible(true);
-                return null;
-            }
-        });
-    }
-
-    // ConcurrentHashMap does not allow null values, use this marker object
-    private final static Object NULL_OBJECT = new Object();
-
-    // cache Method objects per Spi class
-    // Note that this will prevent the Spi classes from being GC'd. We assume
-    // that is not a problem.
-    private final static Map<Class<?>,Object> methodCache =
-                                        new ConcurrentHashMap<>();
-
     private static void digestKey(MessageDigest md, SecretKey key) {
         try {
-            // Verify that md is implemented via MessageDigestSpi, not
-            // via JDK 1.1 style MessageDigest subclassing.
-            if (md.getClass() != delegate) {
-                throw new Exception("Digest is not a MessageDigestSpi");
-            }
-            MessageDigestSpi spi = (MessageDigestSpi)spiField.get(md);
-            Class<?> clazz = spi.getClass();
-            Object r = methodCache.get(clazz);
-            if (r == null) {
-                try {
-                    r = clazz.getDeclaredMethod("implUpdate", SecretKey.class);
-                    makeAccessible((Method)r);
-                } catch (NoSuchMethodException e) {
-                    r = NULL_OBJECT;
-                }
-                methodCache.put(clazz, r);
-            }
-            if (r == NULL_OBJECT) {
+            if (md instanceof MessageDigestSpi2) {
+                ((MessageDigestSpi2)md).engineUpdate(key);
+            } else {
                 throw new Exception(
                     "Digest does not support implUpdate(SecretKey)");
             }
-            Method update = (Method)r;
-            update.invoke(spi, key);
         } catch (Exception e) {
             throw new RuntimeException(
                 "Could not obtain encoded key and "
@@ -1988,10 +2198,10 @@ static final class CertificateVerify extends HandshakeMessage {
 static final class Finished extends HandshakeMessage {
 
     // constant for a Finished message sent by the client
-    final static int CLIENT = 1;
+    static final int CLIENT = 1;
 
     // constant for a Finished message sent by the server
-    final static int SERVER = 2;
+    static final int SERVER = 2;
 
     // enum Sender:  "CLNT" and "SRVR"
     private static final byte[] SSL_CLIENT = { 0x43, 0x4C, 0x4E, 0x54 };
@@ -2106,7 +2316,8 @@ static final class Finished extends HandshakeMessage {
                 SecretKey prfKey = kg.generateKey();
                 if ("RAW".equals(prfKey.getFormat()) == false) {
                     throw new ProviderException(
-                        "Invalid PRF output, format must be RAW");
+                        "Invalid PRF output, format must be RAW. " +
+                        "Format received: " + prfKey.getFormat());
                 }
                 byte[] finished = prfKey.getEncoded();
                 return finished;

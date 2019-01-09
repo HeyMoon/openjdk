@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 SAP AG. All rights reserved.
+ * Copyright (c) 2012 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,7 +34,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 /**
  * AsynchronousChannelGroup implementation based on the AIX pollset framework.

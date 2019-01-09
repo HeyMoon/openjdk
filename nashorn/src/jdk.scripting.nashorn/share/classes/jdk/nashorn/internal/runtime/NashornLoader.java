@@ -26,28 +26,43 @@
 package jdk.nashorn.internal.runtime;
 
 import java.io.File;
+import java.io.InputStream;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.security.AccessController;
 import java.security.CodeSource;
 import java.security.Permission;
 import java.security.PermissionCollection;
+import java.security.PrivilegedAction;
 import java.security.Permissions;
 import java.security.SecureClassLoader;
-import jdk.nashorn.tools.Shell;
 
 /**
  * Superclass for Nashorn class loader classes.
  */
 abstract class NashornLoader extends SecureClassLoader {
-    private static final String OBJECTS_PKG        = "jdk.nashorn.internal.objects";
-    private static final String RUNTIME_PKG        = "jdk.nashorn.internal.runtime";
-    private static final String RUNTIME_ARRAYS_PKG = "jdk.nashorn.internal.runtime.arrays";
-    private static final String RUNTIME_LINKER_PKG = "jdk.nashorn.internal.runtime.linker";
-    private static final String SCRIPTS_PKG        = "jdk.nashorn.internal.scripts";
+    protected static final String OBJECTS_PKG        = "jdk.nashorn.internal.objects";
+    protected static final String RUNTIME_PKG        = "jdk.nashorn.internal.runtime";
+    protected static final String RUNTIME_ARRAYS_PKG = "jdk.nashorn.internal.runtime.arrays";
+    protected static final String RUNTIME_LINKER_PKG = "jdk.nashorn.internal.runtime.linker";
+    protected static final String SCRIPTS_PKG        = "jdk.nashorn.internal.scripts";
+    protected static final String OBJECTS_PKG_INTERNAL        = "jdk/nashorn/internal/objects";
+    protected static final String RUNTIME_PKG_INTERNAL        = "jdk/nashorn/internal/runtime";
+    protected static final String RUNTIME_ARRAYS_PKG_INTERNAL = "jdk/nashorn/internal/runtime/arrays";
+    protected static final String RUNTIME_LINKER_PKG_INTERNAL = "jdk/nashorn/internal/runtime/linker";
+    protected static final String SCRIPTS_PKG_INTERNAL        = "jdk/nashorn/internal/scripts";
+
+    static final Module NASHORN_MODULE = Context.class.getModule();
 
     private static final Permission[] SCRIPT_PERMISSIONS;
+
+    private static final String MODULE_MANIPULATOR_NAME = SCRIPTS_PKG + ".ModuleGraphManipulator";
+    private static final byte[] MODULE_MANIPULATOR_BYTES = readModuleManipulatorBytes();
 
     static {
         /*
@@ -66,8 +81,43 @@ abstract class NashornLoader extends SecureClassLoader {
         };
     }
 
+    // addExport Method object on ModuleGraphManipulator
+    // class loaded by this loader
+    private Method addModuleExport;
+
     NashornLoader(final ClassLoader parent) {
         super(parent);
+    }
+
+    void loadModuleManipulator() {
+        final Class<?> clazz = defineClass(MODULE_MANIPULATOR_NAME,
+                MODULE_MANIPULATOR_BYTES, 0, MODULE_MANIPULATOR_BYTES.length);
+        // force class initialization so that <clinit> runs!
+        try {
+            Class.forName(MODULE_MANIPULATOR_NAME, true, this);
+        } catch (final Exception ex) {
+            throw new RuntimeException(ex);
+        }
+        final PrivilegedAction<Void> pa = () -> {
+            try {
+                addModuleExport = clazz.getDeclaredMethod("addExport", Module.class);
+                addModuleExport.setAccessible(true);
+            } catch (final NoSuchMethodException | SecurityException ex) {
+                throw new RuntimeException(ex);
+            }
+            return null;
+        };
+        AccessController.doPrivileged(pa);
+    }
+
+    final void addModuleExport(final Module to) {
+        try {
+            addModuleExport.invoke(null, to);
+        } catch (final IllegalAccessException |
+                IllegalArgumentException |
+                InvocationTargetException ex) {
+            throw new RuntimeException(ex);
+        }
     }
 
     protected static void checkPackageAccess(final String name) {
@@ -103,10 +153,10 @@ abstract class NashornLoader extends SecureClassLoader {
     /**
      * Create a secure URL class loader for the given classpath
      * @param classPath classpath for the loader to search from
+     * @param parent the parent class loader for the new class loader
      * @return the class loader
      */
-    static ClassLoader createClassLoader(final String classPath) {
-        final ClassLoader parent = Shell.class.getClassLoader();
+    static ClassLoader createClassLoader(final String classPath, final ClassLoader parent) {
         final URL[] urls = pathToURLs(classPath);
         return URLClassLoader.newInstance(urls, parent);
     }
@@ -163,6 +213,18 @@ abstract class NashornLoader extends SecureClassLoader {
         } catch (final MalformedURLException e) {
             throw new IllegalArgumentException("file");
         }
+    }
+
+    private static byte[] readModuleManipulatorBytes() {
+        final PrivilegedAction<byte[]> pa = () -> {
+            final String res = "/"+ MODULE_MANIPULATOR_NAME.replace('.', '/') + ".class";
+            try (InputStream in = NashornLoader.class.getResourceAsStream(res)) {
+                return in.readAllBytes();
+            } catch (final IOException exp) {
+                throw new UncheckedIOException(exp);
+            }
+        };
+        return AccessController.doPrivileged(pa);
     }
 }
 

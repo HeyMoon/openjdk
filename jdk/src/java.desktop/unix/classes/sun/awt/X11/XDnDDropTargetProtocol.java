@@ -35,7 +35,7 @@ import java.io.IOException;
 
 import sun.util.logging.PlatformLogger;
 
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 /**
  * XDropTargetProtocol implementation for XDnD protocol.
@@ -70,7 +70,7 @@ class XDnDDropTargetProtocol extends XDropTargetProtocol {
     /**
      * Creates an instance associated with the specified listener.
      *
-     * @throws NullPointerException if listener is <code>null</code>.
+     * @throws NullPointerException if listener is {@code null}.
      */
     static XDropTargetProtocol createInstance(XDropTargetProtocolListener listener) {
         return new XDnDDropTargetProtocol(listener);

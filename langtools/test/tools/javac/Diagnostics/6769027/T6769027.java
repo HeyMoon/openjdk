@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,26 +25,20 @@
  * @test
  * @bug     6769027 8006694
  * @summary Source line should be displayed immediately after the first diagnostic line
- *  temporarily workaround combo tests are causing time out in several platforms
- * @author  Maurizio Cimadamore
- * @library ../../lib
  * @modules jdk.compiler/com.sun.tools.javac.api
  *          jdk.compiler/com.sun.tools.javac.util
- * @build JavacTestingAbstractThreadedTest
  * @run main/othervm T6769027
  */
 
-// use /othervm to avoid jtreg timeout issues (CODETOOLS-7900047)
-// see JDK-8006746
+// use /othervm to avoid locale issues
 
 import java.net.URI;
+import java.util.ResourceBundle;
 import java.util.regex.Matcher;
 import javax.tools.*;
 import com.sun.tools.javac.util.*;
 
-public class T6769027
-    extends JavacTestingAbstractThreadedTest
-    implements Runnable {
+public class T6769027 {
 
     enum OutputKind {
         RAW("rawDiagnostics","rawDiagnostics"),
@@ -65,8 +59,8 @@ public class T6769027
 
     enum CaretKind {
         DEFAULT("", ""),
-        SHOW("showCaret","true"),
-        HIDE("showCaret","false");
+        SHOW("diags.showCaret","true"),
+        HIDE("diags.showCaret","false");
 
         String key;
         String value;
@@ -87,8 +81,8 @@ public class T6769027
 
     enum SourceLineKind {
         DEFAULT("", ""),
-        AFTER_SUMMARY("sourcePosition", "top"),
-        BOTTOM("sourcePosition", "bottom");
+        AFTER_SUMMARY("diags.sourcePosition", "top"),
+        BOTTOM("diags.sourcePosition", "bottom");
 
         String key;
         String value;
@@ -116,9 +110,9 @@ public class T6769027
 
         void init(Options opts) {
             if (this != DEFAULT) {
-                String flags = opts.get("diags");
+                String flags = opts.get("diags.formatterOptions");
                 flags = flags == null ? flag : flags + "," + flag;
-                opts.put("diags", flags);
+                opts.put("diags.formatterOptions", flags);
             }
         }
 
@@ -142,9 +136,9 @@ public class T6769027
 
         void init(Options opts) {
             if (this != DEFAULT) {
-                String flags = opts.get("diags");
+                String flags = opts.get("diags.formatterOptions");
                 flags = flags == null ? flag : flags + "," + flag;
-                opts.put("diags", flags);
+                opts.put("diags.formatterOptions", flags);
             }
         }
 
@@ -249,11 +243,11 @@ public class T6769027
     }
 
     enum MultilinePolicy {
-        ENABLED(0, "multilinePolicy", "enabled"),
-        DISABLED(1, "multilinePolicy", "disabled"),
-        LIMIT_LENGTH(2, "multilinePolicy", "limit:1:*"),
-        LIMIT_DEPTH(3, "multilinePolicy", "limit:*:1"),
-        LIMIT_BOTH(4, "multilinePolicy", "limit:1:1");
+        ENABLED(0, "diags.multilinePolicy", "enabled"),
+        DISABLED(1, "diags.multilinePolicy", "disabled"),
+        LIMIT_LENGTH(2, "diags.multilinePolicy", "limit:1:*"),
+        LIMIT_DEPTH(3, "diags.multilinePolicy", "limit:*:1"),
+        LIMIT_BOTH(4, "diags.multilinePolicy", "limit:1:1");
 
         String name;
         String value;
@@ -324,11 +318,6 @@ public class T6769027
         }
 
         @Override
-        protected java.io.PrintWriter getWriterForDiagnosticType(JCDiagnostic.DiagnosticType dt) {
-            return outWriter;
-        }
-
-        @Override
         protected boolean shouldReport(JavaFileObject jfo, int pos) {
             return true;
         }
@@ -368,7 +357,6 @@ public class T6769027
         this.subdiagsIndent = subdiagsIndent;
     }
 
-    @Override
     public void run() {
         Context ctx = new Context();
         Options options = Options.instance(ctx);
@@ -383,10 +371,10 @@ public class T6769027
         indentString += (detailsIndent == IndentKind.CUSTOM) ? "|3" : "|0";
         indentString += (sourceIndent == IndentKind.CUSTOM) ? "|3" : "|0";
         indentString += (subdiagsIndent == IndentKind.CUSTOM) ? "|3" : "|0";
-        options.put("diagsIndentation", indentString);
+        options.put("diags.indent", indentString);
         MyLog log = new MyLog(ctx);
         JavacMessages messages = JavacMessages.instance(ctx);
-        messages.add("tester");
+        messages.add(locale -> ResourceBundle.getBundle("tester", locale));
         JCDiagnostic.Factory diags = JCDiagnostic.Factory.instance(ctx);
         log.useSource(new MyFileObject("This is a source line"));
         JCDiagnostic d = diags.error(null, log.currentSource(),
@@ -419,7 +407,7 @@ public class T6769027
                                                 for (IndentKind detailsIndent : IndentKind.values()) {
                                                     for (IndentKind sourceIndent : IndentKind.values()) {
                                                         for (IndentKind subdiagsIndent : IndentKind.values()) {
-                                                            pool.execute(new T6769027(outputKind,
+                                                            new T6769027(outputKind,
                                                                 errKind,
                                                                 multiKind,
                                                                 multiPolicy,
@@ -431,7 +419,7 @@ public class T6769027
                                                                 summaryIndent,
                                                                 detailsIndent,
                                                                 sourceIndent,
-                                                                subdiagsIndent));
+                                                                subdiagsIndent).run();
                                                         }
                                                     }
                                                 }
@@ -445,8 +433,6 @@ public class T6769027
                 }
             }
         }
-
-        checkAfterExec(false);
     }
 
     void printInfo(String msg, String errorLine) {
@@ -457,11 +443,11 @@ public class T6769027
                 " caret=" + caretKind + " sourcePosition=" + sourceLineKind +
                 " summaryIndent=" + summaryIndent + " detailsIndent=" + detailsIndent +
                 " sourceIndent=" + sourceIndent + " subdiagsIndent=" + subdiagsIndent;
-        errWriter.println(sep);
-        errWriter.println(desc);
-        errWriter.println(sep);
-        errWriter.println(msg);
-        errWriter.println("Diagnostic formatting problem - expected diagnostic...\n" + errorLine);
+        System.err.println(sep);
+        System.err.println(desc);
+        System.err.println(sep);
+        System.err.println(msg);
+        System.err.println("Diagnostic formatting problem - expected diagnostic...\n" + errorLine);
     }
 
     void checkOutput(String msg) {
@@ -494,8 +480,8 @@ public class T6769027
         }
 
         if (!msg.equals(errorLine)) {
-//            printInfo(msg, errorLine);
-            errCount.incrementAndGet();
+            printInfo(msg, errorLine);
+            throw new AssertionError("errors were found");
         }
     }
 

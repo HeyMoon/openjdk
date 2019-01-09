@@ -205,11 +205,9 @@ class TablePrintable implements Printable {
      */
     public int print(Graphics graphics, PageFormat pageFormat, int pageIndex)
                                                        throws PrinterException {
-
         // for easy access to these values
         final int imgWidth = (int)pageFormat.getImageableWidth();
         final int imgHeight = (int)pageFormat.getImageableHeight();
-
         if (imgWidth <= 0) {
             throw new PrinterException("Width of printable area is too small.");
         }
@@ -302,10 +300,12 @@ class TablePrintable implements Printable {
             // been divided by it
             int scaledWidth = (int)(imgWidth / sf);
             int scaledHeight = (int)((availableSpace - hclip.height) / sf);
-
             // calculate the area of the table to be printed for this page
             findNextClip(scaledWidth, scaledHeight);
 
+            if (!((table.getBounds()).intersects(clip))) {
+                return NO_SUCH_PAGE;
+            }
             last++;
         }
 
@@ -343,7 +343,6 @@ class TablePrintable implements Printable {
         tempRect.width = imgWidth;
         tempRect.height = availableSpace;
         g2d.clip(tempRect);
-
         // if we have a scale factor, scale the graphics object to fit
         // the entire width
         if (sf != 1.0D) {
@@ -381,6 +380,12 @@ class TablePrintable implements Printable {
         // print the current section of the table
         g2d.translate(-clip.x, -clip.y);
         g2d.clip(clip);
+
+        // set a property so that BasicTableUI#paint can know JTable printMode
+        // is FIT_WIDTH since TablePrintable.printMode is not accessible from BasicTableUI
+        if (printMode == JTable.PrintMode.FIT_WIDTH) {
+            table.putClientProperty("Table.printMode", JTable.PrintMode.FIT_WIDTH);
+        }
         table.print(g2d);
 
         // restore the original transform and clip
@@ -389,8 +394,37 @@ class TablePrintable implements Printable {
 
         // draw a box around the table
         g2d.setColor(Color.BLACK);
-        g2d.drawRect(0, 0, clip.width, hclip.height + clip.height);
 
+        // compute the visible portion of table and draw the rect around it
+        Rectangle visibleBounds = clip.intersection(table.getBounds());
+        Point upperLeft = visibleBounds.getLocation();
+        Point lowerRight = new Point(visibleBounds.x + visibleBounds.width,
+                                     visibleBounds.y + visibleBounds.height);
+
+        int rMin = table.rowAtPoint(upperLeft);
+        int rMax = table.rowAtPoint(lowerRight);
+        if (rMin == -1) {
+            rMin = 0;
+        }
+        if (rMax == -1) {
+            rMax = table.getRowCount();
+        }
+        int rowHeight = 0;
+        for(int visrow = rMin; visrow < rMax; visrow++) {
+            rowHeight += table.getRowHeight(visrow);
+        }
+        // If PrintMode is FIT_WIDTH, then draw rect for entire column width while
+        // printing irrespective of how many columns are visible in console
+        if (printMode == JTable.PrintMode.FIT_WIDTH) {
+            g2d.drawRect(0, 0, clip.width, hclip.height + rowHeight);
+        } else {
+            g2d.drawRect(0, 0, visibleBounds.width, hclip.height + rowHeight);
+        }
+
+        // clear the property
+        if (printMode == JTable.PrintMode.FIT_WIDTH) {
+            table.putClientProperty("Table.printMode", null);
+        }
         // dispose the graphics copy
         g2d.dispose();
 
@@ -509,7 +543,6 @@ class TablePrintable implements Printable {
             if (++col >= colCount) {
                 // reset col to 0 to indicate we're finished all columns
                 col = 0;
-
                 break;
             }
 
@@ -517,5 +550,4 @@ class TablePrintable implements Printable {
         } while (clip.width + colWidth <= pw);
 
     }
-
 }

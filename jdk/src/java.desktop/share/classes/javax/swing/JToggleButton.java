@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,15 +26,15 @@ package javax.swing;
 
 import java.awt.*;
 import java.awt.event.*;
+import java.beans.JavaBean;
+import java.beans.BeanProperty;
 
-import javax.swing.event.*;
 import javax.swing.plaf.*;
 import javax.accessibility.*;
 
 import java.io.ObjectOutputStream;
-import java.io.ObjectInputStream;
 import java.io.IOException;
-
+import java.util.Iterator;
 
 /**
  * An implementation of a two-state button.
@@ -68,15 +68,13 @@ import java.io.IOException;
  * has been added to the <code>java.beans</code> package.
  * Please see {@link java.beans.XMLEncoder}.
  *
- * @beaninfo
- *   attribute: isContainer false
- * description: An implementation of a two-state button.
- *
  * @see JRadioButton
  * @see JCheckBox
  * @author Jeff Dinkins
  * @since 1.2
  */
+@JavaBean(defaultProperty = "UIClassID", description = "An implementation of a two-state button.")
+@SwingContainer(false)
 @SuppressWarnings("serial") // Same-version serialization only
 public class JToggleButton extends AbstractButton implements Accessible {
 
@@ -195,9 +193,9 @@ public class JToggleButton extends AbstractButton implements Accessible {
      * @return String "ToggleButtonUI"
      * @see JComponent#getUIClassID
      * @see UIDefaults#getUI
-     * @beaninfo
-     *  description: A string that specifies the name of the L&amp;F class
      */
+    @BeanProperty(bound = false, description
+            = "A string that specifies the name of the L&amp;F class")
     public String getUIClassID() {
         return uiClassID;
     }
@@ -209,6 +207,96 @@ public class JToggleButton extends AbstractButton implements Accessible {
      */
     boolean shouldUpdateSelectedStateFromAction() {
         return true;
+    }
+
+    private JToggleButton getGroupSelection(FocusEvent.Cause cause) {
+        switch (cause) {
+          case ACTIVATION:
+          case TRAVERSAL:
+          case TRAVERSAL_UP:
+          case TRAVERSAL_DOWN:
+          case TRAVERSAL_FORWARD:
+          case TRAVERSAL_BACKWARD:
+            ButtonModel model = getModel();
+            JToggleButton selection = this;
+            if (model instanceof DefaultButtonModel) {
+                ButtonGroup group = ((DefaultButtonModel) model).getGroup();
+                if (group != null && group.getSelection() != null
+                                                  && !group.isSelected(model)) {
+                    Iterator<AbstractButton> iterator =
+                                               group.getElements().asIterator();
+                    while (iterator.hasNext()) {
+                        AbstractButton member = iterator.next();
+                        if (group.isSelected(member.getModel())) {
+                            if (member instanceof JToggleButton &&
+                                member.isVisible() && member.isDisplayable() &&
+                                member.isEnabled() && member.isFocusable()) {
+                                selection = (JToggleButton) member;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            return selection;
+          default:
+            return this;
+        }
+    }
+
+    /**
+     * If this toggle button is a member of the {@link ButtonGroup} which has
+     * another toggle button which is selected and can be the focus owner,
+     * and the focus cause argument denotes window activation or focus
+     * traversal action of any direction the result of the method execution
+     * is the same as calling
+     * {@link Component#requestFocus(FocusEvent.Cause)} on the toggle button
+     * selected in the group.
+     * In all other cases the result of the method is the same as calling
+     * {@link Component#requestFocus(FocusEvent.Cause)} on this toggle button.
+     *
+     * @param  cause the cause why the focus is requested
+     * @see ButtonGroup
+     * @see Component#requestFocus(FocusEvent.Cause)
+     * @see FocusEvent.Cause
+     *
+     * @since 9
+     */
+    @Override
+    public void requestFocus(FocusEvent.Cause cause) {
+        getGroupSelection(cause).requestFocusUnconditionally(cause);
+    }
+
+    private void requestFocusUnconditionally(FocusEvent.Cause cause) {
+        super.requestFocus(cause);
+    }
+
+    /**
+     * If this toggle button is a member of the {@link ButtonGroup} which has
+     * another toggle button which is selected and can be the focus owner,
+     * and the focus cause argument denotes window activation or focus
+     * traversal action of any direction the result of the method execution
+     * is the same as calling
+     * {@link Component#requestFocusInWindow(FocusEvent.Cause)} on the toggle
+     * button selected in the group.
+     * In all other cases the result of the method is the same as calling
+     * {@link Component#requestFocusInWindow(FocusEvent.Cause)} on this toggle
+     * button.
+     *
+     * @param  cause the cause why the focus is requested
+     * @see ButtonGroup
+     * @see Component#requestFocusInWindow(FocusEvent.Cause)
+     * @see FocusEvent.Cause
+     *
+     * @since 9
+     */
+    public boolean requestFocusInWindow(FocusEvent.Cause cause) {
+        return getGroupSelection(cause)
+                                    .requestFocusInWindowUnconditionally(cause);
+    }
+
+    private boolean requestFocusInWindowUnconditionally(FocusEvent.Cause cause) {
+        return super.requestFocusInWindow(cause);
     }
 
     // *********************************************************************
@@ -284,6 +372,7 @@ public class JToggleButton extends AbstractButton implements Accessible {
         /**
          * Sets the pressed state of the toggle button.
          */
+        @SuppressWarnings("deprecation")
         public void setPressed(boolean b) {
             if ((isPressed() == b) || !isEnabled()) {
                 return;
@@ -362,10 +451,9 @@ public class JToggleButton extends AbstractButton implements Accessible {
      *
      * @return an AccessibleJToggleButton that serves as the
      *         AccessibleContext of this JToggleButton
-     * @beaninfo
-     *       expert: true
-     *  description: The AccessibleContext associated with this ToggleButton.
      */
+    @BeanProperty(bound = false, expert = true, description
+            = "The AccessibleContext associated with this ToggleButton.")
     public AccessibleContext getAccessibleContext() {
         if (accessibleContext == null) {
             accessibleContext = new AccessibleJToggleButton();

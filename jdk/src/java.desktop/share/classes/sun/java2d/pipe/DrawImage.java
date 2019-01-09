@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -340,8 +340,8 @@ public class DrawImage implements DrawImagePipe
      * <li> Image will be used only once and acceleration caching wouldn't help
      * </ul>
      */
-    BufferedImage makeBufferedImage(Image img, Color bgColor, int type,
-                                    int sx1, int sy1, int sx2, int sy2)
+    private BufferedImage makeBufferedImage(Image img, Color bgColor, int type,
+                                            int sx1, int sy1, int sx2, int sy2)
     {
         final int width = sx2 - sx1;
         final int height = sy2 - sy1;
@@ -401,10 +401,10 @@ public class DrawImage implements DrawImagePipe
         }
 
         Region clip = sg.getCompClip();
-        final int dx1 = Math.max((int) Math.floor(ddx1), clip.lox);
-        final int dy1 = Math.max((int) Math.floor(ddy1), clip.loy);
-        final int dx2 = Math.min((int) Math.ceil(ddx2), clip.hix);
-        final int dy2 = Math.min((int) Math.ceil(ddy2), clip.hiy);
+        final int dx1 = Math.max((int) Math.floor(ddx1), clip.getLoX());
+        final int dy1 = Math.max((int) Math.floor(ddy1), clip.getLoY());
+        final int dx2 = Math.min((int) Math.ceil(ddx2), clip.getHiX());
+        final int dy2 = Math.min((int) Math.ceil(ddy2), clip.getHiY());
         if (dx2 <= dx1 || dy2 <= dy1) {
             // empty destination means no output
             return;
@@ -430,10 +430,16 @@ public class DrawImage implements DrawImagePipe
 
         if (isBgOperation(srcData, bgColor)) {
             // We cannot perform bg operations during transform so make
-            // an opaque temp image with the appropriate background
-            // and work from there.
-            img = makeBufferedImage(img, bgColor, BufferedImage.TYPE_INT_RGB,
-                                    sx1, sy1, sx2, sy2);
+            // a temp image with the appropriate background based on
+            // background alpha value and work from there. If background
+            // alpha is opaque use INT_RGB else use INT_ARGB so that we
+            // will not lose translucency of background.
+
+            int bgAlpha = bgColor.getAlpha();
+            int type = ((bgAlpha == 255)
+                        ? BufferedImage.TYPE_INT_RGB
+                        : BufferedImage.TYPE_INT_ARGB);
+            img = makeBufferedImage(img, bgColor, type, sx1, sy1, sx2, sy2);
             // Temp image has appropriate subimage at 0,0 now.
             sx2 -= sx1;
             sy2 -= sy1;
@@ -736,9 +742,10 @@ public class DrawImage implements DrawImagePipe
         atfm.scale(m00, m11);
         atfm.translate(srcX-sx1, srcY-sy1);
 
-        final int scale = SurfaceManager.getImageScale(img);
-        final int imgW = img.getWidth(null) * scale;
-        final int imgH = img.getHeight(null) * scale;
+        final double scaleX = SurfaceManager.getImageScaleX(img);
+        final double scaleY = SurfaceManager.getImageScaleY(img);
+        final int imgW = (int) Math.ceil(img.getWidth(null) * scaleX);
+        final int imgH = (int) Math.ceil(img.getHeight(null) * scaleY);
         srcW += srcX;
         srcH += srcY;
         // Make sure we are not out of bounds
@@ -953,6 +960,12 @@ public class DrawImage implements DrawImagePipe
               bgColor.getTransparency() == Transparency.OPAQUE)))
         {
             comp = CompositeType.SrcNoEa;
+        }
+        if (srcData == dstData && sx == dx && sy == dy
+                && CompositeType.SrcNoEa.equals(comp)) {
+            // Performance optimization. We skip the Blit/BlitBG if we know that
+            // it will be noop.
+            return;
         }
         if (!isBgOperation(srcData, bgColor)) {
             Blit blit = Blit.getFromCache(srcType, comp, dstType);

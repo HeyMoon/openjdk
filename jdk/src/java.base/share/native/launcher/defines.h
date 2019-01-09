@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,45 +28,34 @@
 
 #include "java.h"
 
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+
 /*
  * This file contains commonly defined constants used only by main.c
  * and should not be included by another file.
  */
-#ifndef FULL_VERSION
+#ifndef VERSION_STRING
 /* make sure the compilation fails */
-#error "FULL_VERSION must be defined"
+#error "VERSION_STRING must be defined"
 #endif
 
-#if defined(JDK_MAJOR_VERSION) && defined(JDK_MINOR_VERSION)
-#define DOT_VERSION JDK_MAJOR_VERSION "." JDK_MINOR_VERSION
-#else
-/* make sure the compilation fails */
-#error "JDK_MAJOR_VERSION and JDK_MINOR_VERSION must be defined"
-#endif
-
+/* Unused, but retained for JLI_Launch compatibility*/
+#define DOT_VERSION "0.0"
 
 #ifdef JAVA_ARGS
 #define HAS_JAVA_ARGS JNI_TRUE
-static const char* const_progname = "java";
-static const char* const_jargs[] = JAVA_ARGS;
-/*
- * ApplicationHome is prepended to each of these entries; the resulting
- * strings are concatenated (separated by PATH_SEPARATOR) and used as the
- * value of -cp option to the launcher.
- */
-#ifndef APP_CLASSPATH
-#define APP_CLASSPATH        { "/lib/tools.jar", "/classes" }
-#endif /* APP_CLASSPATH */
-static const char* const_appclasspath[] = APP_CLASSPATH;
-#else  /* !JAVA_ARGS */
-#define HAS_JAVA_ARGS JNI_FALSE
 #ifdef PROGNAME
 static const char* const_progname = PROGNAME;
 #else
 static char* const_progname = NULL;
 #endif
+static const char* const_jargs[] = JAVA_ARGS;
+#else  /* !JAVA_ARGS */
+#define HAS_JAVA_ARGS JNI_FALSE
+static const char* const_progname = "java";
 static const char** const_jargs = NULL;
-static const char** const_appclasspath = NULL;
+static const char* const_appclasspath[] = { NULL };
 #endif /* JAVA_ARGS */
 
 #ifdef LAUNCHER_NAME
@@ -81,12 +70,9 @@ static const jboolean const_cpwildcard = JNI_TRUE;
 static const jboolean const_cpwildcard = JNI_FALSE;
 #endif /* EXPAND_CLASSPATH_WILDCARDS */
 
-#if defined(NEVER_ACT_AS_SERVER_CLASS_MACHINE)
-static const jint const_ergo_class = NEVER_SERVER_CLASS;
-#elif defined(ALWAYS_ACT_AS_SERVER_CLASS_MACHINE)
-static const jint const_ergo_class = ALWAYS_SERVER_CLASS;
+#ifdef ENABLE_ARG_FILES
+static const jboolean const_disable_argfile = JNI_FALSE;
 #else
-static const jint const_ergo_class = DEFAULT_POLICY;
-#endif /* NEVER_ACT_AS_SERVER_CLASS_MACHINE */
-
+static const jboolean const_disable_argfile = JNI_TRUE;
+#endif
 #endif /*_DEFINES_H */

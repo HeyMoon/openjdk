@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1994, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1994, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,9 +25,7 @@
 
 package java.lang;
 
-import sun.misc.FloatingDecimal;
-import sun.misc.FloatConsts;
-import sun.misc.DoubleConsts;
+import jdk.internal.math.FloatingDecimal;
 import jdk.internal.HotSpotIntrinsicCandidate;
 
 /**
@@ -258,9 +256,12 @@ public final class Float extends Number implements Comparable<Float> {
      *
      * </ul>
      *
-     * <table border>
+     * <table class="plain">
      * <caption>Examples</caption>
+     * <thead>
      * <tr><th>Floating-point Value</th><th>Hexadecimal String</th>
+     * </thead>
+     * <tbody>
      * <tr><td>{@code 1.0}</td> <td>{@code 0x1.0p0}</td>
      * <tr><td>{@code -1.0}</td>        <td>{@code -0x1.0p0}</td>
      * <tr><td>{@code 2.0}</td> <td>{@code 0x1.0p1}</td>
@@ -275,6 +276,7 @@ public final class Float extends Number implements Comparable<Float> {
      *     <td>{@code 0x0.fffffep-126}</td>
      * <tr><td>{@code Float.MIN_VALUE}</td>
      *     <td>{@code 0x0.000002p-126}</td>
+     * </tbody>
      * </table>
      * @param   f   the {@code float} to be converted.
      * @return a hex string representation of the argument.
@@ -282,15 +284,15 @@ public final class Float extends Number implements Comparable<Float> {
      * @author Joseph D. Darcy
      */
     public static String toHexString(float f) {
-        if (Math.abs(f) < FloatConsts.MIN_NORMAL
+        if (Math.abs(f) < Float.MIN_NORMAL
             &&  f != 0.0f ) {// float subnormal
             // Adjust exponent to create subnormal double, then
             // replace subnormal double exponent with subnormal float
             // exponent
             String s = Double.toHexString(Math.scalb((double)f,
                                                      /* -1022+126 */
-                                                     DoubleConsts.MIN_EXPONENT-
-                                                     FloatConsts.MIN_EXPONENT));
+                                                     Double.MIN_EXPONENT-
+                                                     Float.MIN_EXPONENT));
             return s.replaceFirst("p-1022$", "p-126");
         }
         else // double string will be the same as float string
@@ -489,7 +491,7 @@ public final class Float extends Number implements Comparable<Float> {
      * @since 1.8
      */
      public static boolean isFinite(float f) {
-        return Math.abs(f) <= FloatConsts.MAX_VALUE;
+        return Math.abs(f) <= Float.MAX_VALUE;
     }
 
     /**
@@ -504,7 +506,13 @@ public final class Float extends Number implements Comparable<Float> {
      * represents the primitive {@code float} argument.
      *
      * @param   value   the value to be represented by the {@code Float}.
+     *
+     * @deprecated
+     * It is rarely appropriate to use this constructor. The static factory
+     * {@link #valueOf(float)} is generally a better choice, as it is
+     * likely to yield significantly better space and time performance.
      */
+    @Deprecated(since="9")
     public Float(float value) {
         this.value = value;
     }
@@ -514,7 +522,13 @@ public final class Float extends Number implements Comparable<Float> {
      * represents the argument converted to type {@code float}.
      *
      * @param   value   the value to be represented by the {@code Float}.
+     *
+     * @deprecated
+     * It is rarely appropriate to use this constructor. Instead, use the
+     * static factory method {@link #valueOf(float)} method as follows:
+     * {@code Float.valueOf((float)value)}.
      */
+    @Deprecated(since="9")
     public Float(double value) {
         this.value = (float)value;
     }
@@ -525,11 +539,17 @@ public final class Float extends Number implements Comparable<Float> {
      * represented by the string. The string is converted to a
      * {@code float} value as if by the {@code valueOf} method.
      *
-     * @param      s   a string to be converted to a {@code Float}.
-     * @throws  NumberFormatException  if the string does not contain a
-     *               parsable number.
-     * @see        java.lang.Float#valueOf(java.lang.String)
+     * @param   s   a string to be converted to a {@code Float}.
+     * @throws      NumberFormatException if the string does not contain a
+     *              parsable number.
+     *
+     * @deprecated
+     * It is rarely appropriate to use this constructor.
+     * Use {@link #parseFloat(String)} to convert a string to a
+     * {@code float} primitive, or use {@link #valueOf(String)}
+     * to convert a string to a {@code Float} object.
      */
+    @Deprecated(since="9")
     public Float(String s) throws NumberFormatException {
         value = parseFloat(s);
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@
 #include "oops/instanceKlass.hpp"
 #include "oops/oop.hpp"
 #include "utilities/hashtable.hpp"
+#include "utilities/ostream.hpp"
 
 class DictionaryEntry;
 class PSPromotionManager;
@@ -53,7 +54,8 @@ private:
   DictionaryEntry* get_entry(int index, unsigned int hash,
                              Symbol* name, ClassLoaderData* loader_data);
 
-  DictionaryEntry* bucket(int i) {
+protected:
+  DictionaryEntry* bucket(int i) const {
     return (DictionaryEntry*)Hashtable<Klass*, mtClass>::bucket(i);
   }
 
@@ -66,6 +68,7 @@ private:
     Hashtable<Klass*, mtClass>::add_entry(index, (HashtableEntry<Klass*, mtClass>*)new_entry);
   }
 
+  static size_t entry_size();
 public:
   Dictionary(int table_size);
   Dictionary(int table_size, HashtableBucket<mtClass>* t, int number_of_entries);
@@ -128,6 +131,9 @@ public:
   ProtectionDomainCacheEntry* cache_get(oop protection_domain);
 
   void print(bool details = true);
+#ifdef ASSERT
+  void printPerformanceInfoDetails();
+#endif // ASSERT
   void verify();
 };
 
@@ -194,14 +200,9 @@ private:
     return entry;
   }
 
-  static unsigned int compute_hash(oop protection_domain) {
-    return (unsigned int)(protection_domain->identity_hash());
-  }
+  static unsigned int compute_hash(oop protection_domain);
 
-  int index_for(oop protection_domain) {
-    return hash_to_index(compute_hash(protection_domain));
-  }
-
+  int index_for(oop protection_domain);
   ProtectionDomainCacheEntry* add_entry(int index, unsigned int hash, oop protection_domain);
   ProtectionDomainCacheEntry* find_entry(int index, oop protection_domain);
 
@@ -321,20 +322,19 @@ class DictionaryEntry : public HashtableEntry<Klass*, mtClass> {
     }
   }
 
-  bool equals(Symbol* class_name, ClassLoaderData* loader_data) const {
+  bool equals(const Symbol* class_name, ClassLoaderData* loader_data) const {
     Klass* klass = (Klass*)literal();
-    return (InstanceKlass::cast(klass)->name() == class_name &&
-            _loader_data == loader_data);
+    return (klass->name() == class_name && _loader_data == loader_data);
   }
 
-  void print() {
+  void print_count(outputStream *st) {
     int count = 0;
     for (ProtectionDomainEntry* current = _pd_set;
                                 current != NULL;
                                 current = current->_next) {
       count++;
     }
-    tty->print_cr("pd set = #%d", count);
+    st->print_cr("pd set count = #%d", count);
   }
 };
 

@@ -38,7 +38,7 @@ import sun.security.util.DerValue;
 import sun.security.util.DerInputStream;
 import sun.security.util.DerOutputStream;
 import sun.security.util.ObjectIdentifier;
-import sun.misc.HexDumpEncoder;
+import sun.security.util.HexDumpEncoder;
 
 /**
  * Class supporting any PKCS9 attributes.
@@ -186,7 +186,7 @@ public class PKCS9Attribute implements DerEncoder {
      */
     static final ObjectIdentifier[] PKCS9_OIDS = new ObjectIdentifier[18];
 
-    private final static Class<?> BYTE_ARRAY_CLASS;
+    private static final Class<?> BYTE_ARRAY_CLASS;
 
     static {   // static initializer for PKCS9_OIDS
         for (int i = 1; i < PKCS9_OIDS.length - 2; i++) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,7 +23,12 @@
 
 import java.io.FilePermission;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.lang.module.ModuleFinder;
+import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.ReflectPermission;
 import java.net.URI;
 import java.nio.file.FileSystem;
@@ -42,26 +47,30 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.PropertyPermission;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import jdk.internal.module.Modules;
 
 /**
  * @test
  * @bug 8065552
- * @summary test that all fields returned by getDeclaredFields() can be
- *          set accessible if the right permission is granted; this test
- *          loads all the classes in the BCL, get their declared fields,
+ * @summary test that all public fields returned by getDeclaredFields() can
+ *          be set accessible if the right permission is granted; this test
+ *          loads all classes and get their declared fields
  *          and call setAccessible(false) followed by setAccessible(true);
- * @run main/othervm FieldSetAccessibleTest UNSECURE
- * @run main/othervm FieldSetAccessibleTest SECURE
+ * @modules java.base/jdk.internal.module
+ * @run main/othervm --add-modules=ALL-SYSTEM FieldSetAccessibleTest UNSECURE
+ * @run main/othervm --add-modules=ALL-SYSTEM FieldSetAccessibleTest SECURE
  *
  * @author danielfuchs
  */
 public class FieldSetAccessibleTest {
 
-    static final List<String> skipped = new ArrayList<>();
     static final List<String> cantread = new ArrayList<>();
     static final List<String> failed = new ArrayList<>();
     static final AtomicLong classCount = new AtomicLong();
@@ -74,17 +83,47 @@ public class FieldSetAccessibleTest {
 
     // Test that all fields for any given class can be made accessibles
     static void testSetFieldsAccessible(Class<?> c) {
+        Module self = FieldSetAccessibleTest.class.getModule();
+        Module target = c.getModule();
+        String pn = c.getPackageName();
+        boolean exported = self.canRead(target) && target.isExported(pn, self);
         for (Field f : c.getDeclaredFields()) {
             fieldCount.incrementAndGet();
-            f.setAccessible(false);
-            f.setAccessible(true);
+
+            // setAccessible succeeds only if it's exported and the member
+            // is public and of a public class, or it's opened
+            // otherwise it would fail.
+            boolean isPublic = Modifier.isPublic(f.getModifiers()) &&
+                Modifier.isPublic(c.getModifiers());
+            boolean access = (exported && isPublic) || target.isOpen(pn, self);
+            try {
+                f.setAccessible(false);
+                f.setAccessible(true);
+                if (!access) {
+                    throw new RuntimeException(
+                        String.format("Expected InaccessibleObjectException is not thrown "
+                                      + "for field %s in class %s%n", f.getName(), c.getName()));
+                }
+            } catch (InaccessibleObjectException expected) {
+                if (access) {
+                    throw new RuntimeException(expected);
+                }
+            }
         }
     }
 
     // Performs a series of test on the given class.
     // At this time, we only call testSetFieldsAccessible(c)
-    public static boolean test(Class<?> c) {
-        //System.out.println(c.getName());
+    public static boolean test(Class<?> c, boolean addExports) {
+        Module self = FieldSetAccessibleTest.class.getModule();
+        Module target = c.getModule();
+        String pn = c.getPackageName();
+        boolean exported = self.canRead(target) && target.isExported(pn, self);
+        if (addExports && !exported) {
+            Modules.addExports(target, pn, self);
+            exported = true;
+        }
+
         classCount.incrementAndGet();
 
         // Call getDeclaredFields() and try to set their accessible flag.
@@ -154,23 +193,30 @@ public class FieldSetAccessibleTest {
         final long start = System.nanoTime();
         boolean classFound = false;
         int index = 0;
-        for (String s: iterable) {
+        for (String s : iterable) {
             if (index == maxIndex) break;
             try {
                 if (index < startIndex) continue;
-                if (test(s)) {
+                if (test(s, false)) {
                     classFound = true;
                 }
             } finally {
                 index++;
             }
         }
+
+        // Re-test with all packages exported
+        for (String s : iterable) {
+            test(s, true);
+        }
+
+        classCount.set(classCount.get() / 2);
+        fieldCount.set(fieldCount.get() / 2);
         long elapsed = System.nanoTime() - start;
         long secs = elapsed / 1000_000_000;
         long millis = (elapsed % 1000_000_000) / 1000_000;
         long nanos  = elapsed % 1000_000;
         System.out.println("Unreadable path elements: " + cantread);
-        System.out.println("Skipped path elements: " + skipped);
         System.out.println("Failed path elements: " + failed);
         printSummary(secs, millis, nanos);
 
@@ -187,17 +233,19 @@ public class FieldSetAccessibleTest {
         }
     }
 
-    static boolean test(String s) {
+    static boolean test(String s, boolean addExports) {
+        String clsName = s.replace('/', '.').substring(0, s.length() - 6);
         try {
-            if (s.startsWith("WrapperGenerator")) {
-                System.out.println("Skipping "+ s);
-                return false;
-            }
+            System.out.println("Loading " + clsName);
             final Class<?> c = Class.forName(
-                    s.replace('/', '.').substring(0, s.length() - 6),
+                    clsName,
                     false,
                     systemClassLoader);
-            return test(c);
+            return test(c, addExports);
+        } catch (VerifyError ve) {
+            System.err.println("VerifyError for " + clsName);
+            ve.printStackTrace(System.err);
+            failed.add(s);
         } catch (Exception t) {
             t.printStackTrace(System.err);
             failed.add(s);
@@ -211,37 +259,43 @@ public class FieldSetAccessibleTest {
     static class ClassNameJrtStreamBuilder implements Iterable<String>{
 
         final FileSystem jrt;
-        final List<Path> roots = new ArrayList<>();
+        final Path root;
+        final Set<String> modules;
         ClassNameJrtStreamBuilder() {
-             jrt = FileSystems.getFileSystem(URI.create("jrt:/"));
-             for (Path root : jrt.getRootDirectories()) {
-                 roots.add(root);
-             }
-        }
-
-        Stream<String> build() {
-            return roots.stream().flatMap(this::toStream)
-                    .filter(x -> x.getNameCount() > 2)
-                    .map( x-> x.subpath(2, x.getNameCount()))
-                    .map( x -> x.toString())
-                    .filter(s -> s.endsWith(".class"));
+            jrt = FileSystems.getFileSystem(URI.create("jrt:/"));
+            root = jrt.getPath("/modules");
+            modules = systemModules();
         }
 
         @Override
         public Iterator<String> iterator() {
-            return build().iterator();
-        }
-
-        private Stream<Path> toStream(Path root) {
             try {
-                return Files.walk(root);
+                return Files.walk(root)
+                        .filter(p -> p.getNameCount() > 2)
+                        .filter(p -> modules.contains(p.getName(1).toString()))
+                        .map(p -> p.subpath(2, p.getNameCount()))
+                        .map(p -> p.toString())
+                        .filter(s -> s.endsWith(".class") && !s.endsWith("module-info.class"))
+                    .iterator();
             } catch(IOException x) {
-                x.printStackTrace(System.err);
-                skipped.add(root.toString());
+                throw new UncheckedIOException("Unable to walk \"/modules\"", x);
             }
-            return Collections.<Path>emptyList().stream();
         }
 
+        /*
+         * Filter deployment modules
+         */
+        static Set<String> systemModules() {
+            Set<String> mods = Set.of("javafx.deploy", "jdk.deploy", "jdk.plugin", "jdk.javaws",
+                // All JVMCI packages other than jdk.vm.ci.services are dynamically
+                // exported to jdk.internal.vm.compiler and jdk.aot
+                "jdk.internal.vm.compiler", "jdk.aot"
+            );
+            return ModuleFinder.ofSystem().findAll().stream()
+                               .map(mref -> mref.descriptor().name())
+                               .filter(mn -> !mods.contains(mn))
+                               .collect(Collectors.toSet());
+        }
     }
 
     // Test with or without a security manager
@@ -301,7 +355,7 @@ public class FieldSetAccessibleTest {
     }
 
     // A Helper class to build a set of permissions.
-    final static class PermissionsBuilder {
+    static final class PermissionsBuilder {
         final Permissions perms;
         public PermissionsBuilder() {
             this(new Permissions());
@@ -344,6 +398,7 @@ public class FieldSetAccessibleTest {
             permissions.add(new RuntimePermission("closeClassLoader"));
             permissions.add(new RuntimePermission("getClassLoader"));
             permissions.add(new RuntimePermission("accessDeclaredMembers"));
+            permissions.add(new RuntimePermission("accessSystemModules"));
             permissions.add(new ReflectPermission("suppressAccessChecks"));
             permissions.add(new PropertyPermission("*", "read"));
             permissions.add(new FilePermission("<<ALL FILES>>", "read"));

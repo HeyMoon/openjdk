@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,9 +34,39 @@ import java.util.regex.Pattern;
  */
 public class AlgorithmDecomposer {
 
-    private static final Pattern transPattern = Pattern.compile("/");
-    private static final Pattern pattern =
-                    Pattern.compile("with|and|in", Pattern.CASE_INSENSITIVE);
+    // '(?<!padd)in': match 'in' but not preceded with 'padd'.
+    private static final Pattern PATTERN =
+            Pattern.compile("with|and|(?<!padd)in", Pattern.CASE_INSENSITIVE);
+
+    private static Set<String> decomposeImpl(String algorithm) {
+        Set<String> elements = new HashSet<>();
+
+        // algorithm/mode/padding
+        String[] transTokens = algorithm.split("/");
+
+        for (String transToken : transTokens) {
+            if (transToken == null || transToken.isEmpty()) {
+                continue;
+            }
+
+            // PBEWith<digest>And<encryption>
+            // PBEWith<prf>And<encryption>
+            // OAEPWith<digest>And<mgf>Padding
+            // <digest>with<encryption>
+            // <digest>with<encryption>and<mgf>
+            // <digest>with<encryption>in<format>
+            String[] tokens = PATTERN.split(transToken);
+
+            for (String token : tokens) {
+                if (token == null || token.isEmpty()) {
+                    continue;
+                }
+
+                elements.add(token);
+            }
+        }
+        return elements;
+    }
 
     /**
      * Decompose the standard algorithm name into sub-elements.
@@ -52,31 +82,7 @@ public class AlgorithmDecomposer {
             return new HashSet<>();
         }
 
-        // algorithm/mode/padding
-        String[] transTockens = transPattern.split(algorithm);
-
-        Set<String> elements = new HashSet<>();
-        for (String transTocken : transTockens) {
-            if (transTocken == null || transTocken.length() == 0) {
-                continue;
-            }
-
-            // PBEWith<digest>And<encryption>
-            // PBEWith<prf>And<encryption>
-            // OAEPWith<digest>And<mgf>Padding
-            // <digest>with<encryption>
-            // <digest>with<encryption>and<mgf>
-            // <digest>with<encryption>in<format>
-            String[] tokens = pattern.split(transTocken);
-
-            for (String token : tokens) {
-                if (token == null || token.length() == 0) {
-                    continue;
-                }
-
-                elements.add(token);
-            }
-        }
+        Set<String> elements = decomposeImpl(algorithm);
 
         // In Java standard algorithm name specification, for different
         // purpose, the SHA-1 and SHA-2 algorithm names are different. For
@@ -128,4 +134,40 @@ public class AlgorithmDecomposer {
         return elements;
     }
 
+    private static void hasLoop(Set<String> elements, String find, String replace) {
+        if (elements.contains(find)) {
+            if (!elements.contains(replace)) {
+                elements.add(replace);
+            }
+            elements.remove(find);
+        }
+    }
+
+    /*
+     * This decomposes a standard name into sub-elements with a consistent
+     * message digest algorithm name to avoid overly complicated checking.
+     */
+    public static Set<String> decomposeOneHash(String algorithm) {
+        if (algorithm == null || algorithm.length() == 0) {
+            return new HashSet<>();
+        }
+
+        Set<String> elements = decomposeImpl(algorithm);
+
+        hasLoop(elements, "SHA-1", "SHA1");
+        hasLoop(elements, "SHA-224", "SHA224");
+        hasLoop(elements, "SHA-256", "SHA256");
+        hasLoop(elements, "SHA-384", "SHA384");
+        hasLoop(elements, "SHA-512", "SHA512");
+
+        return elements;
+    }
+
+    /*
+     * The provided message digest algorithm name will return a consistent
+     * naming scheme.
+     */
+    public static String hashName(String algorithm) {
+        return algorithm.replace("-", "");
+    }
 }

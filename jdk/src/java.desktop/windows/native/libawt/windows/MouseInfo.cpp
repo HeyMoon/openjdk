@@ -33,12 +33,12 @@
 extern "C" {
 
 /*
- * Class:     sun_awt_DefaultMouseInfoPeer
+ * Class:     sun_awt_windows_WMouseInfoPeer
  * Method:    isWindowUnderMouse
  * Signature: (Ljava/awt/Window)Z
  */
 JNIEXPORT jboolean JNICALL
-Java_sun_awt_DefaultMouseInfoPeer_isWindowUnderMouse(JNIEnv *env, jclass cls,
+Java_sun_awt_windows_WMouseInfoPeer_isWindowUnderMouse(JNIEnv *env, jclass cls,
                                                         jobject window)
 {
     POINT pt;
@@ -73,12 +73,12 @@ Java_sun_awt_DefaultMouseInfoPeer_isWindowUnderMouse(JNIEnv *env, jclass cls,
 }
 
 /*
- * Class:     sun_awt_DefaultMouseInfoPeer
+ * Class:     sun_awt_windows_WMouseInfoPeer
  * Method:    fillPointWithCoords
  * Signature: (Ljava/awt/Point)I
  */
 JNIEXPORT jint JNICALL
-Java_sun_awt_DefaultMouseInfoPeer_fillPointWithCoords(JNIEnv *env, jclass cls, jobject point)
+Java_sun_awt_windows_WMouseInfoPeer_fillPointWithCoords(JNIEnv *env, jclass cls, jobject point)
 {
     static jclass pointClass = NULL;
     static jfieldID xID, yID;
@@ -94,12 +94,22 @@ Java_sun_awt_DefaultMouseInfoPeer_fillPointWithCoords(JNIEnv *env, jclass cls, j
         pointClass = (jclass)env->NewGlobalRef(pointClassLocal);
         env->DeleteLocalRef(pointClassLocal);
     }
+
+    HMONITOR monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+    int screen = AwtWin32GraphicsDevice::GetScreenFromHMONITOR(monitor);
+    Devices::InstanceAccess devices;
+    AwtWin32GraphicsDevice *device = devices->GetDevice(screen);
+
     xID = env->GetFieldID(pointClass, "x", "I");
     CHECK_NULL_RETURN(xID, (jint)0);
     yID = env->GetFieldID(pointClass, "y", "I");
     CHECK_NULL_RETURN(yID, (jint)0);
-    env->SetIntField(point, xID, pt.x);
-    env->SetIntField(point, yID, pt.y);
+
+    int x = (device == NULL) ? pt.x : device->ScaleDownX(pt.x);
+    int y = (device == NULL) ? pt.y : device->ScaleDownY(pt.y);
+
+    env->SetIntField(point, xID, x);
+    env->SetIntField(point, yID, y);
 
     // Always return 0 on Windows: we assume there's always a
     // virtual screen device used.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #include "precompiled.hpp"
 #include "gc/parallel/cardTableExtension.hpp"
 #include "gc/parallel/gcTaskManager.hpp"
+#include "gc/parallel/objectStartArray.inline.hpp"
 #include "gc/parallel/parallelScavengeHeap.hpp"
 #include "gc/parallel/psPromotionManager.inline.hpp"
 #include "gc/parallel/psScavenge.hpp"
@@ -40,7 +41,6 @@ class CheckForUnmarkedOops : public OopClosure {
   PSYoungGen*         _young_gen;
   CardTableExtension* _card_table;
   HeapWord*           _unmarked_addr;
-  jbyte*              _unmarked_card;
 
  protected:
   template <class T> void do_oop_work(T* p) {
@@ -50,7 +50,6 @@ class CheckForUnmarkedOops : public OopClosure {
       // Don't overwrite the first missing card mark
       if (_unmarked_addr == NULL) {
         _unmarked_addr = (HeapWord*)p;
-        _unmarked_card = _card_table->byte_for(p);
       }
     }
   }
@@ -91,7 +90,7 @@ class CheckForUnmarkedObjects : public ObjectClosure {
     CheckForUnmarkedOops object_check(_young_gen, _card_table);
     obj->oop_iterate_no_header(&object_check);
     if (object_check.has_unmarked_oop()) {
-      assert(_card_table->addr_is_marked_imprecise(obj), "Found unmarked young_gen object");
+      guarantee(_card_table->addr_is_marked_imprecise(obj), "Found unmarked young_gen object");
     }
   }
 };
@@ -287,7 +286,7 @@ void CardTableExtension::scavenge_contents_parallel(ObjectStartArray* start_arra
           while (p < to) {
             Prefetch::write(p, interval);
             oop m = oop(p);
-            assert(m->is_oop_or_null(), err_msg("Expected an oop or NULL for header field at " PTR_FORMAT, p2i(m)));
+            assert(m->is_oop_or_null(), "Expected an oop or NULL for header field at " PTR_FORMAT, p2i(m));
             pm->push_contents(m);
             p += m->size();
           }
@@ -295,7 +294,7 @@ void CardTableExtension::scavenge_contents_parallel(ObjectStartArray* start_arra
         } else {
           while (p < to) {
             oop m = oop(p);
-            assert(m->is_oop_or_null(), err_msg("Expected an oop or NULL for header field at " PTR_FORMAT, p2i(m)));
+            assert(m->is_oop_or_null(), "Expected an oop or NULL for header field at " PTR_FORMAT, p2i(m));
             pm->push_contents(m);
             p += m->size();
           }
@@ -470,30 +469,17 @@ void CardTableExtension::resize_covered_region_by_end(int changed_region,
   // Update the covered region
   resize_update_covered_table(changed_region, new_region);
 
-  if (TraceCardTableModRefBS) {
-    int ind = changed_region;
-    gclog_or_tty->print_cr("CardTableModRefBS::resize_covered_region: ");
-    gclog_or_tty->print_cr("  "
-                  "  _covered[%d].start(): " INTPTR_FORMAT
-                  "  _covered[%d].last(): " INTPTR_FORMAT,
-                  ind, p2i(_covered[ind].start()),
-                  ind, p2i(_covered[ind].last()));
-    gclog_or_tty->print_cr("  "
-                  "  _committed[%d].start(): " INTPTR_FORMAT
-                  "  _committed[%d].last(): " INTPTR_FORMAT,
-                  ind, p2i(_committed[ind].start()),
-                  ind, p2i(_committed[ind].last()));
-    gclog_or_tty->print_cr("  "
-                  "  byte_for(start): " INTPTR_FORMAT
-                  "  byte_for(last): " INTPTR_FORMAT,
-                  p2i(byte_for(_covered[ind].start())),
-                  p2i(byte_for(_covered[ind].last())));
-    gclog_or_tty->print_cr("  "
-                  "  addr_for(start): " INTPTR_FORMAT
-                  "  addr_for(last): " INTPTR_FORMAT,
-                  p2i(addr_for((jbyte*) _committed[ind].start())),
-                  p2i(addr_for((jbyte*) _committed[ind].last())));
-  }
+  int ind = changed_region;
+  log_trace(gc, barrier)("CardTableModRefBS::resize_covered_region: ");
+  log_trace(gc, barrier)("    _covered[%d].start(): " INTPTR_FORMAT "  _covered[%d].last(): " INTPTR_FORMAT,
+                ind, p2i(_covered[ind].start()), ind, p2i(_covered[ind].last()));
+  log_trace(gc, barrier)("    _committed[%d].start(): " INTPTR_FORMAT "  _committed[%d].last(): " INTPTR_FORMAT,
+                ind, p2i(_committed[ind].start()), ind, p2i(_committed[ind].last()));
+  log_trace(gc, barrier)("    byte_for(start): " INTPTR_FORMAT "  byte_for(last): " INTPTR_FORMAT,
+                p2i(byte_for(_covered[ind].start())),  p2i(byte_for(_covered[ind].last())));
+  log_trace(gc, barrier)("    addr_for(start): " INTPTR_FORMAT "  addr_for(last): " INTPTR_FORMAT,
+                p2i(addr_for((jbyte*) _committed[ind].start())), p2i(addr_for((jbyte*) _committed[ind].last())));
+
   debug_only(verify_guard();)
 }
 

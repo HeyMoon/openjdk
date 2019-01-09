@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,8 +30,11 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.security.PrivilegedAction;
 import java.util.Hashtable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Date;
 import java.util.Iterator;
+import java.util.Locale;
+import java.util.Objects;
 import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 import java.util.StringTokenizer;
@@ -42,6 +45,7 @@ import java.security.Permission;
 import java.security.AccessController;
 import sun.security.util.SecurityConstants;
 import sun.net.www.MessageHeader;
+import sun.security.action.GetPropertyAction;
 
 /**
  * The abstract class {@code URLConnection} is the superclass
@@ -50,16 +54,21 @@ import sun.net.www.MessageHeader;
  * read from and to write to the resource referenced by the URL. In
  * general, creating a connection to a URL is a multistep process:
  *
- * <center><table border=2 summary="Describes the process of creating a connection to a URL: openConnection() and connect() over time.">
+ * <div style="text-align:center"><table class="plain" style="margin:0 auto">
+ * <caption style="display:none">Describes the process of creating a connection to a URL: openConnection() and connect() over time.</caption>
+ * <thead>
  * <tr><th>{@code openConnection()}</th>
  *     <th>{@code connect()}</th></tr>
+ * </thead>
+ * <tbody>
  * <tr><td>Manipulate parameters that affect the connection to the remote
  *         resource.</td>
  *     <td>Interact with the resource; query header fields and
  *         contents.</td></tr>
+ * </tbody>
  * </table>
  * ----------------------------&gt;
- * <br>time</center>
+ * <br>time</div>
  *
  * <ol>
  * <li>The connection object is created by invoking the
@@ -229,7 +238,7 @@ public abstract class URLConnection {
      */
     protected boolean allowUserInteraction = defaultAllowUserInteraction;
 
-    private static boolean defaultUseCaches = true;
+    private static volatile boolean defaultUseCaches = true;
 
    /**
      * If {@code true}, the protocol is allowed to use caching
@@ -241,12 +250,18 @@ public abstract class URLConnection {
      * <p>
      * Its default value is the value given in the last invocation of the
      * {@code setDefaultUseCaches} method.
+     * <p>
+     * The default setting may be overridden per protocol with
+     * {@link #setDefaultUseCaches(String,boolean)}.
      *
      * @see     java.net.URLConnection#setUseCaches(boolean)
      * @see     java.net.URLConnection#getUseCaches()
      * @see     java.net.URLConnection#setDefaultUseCaches(boolean)
      */
-    protected boolean useCaches = defaultUseCaches;
+    protected boolean useCaches;
+
+    private static final ConcurrentHashMap<String,Boolean> defaultCaching =
+        new ConcurrentHashMap<>();
 
    /**
      * Some protocols support skipping the fetching of the object unless
@@ -289,12 +304,7 @@ public abstract class URLConnection {
    /**
     * @since   1.1
     */
-    private static FileNameMap fileNameMap;
-
-    /**
-     * @since 1.2.2
-     */
-    private static boolean fileNameMapLoaded = false;
+    private static volatile FileNameMap fileNameMap;
 
     /**
      * Loads filename map (a mimetable) from a data file. It will
@@ -306,18 +316,21 @@ public abstract class URLConnection {
      * @since 1.2
      * @see #setFileNameMap(java.net.FileNameMap)
      */
-    public static synchronized FileNameMap getFileNameMap() {
-        if ((fileNameMap == null) && !fileNameMapLoaded) {
-            fileNameMap = sun.net.www.MimeTable.loadTable();
-            fileNameMapLoaded = true;
+    public static FileNameMap getFileNameMap() {
+        FileNameMap map = fileNameMap;
+
+        if (map == null) {
+            fileNameMap = map = new FileNameMap() {
+                private FileNameMap internalMap =
+                    sun.net.www.MimeTable.loadTable();
+
+                public String getContentTypeFor(String fileName) {
+                    return internalMap.getContentTypeFor(fileName);
+                }
+            };
         }
 
-        return new FileNameMap() {
-            private FileNameMap map = fileNameMap;
-            public String getContentTypeFor(String fileName) {
-                return map.getContentTypeFor(fileName);
-            }
-        };
+        return map;
     }
 
     /**
@@ -365,7 +378,7 @@ public abstract class URLConnection {
      * @see #getConnectTimeout()
      * @see #setConnectTimeout(int)
      */
-    abstract public void connect() throws IOException;
+    public abstract void connect() throws IOException;
 
     /**
      * Sets a specified timeout value, in milliseconds, to be used
@@ -460,6 +473,11 @@ public abstract class URLConnection {
      */
     protected URLConnection(URL url) {
         this.url = url;
+        if (url == null) {
+            this.useCaches = defaultUseCaches;
+        } else {
+            this.useCaches = getDefaultUseCaches(url.getProtocol());
+        }
     }
 
     /**
@@ -981,7 +999,8 @@ public abstract class URLConnection {
      * is true, the connection is allowed to use whatever caches it can.
      *  If false, caches are to be ignored.
      *  The default value comes from DefaultUseCaches, which defaults to
-     * true.
+     * true. A default value can also be set per-protocol using
+     * {@link #setDefaultUseCaches(String,boolean)}.
      *
      * @param usecaches a {@code boolean} indicating whether
      * or not to allow caching
@@ -1032,9 +1051,10 @@ public abstract class URLConnection {
      * Returns the default value of a {@code URLConnection}'s
      * {@code useCaches} flag.
      * <p>
-     * Ths default is "sticky", being a part of the static state of all
+     * This default is "sticky", being a part of the static state of all
      * URLConnections.  This flag applies to the next, and all following
-     * URLConnections that are created.
+     * URLConnections that are created. This default value can be over-ridden
+     * per protocol using {@link #setDefaultUseCaches(String,boolean)}
      *
      * @return  the default value of a {@code URLConnection}'s
      *          {@code useCaches} flag.
@@ -1046,13 +1066,51 @@ public abstract class URLConnection {
 
    /**
      * Sets the default value of the {@code useCaches} field to the
-     * specified value.
+     * specified value. This default value can be over-ridden
+     * per protocol using {@link #setDefaultUseCaches(String,boolean)}
      *
      * @param   defaultusecaches   the new value.
      * @see     #getDefaultUseCaches()
      */
     public void setDefaultUseCaches(boolean defaultusecaches) {
         defaultUseCaches = defaultusecaches;
+    }
+
+   /**
+     * Sets the default value of the {@code useCaches} field for the named
+     * protocol to the given value. This value overrides any default setting
+     * set by {@link #setDefaultUseCaches(boolean)} for the given protocol.
+     * Successive calls to this method change the setting and affect the
+     * default value for all future connections of that protocol. The protocol
+     * name is case insensitive.
+     *
+     * @param   protocol the protocol to set the default for
+     * @param   defaultVal whether caching is enabled by default for the given protocol
+     * @since 9
+     */
+    public static void setDefaultUseCaches(String protocol, boolean defaultVal) {
+        protocol = protocol.toLowerCase(Locale.US);
+        defaultCaching.put(protocol, defaultVal);
+    }
+
+   /**
+     * Returns the default value of the {@code useCaches} flag for the given protocol. If
+     * {@link #setDefaultUseCaches(String,boolean)} was called for the given protocol,
+     * then that value is returned. Otherwise, if {@link #setDefaultUseCaches(boolean)}
+     * was called, then that value is returned. If neither method was called,
+     * the return value is {@code true}. The protocol name is case insensitive.
+     *
+     * @param protocol the protocol whose defaultUseCaches setting is required
+     * @return  the default value of the {@code useCaches} flag for the given protocol.
+     * @since 9
+     */
+    public static boolean getDefaultUseCaches(String protocol) {
+        Boolean protoDefault = defaultCaching.get(protocol.toLowerCase(Locale.US));
+        if (protoDefault != null) {
+            return protoDefault.booleanValue();
+        } else {
+            return defaultUseCaches;
+        }
     }
 
     /**
@@ -1250,7 +1308,7 @@ public abstract class URLConnection {
 
         if (handler != null) {
             ContentHandler h = handlers.putIfAbsent(contentType, handler);
-            return h != null ? h : handler;
+            return Objects.requireNonNullElse(h, handler);
         }
 
         try {
@@ -1263,7 +1321,7 @@ public abstract class URLConnection {
         assert handler != null;
 
         ContentHandler h = handlers.putIfAbsent(contentType, handler);
-        return h != null ? h : handler;
+        return Objects.requireNonNullElse(h, handler);
     }
 
     /*
@@ -1321,7 +1379,9 @@ public abstract class URLConnection {
                     }
                 }
                 if (cls != null) {
-                    return (ContentHandler) cls.newInstance();
+                    @SuppressWarnings("deprecation")
+                    Object tmp = cls.newInstance();
+                    return (ContentHandler) tmp;
                 }
             } catch(Exception ignored) { }
         }
@@ -1394,8 +1454,8 @@ public abstract class URLConnection {
      * is always the last one on the returned package list.
      */
     private String getContentHandlerPkgPrefixes() {
-        String packagePrefixList = AccessController.doPrivileged(
-            new sun.security.action.GetPropertyAction(contentPathProp, ""));
+        String packagePrefixList =
+                GetPropertyAction.privilegedGetProperty(contentPathProp, "");
 
         if (packagePrefixList != "") {
             packagePrefixList += "|";
@@ -1440,7 +1500,7 @@ public abstract class URLConnection {
      * @see        java.io.InputStream#markSupported()
      * @see        java.net.URLConnection#getContentType()
      */
-    static public String guessContentTypeFromStream(InputStream is)
+    public static String guessContentTypeFromStream(InputStream is)
                         throws IOException {
         // If we can't read ahead safely, just give up on guessing
         if (!is.markSupported())
@@ -1549,7 +1609,7 @@ public abstract class URLConnection {
         }
 
         if (c1 == 0xFF && c2 == 0xD8 && c3 == 0xFF) {
-            if (c4 == 0xE0) {
+            if (c4 == 0xE0 || c4 == 0xEE) {
                 return "image/jpeg";
             }
 
@@ -1564,10 +1624,11 @@ public abstract class URLConnection {
                  c11 == 0)) {
                 return "image/jpeg";
             }
+        }
 
-            if (c4 == 0xEE) {
-                return "image/jpg";
-            }
+        if ((c1 == 0x49 && c2 == 0x49 && c3 == 0x2a && c4 == 0x00)
+            || (c1 == 0x4d && c2 == 0x4d && c3 == 0x00 && c4 == 0x2a)) {
+            return "image/tiff";
         }
 
         if (c1 == 0xD0 && c2 == 0xCF && c3 == 0x11 && c4 == 0xE0 &&
@@ -1605,7 +1666,7 @@ public abstract class URLConnection {
      * method, the stream should have already been checked to be sure it
      * contains Microsoft Structured Storage data.
      */
-    static private boolean checkfpx(InputStream is) throws IOException {
+    private static boolean checkfpx(InputStream is) throws IOException {
 
         /* Test for FlashPix image data in Microsoft Structured Storage format.
          * In general, should do this with calls to an SS implementation.
@@ -1766,7 +1827,7 @@ public abstract class URLConnection {
      * Returns -1, If EOF is reached before len bytes are read, returns 0
      * otherwise
      */
-    static private int readBytes(int c[], int len, InputStream is)
+    private static int readBytes(int c[], int len, InputStream is)
                 throws IOException {
 
         byte buf[] = new byte[len];
@@ -1787,7 +1848,7 @@ public abstract class URLConnection {
      * until either EOF is reached, or the specified
      * number of bytes have been skipped
      */
-    static private long skipForward(InputStream is, long toSkip)
+    private static long skipForward(InputStream is, long toSkip)
                 throws IOException {
 
         long eachSkip = 0;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,8 +25,9 @@
 #ifndef SHARE_VM_OOPS_INSTANCEREFKLASS_INLINE_HPP
 #define SHARE_VM_OOPS_INSTANCEREFKLASS_INLINE_HPP
 
-#include "classfile/javaClasses.hpp"
+#include "classfile/javaClasses.inline.hpp"
 #include "gc/shared/referenceProcessor.hpp"
+#include "logging/log.hpp"
 #include "oops/instanceKlass.inline.hpp"
 #include "oops/instanceRefKlass.hpp"
 #include "oops/oop.inline.hpp"
@@ -43,7 +44,7 @@ void InstanceRefKlass::oop_oop_iterate_ref_processing_specialized(oop obj, OopCl
 
   T* referent_addr = (T*)java_lang_ref_Reference::referent_addr(obj);
   T heap_oop = oopDesc::load_heap_oop(referent_addr);
-  ReferenceProcessor* rp = closure->_ref_processor;
+  ReferenceProcessor* rp = closure->ref_processor();
   if (!oopDesc::is_null(heap_oop)) {
     oop referent = oopDesc::decode_heap_oop_not_null(heap_oop);
     if (!referent->is_gc_marked() && (rp != NULL) &&
@@ -59,12 +60,7 @@ void InstanceRefKlass::oop_oop_iterate_ref_processing_specialized(oop obj, OopCl
   // Treat discovered as normal oop, if ref is not "active" (next non-NULL)
   if (!oopDesc::is_null(next_oop) && contains(disc_addr)) {
     // i.e. ref is not "active"
-    debug_only(
-      if(TraceReferenceGC && PrintGCDetails) {
-        gclog_or_tty->print_cr("   Process discovered as normal "
-                               PTR_FORMAT, p2i(disc_addr));
-      }
-    )
+    log_develop_trace(gc, ref)("   Process discovered as normal " PTR_FORMAT, p2i(disc_addr));
     Devirtualizer<nv>::do_oop(closure, disc_addr);
   }
   // treat next as normal oop
@@ -106,37 +102,27 @@ void InstanceRefKlass::oop_oop_iterate_ref_processing_bounded(oop obj, OopClosur
 }
 
 template <bool nv, class OopClosureType>
-int InstanceRefKlass::oop_oop_iterate(oop obj, OopClosureType* closure) {
-  // Get size before changing pointers
-  int size = InstanceKlass::oop_oop_iterate<nv>(obj, closure);
+void InstanceRefKlass::oop_oop_iterate(oop obj, OopClosureType* closure) {
+  InstanceKlass::oop_oop_iterate<nv>(obj, closure);
 
   oop_oop_iterate_ref_processing<nv>(obj, closure);
-
-  return size;
 }
 
 #if INCLUDE_ALL_GCS
 template <bool nv, class OopClosureType>
-int InstanceRefKlass::
-oop_oop_iterate_reverse(oop obj, OopClosureType* closure) {
-  // Get size before changing pointers
-  int size = InstanceKlass::oop_oop_iterate_reverse<nv>(obj, closure);
+void InstanceRefKlass::oop_oop_iterate_reverse(oop obj, OopClosureType* closure) {
+  InstanceKlass::oop_oop_iterate_reverse<nv>(obj, closure);
 
   oop_oop_iterate_ref_processing<nv>(obj, closure);
-
-  return size;
 }
 #endif // INCLUDE_ALL_GCS
 
 
 template <bool nv, class OopClosureType>
-int InstanceRefKlass::oop_oop_iterate_bounded(oop obj, OopClosureType* closure, MemRegion mr) {
-  // Get size before changing pointers
-  int size = InstanceKlass::oop_oop_iterate_bounded<nv>(obj, closure, mr);
+void InstanceRefKlass::oop_oop_iterate_bounded(oop obj, OopClosureType* closure, MemRegion mr) {
+  InstanceKlass::oop_oop_iterate_bounded<nv>(obj, closure, mr);
 
   oop_oop_iterate_ref_processing_bounded<nv>(obj, closure, mr);
-
-  return size;
 }
 
 // Macro to define InstanceRefKlass::oop_oop_iterate for virtual/nonvirtual for

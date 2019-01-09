@@ -57,7 +57,6 @@ static void print_flag_error_message_bounds(const char* name, char* buffer) {
   }
 }
 
-PRAGMA_FORMAT_NONLITERAL_IGNORED_EXTERNAL
 static void print_flag_error_message_if_needed(Flag::Error error, const char* name, FormatBuffer<80>& err_msg) {
   if (error == Flag::SUCCESS) {
     return;
@@ -89,20 +88,17 @@ static void print_flag_error_message_if_needed(Flag::Error error, const char* na
       break;
   }
 
-  PRAGMA_DIAG_PUSH
-  PRAGMA_FORMAT_NONLITERAL_IGNORED_INTERNAL
-  err_msg.print(buffer);
-  PRAGMA_DIAG_POP
+  err_msg.print("%s", buffer);
 }
 
 // set a boolean global flag
 Flag::Error WriteableFlags::set_bool_flag(const char* name, const char* arg, Flag::Flags origin, FormatBuffer<80>& err_msg) {
-  int value = true;
-
-  if (sscanf(arg, "%d", &value)) {
-    return set_bool_flag(name, value != 0, origin, err_msg);
+  if ((strcasecmp(arg, "true") == 0) || (*arg == '1' && *(arg + 1) == 0)) {
+    return set_bool_flag(name, true, origin, err_msg);
+  } else if ((strcasecmp(arg, "false") == 0) || (*arg == '0' && *(arg + 1) == 0)) {
+    return set_bool_flag(name, false, origin, err_msg);
   }
-  err_msg.print("flag value must be a boolean (1 or 0)");
+  err_msg.print("flag value must be a boolean (1/0 or true/false)");
   return Flag::WRONG_FORMAT;
 }
 
@@ -295,7 +291,8 @@ Flag::Error WriteableFlags::set_flag_from_char(Flag* f, const void* value, Flag:
 }
 
 // a writeable flag setter accepting 'jvalue' values
-Flag::Error WriteableFlags::set_flag_from_jvalue(Flag* f, const void* value, Flag::Flags origin, FormatBuffer<80>& err_msg) {
+Flag::Error WriteableFlags::set_flag_from_jvalue(Flag* f, const void* value, Flag::Flags origin,
+                                                 FormatBuffer<80>& err_msg) {
   jvalue new_value = *(jvalue*)value;
   if (f->is_bool()) {
     bool bvalue = (new_value.z == JNI_TRUE ? true : false);

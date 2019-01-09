@@ -97,8 +97,10 @@ public class Beans {
      * @exception IOException if an I/O error occurs.
      * @since 1.2
      */
-
-    public static Object instantiate(ClassLoader cls, String beanName, BeanContext beanContext) throws IOException, ClassNotFoundException {
+    @SuppressWarnings("deprecation")
+    public static Object instantiate(ClassLoader cls, String beanName,
+                                     BeanContext beanContext)
+            throws IOException, ClassNotFoundException {
         return Beans.instantiate(cls, beanName, beanContext, null);
     }
 
@@ -153,10 +155,18 @@ public class Beans {
      *              object could not be found.
      * @exception IOException if an I/O error occurs.
      * @since 1.2
+     *
+     * @deprecated It is recommended to use
+     * {@link #instantiate(ClassLoader, String, BeanContext)},
+     * because the Applet API is deprecated. See the
+     * <a href="../../java/applet/package-summary.html"> java.applet package
+     * documentation</a> for further information.
      */
-
-    public static Object instantiate(ClassLoader cls, String beanName, BeanContext beanContext, AppletInitializer initializer)
-                        throws IOException, ClassNotFoundException {
+    @Deprecated(since = "9")
+    public static Object instantiate(ClassLoader cls, String beanName,
+                                     BeanContext beanContext,
+                                     AppletInitializer initializer)
+            throws IOException, ClassNotFoundException {
 
         InputStream ins;
         ObjectInputStream oins = null;
@@ -416,12 +426,12 @@ public class Beans {
      * <p>Note that this method is security checked
      * and is not available to (for example) untrusted applets.
      * More specifically, if there is a security manager,
-     * its <code>checkPropertiesAccess</code>
+     * its {@code checkPropertiesAccess}
      * method is called. This could result in a SecurityException.
      *
      * @param isDesignTime  True if we're in an application builder tool.
      * @exception  SecurityException  if a security manager exists and its
-     *             <code>checkPropertiesAccess</code> method doesn't allow setting
+     *             {@code checkPropertiesAccess} method doesn't allow setting
      *              of system properties.
      * @see SecurityManager#checkPropertiesAccess
      */
@@ -442,12 +452,12 @@ public class Beans {
      * <p>Note that this method is security checked
      * and is not available to (for example) untrusted applets.
      * More specifically, if there is a security manager,
-     * its <code>checkPropertiesAccess</code>
+     * its {@code checkPropertiesAccess}
      * method is called. This could result in a SecurityException.
      *
      * @param isGuiAvailable  True if GUI interaction is available.
      * @exception  SecurityException  if a security manager exists and its
-     *             <code>checkPropertiesAccess</code> method doesn't allow setting
+     *             {@code checkPropertiesAccess} method doesn't allow setting
      *              of system properties.
      * @see SecurityManager#checkPropertiesAccess
      */
@@ -501,7 +511,7 @@ class ObjectInputStreamWithLoader extends ObjectInputStream
  * Package private support class.  This provides a default AppletContext
  * for beans which are applets.
  */
-
+@Deprecated(since = "9")
 class BeansAppletContext implements AppletContext {
     Applet target;
     Hashtable<URL,Object> imageCache = new Hashtable<>();
@@ -586,6 +596,7 @@ class BeansAppletContext implements AppletContext {
  * Package private support class.  This provides an AppletStub
  * for beans which are applets.
  */
+@Deprecated(since = "9")
 class BeansAppletStub implements AppletStub {
     transient boolean active;
     transient Applet target;

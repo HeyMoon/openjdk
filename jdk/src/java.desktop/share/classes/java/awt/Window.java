@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,7 +52,7 @@ import javax.accessibility.*;
 import sun.awt.AWTAccessor;
 import sun.awt.AWTPermissions;
 import sun.awt.AppContext;
-import sun.awt.CausedFocusEvent;
+import sun.awt.DebugSettings;
 import sun.awt.SunToolkit;
 import sun.awt.util.IdentityArrayList;
 import sun.java2d.pipe.Region;
@@ -346,7 +346,7 @@ public class Window extends Container implements Accessible {
      * @see #getOpacity()
      * @since 1.7
      */
-    private float opacity = 1.0f;
+    private volatile float opacity = 1.0f;
 
     /**
      * The shape assigned to this window. This field is set to {@code null} if
@@ -678,6 +678,10 @@ public class Window extends Container implements Accessible {
      * Depending on the platform capabilities one or several images
      * of different dimensions will be used as the window's icon.
      * <p>
+     * The {@code icons} list can contain {@code MultiResolutionImage} images also.
+     * Suitable image depending on screen resolution is extracted from
+     * base {@code MultiResolutionImage} image and added to the icons list
+     * while base resolution image is removed from list.
      * The {@code icons} list is scanned for the images of most
      * appropriate dimensions from the beginning. If the list contains
      * several images of the same size, the first will be used.
@@ -958,7 +962,7 @@ public class Window extends Container implements Accessible {
         }
     }
 
-    static private final AtomicBoolean
+    private static final AtomicBoolean
         beforeFirstWindowShown = new AtomicBoolean(true);
 
     final void closeSplashScreen() {
@@ -1039,9 +1043,7 @@ public class Window extends Container implements Accessible {
             closeSplashScreen();
             Dialog.checkShouldBeBlocked(this);
             super.show();
-            synchronized (getTreeLock()) {
-                this.locationByPlatform = false;
-            }
+            locationByPlatform = false;
             for (int i = 0; i < ownedWindowList.size(); i++) {
                 Window child = ownedWindowList.elementAt(i).get();
                 if ((child != null) && child.showWithParent) {
@@ -1114,9 +1116,7 @@ public class Window extends Container implements Accessible {
             modalBlocker.unblockWindow(this);
         }
         super.hide();
-        synchronized (getTreeLock()) {
-            this.locationByPlatform = false;
-        }
+        locationByPlatform = false;
     }
 
     final void clearMostRecentFocusOwnerOnHide() {
@@ -1929,7 +1929,7 @@ public class Window extends Container implements Accessible {
      * with a class literal, such as
      * <code><em>Foo</em>Listener.class</code>.
      * For example, you can query a
-     * {@code Window} {@code w}
+     * {@code Window w}
      * for its window listeners with the following code:
      *
      * <pre>WindowListener[] wls = (WindowListener[])(w.getListeners(WindowListener.class));</pre>
@@ -2159,11 +2159,13 @@ public class Window extends Container implements Accessible {
      * @param e  the keyboard event
      */
     void preProcessKeyEvent(KeyEvent e) {
-        // Dump the list of child windows to System.out.
-        if (e.isActionKey() && e.getKeyCode() == KeyEvent.VK_F1 &&
-            e.isControlDown() && e.isShiftDown() &&
-            e.getID() == KeyEvent.KEY_PRESSED) {
-            list(System.out, 0);
+        // Dump the list of child windows to System.out if debug is enabled.
+        if (DebugSettings.getInstance().getBoolean("on", false)) {
+            if (e.isActionKey() && e.getKeyCode() == KeyEvent.VK_F1 &&
+                    e.isControlDown() && e.isShiftDown() &&
+                    e.getID() == KeyEvent.KEY_PRESSED) {
+                list(System.out, 0);
+            }
         }
     }
 
@@ -2600,7 +2602,7 @@ public class Window extends Container implements Accessible {
                 {
                     Component toFocus =
                         KeyboardFocusManager.getMostRecentFocusOwner(owner);
-                    if (toFocus != null && toFocus.requestFocus(false, CausedFocusEvent.Cause.ACTIVATION)) {
+                    if (toFocus != null && toFocus.requestFocus(false, FocusEvent.Cause.ACTIVATION)) {
                         return;
                     }
                 }
@@ -2798,7 +2800,12 @@ public class Window extends Container implements Accessible {
      */
     @Deprecated
     public void applyResourceBundle(String rbName) {
-        applyResourceBundle(ResourceBundle.getBundle(rbName));
+        // Use the unnamed module from the TCCL or system class loader.
+        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        if (cl == null) {
+            cl = ClassLoader.getSystemClassLoader();
+        }
+        applyResourceBundle(ResourceBundle.getBundle(rbName, cl.getUnnamedModule()));
     }
 
    /*
@@ -3408,7 +3415,7 @@ public class Window extends Container implements Accessible {
         return super.canContainFocusOwner(focusOwnerCandidate) && isFocusableWindow();
     }
 
-    private boolean locationByPlatform = locationByPlatformProp;
+    private volatile boolean locationByPlatform = locationByPlatformProp;
 
 
     /**
@@ -3479,9 +3486,7 @@ public class Window extends Container implements Accessible {
      * @since 1.5
      */
     public boolean isLocationByPlatform() {
-        synchronized (getTreeLock()) {
-            return locationByPlatform;
-        }
+        return locationByPlatform;
     }
 
     /**
@@ -3570,9 +3575,7 @@ public class Window extends Container implements Accessible {
      * @since 1.7
      */
     public float getOpacity() {
-        synchronized (getTreeLock()) {
-            return opacity;
-        }
+        return opacity;
     }
 
     /**
@@ -4118,6 +4121,10 @@ public class Window extends Container implements Accessible {
 
             public void setTrayIconWindow(Window w, boolean isTrayIconWindow) {
                 w.isTrayIconWindow = isTrayIconWindow;
+            }
+
+            public Window[] getOwnedWindows(Window w) {
+                return w.getOwnedWindows_NoClientCode();
             }
         }); // WindowAccessor
     } // static

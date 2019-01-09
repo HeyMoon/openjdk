@@ -24,12 +24,15 @@
 /**
  * @test
  * @bug 6263319
+ * @requires ((vm.opt.StartFlightRecording == null) | (vm.opt.StartFlightRecording == false)) & ((vm.opt.FlightRecorder == null) | (vm.opt.FlightRecorder == false))
  * @summary test setNativeMethodPrefix
  * @author Robert Field, Sun Microsystems
  *
  * @modules java.base/jdk.internal.org.objectweb.asm
+ *          java.management
+ *          java.instrument
  * @run shell/timeout=240 MakeJAR2.sh NativeMethodPrefixAgent NativeMethodPrefixApp 'Can-Retransform-Classes: true' 'Can-Set-Native-Method-Prefix: true'
- * @run main/othervm -javaagent:NativeMethodPrefixAgent.jar NativeMethodPrefixApp
+ * @run main/othervm -XX:+UnlockDiagnosticVMOptions -XX:-CheckIntrinsics -javaagent:NativeMethodPrefixAgent.jar NativeMethodPrefixApp
  */
 
 import java.lang.instrument.*;

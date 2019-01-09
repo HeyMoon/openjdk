@@ -29,6 +29,7 @@ package javax.security.auth.callback;
  * Signals that a {@code CallbackHandler} does not
  * recognize a particular {@code Callback}.
  *
+ * @since 1.4
  */
 public class UnsupportedCallbackException extends Exception {
 
@@ -40,7 +41,7 @@ public class UnsupportedCallbackException extends Exception {
     private Callback callback;
 
     /**
-     * Constructs a {@code UnsupportedCallbackException}
+     * Constructs an {@code UnsupportedCallbackException}
      * with no detail message.
      *
      * @param callback the unrecognized {@code Callback}.

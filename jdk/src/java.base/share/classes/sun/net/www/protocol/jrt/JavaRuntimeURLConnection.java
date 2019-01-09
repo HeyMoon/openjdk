@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,8 +25,7 @@
 
 package sun.net.www.protocol.jrt;
 
-import java.io.File;
-import java.io.FilePermission;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
@@ -34,10 +33,13 @@ import java.net.URL;
 import java.security.AccessController;
 import java.security.Permission;
 import java.security.PrivilegedAction;
-import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 
-import sun.misc.Resource;
+import jdk.internal.jimage.ImageLocation;
+import jdk.internal.jimage.ImageReader;
+import jdk.internal.jimage.ImageReaderFactory;
+
+import jdk.internal.loader.URLClassPath;
+import jdk.internal.loader.Resource;
 import sun.net.www.ParseUtil;
 import sun.net.www.URLConnection;
 
@@ -47,32 +49,11 @@ import sun.net.www.URLConnection;
  */
 public class JavaRuntimeURLConnection extends URLConnection {
 
-    /**
-     * Finds resource {@code name} in module {@code module}.
-     */
-    public interface ResourceFinder {
-        Resource find(String module, String name) throws IOException;
-    }
-
-    /**
-     * The list of resource finders for jimages in the runtime image.
-     */
-    private static final List<ResourceFinder> finders = new CopyOnWriteArrayList<>();
-
-    /**
-     * Called on behalf of the boot, extension and system class loaders to
-     * register a resource finder.
-     */
-    public static void register(ResourceFinder finder) {
-        finders.add(finder);
-    }
-
-    private static Resource find(String module, String name) throws IOException {
-        for (ResourceFinder finder: finders) {
-            Resource r = finder.find(module, name);
-            if (r != null) return r;
-        }
-        return null;
+    // ImageReader to access resources in jimage
+    private static final ImageReader reader;
+    static {
+        PrivilegedAction<ImageReader> pa = ImageReaderFactory::getImageReader;
+        reader = AccessController.doPrivileged(pa);
     }
 
     // the module and resource name in the URL
@@ -81,9 +62,6 @@ public class JavaRuntimeURLConnection extends URLConnection {
 
     // the Resource when connected
     private volatile Resource resource;
-
-    // the permission to access resources in the runtime image, created lazily
-    private static volatile Permission permission;
 
     JavaRuntimeURLConnection(URL url) throws IOException {
         super(url);
@@ -105,6 +83,44 @@ public class JavaRuntimeURLConnection extends URLConnection {
         }
     }
 
+    /**
+     * Finds a resource in a module, returning {@code null} if the resource
+     * is not found.
+     */
+    private static Resource findResource(String module, String name) {
+        if (reader != null) {
+            URL url = toJrtURL(module, name);
+            ImageLocation location = reader.findLocation(module, name);
+            if (location != null && URLClassPath.checkURL(url) != null) {
+                return new Resource() {
+                    @Override
+                    public String getName() {
+                        return name;
+                    }
+                    @Override
+                    public URL getURL() {
+                        return url;
+                    }
+                    @Override
+                    public URL getCodeSourceURL() {
+                        return toJrtURL(module);
+                    }
+                    @Override
+                    public InputStream getInputStream() throws IOException {
+                        byte[] resource = reader.getResource(location);
+                        return new ByteArrayInputStream(resource);
+                    }
+                    @Override
+                    public int getContentLength() {
+                        long size = location.getUncompressedSize();
+                        return (size > Integer.MAX_VALUE) ? -1 : (int) size;
+                    }
+                };
+            }
+        }
+        return null;
+    }
+
     @Override
     public synchronized void connect() throws IOException {
         if (!connected) {
@@ -112,7 +128,7 @@ public class JavaRuntimeURLConnection extends URLConnection {
                 String s = (module == null) ? "" : module;
                 throw new IOException("cannot connect to jrt:/" + s);
             }
-            resource = find(module, name);
+            resource = findResource(module, name);
             if (resource == null)
                 throw new IOException(module + "/" + name + " not found");
             connected = true;
@@ -142,17 +158,29 @@ public class JavaRuntimeURLConnection extends URLConnection {
     }
 
     @Override
-    public Permission getPermission() throws IOException {
-        Permission p = permission;
-        if (p == null) {
-            // using lambda expression here leads to recursive initialization
-            PrivilegedAction<String> pa = new PrivilegedAction<String>() {
-                public String run() { return System.getProperty("java.home"); }
-            };
-            String home = AccessController.doPrivileged(pa);
-            p = new FilePermission(home + File.separator + "-", "read");
-            permission = p;
+    public Permission getPermission() {
+        return new RuntimePermission("accessSystemModules");
+    }
+
+    /**
+     * Returns a jrt URL for the given module and resource name.
+     */
+    private static URL toJrtURL(String module, String name) {
+        try {
+            return new URL("jrt:/" + module + "/" + name);
+        } catch (MalformedURLException e) {
+            throw new InternalError(e);
         }
-        return p;
+    }
+
+    /**
+     * Returns a jrt URL for the given module.
+     */
+    private static URL toJrtURL(String module) {
+        try {
+            return new URL("jrt:/" + module);
+        } catch (MalformedURLException e) {
+            throw new InternalError(e);
+        }
     }
 }

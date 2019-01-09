@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -55,13 +55,14 @@ import java.util.Properties;
  * @see Key
  *
  * @author Benjamin Renaud
+ * @since 1.1
  *
  * @deprecated This class is no longer used. Its functionality has been
  * replaced by {@code java.security.KeyStore}, the
  * {@code java.security.cert} package, and
  * {@code java.security.Principal}.
  */
-@Deprecated
+@Deprecated(since="1.2")
 public abstract
 class IdentityScope extends Identity {
 

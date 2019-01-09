@@ -3,7 +3,7 @@ foo
 setter called for 'foo' with 33
 method 'func' called with hello, world
 new with hey!, it works!
-__getIds__ called
+__getKeys__ called
 foo
 bar
 __getValues__ called
@@ -20,3 +20,12 @@ js
 setter called for 'js' with javascript
 getter called for 'javascript'
 javascript
+__isExtensible__ called
+true
+__isSealed__ called
+false
+__isFrozen__ called
+false
+__freeze__ called
+__seal__ called
+__preventExtensions__ called

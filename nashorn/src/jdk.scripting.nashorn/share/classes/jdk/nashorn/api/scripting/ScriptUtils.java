@@ -26,8 +26,8 @@
 package jdk.nashorn.api.scripting;
 
 import java.lang.invoke.MethodHandle;
-import jdk.internal.dynalink.beans.StaticClass;
-import jdk.internal.dynalink.linker.LinkerServices;
+import jdk.dynalink.beans.StaticClass;
+import jdk.dynalink.linker.LinkerServices;
 import jdk.nashorn.internal.runtime.Context;
 import jdk.nashorn.internal.runtime.ScriptFunction;
 import jdk.nashorn.internal.runtime.ScriptObject;
@@ -39,7 +39,6 @@ import jdk.nashorn.internal.runtime.linker.Bootstrap;
  *
  * @since 1.8u40
  */
-@jdk.Exported
 public final class ScriptUtils {
     private ScriptUtils() {}
 
@@ -75,9 +74,15 @@ public final class ScriptUtils {
      * @param func the function to wrap
      * @param sync the object to synchronize on
      * @return a synchronizing wrapper function
+     * @throws IllegalArgumentException if func does not represent a script function
      */
-    public static Object makeSynchronizedFunction(final ScriptFunction func, final Object sync) {
-        return func.makeSynchronizedFunction(unwrap(sync));
+    public static Object makeSynchronizedFunction(final Object func, final Object sync) {
+        final Object unwrapped = unwrap(func);
+        if (unwrapped instanceof ScriptFunction) {
+            return ((ScriptFunction)unwrapped).createSynchronized(unwrap(sync));
+        }
+
+        throw new IllegalArgumentException();
     }
 
     /**
@@ -85,9 +90,19 @@ public final class ScriptUtils {
      *
      * @param obj object to be wrapped
      * @return wrapped object
+     * @throws IllegalArgumentException if obj cannot be wrapped
      */
-    public static ScriptObjectMirror wrap(final ScriptObject obj) {
-        return (ScriptObjectMirror) ScriptObjectMirror.wrap(obj, Context.getGlobal());
+    public static ScriptObjectMirror wrap(final Object obj) {
+        if (obj instanceof ScriptObjectMirror) {
+            return (ScriptObjectMirror)obj;
+        }
+
+        if (obj instanceof ScriptObject) {
+            final ScriptObject sobj = (ScriptObject)obj;
+            return (ScriptObjectMirror) ScriptObjectMirror.wrap(sobj, Context.getGlobal());
+        }
+
+        throw new IllegalArgumentException();
     }
 
     /**
@@ -136,7 +151,8 @@ public final class ScriptUtils {
      * Convert the given object to the given type.
      *
      * @param obj object to be converted
-     * @param type destination type to convert to
+     * @param type destination type to convert to. type is either a Class
+     * or nashorn representation of a Java type returned by Java.type() call in script.
      * @return converted object
      */
     public static Object convert(final Object obj, final Object type) {
@@ -155,7 +171,7 @@ public final class ScriptUtils {
 
         final LinkerServices linker = Bootstrap.getLinkerServices();
         final Object objToConvert = unwrap(obj);
-        final MethodHandle converter = linker.getTypeConverter(objToConvert.getClass(),  clazz);
+        final MethodHandle converter = linker.getTypeConverter(objToConvert.getClass(), clazz);
         if (converter == null) {
             // no supported conversion!
             throw new UnsupportedOperationException("conversion not supported");

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,6 +36,7 @@ import java.security.PrivilegedAction;
 import javax.print.*;
 import javax.print.attribute.PrintRequestAttributeSet;
 import javax.print.attribute.HashPrintRequestAttributeSet;
+import javax.print.attribute.standard.Copies;
 import javax.print.attribute.standard.Media;
 import javax.print.attribute.standard.MediaPrintableArea;
 import javax.print.attribute.standard.MediaSize;
@@ -43,7 +44,6 @@ import javax.print.attribute.standard.MediaSizeName;
 import javax.print.attribute.standard.PageRanges;
 
 import sun.java2d.*;
-import sun.misc.ManagedLocalsThread;
 import sun.print.*;
 
 public final class CPrinterJob extends RasterPrinterJob {
@@ -83,13 +83,13 @@ public final class CPrinterJob extends RasterPrinterJob {
      * to these native print services.
      * To present the cross platform print dialog for all services,
      * including native ones instead use
-     * <code>printDialog(PrintRequestAttributeSet)</code>.
+     * {@code printDialog(PrintRequestAttributeSet)}.
      * <p>
      * PrinterJob implementations which can use PrintService's will update
      * the PrintService for this PrinterJob to reflect the new service
      * selected by the user.
-     * @return <code>true</code> if the user does not cancel the dialog;
-     * <code>false</code> otherwise.
+     * @return {@code true} if the user does not cancel the dialog;
+     * {@code false} otherwise.
      * @exception HeadlessException if GraphicsEnvironment.isHeadless()
      * returns true.
      * @see java.awt.GraphicsEnvironment#isHeadless
@@ -117,19 +117,19 @@ public final class CPrinterJob extends RasterPrinterJob {
 
     /**
      * Displays a dialog that allows modification of a
-     * <code>PageFormat</code> instance.
-     * The <code>page</code> argument is used to initialize controls
+     * {@code PageFormat} instance.
+     * The {@code page} argument is used to initialize controls
      * in the page setup dialog.
      * If the user cancels the dialog then this method returns the
-     * original <code>page</code> object unmodified.
+     * original {@code page} object unmodified.
      * If the user okays the dialog then this method returns a new
-     * <code>PageFormat</code> object with the indicated changes.
-     * In either case, the original <code>page</code> object is
+     * {@code PageFormat} object with the indicated changes.
+     * In either case, the original {@code page} object is
      * not modified.
-     * @param page the default <code>PageFormat</code> presented to the
+     * @param page the default {@code PageFormat} presented to the
      *            user for modification
-     * @return    the original <code>page</code> object if the dialog
-     *            is cancelled; a new <code>PageFormat</code> object
+     * @return    the original {@code page} object if the dialog
+     *            is cancelled; a new {@code PageFormat} object
      *          containing the format indicated by the user if the
      *          dialog is acknowledged.
      * @exception HeadlessException if GraphicsEnvironment.isHeadless()
@@ -157,11 +157,11 @@ public final class CPrinterJob extends RasterPrinterJob {
     }
 
     /**
-     * Clones the <code>PageFormat</code> argument and alters the
+     * Clones the {@code PageFormat} argument and alters the
      * clone to describe a default page size and orientation.
-     * @param page the <code>PageFormat</code> to be cloned and altered
-     * @return clone of <code>page</code>, altered to describe a default
-     *                      <code>PageFormat</code>.
+     * @param page the {@code PageFormat} to be cloned and altered
+     * @return clone of {@code page}, altered to describe a default
+     *                      {@code PageFormat}.
      */
     @Override
     public PageFormat defaultPage(PageFormat page) {
@@ -178,12 +178,6 @@ public final class CPrinterJob extends RasterPrinterJob {
             return;
         }
 
-        // See if this has an NSPrintInfo in it.
-        NSPrintInfo nsPrintInfo = (NSPrintInfo)attributes.get(NSPrintInfo.class);
-        if (nsPrintInfo != null) {
-            fNSPrintInfo = nsPrintInfo.getValue();
-        }
-
         PageRanges pageRangesAttr =  (PageRanges)attributes.get(PageRanges.class);
         if (isSupportedValue(pageRangesAttr, attributes)) {
             SunPageSelection rangeSelect = (SunPageSelection)attributes.get(SunPageSelection.class);
@@ -194,7 +188,34 @@ public final class CPrinterJob extends RasterPrinterJob {
                 // setPageRange will set firstPage and lastPage as called in getFirstPage
                 // and getLastPage
                 setPageRange(range[0][0] - 1, range[0][1] - 1);
+            } else {
+                // if rangeSelect is SunPageSelection.ALL
+                // then setPageRange appropriately
+                setPageRange(-1, -1);
             }
+        }
+    }
+
+    private void setPageRangeAttribute(int from, int to, boolean isRangeSet) {
+        if (attributes != null) {
+            // since native Print use zero-based page indices,
+            // we need to store in 1-based format in attributes set
+            // but setPageRange again uses zero-based indices so it should be
+            // 1 less than pageRanges attribute
+            if (isRangeSet) {
+                attributes.add(new PageRanges(from+1, to+1));
+                attributes.add(SunPageSelection.RANGE);
+                setPageRange(from, to);
+            } else {
+                attributes.add(SunPageSelection.ALL);
+            }
+        }
+    }
+
+    private void setCopiesAttribute(int copies) {
+        if (attributes != null) {
+            attributes.add(new Copies(copies));
+            super.setCopies(copies);
         }
     }
 
@@ -235,6 +256,11 @@ public final class CPrinterJob extends RasterPrinterJob {
         // this will not work if the user clicks on the "Preview" button
         // However if the printer is a StreamPrintService, its the right path.
         PrintService psvc = getPrintService();
+
+        if (psvc == null) {
+            throw new PrinterException("No print service found.");
+        }
+
         if (psvc instanceof StreamPrintService) {
             spoolToService(psvc, attributes);
             return;
@@ -530,9 +556,13 @@ public final class CPrinterJob extends RasterPrinterJob {
     // The following methods are CPrinterJob specific.
 
     @Override
+    @SuppressWarnings("deprecation")
     protected void finalize() {
-        if (fNSPrintInfo != -1) {
-            dispose(fNSPrintInfo);
+        synchronized (fNSPrintInfoLock) {
+            if (fNSPrintInfo != -1) {
+                dispose(fNSPrintInfo);
+            }
+            fNSPrintInfo = -1;
         }
     }
 
@@ -686,9 +716,15 @@ public final class CPrinterJob extends RasterPrinterJob {
                 if (pageFormat != null) {
                     Printable printable = pageable.getPrintable(pageIndex);
                     if (printable != null) {
-                        BufferedImage bimg = new BufferedImage((int)Math.round(pageFormat.getWidth()), (int)Math.round(pageFormat.getHeight()), BufferedImage.TYPE_INT_ARGB_PRE);
-                        PeekGraphics peekGraphics = createPeekGraphics(bimg.createGraphics(), printerJob);
-                        Rectangle2D pageFormatArea = getPageFormatArea(pageFormat);
+                        BufferedImage bimg =
+                              new BufferedImage(
+                                  (int)Math.round(pageFormat.getWidth()),
+                                  (int)Math.round(pageFormat.getHeight()),
+                                  BufferedImage.TYPE_INT_ARGB_PRE);
+                        PeekGraphics peekGraphics =
+                         createPeekGraphics(bimg.createGraphics(), printerJob);
+                        Rectangle2D pageFormatArea =
+                             getPageFormatArea(pageFormat);
                         initPrinterGraphics(peekGraphics, pageFormatArea);
 
                         // Do the assignment here!
@@ -736,7 +772,8 @@ public final class CPrinterJob extends RasterPrinterJob {
 
     // upcall from native
     private static void detachPrintLoop(final long target, final long arg) {
-        new ManagedLocalsThread(() -> _safePrintLoop(target, arg)).start();
+        new Thread(null, () -> _safePrintLoop(target, arg),
+                   "PrintLoop", 0, false).start();
     }
     private static native void _safePrintLoop(long target, long arg);
 

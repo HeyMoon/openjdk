@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 #include "precompiled.hpp"
 #include "code/codeCache.hpp"
 #include "code/nmethod.hpp"
+#include "gc/g1/g1CodeRootSetTable.hpp"
 #include "gc/g1/g1CodeCacheRemSet.hpp"
 #include "gc/g1/heapRegion.hpp"
 #include "memory/heap.hpp"
@@ -33,52 +34,13 @@
 #include "utilities/hashtable.inline.hpp"
 #include "utilities/stack.inline.hpp"
 
-class CodeRootSetTable : public Hashtable<nmethod*, mtGC> {
-  friend class G1CodeRootSetTest;
-  typedef HashtableEntry<nmethod*, mtGC> Entry;
+G1CodeRootSetTable* volatile G1CodeRootSetTable::_purge_list = NULL;
 
-  static CodeRootSetTable* volatile _purge_list;
+size_t G1CodeRootSetTable::mem_size() {
+  return sizeof(G1CodeRootSetTable) + (entry_size() * number_of_entries()) + (sizeof(HashtableBucket<mtGC>) * table_size());
+}
 
-  CodeRootSetTable* _purge_next;
-
-  unsigned int compute_hash(nmethod* nm) {
-    uintptr_t hash = (uintptr_t)nm;
-    return hash ^ (hash >> 7); // code heap blocks are 128byte aligned
-  }
-
-  void remove_entry(Entry* e, Entry* previous);
-  Entry* new_entry(nmethod* nm);
-
- public:
-  CodeRootSetTable(int size) : Hashtable<nmethod*, mtGC>(size, sizeof(Entry)), _purge_next(NULL) {}
-  ~CodeRootSetTable();
-
-  // Needs to be protected locks
-  bool add(nmethod* nm);
-  bool remove(nmethod* nm);
-
-  // Can be called without locking
-  bool contains(nmethod* nm);
-
-  int entry_size() const { return BasicHashtable<mtGC>::entry_size(); }
-
-  void copy_to(CodeRootSetTable* new_table);
-  void nmethods_do(CodeBlobClosure* blk);
-
-  template<typename CB>
-  int remove_if(CB& should_remove);
-
-  static void purge_list_append(CodeRootSetTable* tbl);
-  static void purge();
-
-  static size_t static_mem_size() {
-    return sizeof(_purge_list);
-  }
-};
-
-CodeRootSetTable* volatile CodeRootSetTable::_purge_list = NULL;
-
-CodeRootSetTable::Entry* CodeRootSetTable::new_entry(nmethod* nm) {
+G1CodeRootSetTable::Entry* G1CodeRootSetTable::new_entry(nmethod* nm) {
   unsigned int hash = compute_hash(nm);
   Entry* entry = (Entry*) new_entry_free_list();
   if (entry == NULL) {
@@ -90,7 +52,7 @@ CodeRootSetTable::Entry* CodeRootSetTable::new_entry(nmethod* nm) {
   return entry;
 }
 
-void CodeRootSetTable::remove_entry(Entry* e, Entry* previous) {
+void G1CodeRootSetTable::remove_entry(Entry* e, Entry* previous) {
   int index = hash_to_index(e->hash());
   assert((e == bucket(index)) == (previous == NULL), "if e is the first entry then previous should be null");
 
@@ -102,7 +64,7 @@ void CodeRootSetTable::remove_entry(Entry* e, Entry* previous) {
   free_entry(e);
 }
 
-CodeRootSetTable::~CodeRootSetTable() {
+G1CodeRootSetTable::~G1CodeRootSetTable() {
   for (int index = 0; index < table_size(); ++index) {
     for (Entry* e = bucket(index); e != NULL; ) {
       Entry* to_remove = e;
@@ -119,7 +81,7 @@ CodeRootSetTable::~CodeRootSetTable() {
   }
 }
 
-bool CodeRootSetTable::add(nmethod* nm) {
+bool G1CodeRootSetTable::add(nmethod* nm) {
   if (!contains(nm)) {
     Entry* e = new_entry(nm);
     int index = hash_to_index(e->hash());
@@ -129,7 +91,7 @@ bool CodeRootSetTable::add(nmethod* nm) {
   return false;
 }
 
-bool CodeRootSetTable::contains(nmethod* nm) {
+bool G1CodeRootSetTable::contains(nmethod* nm) {
   int index = hash_to_index(compute_hash(nm));
   for (Entry* e = bucket(index); e != NULL; e = e->next()) {
     if (e->literal() == nm) {
@@ -139,7 +101,7 @@ bool CodeRootSetTable::contains(nmethod* nm) {
   return false;
 }
 
-bool CodeRootSetTable::remove(nmethod* nm) {
+bool G1CodeRootSetTable::remove(nmethod* nm) {
   int index = hash_to_index(compute_hash(nm));
   Entry* previous = NULL;
   for (Entry* e = bucket(index); e != NULL; previous = e, e = e->next()) {
@@ -151,7 +113,7 @@ bool CodeRootSetTable::remove(nmethod* nm) {
   return false;
 }
 
-void CodeRootSetTable::copy_to(CodeRootSetTable* new_table) {
+void G1CodeRootSetTable::copy_to(G1CodeRootSetTable* new_table) {
   for (int index = 0; index < table_size(); ++index) {
     for (Entry* e = bucket(index); e != NULL; e = e->next()) {
       new_table->add(e->literal());
@@ -160,7 +122,7 @@ void CodeRootSetTable::copy_to(CodeRootSetTable* new_table) {
   new_table->copy_freelist(this);
 }
 
-void CodeRootSetTable::nmethods_do(CodeBlobClosure* blk) {
+void G1CodeRootSetTable::nmethods_do(CodeBlobClosure* blk) {
   for (int index = 0; index < table_size(); ++index) {
     for (Entry* e = bucket(index); e != NULL; e = e->next()) {
       blk->do_code_blob(e->literal());
@@ -169,7 +131,7 @@ void CodeRootSetTable::nmethods_do(CodeBlobClosure* blk) {
 }
 
 template<typename CB>
-int CodeRootSetTable::remove_if(CB& should_remove) {
+int G1CodeRootSetTable::remove_if(CB& should_remove) {
   int num_removed = 0;
   for (int index = 0; index < table_size(); ++index) {
     Entry* previous = NULL;
@@ -192,51 +154,52 @@ G1CodeRootSet::~G1CodeRootSet() {
   delete _table;
 }
 
-CodeRootSetTable* G1CodeRootSet::load_acquire_table() {
-  return (CodeRootSetTable*) OrderAccess::load_ptr_acquire(&_table);
+G1CodeRootSetTable* G1CodeRootSet::load_acquire_table() {
+  return (G1CodeRootSetTable*) OrderAccess::load_ptr_acquire(&_table);
 }
 
 void G1CodeRootSet::allocate_small_table() {
-  _table = new CodeRootSetTable(SmallSize);
+  G1CodeRootSetTable* temp = new G1CodeRootSetTable(SmallSize);
+
+  OrderAccess::release_store_ptr(&_table, temp);
 }
 
-void CodeRootSetTable::purge_list_append(CodeRootSetTable* table) {
+void G1CodeRootSetTable::purge_list_append(G1CodeRootSetTable* table) {
   for (;;) {
     table->_purge_next = _purge_list;
-    CodeRootSetTable* old = (CodeRootSetTable*) Atomic::cmpxchg_ptr(table, &_purge_list, table->_purge_next);
+    G1CodeRootSetTable* old = (G1CodeRootSetTable*) Atomic::cmpxchg_ptr(table, &_purge_list, table->_purge_next);
     if (old == table->_purge_next) {
       break;
     }
   }
 }
 
-void CodeRootSetTable::purge() {
-  CodeRootSetTable* table = _purge_list;
+void G1CodeRootSetTable::purge() {
+  G1CodeRootSetTable* table = _purge_list;
   _purge_list = NULL;
   while (table != NULL) {
-    CodeRootSetTable* to_purge = table;
+    G1CodeRootSetTable* to_purge = table;
     table = table->_purge_next;
     delete to_purge;
   }
 }
 
 void G1CodeRootSet::move_to_large() {
-  CodeRootSetTable* temp = new CodeRootSetTable(LargeSize);
+  G1CodeRootSetTable* temp = new G1CodeRootSetTable(LargeSize);
 
   _table->copy_to(temp);
 
-  CodeRootSetTable::purge_list_append(_table);
+  G1CodeRootSetTable::purge_list_append(_table);
 
   OrderAccess::release_store_ptr(&_table, temp);
 }
 
-
 void G1CodeRootSet::purge() {
-  CodeRootSetTable::purge();
+  G1CodeRootSetTable::purge();
 }
 
 size_t G1CodeRootSet::static_mem_size() {
-  return CodeRootSetTable::static_mem_size();
+  return G1CodeRootSetTable::static_mem_size();
 }
 
 void G1CodeRootSet::add(nmethod* method) {
@@ -245,12 +208,13 @@ void G1CodeRootSet::add(nmethod* method) {
     allocate_small_table();
   }
   added = _table->add(method);
-  if (_length == Threshold) {
-    move_to_large();
-  }
   if (added) {
+    if (_length == Threshold) {
+      move_to_large();
+    }
     ++_length;
   }
+  assert(_length == (size_t)_table->number_of_entries(), "sizes should match");
 }
 
 bool G1CodeRootSet::remove(nmethod* method) {
@@ -264,11 +228,13 @@ bool G1CodeRootSet::remove(nmethod* method) {
       clear();
     }
   }
+  assert((_length == 0 && _table == NULL) ||
+         (_length == (size_t)_table->number_of_entries()), "sizes should match");
   return removed;
 }
 
 bool G1CodeRootSet::contains(nmethod* method) {
-  CodeRootSetTable* table = load_acquire_table();
+  G1CodeRootSetTable* table = load_acquire_table(); // contains() may be called outside of lock, so ensure mem sync.
   if (table != NULL) {
     return table->contains(method);
   }
@@ -282,8 +248,7 @@ void G1CodeRootSet::clear() {
 }
 
 size_t G1CodeRootSet::mem_size() {
-  return sizeof(*this) +
-      (_table != NULL ? sizeof(CodeRootSetTable) + _table->entry_size() * _length : 0);
+  return sizeof(*this) + (_table != NULL ? _table->mem_size() : 0);
 }
 
 void G1CodeRootSet::nmethods_do(CodeBlobClosure* blk) const {
@@ -339,67 +304,3 @@ void G1CodeRootSet::clean(HeapRegion* owner) {
     clear();
   }
 }
-
-#ifndef PRODUCT
-
-class G1CodeRootSetTest {
- public:
-  static void test() {
-    {
-      G1CodeRootSet set1;
-      assert(set1.is_empty(), "Code root set must be initially empty but is not.");
-
-      assert(G1CodeRootSet::static_mem_size() == sizeof(void*),
-          err_msg("The code root set's static memory usage is incorrect, " SIZE_FORMAT " bytes", G1CodeRootSet::static_mem_size()));
-
-      set1.add((nmethod*)1);
-      assert(set1.length() == 1, err_msg("Added exactly one element, but set contains "
-          SIZE_FORMAT " elements", set1.length()));
-
-      const size_t num_to_add = (size_t)G1CodeRootSet::Threshold + 1;
-
-      for (size_t i = 1; i <= num_to_add; i++) {
-        set1.add((nmethod*)1);
-      }
-      assert(set1.length() == 1,
-          err_msg("Duplicate detection should not have increased the set size but "
-              "is " SIZE_FORMAT, set1.length()));
-
-      for (size_t i = 2; i <= num_to_add; i++) {
-        set1.add((nmethod*)(uintptr_t)(i));
-      }
-      assert(set1.length() == num_to_add,
-          err_msg("After adding in total " SIZE_FORMAT " distinct code roots, they "
-              "need to be in the set, but there are only " SIZE_FORMAT,
-              num_to_add, set1.length()));
-
-      assert(CodeRootSetTable::_purge_list != NULL, "should have grown to large hashtable");
-
-      size_t num_popped = 0;
-      for (size_t i = 1; i <= num_to_add; i++) {
-        bool removed = set1.remove((nmethod*)i);
-        if (removed) {
-          num_popped += 1;
-        } else {
-          break;
-        }
-      }
-      assert(num_popped == num_to_add,
-          err_msg("Managed to pop " SIZE_FORMAT " code roots, but only " SIZE_FORMAT " "
-              "were added", num_popped, num_to_add));
-      assert(CodeRootSetTable::_purge_list != NULL, "should have grown to large hashtable");
-
-      G1CodeRootSet::purge();
-
-      assert(CodeRootSetTable::_purge_list == NULL, "should have purged old small tables");
-
-    }
-
-  }
-};
-
-void TestCodeCacheRemSet_test() {
-  G1CodeRootSetTest::test();
-}
-
-#endif

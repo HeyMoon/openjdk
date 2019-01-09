@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -114,6 +114,7 @@ class Bundle {
     private final String cldrPath;
     private final EnumSet<Type> bundleTypes;
     private final String currencies;
+    private Map<String, Object> targetMap;
 
     static Bundle getBundle(String id) {
         return bundles.get(id);
@@ -145,6 +146,13 @@ class Bundle {
         return id;
     }
 
+    String getJavaID() {
+        // Tweak ISO compatibility for bundle generation
+        return id.replaceFirst("^he", "iw")
+            .replaceFirst("^id", "in")
+            .replaceFirst("^yi", "ji");
+    }
+
     boolean isRoot() {
         return "root".equals(id);
     }
@@ -166,6 +174,10 @@ class Bundle {
      * visible for the bundle's locale
      */
     Map<String, Object> getTargetMap() throws Exception {
+        if (targetMap != null) {
+            return targetMap;
+        }
+
         String[] cldrBundles = getCLDRPath().split(",");
 
         // myMap contains resources for id.
@@ -272,6 +284,7 @@ class Bundle {
             handleMultipleInheritance(myMap, parentsMap, calendarPrefix + "DayNarrows");
             handleMultipleInheritance(myMap, parentsMap, calendarPrefix + "AmPmMarkers");
             handleMultipleInheritance(myMap, parentsMap, calendarPrefix + "narrow.AmPmMarkers");
+            handleMultipleInheritance(myMap, parentsMap, calendarPrefix + "abbreviated.AmPmMarkers");
             handleMultipleInheritance(myMap, parentsMap, calendarPrefix + "QuarterNames");
             handleMultipleInheritance(myMap, parentsMap, calendarPrefix + "QuarterAbbreviations");
             handleMultipleInheritance(myMap, parentsMap, calendarPrefix + "QuarterNarrows");
@@ -298,8 +311,8 @@ class Bundle {
                     continue;
                 }
 
-                if (id.startsWith("en")) {
-                    fillInAbbrs(key, nameMap);
+                if (id.equals("en")) {
+                    fillInJREs(key, nameMap);
                 }
             }
         }
@@ -376,17 +389,31 @@ class Bundle {
                 }
             }
         }
+        // replace empty era names with parentMap era names
+        for (String key : ERA_KEYS) {
+            Object value = myMap.get(key);
+            if (value != null && value instanceof String[]) {
+                String[] eraStrings = (String[]) value;
+                for (String eraString : eraStrings) {
+                    if (eraString == null || eraString.isEmpty()) {
+                        fillInElements(parentsMap, key, value);
+                    }
+                }
+            }
+        }
 
         // Remove all duplicates
         if (Objects.nonNull(parentsMap)) {
             for (Iterator<String> it = myMap.keySet().iterator(); it.hasNext();) {
                 String key = it.next();
-                if (Objects.deepEquals(parentsMap.get(key), myMap.get(key))) {
+                if (!key.equals("numberingScripts") && // real body "NumberElements" may differ
+                    Objects.deepEquals(parentsMap.get(key), myMap.get(key))) {
                     it.remove();
                 }
             }
         }
 
+        targetMap = myMap;
         return myMap;
     }
 
@@ -621,78 +648,41 @@ class Bundle {
         return null;
     }
 
-    private void fillInAbbrs(String key, Map<String, String> map) {
-        fillInAbbrs(TZ_STD_LONG_KEY, TZ_STD_SHORT_KEY, map);
-        fillInAbbrs(TZ_DST_LONG_KEY, TZ_DST_SHORT_KEY, map);
-        fillInAbbrs(TZ_GEN_LONG_KEY, TZ_GEN_SHORT_KEY, map);
+    static List<Object[]> jreTimeZoneNames = Arrays.asList(TimeZoneNames.getContents());
+    private void fillInJREs(String key, Map<String, String> map) {
+        String tzid = null;
 
-        // If the standard std is "Standard Time" and daylight std is "Summer Time",
-        // replace the standard std with the generic std to avoid using
-        // the same abbrivation except for Australia time zone names.
-        String std = map.get(TZ_STD_SHORT_KEY);
-        String dst = map.get(TZ_DST_SHORT_KEY);
-        String gen = map.get(TZ_GEN_SHORT_KEY);
-        if (std != null) {
-            if (dst == null) {
-                // if dst is null, create long and short names from the standard
-                // std. ("Something Standard Time" to "Something Daylight Time",
-                // or "Something Time" to "Something Summer Time")
-                String name = map.get(TZ_STD_LONG_KEY);
-                if (name != null) {
-                    if (name.contains("Standard Time")) {
-                        name = name.replace("Standard Time", "Daylight Time");
-                    } else if (name.endsWith("Mean Time")) {
-                        if (!name.startsWith("Greenwich ")) {
-                        name = name.replace("Mean Time", "Summer Time");
+        if (key.startsWith(CLDRConverter.METAZONE_ID_PREFIX)) {
+            // Look for tzid
+            String meta = key.substring(CLDRConverter.METAZONE_ID_PREFIX.length());
+            if (meta.equals("GMT")) {
+                tzid = meta;
+            } else {
+                for (String tz : CLDRConverter.handlerMetaZones.keySet()) {
+                    if (CLDRConverter.handlerMetaZones.get(tz).equals(meta)) {
+                        tzid = tz;
+                        break;
                         }
-                    } else if (name.endsWith(" Time")) {
-                        name = name.replace(" Time", " Summer Time");
                     }
-                    map.put(TZ_DST_LONG_KEY, name);
-                    fillInAbbrs(TZ_DST_LONG_KEY, TZ_DST_SHORT_KEY, map);
                 }
-            }
-            if (gen  == null) {
-                String name = map.get(TZ_STD_LONG_KEY);
-                if (name != null) {
-                    if (name.endsWith("Standard Time")) {
-                        name = name.replace("Standard Time", "Time");
-                    } else if (name.endsWith("Mean Time")) {
-                        if (!name.startsWith("Greenwich ")) {
-                        name = name.replace("Mean Time", "Time");
-                    }
-                    }
-                    map.put(TZ_GEN_LONG_KEY, name);
-                    fillInAbbrs(TZ_GEN_LONG_KEY, TZ_GEN_SHORT_KEY, map);
-                }
-            }
-        }
+        } else {
+            tzid = key.substring(CLDRConverter.TIMEZONE_ID_PREFIX.length());
     }
 
-    private void fillInAbbrs(String longKey, String shortKey, Map<String, String> map) {
-        String abbr = map.get(shortKey);
-        if (abbr == null) {
-            String name = map.get(longKey);
-            if (name != null) {
-                abbr = toAbbr(name);
-                if (abbr != null) {
-                    map.put(shortKey, abbr);
+        if (tzid != null) {
+            for (Object[] jreZone : jreTimeZoneNames) {
+                if (jreZone[0].equals(tzid)) {
+                    for (int i = 0; i < ZONE_NAME_KEYS.length; i++) {
+                        if (map.get(ZONE_NAME_KEYS[i]) == null) {
+                            String[] jreNames = (String[])jreZone[1];
+                            map.put(ZONE_NAME_KEYS[i], jreNames[i]);
                 }
             }
+                    break;
         }
     }
-
-    private String toAbbr(String name) {
-        String[] substrs = name.split("\\s+");
-        StringBuilder sb = new StringBuilder();
-        for (String s : substrs) {
-            char c = s.charAt(0);
-            if (c >= 'A' && c <= 'Z') {
-                sb.append(c);
             }
         }
-        return sb.length() > 0 ? sb.toString() : null;
-    }
 
     private void convert(CalendarType calendarType, char cldrLetter, int count, StringBuilder sb) {
         switch (cldrLetter) {

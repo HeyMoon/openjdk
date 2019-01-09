@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,6 +36,7 @@
  *          java.rmi/sun.rmi.transport.tcp
  * @build TestLibrary RMID ActivationLibrary
  * @run main/othervm/timeout=240 InheritedChannelNotServerSocket
+ * @key intermittent
  */
 
 import java.io.IOException;
@@ -92,9 +93,8 @@ public class InheritedChannelNotServerSocket {
             obj = new CallbackImpl();
             Callback proxy =
                 (Callback) UnicastRemoteObject.exportObject(obj, 0);
-            Registry registry =
-                LocateRegistry.createRegistry(
-                    TestLibrary.INHERITEDCHANNELNOTSERVERSOCKET_REGISTRY_PORT);
+            Registry registry = TestLibrary.createRegistryOnEphemeralPort();
+            int registryPort = TestLibrary.getRegistryPort(registry);
             registry.bind("Callback", proxy);
 
             /*
@@ -104,9 +104,10 @@ public class InheritedChannelNotServerSocket {
             RMID.removeLog();
             rmid = RMID.createRMID(System.out, System.err, true, true,
                                    TestLibrary.INHERITEDCHANNELNOTSERVERSOCKET_ACTIVATION_PORT);
-            rmid.addOptions(new String[]{
-                "-Djava.nio.channels.spi.SelectorProvider=" +
-                "InheritedChannelNotServerSocket$SP"});
+            rmid.addOptions(
+                "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED",
+                "-Djava.nio.channels.spi.SelectorProvider=InheritedChannelNotServerSocket$SP",
+                "-Dtest.java.rmi.rmidViaInheritedChannel.registry.port=" + registryPort);
             rmid.start();
 
             /*
@@ -180,8 +181,9 @@ public class InheritedChannelNotServerSocket {
                  */
                 try {
                     System.err.println("notify test...");
-                    Registry registry =
-                        LocateRegistry.getRegistry(TestLibrary.INHERITEDCHANNELNOTSERVERSOCKET_REGISTRY_PORT);
+                    int registryPort = Integer.getInteger(
+                            "test.java.rmi.rmidViaInheritedChannel.registry.port", 0);
+                    Registry registry = LocateRegistry.getRegistry(registryPort);
                     Callback obj = (Callback) registry.lookup("Callback");
                     obj.notifyTest();
                 } catch (NotBoundException nbe) {

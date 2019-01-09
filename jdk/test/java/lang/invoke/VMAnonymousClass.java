@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,7 @@
 /* @test
  * @bug 8046903
  * @summary VM anonymous class members can't be statically invocable
- * @modules java.base/sun.misc java.base/jdk.internal.org.objectweb.asm
+ * @modules java.base/jdk.internal.misc java.base/jdk.internal.org.objectweb.asm
  * @run junit test.java.lang.invoke.VMAnonymousClass
  */
 package test.java.lang.invoke;
@@ -32,9 +32,8 @@ package test.java.lang.invoke;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
-import java.lang.reflect.Field;
 import org.junit.Test;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 import jdk.internal.org.objectweb.asm.*;
 import static jdk.internal.org.objectweb.asm.Opcodes.*;
 
@@ -43,24 +42,48 @@ public class VMAnonymousClass {
         VMAnonymousClass test = new VMAnonymousClass();
         test.testJavaLang();
         test.testJavaUtil();
-        test.testSunMisc();
+        test.testJdkInternalMisc();
         test.testJavaLangInvoke();
+        test.testProhibitedJavaPkg();
         System.out.println("TEST PASSED");
     }
 
     // Test VM anonymous classes from different packages
     // (see j.l.i.InvokerBytecodeGenerator::isStaticallyInvocable).
-    @Test public void testJavaLang()       throws Throwable { test("java/lang");        }
-    @Test public void testJavaUtil()       throws Throwable { test("java/util");        }
-    @Test public void testSunMisc()        throws Throwable { test("sun/misc");         }
-    @Test public void testJavaLangInvoke() throws Throwable { test("java/lang/invoke"); }
+    @Test public void testJavaLang()        throws Throwable { test("java/lang");         }
+    @Test public void testJavaUtil()        throws Throwable { test("java/util");         }
+    @Test public void testJdkInternalMisc() throws Throwable { test("jdk/internal/misc"); }
+    @Test public void testJavaLangInvoke()  throws Throwable { test("java/lang/invoke");  }
+    @Test public void testProhibitedJavaPkg() throws Throwable {
+       try {
+           test("java/prohibited");
+       } catch (IllegalArgumentException e) {
+           return;
+       }
+       throw new RuntimeException("Expected SecurityException");
+     }
 
-    private static Unsafe unsafe = getUnsafe();
+    private static Unsafe unsafe = Unsafe.getUnsafe();
 
     private static void test(String pkg) throws Throwable {
         byte[] bytes = dumpClass(pkg);
-        // Define VM anonymous class in privileged context (on BCP).
-        Class anonClass = unsafe.defineAnonymousClass(Object.class, bytes, null);
+        Class host_class;
+        if (pkg.equals("java/prohibited")) {
+            VMAnonymousClass sampleclass = new VMAnonymousClass();
+            host_class = (Class)sampleclass.getClass();
+        } else if (pkg.equals("java/lang")) {
+          host_class = Object.class;
+        } else if (pkg.equals("java/util")) {
+            host_class = java.util.ArrayList.class;
+        } else if (pkg.equals("jdk/internal/misc")) {
+            host_class = jdk.internal.misc.Signal.class;
+        } else if (pkg.equals("java/lang/invoke")) {
+            host_class = java.lang.invoke.CallSite.class;
+        } else {
+            throw new RuntimeException("Unexpected pkg: " + pkg);
+        }
+        // Define VM anonymous class
+        Class anonClass = unsafe.defineAnonymousClass(host_class, bytes, null);
 
         MethodType t = MethodType.methodType(Object.class, int.class);
         MethodHandle target = MethodHandles.lookup().findStatic(anonClass, "get", t);
@@ -105,15 +128,5 @@ public class VMAnonymousClass {
         }
         cw.visitEnd();
         return cw.toByteArray();
-    }
-
-    private static synchronized Unsafe getUnsafe() {
-        try {
-            Field f = Unsafe.class.getDeclaredField("theUnsafe");
-            f.setAccessible(true);
-            return (Unsafe) f.get(null);
-        } catch (NoSuchFieldException | IllegalAccessException e) {
-            throw new RuntimeException("Unable to get Unsafe instance.", e);
-        }
     }
 }

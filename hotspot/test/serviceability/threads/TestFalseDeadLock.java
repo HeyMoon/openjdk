@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,8 @@ import java.util.Random;
  * @test
  * @bug 8016304
  * @summary Make sure no deadlock is reported for this program which has no deadlocks.
- * @library /testlibrary
+ * @modules java.base/jdk.internal.misc
+ * @library /test/lib
  * @run main/othervm TestFalseDeadLock
  */
 

@@ -29,9 +29,14 @@ package javax.transaction.xa;
  * The XAException is thrown by the Resource Manager (RM) to inform the
  * Transaction Manager of an error encountered by the involved transaction.
  *
+ * @since 1.4
  */
 public class XAException extends Exception {
-    //private static final long serialVersionUID = -8249683284832867751L;
+
+    /**
+     * Specify serialVersionUID for backward compatibility
+     */
+    private static final long serialVersionUID = -8249683284832867751L;
 
     /**
      * The error code with which to create the SystemException.

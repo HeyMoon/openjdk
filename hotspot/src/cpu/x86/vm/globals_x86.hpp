@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,15 +31,14 @@
 // Sets the default values for platform dependent flags used by the runtime system.
 // (see globals.hpp)
 
-define_pd_global(bool, ConvertSleepToYield,      true);
 define_pd_global(bool, ShareVtableStubs,         true);
-define_pd_global(bool, CountInterpCalls,         true);
 define_pd_global(bool, NeedsDeoptSuspend,        false); // only register window machines need this
 
 define_pd_global(bool, ImplicitNullChecks,       true);  // Generate code for implicit null checks
 define_pd_global(bool, TrapBasedNullChecks,      false); // Not needed on x86.
 define_pd_global(bool, UncommonNullCast,         true);  // Uncommon-trap NULLs passed to check cast
 
+define_pd_global(uintx, CodeCacheSegmentSize,    64 TIERED_ONLY(+64)); // Tiered compilation has large code-entry alignment.
 // See 4827828 for this change. There is no globals_core_i486.hpp. I can't
 // assign a different value for C2 without touching a number of files. Use
 // #ifdef to minimize the change as it's late in Mantis. -- FIXME.
@@ -47,7 +46,7 @@ define_pd_global(bool, UncommonNullCast,         true);  // Uncommon-trap NULLs 
 // the the vep is aligned at CodeEntryAlignment whereas c2 only aligns
 // the uep and the vep doesn't get real alignment but just slops on by
 // only assured that the entry instruction meets the 5 byte size requirement.
-#ifdef COMPILER2
+#if defined(COMPILER2) || INCLUDE_JVMCI
 define_pd_global(intx, CodeEntryAlignment,       32);
 #else
 define_pd_global(intx, CodeEntryAlignment,       16);
@@ -56,17 +55,31 @@ define_pd_global(intx, OptoLoopAlignment,        16);
 define_pd_global(intx, InlineFrequencyCount,     100);
 define_pd_global(intx, InlineSmallCode,          1000);
 
-define_pd_global(intx, StackYellowPages, NOT_WINDOWS(2) WINDOWS_ONLY(3));
-define_pd_global(intx, StackRedPages, 1);
-#ifdef AMD64
-// Very large C++ stack frames using solaris-amd64 optimized builds
-// due to lack of optimization caused by C++ compiler bugs
-define_pd_global(intx, StackShadowPages, NOT_WIN64(20) WIN64_ONLY(6) DEBUG_ONLY(+2));
-#else
-define_pd_global(intx, StackShadowPages, 4 DEBUG_ONLY(+5));
-#endif // AMD64
+#define DEFAULT_STACK_YELLOW_PAGES (NOT_WINDOWS(2) WINDOWS_ONLY(3))
+#define DEFAULT_STACK_RED_PAGES (1)
+#define DEFAULT_STACK_RESERVED_PAGES (NOT_WINDOWS(1) WINDOWS_ONLY(0))
 
-define_pd_global(intx, PreInflateSpin,           10);
+#define MIN_STACK_YELLOW_PAGES DEFAULT_STACK_YELLOW_PAGES
+#define MIN_STACK_RED_PAGES DEFAULT_STACK_RED_PAGES
+#define MIN_STACK_RESERVED_PAGES (0)
+
+#ifdef _LP64
+// Java_java_net_SocketOutputStream_socketWrite0() uses a 64k buffer on the
+// stack if compiled for unix and LP64. To pass stack overflow tests we need
+// 20 shadow pages.
+#define DEFAULT_STACK_SHADOW_PAGES (NOT_WIN64(20) WIN64_ONLY(7) DEBUG_ONLY(+2))
+// For those clients that do not use write socket, we allow
+// the min range value to be below that of the default
+#define MIN_STACK_SHADOW_PAGES (NOT_WIN64(10) WIN64_ONLY(7) DEBUG_ONLY(+2))
+#else
+#define DEFAULT_STACK_SHADOW_PAGES (4 DEBUG_ONLY(+5))
+#define MIN_STACK_SHADOW_PAGES DEFAULT_STACK_SHADOW_PAGES
+#endif // _LP64
+
+define_pd_global(intx, StackYellowPages, DEFAULT_STACK_YELLOW_PAGES);
+define_pd_global(intx, StackRedPages, DEFAULT_STACK_RED_PAGES);
+define_pd_global(intx, StackShadowPages, DEFAULT_STACK_SHADOW_PAGES);
+define_pd_global(intx, StackReservedPages, DEFAULT_STACK_RESERVED_PAGES);
 
 define_pd_global(bool, RewriteBytecodes,     true);
 define_pd_global(bool, RewriteFrequentPairs, true);
@@ -82,9 +95,20 @@ define_pd_global(size_t, CMSYoungGenPerWorker, 64*M);  // default max size of CM
 
 define_pd_global(uintx, TypeProfileLevel, 111);
 
+define_pd_global(bool, CompactStrings, true);
+
 define_pd_global(bool, PreserveFramePointer, false);
 
-#define ARCH_FLAGS(develop, product, diagnostic, experimental, notproduct, range, constraint) \
+define_pd_global(intx, InitArrayShortSize, 8*BytesPerLong);
+
+#define ARCH_FLAGS(develop, \
+                   product, \
+                   diagnostic, \
+                   experimental, \
+                   notproduct, \
+                   range, \
+                   constraint, \
+                   writeable) \
                                                                             \
   develop(bool, IEEEPrecision, true,                                        \
           "Enables IEEE precision (for INTEL only)")                        \
@@ -92,8 +116,9 @@ define_pd_global(bool, PreserveFramePointer, false);
   product(bool, UseStoreImmI16, true,                                       \
           "Use store immediate 16-bits value instruction on x86")           \
                                                                             \
-  product(intx, UseAVX, 99,                                                 \
+  product(intx, UseAVX, 2,                                                  \
           "Highest supported AVX instructions set on x86/x64")              \
+          range(0, 99)                                                      \
                                                                             \
   product(bool, UseCLMUL, false,                                            \
           "Control whether CLMUL instructions can be used on x86/x64")      \
@@ -137,6 +162,7 @@ define_pd_global(bool, PreserveFramePointer, false);
                                                                             \
   product(uintx, RTMRetryCount, 5,                                          \
           "Number of RTM retries on lock abort or busy")                    \
+          range(0, max_uintx)                                               \
                                                                             \
   experimental(intx, RTMSpinLoopCount, 100,                                 \
           "Spin count for lock to become free before RTM retry")            \
@@ -162,18 +188,21 @@ define_pd_global(bool, PreserveFramePointer, false);
           "Use RTM Xend instead of Xabort when lock busy")                  \
                                                                             \
   /* assembler */                                                           \
-  product(bool, Use486InstrsOnly, false,                                    \
-          "Use 80486 Compliant instruction subset")                         \
-                                                                            \
   product(bool, UseCountLeadingZerosInstruction, false,                     \
           "Use count leading zeros instruction")                            \
                                                                             \
   product(bool, UseCountTrailingZerosInstruction, false,                    \
           "Use count trailing zeros instruction")                           \
                                                                             \
+  product(bool, UseSSE42Intrinsics, false,                                  \
+          "SSE4.2 versions of intrinsics")                                  \
+                                                                            \
   product(bool, UseBMI1Instructions, false,                                 \
           "Use BMI1 instructions")                                          \
                                                                             \
   product(bool, UseBMI2Instructions, false,                                 \
-          "Use BMI2 instructions")
+          "Use BMI2 instructions")                                          \
+                                                                            \
+  diagnostic(bool, UseLibmIntrinsic, true,                                  \
+          "Use Libm Intrinsics")
 #endif // CPU_X86_VM_GLOBALS_X86_HPP

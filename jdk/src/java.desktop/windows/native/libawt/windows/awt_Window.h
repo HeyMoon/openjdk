@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -173,6 +173,8 @@ public:
     virtual MsgRouting WmMove(int x, int y);
     virtual MsgRouting WmSize(UINT type, int w, int h);
     virtual MsgRouting WmSizing();
+    virtual MsgRouting WmEnterSizeMove();
+    virtual MsgRouting WmExitSizeMove();
     virtual MsgRouting WmPaint(HDC hDC);
     virtual MsgRouting WmSettingChange(UINT wFlag, LPCTSTR pszSection);
     virtual MsgRouting WmNcCalcSize(BOOL fCalcValidRects,
@@ -241,6 +243,8 @@ public:
     static void _UpdateWindow(void* param);
     static void _RepositionSecurityWarning(void* param);
     static void _SetFullScreenExclusiveModeState(void* param);
+    static void _GetNativeWindowSize(void* param);
+    static void _WindowDPIChange(void* param);
 
     inline static BOOL IsResizing() {
         return sm_resizing;
@@ -383,7 +387,19 @@ protected:
 private:
     int m_screenNum;
 
+    typedef struct {
+        jint screen;
+        jfloat scaleX;
+        jfloat scaleY;
+    } ScaleRec;
+
+    BOOL m_winSizeMove;
+    ScaleRec prevScaleRec;
+
     void InitOwner(AwtWindow *owner);
+    void CheckWindowDPIChange();
+    void WindowDPIChange(int prevScreen, float prevScaleX, float prevScaleY,
+                         int newScreen, float scaleX, float scaleY);
 
     Type m_windowType;
     void InitType(JNIEnv *env, jobject peer);
@@ -396,5 +412,7 @@ private:
 public:
     inline bool IsAlwaysOnTop() { return m_alwaysOnTop; }
 };
+
+HICON CreateIconFromRaster(JNIEnv* env, jintArray iconRaster, jint w, jint h);
 
 #endif /* AWT_WINDOW_H */

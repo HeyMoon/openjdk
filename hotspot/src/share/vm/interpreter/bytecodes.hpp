@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,10 +26,11 @@
 #define SHARE_VM_INTERPRETER_BYTECODES_HPP
 
 #include "memory/allocation.hpp"
-#include "utilities/top.hpp"
 
 // Bytecodes specifies all bytecodes used in the VM and
 // provides utility functions to get bytecode attributes.
+
+class Method;
 
 // NOTE: replicated in SA in vm/agent/sun/jvm/hotspot/interpreter/Bytecodes.java
 class Bytecodes: AllStatic {
@@ -256,6 +257,7 @@ class Bytecodes: AllStatic {
 
     _fast_aputfield       ,
     _fast_bputfield       ,
+    _fast_zputfield       ,
     _fast_cputfield       ,
     _fast_dputfield       ,
     _fast_fputfield       ,
@@ -353,8 +355,8 @@ class Bytecodes: AllStatic {
 
  public:
   // Conversion
-  static void        check          (Code code)    { assert(is_defined(code),      err_msg("illegal code: %d", (int)code)); }
-  static void        wide_check     (Code code)    { assert(wide_is_defined(code), err_msg("illegal code: %d", (int)code)); }
+  static void        check          (Code code)    { assert(is_defined(code),      "illegal code: %d", (int)code); }
+  static void        wide_check     (Code code)    { assert(wide_is_defined(code), "illegal code: %d", (int)code); }
   static Code        cast           (int  code)    { return (Code)code; }
 
 
@@ -384,15 +386,16 @@ class Bytecodes: AllStatic {
   static Code       non_breakpoint_code_at(const Method* method, address bcp);
 
   // Bytecode attributes
-  static bool        is_defined     (int  code)    { return 0 <= code && code < number_of_codes && flags(code, false) != 0; }
+  static bool        is_valid       (int  code)    { return 0 <= code && code < number_of_codes; }
+  static bool        is_defined     (int  code)    { return is_valid(code) && flags(code, false) != 0; }
   static bool        wide_is_defined(int  code)    { return is_defined(code) && flags(code, true) != 0; }
   static const char* name           (Code code)    { check(code);      return _name          [code]; }
   static BasicType   result_type    (Code code)    { check(code);      return _result_type   [code]; }
   static int         depth          (Code code)    { check(code);      return _depth         [code]; }
   // Note: Length functions must return <=0 for invalid bytecodes.
   // Calling check(code) in length functions would throw an unwanted assert.
-  static int         length_for     (Code code)    { /*no check*/      return _lengths       [code] & 0xF; }
-  static int         wide_length_for(Code code)    { /*no check*/      return _lengths       [code] >> 4; }
+  static int         length_for     (Code code)    { return is_valid(code) ? _lengths[code] & 0xF : -1; }
+  static int         wide_length_for(Code code)    { return is_valid(code) ? _lengths[code]  >> 4 : -1; }
   static bool        can_trap       (Code code)    { check(code);      return has_all_flags(code, _bc_can_trap, false); }
   static Code        java_code      (Code code)    { check(code);      return _java_code     [code]; }
   static bool        can_rewrite    (Code code)    { check(code);      return has_all_flags(code, _bc_can_rewrite, false); }

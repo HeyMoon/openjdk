@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,7 @@
  * @test
  * @bug 4975569 6622215 8034861
  * @summary javap doesn't print new flag bits
- * @modules jdk.jdeps
+ * @modules jdk.jdeps/com.sun.tools.javap
  */
 
 import java.io.*;
@@ -42,12 +42,12 @@ public class T4975569 {
     }
 
     void run() {
-        verify(Anno.class.getName(), "flags: ACC_INTERFACE, ACC_ABSTRACT, ACC_ANNOTATION");
-        verify(E.class.getName(),    "flags: ACC_FINAL, ACC_SUPER, ACC_ENUM");
-        verify(S.class.getName(),    "flags: ACC_BRIDGE, ACC_SYNTHETIC",
+        verify(Anno.class.getName(), "flags: \\(0x2600\\) ACC_INTERFACE, ACC_ABSTRACT, ACC_ANNOTATION");
+        verify(E.class.getName(),    "flags: \\(0x4030\\) ACC_FINAL, ACC_SUPER, ACC_ENUM");
+        verify(S.class.getName(),    "flags: \\(0x1040\\) ACC_BRIDGE, ACC_SYNTHETIC",
                                      "InnerClasses:\n  static [# =\\w]+; +// ");
         verify(V.class.getName(),    "void m\\(java.lang.String...\\)",
-                                     "flags: ACC_VARARGS");
+                                     "flags: \\(0x0080\\) ACC_VARARGS");
         verify(Prot.class.getName(), "InnerClasses:\n  protected [# =\\w]+; +// ");
         verify(Priv.class.getName(), new String[]{"-p"},
                                      "InnerClasses:\n  private [# =\\w]+; +// ");

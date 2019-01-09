@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,12 +23,14 @@
 
 /*
   @test
+  @key headful
   @bug 6359129
   @summary REGRESSION: Popup menus dont respond to selections when extend outside Applet
   @author oleg.sukhodolsky area=awt.grab
   @modules java.desktop/java.awt.peer
            java.desktop/sun.awt
-  @library ../../regtesthelpers
+  @library /java/awt/patchlib  ../../regtesthelpers
+  @build java.desktop/java.awt.Helper
   @build Util UtilInternal
   @run main EmbeddedFrameTest1
 */

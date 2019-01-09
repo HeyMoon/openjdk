@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,42 +21,64 @@
  * questions.
  */
 
-/**
+/*
  * @test
  * @bug 4856966
  * @summary Test the new RSA provider can verify all the RSA certs in the cacerts file
  * @author Andreas Sterbenz
  * @library ..
  * @library ../../../../java/security/testlibrary
+ * @modules jdk.crypto.cryptoki
+ * @run main/othervm TestCACerts
+ * @run main/othervm TestCACerts sm TestCACerts.policy
  */
 
 // this test serves as our known answer test
 
-import java.io.*;
-import java.util.*;
-
-import java.security.*;
-import java.security.cert.*;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.security.KeyStore;
+import java.security.Provider;
+import java.security.PublicKey;
+import java.security.Security;
+import java.security.cert.X509Certificate;
+import java.util.Enumeration;
 
 public class TestCACerts extends PKCS11Test {
 
-    private final static char SEP = File.separatorChar;
-
     public static void main(String[] args) throws Exception {
-        main(new TestCACerts());
+        main(new TestCACerts(), args);
     }
 
+    @Override
     public void main(Provider p) throws Exception {
+
+        /*
+         * Use Solaris SPARC 11.2 or later to avoid an intermittent failure
+         * when running SunPKCS11-Solaris (8044554)
+         */
+        if (p.getName().equals("SunPKCS11-Solaris") &&
+            props.getProperty("os.name").equals("SunOS") &&
+            props.getProperty("os.arch").equals("sparcv9") &&
+            props.getProperty("os.version").compareTo("5.11") <= 0 &&
+            getDistro().compareTo("11.2") < 0) {
+
+            System.out.println("SunPKCS11-Solaris provider requires " +
+                "Solaris SPARC 11.2 or later, skipping");
+            return;
+        }
+
         long start = System.currentTimeMillis();
         Providers.setAt(p, 1);
         try {
             String PROVIDER = p.getName();
-            String javaHome = System.getProperty("java.home");
+            String javaHome = props.getProperty("java.home");
             String caCerts = javaHome + SEP + "lib" + SEP + "security" + SEP + "cacerts";
-            InputStream in = new FileInputStream(caCerts);
-            KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
-            ks.load(in, null);
-            in.close();
+            KeyStore ks;
+            try (InputStream in = new FileInputStream(caCerts)) {
+                ks = KeyStore.getInstance(KeyStore.getDefaultType());
+                ks.load(in, null);
+            }
             for (Enumeration e = ks.aliases(); e.hasMoreElements(); ) {
                 String alias = (String)e.nextElement();
                 if (ks.isCertificateEntry(alias)) {

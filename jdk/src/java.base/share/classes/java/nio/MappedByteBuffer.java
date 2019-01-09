@@ -26,7 +26,7 @@
 package java.nio;
 
 import java.io.FileDescriptor;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 
 /**
@@ -45,7 +45,7 @@ import sun.misc.Unsafe;
  * this program or another.  Whether or not such changes occur, and when they
  * occur, is operating-system dependent and therefore unspecified.
  *
- * <a name="inaccess"></a><p> All or part of a mapped byte buffer may become
+ * <a id="inaccess"></a><p> All or part of a mapped byte buffer may become
  * inaccessible at any time, for example if the mapped file is truncated.  An
  * attempt to access an inaccessible region of a mapped byte buffer will not
  * change the buffer's content and will cause an unspecified exception to be
@@ -116,10 +116,10 @@ public abstract class MappedByteBuffer
      * Tells whether or not this buffer's content is resident in physical
      * memory.
      *
-     * <p> A return value of <tt>true</tt> implies that it is highly likely
+     * <p> A return value of {@code true} implies that it is highly likely
      * that all of the data in this buffer is resident in physical memory and
      * may therefore be accessed without incurring any virtual-memory page
-     * faults or I/O operations.  A return value of <tt>false</tt> does not
+     * faults or I/O operations.  A return value of {@code false} does not
      * necessarily imply that the buffer's content is not resident in physical
      * memory.
      *
@@ -127,7 +127,7 @@ public abstract class MappedByteBuffer
      * underlying operating system may have paged out some of the buffer's data
      * by the time that an invocation of this method returns.  </p>
      *
-     * @return  <tt>true</tt> if it is likely that this buffer's content
+     * @return  {@code true} if it is likely that this buffer's content
      *          is resident in physical memory
      */
     public final boolean isLoaded() {
@@ -213,7 +213,6 @@ public abstract class MappedByteBuffer
 
     /**
      * {@inheritDoc}
-     * @since 1.9
      */
     @Override
     public final MappedByteBuffer position(int newPosition) {
@@ -223,7 +222,6 @@ public abstract class MappedByteBuffer
 
     /**
      * {@inheritDoc}
-     * @since 1.9
      */
     @Override
     public final MappedByteBuffer limit(int newLimit) {
@@ -233,7 +231,6 @@ public abstract class MappedByteBuffer
 
     /**
      * {@inheritDoc}
-     * @since 1.9
      */
     @Override
     public final MappedByteBuffer mark() {
@@ -243,7 +240,6 @@ public abstract class MappedByteBuffer
 
     /**
      * {@inheritDoc}
-     * @since 1.9
      */
     @Override
     public final MappedByteBuffer reset() {
@@ -253,7 +249,6 @@ public abstract class MappedByteBuffer
 
     /**
      * {@inheritDoc}
-     * @since 1.9
      */
     @Override
     public final MappedByteBuffer clear() {
@@ -263,7 +258,6 @@ public abstract class MappedByteBuffer
 
     /**
      * {@inheritDoc}
-     * @since 1.9
      */
     @Override
     public final MappedByteBuffer flip() {
@@ -273,7 +267,6 @@ public abstract class MappedByteBuffer
 
     /**
      * {@inheritDoc}
-     * @since 1.9
      */
     @Override
     public final MappedByteBuffer rewind() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,20 +21,30 @@
  * questions.
  */
 
-/**
+/*
  * @test
  * @bug 6405536
  * @summary Test the P11ECKeyFactory
  * @author Andreas Sterbenz
  * @library ..
+ * @modules jdk.crypto.cryptoki
+ * @run main/othervm TestKeyFactory
+ * @run main/othervm TestKeyFactory sm
  */
 
-import java.io.*;
-import java.util.*;
-
-import java.security.*;
-import java.security.interfaces.*;
-import java.security.spec.*;
+import java.security.Key;
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
+import java.security.Provider;
+import java.security.PublicKey;
+import java.security.spec.ECPrivateKeySpec;
+import java.security.spec.ECPublicKeySpec;
+import java.security.spec.KeySpec;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Arrays;
 
 public class TestKeyFactory extends PKCS11Test {
 
@@ -111,9 +121,10 @@ public class TestKeyFactory extends PKCS11Test {
     }
 
     public static void main(String[] args) throws Exception {
-        main(new TestKeyFactory());
+        main(new TestKeyFactory(), args);
     }
 
+    @Override
     public void main(Provider p) throws Exception {
         if (p.getService("KeyFactory", "EC") == null) {
             System.out.println("Provider does not support EC, skipping");

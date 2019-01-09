@@ -124,7 +124,7 @@ public class Cursor implements java.io.Serializable {
     /**
      * This field is a private replacement for 'predefined' array.
      */
-    private final static Cursor[] predefinedPrivate = new Cursor[14];
+    private static final Cursor[] predefinedPrivate = new Cursor[14];
 
     /* Localization names and default values */
     static final String[][] cursorProperties = {
@@ -146,7 +146,7 @@ public class Cursor implements java.io.Serializable {
 
     /**
      * The chosen cursor type initially set to
-     * the <code>DEFAULT_CURSOR</code>.
+     * the {@code DEFAULT_CURSOR}.
      *
      * @serial
      * @see #getType()
@@ -283,7 +283,7 @@ public class Cursor implements java.io.Serializable {
      * @param name a string describing the desired system-specific custom cursor
      * @return the system specific custom cursor named
      * @exception HeadlessException if
-     * <code>GraphicsEnvironment.isHeadless</code> returns true
+     * {@code GraphicsEnvironment.isHeadless} returns true
      * @exception AWTException in case of erroneous retrieving of the cursor
      */
     public static Cursor getSystemCustomCursor(final String name)
@@ -449,5 +449,5 @@ public class Cursor implements java.io.Serializable {
         }
     }
 
-    private native static void finalizeImpl(long pData);
+    private static native void finalizeImpl(long pData);
 }

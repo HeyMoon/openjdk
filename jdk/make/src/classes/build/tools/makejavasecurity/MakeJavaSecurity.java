@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,7 +35,8 @@ import java.util.*;
  *
  * 1. Adds additional packages to the package.access and
  *    package.definition security properties.
- * 2. Filter out platform-unrelated parts
+ * 2. Filter out platform-unrelated parts.
+ * 3. Set the JCE jurisdiction policy directory.
  *
  * In order to easily maintain platform-related entries, every item
  * (including the last line) in package.access and package.definition
@@ -50,19 +51,22 @@ public class MakeJavaSecurity {
 
     public static void main(String[] args) throws Exception {
 
-        if (args.length < 3) {
+        if (args.length < 5) {
             System.err.println("Usage: java MakeJavaSecurity " +
                                "[input java.security file name] " +
                                "[output java.security file name] " +
                                "[openjdk target os] " +
+                               "[openjdk target cpu architecture]" +
+                               "[JCE jurisdiction policy directory]" +
                                "[more restricted packages file name?]");
-            System.exit(1);
+
+                    System.exit(1);
         }
 
         // more restricted packages
         List<String> extraLines;
-        if (args.length == 4) {
-            extraLines = Files.readAllLines(Paths.get(args[3]));
+        if (args.length == 6) {
+            extraLines = Files.readAllLines(Paths.get(args[5]));
         } else {
             extraLines = Collections.emptyList();
         }
@@ -87,7 +91,7 @@ public class MakeJavaSecurity {
         }
 
         // Filter out platform-unrelated ones. We only support
-        // #ifdef, #ifndef, and #endif.
+        // #ifdef, #ifndef, #else, and #endif. Nesting not supported (yet).
         int mode = 0;   // 0: out of block, 1: in match, 2: in non-match
         Iterator<String> iter = lines.iterator();
         while (iter.hasNext()) {
@@ -96,10 +100,24 @@ public class MakeJavaSecurity {
                 mode = 0;
                 iter.remove();
             } else if (line.startsWith("#ifdef ")) {
-                mode = line.endsWith(args[2])?1:2;
+                if (line.indexOf('-') > 0) {
+                    mode = line.endsWith(args[2]+"-"+args[3]) ? 1 : 2;
+                } else {
+                    mode = line.endsWith(args[2]) ? 1 : 2;
+                }
                 iter.remove();
             } else if (line.startsWith("#ifndef ")) {
-                mode = line.endsWith(args[2])?2:1;
+                if (line.indexOf('-') > 0) {
+                    mode = line.endsWith(args[2]+"-"+args[3]) ? 2 : 1;
+                } else {
+                    mode = line.endsWith(args[2]) ? 2 : 1;
+                }
+                iter.remove();
+            } else if (line.startsWith("#else")) {
+                if (mode == 0) {
+                    throw new IllegalStateException("#else not in #if block");
+                }
+                mode = 3 - mode;
                 iter.remove();
             } else {
                 if (mode == 2) iter.remove();
@@ -116,6 +134,16 @@ public class MakeJavaSecurity {
                 int n = count.getOrDefault(prefix, 1);
                 count.put(prefix, n+1);
                 lines.set(i, prefix + "." + n + line.substring(index+4));
+            }
+        }
+
+        // Set the JCE policy value
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            int index = line.indexOf("crypto.policydir-tbd");
+            if (index >= 0) {
+                String prefix = line.substring(0, index);
+                lines.set(i, prefix + args[4]);
             }
         }
 
@@ -144,7 +172,7 @@ public class MakeJavaSecurity {
                                     List<String> args) throws IOException {
         // parse property until EOL, not including line breaks
         boolean first = true;
-        while (!line.isEmpty()) {
+        while (line != null && !line.isEmpty()) {
             if (!line.startsWith("#")) {
                 if (!line.endsWith(",\\") ||
                         (!first && line.contains("="))) {
@@ -163,6 +191,8 @@ public class MakeJavaSecurity {
                 lines.add(String.format("%"+numSpaces+"s", "") + arg + ",\\");
             }
         }
-        lines.add(line);
+        if (line != null) {
+            lines.add(line);
+        }
     }
 }

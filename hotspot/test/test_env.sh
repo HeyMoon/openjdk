@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-#  Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+#  Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
 #  DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 # 
 #  This code is free software; you can redistribute it and/or modify it
@@ -111,7 +111,8 @@ if [ $? != 0 ]; then
   exit 1
 fi
 
-${TESTJAVA}${FS}bin${FS}java ${TESTOPTS} -Xinternalversion > vm_version.out 2>&1
+${TESTJAVA}${FS}bin${FS}java ${TESTOPTS} -Xinternalversion | sed -e 's/[(][^)]*[)]//g' -e 's/ by "[^"]*"//g' > vm_version.out 2>&1
+echo "INT_VERSION=`cat vm_version.out 2>&1`"
 
 VM_TYPE="unknown"
 grep "Server" vm_version.out > ${NULL}
@@ -191,6 +192,11 @@ then
   if [ $VM_BITS = "64" ]
   then
     VM_CPU="ppc64"
+    grep "ppc64le" vm_version.out > ${NULL}
+    if [ $? = 0 ]
+    then
+      VM_CPU="ppc64le"
+    fi
   fi
 fi
 grep "ia64" vm_version.out > ${NULL}
@@ -198,7 +204,17 @@ if [ $? = 0 ]
 then
   VM_CPU="ia64"
 fi
+grep "s390x" vm_version.out > ${NULL}
+if [ $? = 0 ]
+then
+  VM_CPU="s390x"
+fi
 grep "aarch64" vm_version.out > ${NULL}
+if [ $? = 0 ]
+then
+  VM_CPU="aarch64"
+fi
+grep "arm64" vm_version.out > ${NULL}
 if [ $? = 0 ]
 then
   VM_CPU="aarch64"

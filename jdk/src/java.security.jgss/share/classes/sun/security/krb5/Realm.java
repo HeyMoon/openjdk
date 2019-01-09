@@ -41,12 +41,17 @@ import sun.security.krb5.internal.util.KerberosString;
 /**
  * Implements the ASN.1 Realm type.
  *
- * <xmp>
- * Realm ::= GeneralString
- * </xmp>
+ * {@code Realm ::= GeneralString}
+ *
  * This class is immutable.
  */
 public class Realm implements Cloneable {
+
+    public static final boolean AUTODEDUCEREALM =
+        java.security.AccessController.doPrivileged(
+                new sun.security.action.GetBooleanAction(
+                        "sun.security.krb5.autodeducerealm"));
+
     private final String realm; // not null nor empty
 
     public Realm(String name) throws RealmException {
@@ -244,8 +249,8 @@ public class Realm implements Cloneable {
      *
      * @param cRealm the initiating realm, not null
      * @param sRealm the target realm, not null, not equals to cRealm
-     * @returns array of realms including at least cRealm as the first
-     *          element
+     * @return array of realms including at least cRealm as the first
+     *         element
      */
     public static String[] getRealmsList(String cRealm, String sRealm) {
         try {
@@ -297,7 +302,7 @@ public class Realm implements Cloneable {
      *
      * @param cRealm the initiating realm
      * @param sRealm the target realm, not the same as cRealm
-     * @returns array of realms including at least cRealm as the first
+     * @return array of realms including at least cRealm as the first
      *          element
      * @throws KrbException if the config does not contain a sub-stanza
      *          for cRealm in [capaths] or the sub-stanza does not contain
@@ -348,7 +353,7 @@ public class Realm implements Cloneable {
      * for a service in the target realm sRealm.
      * @param cRealm the initiating realm
      * @param sRealm the target realm, not the same as cRealm
-     * @returns array of realms including cRealm as the first element
+     * @return array of realms including cRealm as the first element
      */
     private static String[] parseHierarchy(String cRealm, String sRealm) {
 

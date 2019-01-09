@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,59 +25,63 @@
  * @test
  * @bug 8058744
  * @summary Invalid pattern-matching of address computations in raw unsafe
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
- * @run main/othervm -Xbatch UnsafeRaw
+ * @run main/othervm -Xbatch compiler.unsafe.UnsafeRaw
  */
 
+package compiler.unsafe;
+
+import jdk.internal.misc.Unsafe;
 import jdk.test.lib.Utils;
+
 import java.util.Random;
 
 public class UnsafeRaw {
   public static class Tests {
-    public static int int_index(sun.misc.Unsafe unsafe, long base, int index) throws Exception {
+    public static int int_index(Unsafe unsafe, long base, int index) throws Exception {
       return unsafe.getInt(base + (index << 2));
     }
-    public static int long_index(sun.misc.Unsafe unsafe, long base, long index) throws Exception {
+    public static int long_index(Unsafe unsafe, long base, long index) throws Exception {
       return unsafe.getInt(base + (index << 2));
     }
-    public static int int_index_back_ashift(sun.misc.Unsafe unsafe, long base, int index) throws Exception {
+    public static int int_index_back_ashift(Unsafe unsafe, long base, int index) throws Exception {
       return unsafe.getInt(base + (index >> 2));
     }
-    public static int int_index_back_lshift(sun.misc.Unsafe unsafe, long base, int index) throws Exception {
+    public static int int_index_back_lshift(Unsafe unsafe, long base, int index) throws Exception {
       return unsafe.getInt(base + (index >>> 2));
     }
-    public static int long_index_back_ashift(sun.misc.Unsafe unsafe, long base, long index) throws Exception {
+    public static int long_index_back_ashift(Unsafe unsafe, long base, long index) throws Exception {
       return unsafe.getInt(base + (index >> 2));
     }
-    public static int long_index_back_lshift(sun.misc.Unsafe unsafe, long base, long index) throws Exception {
+    public static int long_index_back_lshift(Unsafe unsafe, long base, long index) throws Exception {
       return unsafe.getInt(base + (index >>> 2));
     }
-    public static int int_const_12345678_index(sun.misc.Unsafe unsafe, long base) throws Exception {
+    public static int int_const_12345678_index(Unsafe unsafe, long base) throws Exception {
       int idx4 = 0x12345678;
       return unsafe.getInt(base + idx4);
     }
-    public static int long_const_1234567890abcdef_index(sun.misc.Unsafe unsafe, long base) throws Exception {
+    public static int long_const_1234567890abcdef_index(Unsafe unsafe, long base) throws Exception {
       long idx5 = 0x1234567890abcdefL;
       return unsafe.getInt(base + idx5);
     }
-    public static int int_index_mul(sun.misc.Unsafe unsafe, long base, int index) throws Exception {
+    public static int int_index_mul(Unsafe unsafe, long base, int index) throws Exception {
       return unsafe.getInt(base + (index * 4));
     }
-    public static int long_index_mul(sun.misc.Unsafe unsafe, long base, long index) throws Exception {
+    public static int long_index_mul(Unsafe unsafe, long base, long index) throws Exception {
       return unsafe.getInt(base + (index * 4));
     }
-    public static int int_index_mul_scale_16(sun.misc.Unsafe unsafe, long base, int index) throws Exception {
+    public static int int_index_mul_scale_16(Unsafe unsafe, long base, int index) throws Exception {
       return unsafe.getInt(base + (index * 16));
     }
-    public static int long_index_mul_scale_16(sun.misc.Unsafe unsafe, long base, long index) throws Exception {
+    public static int long_index_mul_scale_16(Unsafe unsafe, long base, long index) throws Exception {
       return unsafe.getInt(base + (index * 16));
     }
   }
 
   public static void main(String[] args) throws Exception {
-    sun.misc.Unsafe unsafe = Utils.getUnsafe();
+    Unsafe unsafe = Unsafe.getUnsafe();
     final int array_size = 128;
     final int element_size = 4;
     final int magic = 0x12345678;

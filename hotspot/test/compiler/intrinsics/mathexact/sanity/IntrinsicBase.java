@@ -21,20 +21,21 @@
  * questions.
  */
 
+package compiler.intrinsics.mathexact.sanity;
+
+import compiler.testlibrary.intrinsics.Verifier;
+import compiler.whitebox.CompilerWhiteBoxTest;
 import jdk.test.lib.Platform;
-import intrinsics.Verifier;
 
 import java.io.FileOutputStream;
 import java.lang.reflect.Executable;
 import java.util.Properties;
 
 public abstract class IntrinsicBase extends CompilerWhiteBoxTest {
-    protected String javaVmName;
     protected String useMathExactIntrinsics;
 
     protected IntrinsicBase(TestCase testCase) {
         super(testCase);
-        javaVmName = System.getProperty("java.vm.name");
         useMathExactIntrinsics = getVMOption("UseMathExactIntrinsics");
     }
 
@@ -43,39 +44,32 @@ public abstract class IntrinsicBase extends CompilerWhiteBoxTest {
         //java.lang.Math should be loaded to allow a compilation of the methods that use Math's method
         System.out.println("class java.lang.Math should be loaded. Proof: " + Math.class);
         printEnvironmentInfo();
+        if (Platform.isInt()) {
+            throw new Error("TESTBUG: test can not be run in interpreter");
+        }
 
         int expectedIntrinsicCount = 0;
 
-        switch (MODE) {
-            case "compiled mode":
-            case "mixed mode":
-                if (isServerVM()) {
-                    if (TIERED_COMPILATION) {
-                        int max_level = TIERED_STOP_AT_LEVEL;
-                        expectedIntrinsicCount = (max_level == COMP_LEVEL_MAX) ? 1 : 0;
-                        for (int i = CompilerWhiteBoxTest.COMP_LEVEL_SIMPLE; i <= max_level; ++i) {
-                            deoptimize();
-                            compileAtLevel(i);
-                        }
-                    } else {
-                        expectedIntrinsicCount = 1;
-                        deoptimize();
-                        compileAtLevel(CompilerWhiteBoxTest.COMP_LEVEL_MAX);
-                    }
-                } else {
+        if (Platform.isServer() && !Platform.isEmulatedClient()) {
+            if (TIERED_COMPILATION) {
+                int max_level = TIERED_STOP_AT_LEVEL;
+                expectedIntrinsicCount = (max_level == COMP_LEVEL_MAX) ? 1 : 0;
+                for (int i = COMP_LEVEL_SIMPLE; i <= max_level; ++i) {
                     deoptimize();
-                    compileAtLevel(CompilerWhiteBoxTest.COMP_LEVEL_SIMPLE);
+                    compileAtLevel(i);
                 }
+            } else {
+                expectedIntrinsicCount = 1;
+                deoptimize();
+                compileAtLevel(COMP_LEVEL_MAX);
+            }
+        } else {
+            deoptimize();
+            compileAtLevel(COMP_LEVEL_SIMPLE);
+        }
 
-                if (!isIntrinsicSupported()) {
-                    expectedIntrinsicCount = 0;
-                }
-                break;
-            case "interpreted mode": //test is not applicable in this mode;
-                System.err.println("Warning: This test is not applicable in mode: " + MODE);
-                break;
-            default:
-                throw new RuntimeException("Test bug, unknown VM mode: " + MODE);
+        if (!isIntrinsicAvailable()) {
+            expectedIntrinsicCount = 0;
         }
 
         System.out.println("Expected intrinsic count is " + expectedIntrinsicCount + " name " + getIntrinsicId());
@@ -90,9 +84,8 @@ public abstract class IntrinsicBase extends CompilerWhiteBoxTest {
     }
 
     protected void printEnvironmentInfo() {
-        System.out.println("java.vm.name=" + javaVmName);
         System.out.println("os.arch=" + Platform.getOsArch());
-        System.out.println("java.vm.info=" + MODE);
+        System.out.println("java.vm.info=" + Platform.vmInfo);
         System.out.println("useMathExactIntrinsics=" + useMathExactIntrinsics);
     }
 
@@ -114,23 +107,29 @@ public abstract class IntrinsicBase extends CompilerWhiteBoxTest {
         }
     }
 
-    protected abstract boolean isIntrinsicSupported();
+    // An intrinsic is available if:
+    // - the intrinsic is enabled (by using the appropriate command-line flag) and
+    // - the intrinsic is supported by the VM (i.e., the platform on which the VM is
+    //   running provides the instructions necessary for the VM to generate the intrinsic).
+    protected abstract boolean isIntrinsicAvailable();
 
     protected abstract String getIntrinsicId();
 
-    protected boolean isServerVM() {
-        return javaVmName.toLowerCase().contains("server");
-    }
-
     static class IntTest extends IntrinsicBase {
+
+        protected boolean isIntrinsicAvailable; // The tested intrinsic is available on the current platform.
+
         protected IntTest(MathIntrinsic.IntIntrinsic testCase) {
             super(testCase);
+            // Only the C2 compiler intrinsifies exact math methods
+            // so check if the intrinsics are available with C2.
+            isIntrinsicAvailable = WHITE_BOX.isIntrinsicAvailable(testCase.getTestMethod(),
+                                                                  COMP_LEVEL_FULL_OPTIMIZATION);
         }
 
         @Override
-        protected boolean isIntrinsicSupported() {
-            return isServerVM() && Boolean.valueOf(useMathExactIntrinsics)
-                && (Platform.isX86() || Platform.isX64() || Platform.isAArch64());
+        protected boolean isIntrinsicAvailable() {
+            return isIntrinsicAvailable;
         }
 
         @Override
@@ -140,14 +139,20 @@ public abstract class IntrinsicBase extends CompilerWhiteBoxTest {
     }
 
     static class LongTest extends IntrinsicBase {
+
+        protected boolean isIntrinsicAvailable; // The tested intrinsic is available on the current platform.
+
         protected LongTest(MathIntrinsic.LongIntrinsic testCase) {
             super(testCase);
+            // Only the C2 compiler intrinsifies exact math methods
+            // so check if the intrinsics are available with C2.
+            isIntrinsicAvailable = WHITE_BOX.isIntrinsicAvailable(testCase.getTestMethod(),
+                                                                  COMP_LEVEL_FULL_OPTIMIZATION);
         }
 
         @Override
-        protected boolean isIntrinsicSupported() {
-            return isServerVM() && Boolean.valueOf(useMathExactIntrinsics) &&
-                (Platform.isX64() || Platform.isPPC() || Platform.isAArch64());
+        protected boolean isIntrinsicAvailable() {
+            return isIntrinsicAvailable;
         }
 
         @Override

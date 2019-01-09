@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,7 @@ import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.*;
 import java.io.IOException;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 import static sun.nio.fs.UnixNativeDispatcher.*;
 import static sun.nio.fs.UnixConstants.*;
@@ -232,9 +232,11 @@ class LinuxWatchService
                 for (WatchEvent.Modifier modifier: modifiers) {
                     if (modifier == null)
                         return new NullPointerException();
-                    if (modifier instanceof com.sun.nio.file.SensitivityWatchEventModifier)
-                        continue; // ignore
-                    return new UnsupportedOperationException("Modifier not supported");
+                    if (!ExtendedOptions.SENSITIVITY_HIGH.matches(modifier) &&
+                            !ExtendedOptions.SENSITIVITY_MEDIUM.matches(modifier) &&
+                            !ExtendedOptions.SENSITIVITY_LOW.matches(modifier)) {
+                        return new UnsupportedOperationException("Modifier not supported");
+                    }
                 }
             }
 
@@ -322,19 +324,6 @@ class LinuxWatchService
                         bytesRead = 0;
                     }
 
-                    // process any pending requests
-                    if ((nReady > 1) || (nReady == 1 && bytesRead == 0)) {
-                        try {
-                            read(socketpair[0], address, BUFFER_SIZE);
-                            boolean shutdown = processRequests();
-                            if (shutdown)
-                                break;
-                        } catch (UnixException x) {
-                            if (x.errno() != UnixConstants.EAGAIN)
-                                throw x;
-                        }
-                    }
-
                     // iterate over buffer to decode events
                     int offset = 0;
                     while (offset < bytesRead) {
@@ -368,6 +357,19 @@ class LinuxWatchService
                         processEvent(wd, mask, name);
 
                         offset += (SIZEOF_INOTIFY_EVENT + len);
+                    }
+
+                    // process any pending requests
+                    if ((nReady > 1) || (nReady == 1 && bytesRead == 0)) {
+                        try {
+                            read(socketpair[0], address, BUFFER_SIZE);
+                            boolean shutdown = processRequests();
+                            if (shutdown)
+                                break;
+                        } catch (UnixException x) {
+                            if (x.errno() != UnixConstants.EAGAIN)
+                                throw x;
+                        }
                     }
                 }
             } catch (UnixException x) {

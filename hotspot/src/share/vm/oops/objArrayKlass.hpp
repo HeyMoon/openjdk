@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,6 +33,7 @@
 
 class ObjArrayKlass : public ArrayKlass {
   friend class VMStructs;
+  friend class JVMCIVMStructs;
  private:
   Klass* _element_klass;            // The klass of the elements of this array type
   Klass* _bottom_klass;             // The one-dimensional type (InstanceKlass or TypeArrayKlass)
@@ -53,6 +54,9 @@ class ObjArrayKlass : public ArrayKlass {
   void set_bottom_klass(Klass* k)   { _bottom_klass = k; }
   Klass** bottom_klass_addr()       { return &_bottom_klass; }
 
+  ModuleEntry* module() const;
+  PackageEntry* package() const;
+
   // Compiler/Interpreter offset
   static ByteSize element_klass_offset() { return in_ByteSize(offset_of(ObjArrayKlass, _element_klass)); }
 
@@ -60,7 +64,7 @@ class ObjArrayKlass : public ArrayKlass {
   bool can_be_primary_super_slow() const;
   GrowableArray<Klass*>* compute_secondary_supers(int num_extra_slots);
   bool compute_is_subtype_of(Klass* k);
-  bool oop_is_objArray_slow()  const  { return true; }
+  DEBUG_ONLY(bool is_objArray_klass_slow()  const  { return true; })
   int oop_size(oop obj) const;
 
   // Allocation
@@ -89,14 +93,18 @@ class ObjArrayKlass : public ArrayKlass {
   virtual Klass* array_klass_impl(bool or_null, TRAPS);
 
  public:
-  // Casting from Klass*
+
   static ObjArrayKlass* cast(Klass* k) {
-    assert(k->oop_is_objArray(), "cast to ObjArrayKlass");
-    return (ObjArrayKlass*) k;
+    return const_cast<ObjArrayKlass*>(cast(const_cast<const Klass*>(k)));
+  }
+
+  static const ObjArrayKlass* cast(const Klass* k) {
+    assert(k->is_objArray_klass(), "cast to ObjArrayKlass");
+    return static_cast<const ObjArrayKlass*>(k);
   }
 
   // Sizing
-  static int header_size()                { return sizeof(ObjArrayKlass)/HeapWordSize; }
+  static int header_size()                { return sizeof(ObjArrayKlass)/wordSize; }
   int size() const                        { return ArrayKlass::static_size(header_size()); }
 
   // Initialization (virtual from Klass)
@@ -105,14 +113,13 @@ class ObjArrayKlass : public ArrayKlass {
   // GC specific object visitors
   //
   // Mark Sweep
-  void oop_ms_follow_contents(oop obj);
   int  oop_ms_adjust_pointers(oop obj);
 #if INCLUDE_ALL_GCS
   // Parallel Scavenge
   void oop_ps_push_contents(  oop obj, PSPromotionManager* pm);
   // Parallel Compact
   void oop_pc_follow_contents(oop obj, ParCompactionManager* cm);
-  void oop_pc_update_pointers(oop obj);
+  void oop_pc_update_pointers(oop obj, ParCompactionManager* cm);
 #endif
 
   // Oop fields (and metadata) iterators
@@ -125,15 +132,15 @@ class ObjArrayKlass : public ArrayKlass {
 
   // Iterate over oop elements and metadata.
   template <bool nv, typename OopClosureType>
-  inline int oop_oop_iterate(oop obj, OopClosureType* closure);
+  inline void oop_oop_iterate(oop obj, OopClosureType* closure);
 
   // Iterate over oop elements within mr, and metadata.
   template <bool nv, typename OopClosureType>
-  inline int oop_oop_iterate_bounded(oop obj, OopClosureType* closure, MemRegion mr);
+  inline void oop_oop_iterate_bounded(oop obj, OopClosureType* closure, MemRegion mr);
 
   // Iterate over oop elements with indices within [start, end), and metadata.
   template <bool nv, class OopClosureType>
-  inline int oop_oop_iterate_range(oop obj, OopClosureType* closure, int start, int end);
+  inline void oop_oop_iterate_range(oop obj, OopClosureType* closure, int start, int end);
 
   // Iterate over oop elements within [start, end), and metadata.
   // Specialized for [T = oop] or [T = narrowOop].

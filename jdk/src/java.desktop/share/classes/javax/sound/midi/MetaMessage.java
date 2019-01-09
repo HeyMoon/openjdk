@@ -59,7 +59,7 @@ public class MetaMessage extends MidiMessage {
      *
      * @see MidiMessage#getStatus
      */
-    public static final int META                                                = 0xFF; // 255
+    public static final int META = 0xFF; // 255
 
     /**
      * The length of the actual message in the data array. This is used to
@@ -195,6 +195,7 @@ public class MetaMessage extends MidiMessage {
      *
      * @return a clone of this instance
      */
+    @Override
     public Object clone() {
         byte[] newData = new byte[length];
         System.arraycopy(data, 0, newData, 0, newData.length);
@@ -214,7 +215,7 @@ public class MetaMessage extends MidiMessage {
         return length;
     }
 
-    private final static long mask = 0x7F;
+    private static final long mask = 0x7F;
 
     private void writeVarInt(byte[] data, int off, long value) {
         int shift=63; // number of bitwise left-shifts of mask

@@ -19,13 +19,13 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
+
 package p;
 
 /**
  * Test class -- implements I, extends E, both define m, so all should be well.
  */
-public class Dok extends p.E {
+public class Dok extends E {
 
 }

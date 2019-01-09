@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,12 +25,16 @@
 #include "precompiled.hpp"
 #include "gc/parallel/gcTaskManager.hpp"
 #include "gc/parallel/gcTaskThread.hpp"
-#include "gc/shared/adaptiveSizePolicy.hpp"
+#include "gc/shared/gcId.hpp"
+#include "gc/shared/workerManager.hpp"
+#include "logging/log.hpp"
 #include "memory/allocation.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "runtime/mutex.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "runtime/orderAccess.inline.hpp"
+#include "runtime/os.hpp"
 
 //
 // GCTask
@@ -48,8 +52,8 @@ const char* GCTask::Kind::to_string(kind value) {
   case ordinary_task:
     result = "ordinary task";
     break;
-  case barrier_task:
-    result = "barrier task";
+  case wait_for_barrier_task:
+    result = "wait for barrier task";
     break;
   case noop_task:
     result = "noop task";
@@ -61,33 +65,24 @@ const char* GCTask::Kind::to_string(kind value) {
   return result;
 };
 
-GCTask::GCTask() :
-  _kind(Kind::ordinary_task),
-  _affinity(GCTaskManager::sentinel_worker()){
-  initialize();
+GCTask::GCTask() {
+  initialize(Kind::ordinary_task, GCId::current());
 }
 
-GCTask::GCTask(Kind::kind kind) :
-  _kind(kind),
-  _affinity(GCTaskManager::sentinel_worker()) {
-  initialize();
+GCTask::GCTask(Kind::kind kind) {
+  initialize(kind, GCId::current());
 }
 
-GCTask::GCTask(uint affinity) :
-  _kind(Kind::ordinary_task),
-  _affinity(affinity) {
-  initialize();
+GCTask::GCTask(Kind::kind kind, uint gc_id) {
+  initialize(kind, gc_id);
 }
 
-GCTask::GCTask(Kind::kind kind, uint affinity) :
-  _kind(kind),
-  _affinity(affinity) {
-  initialize();
-}
-
-void GCTask::initialize() {
+void GCTask::initialize(Kind::kind kind, uint gc_id) {
+  _kind = kind;
+  _affinity = GCTaskManager::sentinel_worker();
   _older = NULL;
   _newer = NULL;
+  _gc_id = gc_id;
 }
 
 void GCTask::destruct() {
@@ -379,16 +374,33 @@ GCTaskManager::GCTaskManager(uint workers) :
   _workers(workers),
   _active_workers(0),
   _idle_workers(0),
-  _ndc(NULL) {
+  _created_workers(0) {
   initialize();
 }
 
-GCTaskManager::GCTaskManager(uint workers, NotifyDoneClosure* ndc) :
-  _workers(workers),
-  _active_workers(0),
-  _idle_workers(0),
-  _ndc(ndc) {
-  initialize();
+GCTaskThread* GCTaskManager::install_worker(uint t) {
+  GCTaskThread* new_worker = GCTaskThread::create(this, t, _processor_assignment[t]);
+  set_thread(t, new_worker);
+  return new_worker;
+}
+
+void GCTaskManager::add_workers(bool initializing) {
+  os::ThreadType worker_type = os::pgc_thread;
+  uint previous_created_workers = _created_workers;
+
+  _created_workers = WorkerManager::add_workers(this,
+                                                _active_workers,
+                                                _workers,
+                                                _created_workers,
+                                                worker_type,
+                                                initializing);
+  _active_workers = MIN2(_created_workers, _active_workers);
+
+  WorkerManager::log_worker_creation(this, previous_created_workers, _active_workers, _created_workers, initializing);
+}
+
+const char* GCTaskManager::group_name() {
+  return "ParGC Thread";
 }
 
 void GCTaskManager::initialize() {
@@ -404,31 +416,35 @@ void GCTaskManager::initialize() {
   GCTaskQueue* unsynchronized_queue = GCTaskQueue::create_on_c_heap();
   _queue = SynchronizedGCTaskQueue::create(unsynchronized_queue, lock());
   _noop_task = NoopGCTask::create_on_c_heap();
-  _idle_inactive_task = WaitForBarrierGCTask::create_on_c_heap();
   _resource_flag = NEW_C_HEAP_ARRAY(bool, workers(), mtGC);
   {
     // Set up worker threads.
     //     Distribute the workers among the available processors,
     //     unless we were told not to, or if the os doesn't want to.
-    uint* processor_assignment = NEW_C_HEAP_ARRAY(uint, workers(), mtGC);
+    _processor_assignment = NEW_C_HEAP_ARRAY(uint, workers(), mtGC);
     if (!BindGCTaskThreadsToCPUs ||
-        !os::distribute_processes(workers(), processor_assignment)) {
+        !os::distribute_processes(workers(), _processor_assignment)) {
       for (uint a = 0; a < workers(); a += 1) {
-        processor_assignment[a] = sentinel_worker();
+        _processor_assignment[a] = sentinel_worker();
       }
     }
+
     _thread = NEW_C_HEAP_ARRAY(GCTaskThread*, workers(), mtGC);
-    for (uint t = 0; t < workers(); t += 1) {
-      set_thread(t, GCTaskThread::create(this, t, processor_assignment[t]));
+    _active_workers = ParallelGCThreads;
+    if (UseDynamicNumberOfGCThreads && !FLAG_IS_CMDLINE(ParallelGCThreads)) {
+      _active_workers = 1U;
     }
-    if (TraceGCTaskThread) {
-      tty->print("GCTaskManager::initialize: distribution:");
+
+    Log(gc, task, thread) log;
+    if (log.is_trace()) {
+      ResourceMark rm;
+      outputStream* out = log.trace_stream();
+      out->print("GCTaskManager::initialize: distribution:");
       for (uint t = 0; t < workers(); t += 1) {
-        tty->print("  %u", processor_assignment[t]);
+        out->print("  %u", _processor_assignment[t]);
       }
-      tty->cr();
+      out->cr();
     }
-    FREE_C_HEAP_ARRAY(uint, processor_assignment);
   }
   reset_busy_workers();
   set_unblocked();
@@ -437,12 +453,10 @@ void GCTaskManager::initialize() {
   }
   reset_delivered_tasks();
   reset_completed_tasks();
-  reset_noop_tasks();
   reset_barriers();
   reset_emptied_queue();
-  for (uint s = 0; s < workers(); s += 1) {
-    thread(s)->start();
-  }
+
+  add_workers(true);
 }
 
 GCTaskManager::~GCTaskManager() {
@@ -450,15 +464,17 @@ GCTaskManager::~GCTaskManager() {
   assert(queue()->is_empty(), "still have queued work");
   NoopGCTask::destroy(_noop_task);
   _noop_task = NULL;
-  WaitForBarrierGCTask::destroy(_idle_inactive_task);
-  _idle_inactive_task = NULL;
   if (_thread != NULL) {
-    for (uint i = 0; i < workers(); i += 1) {
+    for (uint i = 0; i < created_workers(); i += 1) {
       GCTaskThread::destroy(thread(i));
       set_thread(i, NULL);
     }
     FREE_C_HEAP_ARRAY(GCTaskThread*, _thread);
     _thread = NULL;
+  }
+  if (_processor_assignment != NULL) {
+    FREE_C_HEAP_ARRAY(uint, _processor_assignment);
+    _processor_assignment = NULL;
   }
   if (_resource_flag != NULL) {
     FREE_C_HEAP_ARRAY(bool, _resource_flag);
@@ -483,16 +499,17 @@ void GCTaskManager::set_active_gang() {
                                  Threads::number_of_non_daemon_threads());
 
   assert(!all_workers_active() || active_workers() == ParallelGCThreads,
-         err_msg("all_workers_active() is  incorrect: "
-                 "active %d  ParallelGCThreads %u", active_workers(),
-                 ParallelGCThreads));
-  if (TraceDynamicGCThreads) {
-    gclog_or_tty->print_cr("GCTaskManager::set_active_gang(): "
-                           "all_workers_active()  %d  workers %d  "
-                           "active  %d  ParallelGCThreads %u",
-                           all_workers_active(), workers(),  active_workers(),
-                           ParallelGCThreads);
-  }
+         "all_workers_active() is  incorrect: "
+         "active %d  ParallelGCThreads %u", active_workers(),
+         ParallelGCThreads);
+  _active_workers = MIN2(_active_workers, _workers);
+  // "add_workers" does not guarantee any additional workers
+  add_workers(false);
+  log_trace(gc, task)("GCTaskManager::set_active_gang(): "
+                      "all_workers_active()  %d  workers %d  "
+                      "active  %d  ParallelGCThreads %u",
+                      all_workers_active(), workers(),  active_workers(),
+                      ParallelGCThreads);
 }
 
 // Create IdleGCTasks for inactive workers.
@@ -507,7 +524,7 @@ void GCTaskManager::task_idle_workers() {
       // the GCTaskManager's monitor so that the "more_inactive_workers"
       // count is correct.
       MutexLockerEx ml(monitor(), Mutex::_no_safepoint_check_flag);
-      _idle_inactive_task->set_should_wait(true);
+      _wait_helper.set_should_wait(true);
       // active_workers are a number being requested.  idle_workers
       // are the number currently idle.  If all the workers are being
       // requested to be active but some are already idle, reduce
@@ -517,28 +534,25 @@ void GCTaskManager::task_idle_workers() {
       // is starting).  Try later to release enough idle_workers
       // to allow the desired number of active_workers.
       more_inactive_workers =
-        workers() - active_workers() - idle_workers();
+        created_workers() - active_workers() - idle_workers();
       if (more_inactive_workers < 0) {
         int reduced_active_workers = active_workers() + more_inactive_workers;
-        set_active_workers(reduced_active_workers);
+        update_active_workers(reduced_active_workers);
         more_inactive_workers = 0;
       }
-      if (TraceDynamicGCThreads) {
-        gclog_or_tty->print_cr("JT: %d  workers %d  active  %d  "
-                                "idle %d  more %d",
-                                Threads::number_of_non_daemon_threads(),
-                                workers(),
-                                active_workers(),
-                                idle_workers(),
-                                more_inactive_workers);
-      }
+      log_trace(gc, task)("JT: %d  workers %d  active  %d  idle %d  more %d",
+                          Threads::number_of_non_daemon_threads(),
+                          created_workers(),
+                          active_workers(),
+                          idle_workers(),
+                          more_inactive_workers);
     }
     GCTaskQueue* q = GCTaskQueue::create();
     for(uint i = 0; i < (uint) more_inactive_workers; i++) {
       q->enqueue(IdleGCTask::create_on_c_heap());
       increment_idle_workers();
     }
-    assert(workers() == active_workers() + idle_workers(),
+    assert(created_workers() == active_workers() + idle_workers(),
       "total workers should equal active + inactive");
     add_list(q);
     // GCTaskQueue* q was created in a ResourceArea so a
@@ -550,21 +564,25 @@ void  GCTaskManager::release_idle_workers() {
   {
     MutexLockerEx ml(monitor(),
       Mutex::_no_safepoint_check_flag);
-    _idle_inactive_task->set_should_wait(false);
+    _wait_helper.set_should_wait(false);
     monitor()->notify_all();
   // Release monitor
   }
 }
 
 void GCTaskManager::print_task_time_stamps() {
-  for(uint i=0; i<ParallelGCThreads; i++) {
+  if (!log_is_enabled(Debug, gc, task, time)) {
+    return;
+  }
+  uint num_thr = created_workers();
+  for(uint i=0; i < num_thr; i++) {
     GCTaskThread* t = thread(i);
     t->print_task_time_stamps();
   }
 }
 
 void GCTaskManager::print_threads_on(outputStream* st) {
-  uint num_thr = workers();
+  uint num_thr = created_workers();
   for (uint i = 0; i < num_thr; i++) {
     thread(i)->print_on(st);
     st->cr();
@@ -573,19 +591,20 @@ void GCTaskManager::print_threads_on(outputStream* st) {
 
 void GCTaskManager::threads_do(ThreadClosure* tc) {
   assert(tc != NULL, "Null ThreadClosure");
-  uint num_thr = workers();
+  uint num_thr = created_workers();
   for (uint i = 0; i < num_thr; i++) {
     tc->do_thread(thread(i));
   }
 }
 
 GCTaskThread* GCTaskManager::thread(uint which) {
-  assert(which < workers(), "index out of bounds");
+  assert(which < created_workers(), "index out of bounds");
   assert(_thread[which] != NULL, "shouldn't have null thread");
   return _thread[which];
 }
 
 void GCTaskManager::set_thread(uint which, GCTaskThread* value) {
+  // "_created_workers" may not have been updated yet so use workers()
   assert(which < workers(), "index out of bounds");
   assert(value != NULL, "shouldn't have null thread");
   _thread[which] = value;
@@ -671,7 +690,6 @@ GCTask* GCTaskManager::get_task(uint which) {
     // Just hand back a Noop task,
     // in case someone wanted us to release resources, or whatever.
     result = noop_task();
-    increment_noop_tasks();
   }
   assert(result != NULL, "shouldn't have null task");
   if (TraceGCTaskManager) {
@@ -705,11 +723,6 @@ void GCTaskManager::note_completion(uint which) {
     increment_emptied_queue();
     if (TraceGCTaskManager) {
       tty->print_cr("    GCTaskManager::note_completion(%u) done", which);
-    }
-    // Notify client that we are done.
-    NotifyDoneClosure* ndc = notify_done_closure();
-    if (ndc != NULL) {
-      ndc->notify(this);
     }
   }
   if (TraceGCTaskManager) {
@@ -751,8 +764,8 @@ uint GCTaskManager::decrement_busy_workers() {
 }
 
 void GCTaskManager::release_all_resources() {
-  // If you want this to be done atomically, do it in a BarrierGCTask.
-  for (uint i = 0; i < workers(); i += 1) {
+  // If you want this to be done atomically, do it in a WaitForBarrierGCTask.
+  for (uint i = 0; i < created_workers(); i += 1) {
     set_resource_flag(i, true);
   }
 }
@@ -813,24 +826,21 @@ void GCTaskManager::set_resource_flag(uint which, bool value) {
 // NoopGCTask
 //
 
-NoopGCTask* NoopGCTask::create() {
-  NoopGCTask* result = new NoopGCTask(false);
-  return result;
-}
-
 NoopGCTask* NoopGCTask::create_on_c_heap() {
-  NoopGCTask* result = new(ResourceObj::C_HEAP, mtGC) NoopGCTask(true);
+  NoopGCTask* result = new(ResourceObj::C_HEAP, mtGC) NoopGCTask();
   return result;
 }
 
 void NoopGCTask::destroy(NoopGCTask* that) {
   if (that != NULL) {
     that->destruct();
-    if (that->is_c_heap_obj()) {
-      FreeHeap(that);
-    }
+    FreeHeap(that);
   }
 }
+
+// This task should never be performing GC work that require
+// a valid GC id.
+NoopGCTask::NoopGCTask() : GCTask(GCTask::Kind::noop_task, GCId::undefined()) { }
 
 void NoopGCTask::destruct() {
   // This has to know it's superclass structure, just like the constructor.
@@ -857,39 +867,25 @@ IdleGCTask* IdleGCTask::create_on_c_heap() {
 }
 
 void IdleGCTask::do_it(GCTaskManager* manager, uint which) {
-  WaitForBarrierGCTask* wait_for_task = manager->idle_inactive_task();
-  if (TraceGCTaskManager) {
-    tty->print_cr("[" INTPTR_FORMAT "]"
-                  " IdleGCTask:::do_it()"
-      "  should_wait: %s",
-      p2i(this), wait_for_task->should_wait() ? "true" : "false");
-  }
+  WaitHelper* wait_helper = manager->wait_helper();
+  log_trace(gc, task)("[" INTPTR_FORMAT "] IdleGCTask:::do_it() should_wait: %s",
+      p2i(this), wait_helper->should_wait() ? "true" : "false");
+
   MutexLockerEx ml(manager->monitor(), Mutex::_no_safepoint_check_flag);
-  if (TraceDynamicGCThreads) {
-    gclog_or_tty->print_cr("--- idle %d", which);
-  }
+  log_trace(gc, task)("--- idle %d", which);
   // Increment has to be done when the idle tasks are created.
   // manager->increment_idle_workers();
   manager->monitor()->notify_all();
-  while (wait_for_task->should_wait()) {
-    if (TraceGCTaskManager) {
-      tty->print_cr("[" INTPTR_FORMAT "]"
-                    " IdleGCTask::do_it()"
-        "  [" INTPTR_FORMAT "] (%s)->wait()",
-        p2i(this), p2i(manager->monitor()), manager->monitor()->name());
-    }
+  while (wait_helper->should_wait()) {
+    log_trace(gc, task)("[" INTPTR_FORMAT "] IdleGCTask::do_it()  [" INTPTR_FORMAT "] (%s)->wait()",
+      p2i(this), p2i(manager->monitor()), manager->monitor()->name());
     manager->monitor()->wait(Mutex::_no_safepoint_check_flag, 0);
   }
   manager->decrement_idle_workers();
-  if (TraceDynamicGCThreads) {
-    gclog_or_tty->print_cr("--- release %d", which);
-  }
-  if (TraceGCTaskManager) {
-    tty->print_cr("[" INTPTR_FORMAT "]"
-                  " IdleGCTask::do_it() returns"
-      "  should_wait: %s",
-      p2i(this), wait_for_task->should_wait() ? "true" : "false");
-  }
+
+  log_trace(gc, task)("--- release %d", which);
+  log_trace(gc, task)("[" INTPTR_FORMAT "] IdleGCTask::do_it() returns should_wait: %s",
+    p2i(this), wait_helper->should_wait() ? "true" : "false");
   // Release monitor().
 }
 
@@ -909,140 +905,52 @@ void IdleGCTask::destruct() {
 }
 
 //
-// BarrierGCTask
+// WaitForBarrierGCTask
 //
-
-void BarrierGCTask::do_it(GCTaskManager* manager, uint which) {
-  // Wait for this to be the only busy worker.
-  // ??? I thought of having a StackObj class
-  //     whose constructor would grab the lock and come to the barrier,
-  //     and whose destructor would release the lock,
-  //     but that seems like too much mechanism for two lines of code.
-  MutexLockerEx ml(manager->lock(), Mutex::_no_safepoint_check_flag);
-  do_it_internal(manager, which);
-  // Release manager->lock().
+WaitForBarrierGCTask* WaitForBarrierGCTask::create() {
+  WaitForBarrierGCTask* result = new WaitForBarrierGCTask();
+  return result;
 }
 
-void BarrierGCTask::do_it_internal(GCTaskManager* manager, uint which) {
+WaitForBarrierGCTask::WaitForBarrierGCTask() : GCTask(GCTask::Kind::wait_for_barrier_task) { }
+
+void WaitForBarrierGCTask::destroy(WaitForBarrierGCTask* that) {
+  if (that != NULL) {
+    if (TraceGCTaskManager) {
+      tty->print_cr("[" INTPTR_FORMAT "] WaitForBarrierGCTask::destroy()", p2i(that));
+    }
+    that->destruct();
+  }
+}
+
+void WaitForBarrierGCTask::destruct() {
+  if (TraceGCTaskManager) {
+    tty->print_cr("[" INTPTR_FORMAT "] WaitForBarrierGCTask::destruct()", p2i(this));
+  }
+  this->GCTask::destruct();
+  // Clean up that should be in the destructor,
+  // except that ResourceMarks don't call destructors.
+  _wait_helper.release_monitor();
+}
+
+void WaitForBarrierGCTask::do_it_internal(GCTaskManager* manager, uint which) {
   // Wait for this to be the only busy worker.
   assert(manager->monitor()->owned_by_self(), "don't own the lock");
   assert(manager->is_blocked(), "manager isn't blocked");
   while (manager->busy_workers() > 1) {
     if (TraceGCTaskManager) {
-      tty->print_cr("BarrierGCTask::do_it(%u) waiting on %u workers",
+      tty->print_cr("WaitForBarrierGCTask::do_it(%u) waiting on %u workers",
                     which, manager->busy_workers());
     }
     manager->monitor()->wait(Mutex::_no_safepoint_check_flag, 0);
   }
 }
 
-void BarrierGCTask::destruct() {
-  this->GCTask::destruct();
-  // Nothing else to do.
-}
-
-//
-// ReleasingBarrierGCTask
-//
-
-void ReleasingBarrierGCTask::do_it(GCTaskManager* manager, uint which) {
-  MutexLockerEx ml(manager->lock(), Mutex::_no_safepoint_check_flag);
-  do_it_internal(manager, which);
-  manager->release_all_resources();
-  // Release manager->lock().
-}
-
-void ReleasingBarrierGCTask::destruct() {
-  this->BarrierGCTask::destruct();
-  // Nothing else to do.
-}
-
-//
-// NotifyingBarrierGCTask
-//
-
-void NotifyingBarrierGCTask::do_it(GCTaskManager* manager, uint which) {
-  MutexLockerEx ml(manager->lock(), Mutex::_no_safepoint_check_flag);
-  do_it_internal(manager, which);
-  NotifyDoneClosure* ndc = notify_done_closure();
-  if (ndc != NULL) {
-    ndc->notify(manager);
-  }
-  // Release manager->lock().
-}
-
-void NotifyingBarrierGCTask::destruct() {
-  this->BarrierGCTask::destruct();
-  // Nothing else to do.
-}
-
-//
-// WaitForBarrierGCTask
-//
-WaitForBarrierGCTask* WaitForBarrierGCTask::create() {
-  WaitForBarrierGCTask* result = new WaitForBarrierGCTask(false);
-  return result;
-}
-
-WaitForBarrierGCTask* WaitForBarrierGCTask::create_on_c_heap() {
-  WaitForBarrierGCTask* result =
-    new (ResourceObj::C_HEAP, mtGC) WaitForBarrierGCTask(true);
-  return result;
-}
-
-WaitForBarrierGCTask::WaitForBarrierGCTask(bool on_c_heap) :
-  _is_c_heap_obj(on_c_heap) {
-  _monitor = MonitorSupply::reserve();
-  set_should_wait(true);
-  if (TraceGCTaskManager) {
-    tty->print_cr("[" INTPTR_FORMAT "]"
-                  " WaitForBarrierGCTask::WaitForBarrierGCTask()"
-                  "  monitor: " INTPTR_FORMAT,
-                  p2i(this), p2i(monitor()));
-  }
-}
-
-void WaitForBarrierGCTask::destroy(WaitForBarrierGCTask* that) {
-  if (that != NULL) {
-    if (TraceGCTaskManager) {
-      tty->print_cr("[" INTPTR_FORMAT "]"
-                    " WaitForBarrierGCTask::destroy()"
-                    "  is_c_heap_obj: %s"
-                    "  monitor: " INTPTR_FORMAT,
-                    p2i(that),
-                    that->is_c_heap_obj() ? "true" : "false",
-                    p2i(that->monitor()));
-    }
-    that->destruct();
-    if (that->is_c_heap_obj()) {
-      FreeHeap(that);
-    }
-  }
-}
-
-void WaitForBarrierGCTask::destruct() {
-  assert(monitor() != NULL, "monitor should not be NULL");
-  if (TraceGCTaskManager) {
-    tty->print_cr("[" INTPTR_FORMAT "]"
-                  " WaitForBarrierGCTask::destruct()"
-                  "  monitor: " INTPTR_FORMAT,
-                  p2i(this), p2i(monitor()));
-  }
-  this->BarrierGCTask::destruct();
-  // Clean up that should be in the destructor,
-  // except that ResourceMarks don't call destructors.
-   if (monitor() != NULL) {
-     MonitorSupply::release(monitor());
-  }
-  _monitor = (Monitor*) 0xDEAD000F;
-}
-
 void WaitForBarrierGCTask::do_it(GCTaskManager* manager, uint which) {
   if (TraceGCTaskManager) {
     tty->print_cr("[" INTPTR_FORMAT "]"
-                  " WaitForBarrierGCTask::do_it() waiting for idle"
-                  "  monitor: " INTPTR_FORMAT,
-                  p2i(this), p2i(monitor()));
+                  " WaitForBarrierGCTask::do_it() waiting for idle",
+                  p2i(this));
   }
   {
     // First, wait for the barrier to arrive.
@@ -1050,24 +958,30 @@ void WaitForBarrierGCTask::do_it(GCTaskManager* manager, uint which) {
     do_it_internal(manager, which);
     // Release manager->lock().
   }
-  {
-    // Then notify the waiter.
-    MutexLockerEx ml(monitor(), Mutex::_no_safepoint_check_flag);
-    set_should_wait(false);
-    // Waiter doesn't miss the notify in the wait_for method
-    // since it checks the flag after grabbing the monitor.
-    if (TraceGCTaskManager) {
-      tty->print_cr("[" INTPTR_FORMAT "]"
-                    " WaitForBarrierGCTask::do_it()"
-                    "  [" INTPTR_FORMAT "] (%s)->notify_all()",
-                    p2i(this), p2i(monitor()), monitor()->name());
-    }
-    monitor()->notify_all();
-    // Release monitor().
+  // Then notify the waiter.
+  _wait_helper.notify();
+}
+
+WaitHelper::WaitHelper() : _should_wait(true), _monitor(MonitorSupply::reserve()) {
+  if (TraceGCTaskManager) {
+    tty->print_cr("[" INTPTR_FORMAT "]"
+                  " WaitHelper::WaitHelper()"
+                  "  monitor: " INTPTR_FORMAT,
+                  p2i(this), p2i(monitor()));
   }
 }
 
-void WaitForBarrierGCTask::wait_for(bool reset) {
+void WaitHelper::release_monitor() {
+  assert(_monitor != NULL, "");
+  MonitorSupply::release(_monitor);
+  _monitor = NULL;
+}
+
+WaitHelper::~WaitHelper() {
+  release_monitor();
+}
+
+void WaitHelper::wait_for(bool reset) {
   if (TraceGCTaskManager) {
     tty->print_cr("[" INTPTR_FORMAT "]"
                   " WaitForBarrierGCTask::wait_for()"
@@ -1098,6 +1012,20 @@ void WaitForBarrierGCTask::wait_for(bool reset) {
     }
     // Release monitor().
   }
+}
+
+void WaitHelper::notify() {
+  MutexLockerEx ml(monitor(), Mutex::_no_safepoint_check_flag);
+  set_should_wait(false);
+  // Waiter doesn't miss the notify in the wait_for method
+  // since it checks the flag after grabbing the monitor.
+  if (TraceGCTaskManager) {
+    tty->print_cr("[" INTPTR_FORMAT "]"
+                  " WaitForBarrierGCTask::do_it()"
+                  "  [" INTPTR_FORMAT "] (%s)->notify_all()",
+                  p2i(this), p2i(monitor()), monitor()->name());
+  }
+  monitor()->notify_all();
 }
 
 Mutex*                   MonitorSupply::_lock     = NULL;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,14 @@
 #define OS_SOLARIS_VM_OS_SOLARIS_HPP
 
 // Solaris_OS defines the interface to Solaris operating systems
+
+// see thr_setprio(3T) for the basis of these numbers
+#define MinimumPriority 0
+#define NormalPriority  64
+#define MaximumPriority 127
+
+// FX/60 is critical thread class/priority on T4
+#define FXCriticalPriority 60
 
 // Information about the protection of the page at address '0' on this os.
 static bool zero_page_read_protected() { return true; }
@@ -65,8 +73,6 @@ class Solaris {
     LGRP_VIEW_OS            // what's available to operating system
   } lgrp_view_t;
 
-  typedef uint_t (*getisax_func_t)(uint32_t* array, uint_t n);
-
   typedef lgrp_id_t (*lgrp_home_func_t)(idtype_t idtype, id_t id);
   typedef lgrp_cookie_t (*lgrp_init_func_t)(lgrp_view_t view);
   typedef int (*lgrp_fini_func_t)(lgrp_cookie_t cookie);
@@ -78,11 +84,6 @@ class Solaris {
                                        lgrp_rsrc_t type);
   typedef int (*lgrp_nlgrps_func_t)(lgrp_cookie_t cookie);
   typedef int (*lgrp_cookie_stale_func_t)(lgrp_cookie_t cookie);
-  typedef int (*meminfo_func_t)(const uint64_t inaddr[],   int addr_count,
-                                const uint_t  info_req[],  int info_count,
-                                uint64_t  outdata[], uint_t validity[]);
-
-  static getisax_func_t _getisax;
 
   static lgrp_home_func_t _lgrp_home;
   static lgrp_init_func_t _lgrp_init;
@@ -94,8 +95,6 @@ class Solaris {
   static lgrp_cookie_stale_func_t _lgrp_cookie_stale;
   static lgrp_cookie_t _lgrp_cookie;
 
-  static meminfo_func_t _meminfo;
-
   // Large Page Support
   static bool is_valid_page_size(size_t bytes);
   static size_t page_size_for_alignment(size_t alignment);
@@ -105,38 +104,35 @@ class Solaris {
 
   static void try_enable_extended_io();
 
-  // For signal-chaining
-  static unsigned long sigs;                 // mask of signals that have
-                                             // preinstalled signal handlers
   static struct sigaction *(*get_signal_action)(int);
   static struct sigaction *get_preinstalled_handler(int);
   static int (*get_libjsig_version)();
   static void save_preinstalled_handler(int, struct sigaction&);
   static void check_signal_handler(int sig);
   // For overridable signals
-  static int _SIGinterrupt;                  // user-overridable INTERRUPT_SIGNAL
   static int _SIGasync;                      // user-overridable ASYNC_SIGNAL
-  static void set_SIGinterrupt(int newsig) { _SIGinterrupt = newsig; }
   static void set_SIGasync(int newsig) { _SIGasync = newsig; }
+
+  typedef int (*pthread_setname_np_func_t)(pthread_t, const char*);
+  static pthread_setname_np_func_t _pthread_setname_np;
 
  public:
   // Large Page Support--ISM.
   static bool largepage_range(char* addr, size_t size);
 
-  static int SIGinterrupt() { return _SIGinterrupt; }
   static int SIGasync() { return _SIGasync; }
   static address handler_start, handler_end; // start and end pc of thr_sighndlrinfo
 
   static bool valid_stack_address(Thread* thread, address sp);
-  static bool valid_ucontext(Thread* thread, ucontext_t* valid, ucontext_t* suspect);
-  static ucontext_t* get_valid_uc_in_signal_handler(Thread* thread,
-                                                    ucontext_t* uc);
+  static bool valid_ucontext(Thread* thread, const ucontext_t* valid, const ucontext_t* suspect);
+  static const ucontext_t* get_valid_uc_in_signal_handler(Thread* thread,
+                                                    const ucontext_t* uc);
 
-  static ExtendedPC  ucontext_get_ExtendedPC(ucontext_t* uc);
-  static intptr_t*   ucontext_get_sp(ucontext_t* uc);
+  static ExtendedPC  ucontext_get_ExtendedPC(const ucontext_t* uc);
+  static intptr_t*   ucontext_get_sp(const ucontext_t* uc);
   // ucontext_get_fp() is only used by Solaris X86 (see note below)
-  static intptr_t*   ucontext_get_fp(ucontext_t* uc);
-  static address    ucontext_get_pc(ucontext_t* uc);
+  static intptr_t*   ucontext_get_fp(const ucontext_t* uc);
+  static address    ucontext_get_pc(const ucontext_t* uc);
   static void ucontext_set_pc(ucontext_t* uc, address pc);
 
   // For Analyzer Forte AsyncGetCallTrace profiling support:
@@ -145,8 +141,10 @@ class Solaris {
   // We should have different declarations of this interface in
   // os_solaris_i486.hpp and os_solaris_sparc.hpp, but that file
   // provides extensions to the os class and not the Solaris class.
-  static ExtendedPC fetch_frame_from_ucontext(Thread* thread, ucontext_t* uc,
+  static ExtendedPC fetch_frame_from_ucontext(Thread* thread, const ucontext_t* uc,
                                               intptr_t** ret_sp, intptr_t** ret_fp);
+
+  static bool get_frame_at_stack_banging_point(JavaThread* thread, ucontext_t* uc, frame* fr);
 
   static void hotspot_sigmask(Thread* thread);
 
@@ -184,8 +182,6 @@ class Solaris {
   static void libthread_init();
   static void synchronization_init();
   static bool liblgrp_init();
-  // Load miscellaneous symbols.
-  static void misc_sym_init();
   // This boolean allows users to forward their own non-matching signals
   // to JVM_handle_solaris_signal, harmlessly.
   static bool signal_handlers_are_installed;
@@ -265,17 +261,6 @@ class Solaris {
   }
   static lgrp_cookie_t lgrp_cookie()                 { return _lgrp_cookie; }
 
-  static bool supports_getisax()                     { return _getisax != NULL; }
-  static uint_t getisax(uint32_t* array, uint_t n);
-
-  static void set_meminfo(meminfo_func_t func)       { _meminfo = func; }
-  static int meminfo (const uint64_t inaddr[],   int addr_count,
-                      const uint_t  info_req[],  int info_count,
-                      uint64_t  outdata[], uint_t validity[]) {
-    return _meminfo != NULL ? _meminfo(inaddr, addr_count, info_req, info_count,
-                                       outdata, validity) : -1;
-  }
-
   static sigset_t* unblocked_signals();
   static sigset_t* vm_signals();
   static sigset_t* allowdebug_blocked_signals();
@@ -285,10 +270,6 @@ class Solaris {
   static          jint  _os_thread_limit;
   static volatile jint  _os_thread_count;
 
-  // Minimum stack size a thread can be created with (allowing
-  // the VM to completely create the thread and enter user code)
-
-  static size_t min_stack_allowed;
 
   // Stack overflow handling
 

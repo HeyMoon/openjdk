@@ -922,8 +922,8 @@ public abstract class SurfaceData
     }
 
     /**
-     * Returns the type of this <code>Transparency</code>.
-     * @return the field type of this <code>Transparency</code>, which is
+     * Returns the type of this {@code Transparency}.
+     * @return the field type of this {@code Transparency}, which is
      *          either OPAQUE, BITMASK or TRANSLUCENT.
      */
     public int getTransparency() {
@@ -1039,6 +1039,11 @@ public abstract class SurfaceData
      * Performs a copyarea within this surface.  Returns
      * false if there is no algorithm to perform the copyarea
      * given the current settings of the SunGraphics2D.
+     *
+     * @param x the x coordinate of the area in device space
+     * @param y the y coordinate of the area in device space
+     * @param w the width of the area in device space
+     * @param h the height of the area in device space
      */
     public boolean copyArea(SunGraphics2D sg2d,
                             int x, int y, int w, int h, int dx, int dy)
@@ -1059,12 +1064,22 @@ public abstract class SurfaceData
     public abstract Object getDestination();
 
     /**
-     * Returns default scale factor of the destination surface. Scale factor
-     * describes the mapping between virtual and physical coordinates of the
+     * Returns default horizontal scale factor of the destination surface. Scale
+     * factor describes the mapping between virtual and physical coordinates of the
      * SurfaceData. If the scale is 2 then virtual pixel coordinates need to be
      * doubled for physical pixels.
      */
-    public int getDefaultScale() {
+    public double getDefaultScaleX() {
+        return 1;
+    }
+
+    /**
+     * Returns default vertical scale factor of the destination surface. Scale
+     * factor describes the mapping between virtual and physical coordinates of the
+     * SurfaceData. If the scale is 2 then virtual pixel coordinates need to be
+     * doubled for physical pixels.
+     */
+    public double getDefaultScaleY() {
         return 1;
     }
 }

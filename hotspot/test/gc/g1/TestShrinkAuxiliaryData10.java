@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,15 +26,15 @@
  * @bug 8038423 8061715 8078405
  * @summary Checks that decommitment occurs for JVM with different
  * G1ConcRSLogCacheSize and ObjectAlignmentInBytes options values
- * @requires vm.gc=="G1" | vm.gc=="null"
- * @library /testlibrary /../../test/lib
- * @modules java.base/sun.misc
+ * @requires vm.gc.G1
+ * @requires vm.opt.AggressiveOpts=="false" | vm.opt.AggressiveOpts=="null"
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
- * @build jdk.test.lib.* sun.hotspot.WhiteBox
- * @build TestShrinkAuxiliaryData TestShrinkAuxiliaryData10
+ * @build sun.hotspot.WhiteBox
  * @run main ClassFileInstaller sun.hotspot.WhiteBox
  *                              sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run driver/timeout=720 TestShrinkAuxiliaryData10
+ * @run main/timeout=720 TestShrinkAuxiliaryData10
  */
 public class TestShrinkAuxiliaryData10 {
 

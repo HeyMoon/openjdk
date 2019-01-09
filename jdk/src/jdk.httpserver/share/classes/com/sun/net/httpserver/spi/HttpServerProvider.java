@@ -40,7 +40,6 @@ import com.sun.net.httpserver.*;
  * {@link HttpServer} and associated classes. Applications do not normally use
  * this class. See {@link #provider()} for how providers are found and loaded.
  */
-@jdk.Exported
 public abstract class HttpServerProvider {
 
     /**
@@ -90,9 +89,10 @@ public abstract class HttpServerProvider {
         if (cn == null)
             return false;
         try {
-            Class<?> c = Class.forName(cn, true,
-                                       ClassLoader.getSystemClassLoader());
-            provider = (HttpServerProvider)c.newInstance();
+            @SuppressWarnings("deprecation")
+            Object o = Class.forName(cn, true,
+                                     ClassLoader.getSystemClassLoader()).newInstance();
+            provider = (HttpServerProvider)o;
             return true;
         } catch (ClassNotFoundException |
                  IllegalAccessException |
@@ -142,7 +142,7 @@ public abstract class HttpServerProvider {
      *   visible to the system class loader, and that jar file contains a
      *   provider-configuration file named
      *   {@code com.sun.net.httpserver.HttpServerProvider} in the resource
-     *   directory <tt>META-INF/services</tt>, then the first class name
+     *   directory {@code META-INF/services}, then the first class name
      *   specified in that file is taken.  The class is loaded and
      *   instantiated; if this process fails then an unspecified unchecked error
      *   or exception is thrown.  </p></li>

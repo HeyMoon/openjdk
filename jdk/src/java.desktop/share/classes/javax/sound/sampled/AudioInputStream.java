@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -60,7 +60,7 @@ public class AudioInputStream extends InputStream {
      * The {@code InputStream} from which this {@code AudioInputStream} object
      * was constructed.
      */
-    private InputStream stream;
+    private final InputStream stream;
 
     /**
      * The format of the audio data contained in the stream.
@@ -249,10 +249,10 @@ public class AudioInputStream extends InputStream {
      */
     @Override
     public int read(byte[] b, int off, int len) throws IOException {
-
         // make sure we don't read fractions of a frame.
-        if( (len%frameSize) != 0 ) {
-            len -= (len%frameSize);
+        final int reminder = len % frameSize;
+        if (reminder != 0) {
+            len -= reminder;
             if (len == 0) {
                 return 0;
             }
@@ -312,6 +312,10 @@ public class AudioInputStream extends InputStream {
     /**
      * Skips over and discards a specified number of bytes from this audio input
      * stream.
+     * <p>
+     * This method will always skip an integral number of frames. If {@code n}
+     * does not specify an integral number of frames, a maximum of
+     * {@code n - (n % frameSize)} bytes will be skipped.
      *
      * @param  n the requested number of bytes to be skipped
      * @return the actual number of bytes skipped
@@ -321,31 +325,47 @@ public class AudioInputStream extends InputStream {
      */
     @Override
     public long skip(long n) throws IOException {
-
         // make sure not to skip fractional frames
-        if( (n%frameSize) != 0 ) {
-            n -= (n%frameSize);
+        final long reminder = n % frameSize;
+        if (reminder != 0) {
+            n -= reminder;
+        }
+        if (n <= 0) {
+            return 0;
         }
 
-        if( frameLength != AudioSystem.NOT_SPECIFIED ) {
+        if (frameLength != AudioSystem.NOT_SPECIFIED) {
             // don't skip more than our set length in frames.
-            if( (n/frameSize) > (frameLength-framePos) ) {
-                n = (frameLength-framePos) * frameSize;
+            if ((n / frameSize) > (frameLength - framePos)) {
+                n = (frameLength - framePos) * frameSize;
             }
         }
-        long temp = stream.skip(n);
+        long remaining = n;
+        while (remaining > 0) {
+            // Some input streams like FileInputStream can return more bytes,
+            // when EOF is reached.
+            long ret = Math.min(stream.skip(remaining), remaining);
+            if (ret == 0) {
+                // EOF or not? we need to check.
+                if (stream.read() == -1) {
+                    break;
+                }
+                ret = 1;
+            } else if (ret < 0) {
+                // the skip should not return negative value, but check it also
+                break;
+            }
+            remaining -= ret;
+        }
+        final long temp =  n - remaining;
 
         // if no error, update our position.
-        if( temp%frameSize != 0 ) {
-
+        if (temp % frameSize != 0) {
             // Throw an IOException if we've skipped a fractional number of frames
             throw new IOException("Could not skip an integer number of frames.");
         }
-        if( temp >= 0 ) {
-            framePos += temp/frameSize;
-        }
+        framePos += temp/frameSize;
         return temp;
-
     }
 
     /**
@@ -392,7 +412,7 @@ public class AudioInputStream extends InputStream {
      * Marks the current position in this audio input stream.
      *
      * @param  readlimit the maximum number of bytes that can be read before the
-     *         mark position becomes invalid.
+     *         mark position becomes invalid
      * @see #reset
      * @see #markSupported
      */

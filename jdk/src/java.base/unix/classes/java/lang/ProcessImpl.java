@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,6 +46,10 @@ import static java.security.AccessController.doPrivileged;
 import java.security.PrivilegedAction;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
+import java.util.Properties;
+import jdk.internal.misc.JavaIOFileDescriptorAccess;
+import jdk.internal.misc.SharedSecrets;
+import sun.security.action.GetPropertyAction;
 
 /**
  * java.lang.Process subclass in the UNIX environment.
@@ -57,8 +61,8 @@ import java.security.PrivilegedExceptionAction;
  * @since   1.5
  */
 final class ProcessImpl extends Process {
-    private static final sun.misc.JavaIOFileDescriptorAccess fdAccess
-        = sun.misc.SharedSecrets.getJavaIOFileDescriptorAccess();
+    private static final JavaIOFileDescriptorAccess fdAccess
+        = SharedSecrets.getJavaIOFileDescriptorAccess();
 
     // Linux platforms support a normal (non-forcible) kill signal.
     static final boolean SUPPORTS_NORMAL_TERMINATION = true;
@@ -105,13 +109,9 @@ final class ProcessImpl extends Process {
         private String helperPath(String javahome, String osArch) {
             switch (this) {
                 case SOLARIS:
-                    if (osArch.equals("x86")) { osArch = "i386"; }
-                    else if (osArch.equals("x86_64")) { osArch = "amd64"; }
                     // fall through...
                 case LINUX:
                 case AIX:
-                    return javahome + "/lib/" + osArch + "/jspawnhelper";
-
                 case BSD:
                     return javahome + "/lib/jspawnhelper";
 
@@ -121,11 +121,9 @@ final class ProcessImpl extends Process {
         }
 
         String helperPath() {
-            return AccessController.doPrivileged(
-                (PrivilegedAction<String>) () ->
-                    helperPath(System.getProperty("java.home"),
-                               System.getProperty("os.arch"))
-            );
+            Properties props = GetPropertyAction.privilegedGetProperties();
+            return helperPath(props.getProperty("java.home"),
+                              props.getProperty("os.arch"));
         }
 
         LaunchMechanism launchMechanism() {
@@ -157,9 +155,7 @@ final class ProcessImpl extends Process {
         }
 
         static Platform get() {
-            String osName = AccessController.doPrivileged(
-                (PrivilegedAction<String>) () -> System.getProperty("os.name")
-            );
+            String osName = GetPropertyAction.privilegedGetProperty("os.name");
 
             if (osName.equals("Linux")) { return LINUX; }
             if (osName.contains("OS X")) { return BSD; }
@@ -222,48 +218,75 @@ final class ProcessImpl extends Process {
         FileOutputStream f2 = null;
 
         try {
+            boolean forceNullOutputStream = false;
             if (redirects == null) {
                 std_fds = new int[] { -1, -1, -1 };
             } else {
                 std_fds = new int[3];
 
-                if (redirects[0] == Redirect.PIPE)
+                if (redirects[0] == Redirect.PIPE) {
                     std_fds[0] = -1;
-                else if (redirects[0] == Redirect.INHERIT)
+                } else if (redirects[0] == Redirect.INHERIT) {
                     std_fds[0] = 0;
-                else {
+                } else if (redirects[0] instanceof ProcessBuilder.RedirectPipeImpl) {
+                    std_fds[0] = fdAccess.get(((ProcessBuilder.RedirectPipeImpl) redirects[0]).getFd());
+                } else {
                     f0 = new FileInputStream(redirects[0].file());
                     std_fds[0] = fdAccess.get(f0.getFD());
                 }
 
-                if (redirects[1] == Redirect.PIPE)
+                if (redirects[1] == Redirect.PIPE) {
                     std_fds[1] = -1;
-                else if (redirects[1] == Redirect.INHERIT)
+                } else if (redirects[1] == Redirect.INHERIT) {
                     std_fds[1] = 1;
-                else {
+                } else if (redirects[1] instanceof ProcessBuilder.RedirectPipeImpl) {
+                    std_fds[1] = fdAccess.get(((ProcessBuilder.RedirectPipeImpl) redirects[1]).getFd());
+                    // Force getInputStream to return a null stream,
+                    // the fd is directly assigned to the next process.
+                    forceNullOutputStream = true;
+                } else {
                     f1 = new FileOutputStream(redirects[1].file(),
                             redirects[1].append());
                     std_fds[1] = fdAccess.get(f1.getFD());
                 }
 
-                if (redirects[2] == Redirect.PIPE)
+                if (redirects[2] == Redirect.PIPE) {
                     std_fds[2] = -1;
-                else if (redirects[2] == Redirect.INHERIT)
+                } else if (redirects[2] == Redirect.INHERIT) {
                     std_fds[2] = 2;
-                else {
+                } else if (redirects[2] instanceof ProcessBuilder.RedirectPipeImpl) {
+                    std_fds[2] = fdAccess.get(((ProcessBuilder.RedirectPipeImpl) redirects[2]).getFd());
+                } else {
                     f2 = new FileOutputStream(redirects[2].file(),
                             redirects[2].append());
                     std_fds[2] = fdAccess.get(f2.getFD());
                 }
             }
 
-            return new ProcessImpl
+            Process p = new ProcessImpl
                     (toCString(cmdarray[0]),
                             argBlock, args.length,
                             envBlock, envc[0],
                             toCString(dir),
                             std_fds,
+                            forceNullOutputStream,
                             redirectErrorStream);
+            if (redirects != null) {
+                // Copy the fd's if they are to be redirected to another process
+                if (std_fds[0] >= 0 &&
+                        redirects[0] instanceof ProcessBuilder.RedirectPipeImpl) {
+                    fdAccess.set(((ProcessBuilder.RedirectPipeImpl) redirects[0]).getFd(), std_fds[0]);
+                }
+                if (std_fds[1] >= 0 &&
+                        redirects[1] instanceof ProcessBuilder.RedirectPipeImpl) {
+                    fdAccess.set(((ProcessBuilder.RedirectPipeImpl) redirects[1]).getFd(), std_fds[1]);
+                }
+                if (std_fds[2] >= 0 &&
+                        redirects[2] instanceof ProcessBuilder.RedirectPipeImpl) {
+                    fdAccess.set(((ProcessBuilder.RedirectPipeImpl) redirects[2]).getFd(), std_fds[2]);
+                }
+            }
+            return p;
         } finally {
             // In theory, close() can throw IOException
             // (although it is rather unlikely to happen here)
@@ -309,6 +332,7 @@ final class ProcessImpl extends Process {
                 final byte[] envBlock, final int envc,
                 final byte[] dir,
                 final int[] fds,
+                final boolean forceNullOutputStream,
                 final boolean redirectErrorStream)
             throws IOException {
 
@@ -324,7 +348,7 @@ final class ProcessImpl extends Process {
 
         try {
             doPrivileged((PrivilegedExceptionAction<Void>) () -> {
-                initStreams(fds);
+                initStreams(fds, forceNullOutputStream);
                 return null;
             });
         } catch (PrivilegedActionException ex) {
@@ -338,7 +362,14 @@ final class ProcessImpl extends Process {
         return fileDescriptor;
     }
 
-    void initStreams(int[] fds) throws IOException {
+    /**
+     * Initialize the streams from the file descriptors.
+     * @param fds array of stdin, stdout, stderr fds
+     * @param forceNullOutputStream true if the stdout is being directed to
+     *        a subsequent process. The stdout stream should be a null output stream .
+     * @throws IOException
+     */
+    void initStreams(int[] fds, boolean forceNullOutputStream) throws IOException {
         switch (platform) {
             case LINUX:
             case BSD:
@@ -346,7 +377,7 @@ final class ProcessImpl extends Process {
                         ProcessBuilder.NullOutputStream.INSTANCE :
                         new ProcessPipeOutputStream(fds[0]);
 
-                stdout = (fds[1] == -1) ?
+                stdout = (fds[1] == -1 || forceNullOutputStream) ?
                          ProcessBuilder.NullInputStream.INSTANCE :
                          new ProcessPipeInputStream(fds[1]);
 
@@ -586,13 +617,26 @@ final class ProcessImpl extends Process {
     }
 
     @Override
-    public long getPid() {
+    public long pid() {
         return pid;
     }
 
     @Override
     public synchronized boolean isAlive() {
         return !hasExited;
+    }
+
+    /**
+     * The {@code toString} method returns a string consisting of
+     * the native process ID of the process and the exit value of the process.
+     *
+     * @return a string representation of the object.
+     */
+    @Override
+    public String toString() {
+        return new StringBuilder("Process[pid=").append(pid)
+                .append(", exitValue=").append(hasExited ? exitcode : "\"not exited\"")
+                .append("]").toString();
     }
 
     private static native void init();
@@ -614,7 +658,7 @@ final class ProcessImpl extends Process {
         private final Object closeLock = new Object();
 
         ProcessPipeInputStream(int fd) {
-            super(new FileInputStream(newFileDescriptor(fd)));
+            super(new PipeInputStream(newFileDescriptor(fd)));
         }
         private static byte[] drainInputStream(InputStream in)
                 throws IOException {
@@ -690,8 +734,7 @@ final class ProcessImpl extends Process {
     // behavior.  By deferring the close we allow any pending reads to see -1
     // (EOF) as they did before.
     //
-    private static class DeferredCloseInputStream extends FileInputStream
-    {
+    private static class DeferredCloseInputStream extends PipeInputStream {
         DeferredCloseInputStream(FileDescriptor fd) {
             super(fd);
         }
@@ -813,7 +856,7 @@ final class ProcessImpl extends Process {
         private boolean closePending = false;
 
         DeferredCloseProcessPipeInputStream(int fd) {
-            super(new FileInputStream(newFileDescriptor(fd)));
+            super(new PipeInputStream(newFileDescriptor(fd)));
         }
 
         private InputStream drainInputStream(InputStream in)

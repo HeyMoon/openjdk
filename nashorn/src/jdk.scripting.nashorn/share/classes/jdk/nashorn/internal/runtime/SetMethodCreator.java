@@ -28,17 +28,18 @@ package jdk.nashorn.internal.runtime;
 import static jdk.nashorn.internal.lookup.Lookup.MH;
 import static jdk.nashorn.internal.runtime.ECMAErrors.referenceError;
 import static jdk.nashorn.internal.runtime.JSType.getAccessorTypeIndex;
+
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.SwitchPoint;
-import jdk.internal.dynalink.CallSiteDescriptor;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.LinkRequest;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.LinkRequest;
 import jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor;
 import jdk.nashorn.internal.runtime.linker.NashornGuards;
 
 /**
  * Instances of this class are quite ephemeral; they only exist for the duration of an invocation of
- * {@link ScriptObject#findSetMethod(CallSiteDescriptor, jdk.internal.dynalink.linker.LinkRequest)} and
+ * {@link ScriptObject#findSetMethod(CallSiteDescriptor, jdk.dynalink.linker.LinkRequest)} and
  * serve as the actual encapsulation of the algorithm for creating an appropriate property setter method.
  */
 final class SetMethodCreator {
@@ -53,7 +54,7 @@ final class SetMethodCreator {
     /**
      * Creates a new property setter method creator.
      * @param sobj the object for which we're creating the property setter
-     * @param find a result of a {@link ScriptObject#findProperty(String, boolean)} on the object for the property we
+     * @param find a result of a {@link ScriptObject#findProperty(Object, boolean)} on the object for the property we
      * want to create a setter for. Can be null if the property does not yet exist on the object.
      * @param desc the descriptor of the call site that triggered the property setter lookup
      * @param request the link request
@@ -65,11 +66,10 @@ final class SetMethodCreator {
         this.desc    = desc;
         this.type    = desc.getMethodType().parameterType(1);
         this.request = request;
-
     }
 
     private String getName() {
-        return desc.getNameToken(CallSiteDescriptor.NAME_OPERAND);
+        return NashornCallSiteDescriptor.getOperand(desc);
     }
 
     private PropertyMap getMap() {
@@ -145,8 +145,7 @@ final class SetMethodCreator {
         final boolean isStrict  = NashornCallSiteDescriptor.isStrict(desc);
         final MethodHandle methodHandle;
 
-        if (NashornCallSiteDescriptor.isDeclaration(desc)) {
-            assert property.needsDeclaration();
+        if (NashornCallSiteDescriptor.isDeclaration(desc) && property.needsDeclaration()) {
             // This is a LET or CONST being declared. The property is already there but flagged as needing declaration.
             // We create a new PropertyMap with the flag removed. The map is installed with a fast compare-and-set
             // method if the pre-callsite map is stable (which should be the case for function scopes except for
@@ -171,7 +170,7 @@ final class SetMethodCreator {
         assert property     != null;
 
         final MethodHandle boundHandle;
-        if (!(property instanceof UserAccessorProperty) && find.isInherited()) {
+        if (find.isInheritedOrdinaryProperty()) {
             boundHandle = ScriptObject.addProtoFilter(methodHandle, find.getProtoChainLength());
         } else {
             boundHandle = methodHandle;
@@ -186,10 +185,7 @@ final class SetMethodCreator {
 
     private SetMethod createNewPropertySetter(final SwitchPoint builtinSwitchPoint) {
         final SetMethod sm = map.getFreeFieldSlot() > -1 ? createNewFieldSetter(builtinSwitchPoint) : createNewSpillPropertySetter(builtinSwitchPoint);
-        final PropertyListeners listeners = map.getListeners();
-        if (listeners != null) {
-            listeners.propertyAdded(sm.property);
-        }
+        map.propertyAdded(sm.property, true);
         return sm;
     }
 
@@ -199,12 +195,12 @@ final class SetMethodCreator {
         final PropertyMap oldMap   = getMap();
         final PropertyMap newMap   = getNewMap(property);
         final boolean     isStrict = NashornCallSiteDescriptor.isStrict(desc);
-        final String      name     = desc.getNameToken(CallSiteDescriptor.NAME_OPERAND);
+        final String      name     = NashornCallSiteDescriptor.getOperand(desc);
 
         //fast type specific setter
         final MethodHandle fastSetter = property.getSetter(type, newMap); //0 sobj, 1 value, slot folded for spill property already
 
-        //slow setter, that calls ScriptObject.set with appropraite type and key name
+        //slow setter, that calls ScriptObject.set with appropriate type and key name
         MethodHandle slowSetter = ScriptObject.SET_SLOW[getAccessorTypeIndex(type)];
         slowSetter = MH.insertArguments(slowSetter, 3, NashornCallSiteDescriptor.getFlags(desc));
         slowSetter = MH.insertArguments(slowSetter, 1, name);

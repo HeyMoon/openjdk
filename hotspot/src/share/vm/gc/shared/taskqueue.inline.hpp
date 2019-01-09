@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,7 +28,7 @@
 #include "gc/shared/taskqueue.hpp"
 #include "memory/allocation.inline.hpp"
 #include "oops/oop.inline.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/orderAccess.inline.hpp"
 #include "utilities/debug.hpp"
 #include "utilities/stack.inline.hpp"
@@ -44,12 +44,13 @@ inline GenericTaskQueueSet<T, F>::GenericTaskQueueSet(int n) : _n(n) {
 
 template<class E, MEMFLAGS F, unsigned int N>
 inline void GenericTaskQueue<E, F, N>::initialize() {
-  _elems = _array_allocator.allocate(N);
+  _elems = ArrayAllocator<E, F>::allocate(N);
 }
 
 template<class E, MEMFLAGS F, unsigned int N>
 inline GenericTaskQueue<E, F, N>::~GenericTaskQueue() {
-  FREE_C_HEAP_ARRAY(E, _elems);
+  assert(false, "This code is currently never called");
+  ArrayAllocator<E, F>::free(const_cast<E*>(_elems), N);
 }
 
 template<class E, MEMFLAGS F, unsigned int N>
@@ -100,6 +101,11 @@ inline bool OverflowTaskQueue<E, F, N>::push(E t)
     TASKQUEUE_STATS_ONLY(stats.record_overflow(overflow_stack()->size()));
   }
   return true;
+}
+
+template <class E, MEMFLAGS F, unsigned int N>
+inline bool OverflowTaskQueue<E, F, N>::try_push_to_taskqueue(E t) {
+  return taskqueue_t::push(t);
 }
 
 // pop_local_slow() is done by the owning thread and is trying to
@@ -259,20 +265,14 @@ inline typename TaskQueueSuper<N, F>::Age TaskQueueSuper<N, F>::Age::cmpxchg(con
 }
 
 template<class E, MEMFLAGS F, unsigned int N>
-inline void GenericTaskQueue<E, F, N>::oops_do(OopClosure* f) {
-  // tty->print_cr("START OopTaskQueue::oops_do");
+template<class Fn>
+inline void GenericTaskQueue<E, F, N>::iterate(Fn fn) {
   uint iters = size();
   uint index = _bottom;
   for (uint i = 0; i < iters; ++i) {
     index = decrement_index(index);
-    // tty->print_cr("  doing entry %d," INTPTR_T " -> " INTPTR_T,
-    //            index, &_elems[index], _elems[index]);
-    E* t = (E*)&_elems[index];      // cast away volatility
-    oop* p = (oop*)t;
-    assert((*t)->is_oop_or_null(), err_msg("Expected an oop or NULL at " PTR_FORMAT, p2i(*t)));
-    f->do_oop(p);
+    fn(const_cast<E&>(_elems[index])); // cast away volatility
   }
-  // tty->print_cr("END OopTaskQueue::oops_do");
 }
 
 

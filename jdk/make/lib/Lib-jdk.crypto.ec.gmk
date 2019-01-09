@@ -27,7 +27,7 @@ include LibCommon.gmk
 
 ################################################################################
 
-ifeq ($(ENABLE_INTREE_EC), yes)
+ifeq ($(ENABLE_INTREE_EC), true)
 
   LIBSUNEC_SRC := $(JDK_TOPDIR)/src/jdk.crypto.ec/share/native/libsunec
   BUILD_LIBSUNEC_FLAGS := $(addprefix -I, $(SUNEC_SRC))
@@ -59,16 +59,16 @@ ifeq ($(ENABLE_INTREE_EC), yes)
       MAPFILE := $(JDK_TOPDIR)/make/mapfiles/libsunec/mapfile-vers, \
       LDFLAGS := $(LDFLAGS_JDKLIB) $(LDFLAGS_CXX_JDK), \
       LDFLAGS_macosx := $(call SET_SHARED_LIBRARY_ORIGIN), \
-      LDFLAGS_SUFFIX := $(LIBCXX), \
-      LDFLAGS_SUFFIX_linux := -lc, \
-      LDFLAGS_SUFFIX_solaris := -lc, \
+      LIBS := $(LIBCXX), \
+      LIBS_linux := -lc, \
+      LIBS_solaris := -lc, \
       VERSIONINFO_RESOURCE := $(GLOBAL_VERSION_INFO_RESOURCE), \
       RC_FLAGS := $(RC_FLAGS) \
           -D "JDK_FNAME=sunec.dll" \
           -D "JDK_INTERNAL_NAME=sunec" \
           -D "JDK_FTYPE=0x2L", \
       OBJECT_DIR := $(SUPPORT_OUTPUTDIR)/native/$(MODULE)/libsunec, \
-      DEBUG_SYMBOLS := $(DEBUG_ALL_BINARIES)))
+  ))
 
   TARGETS += $(BUILD_LIBSUNEC)
 endif

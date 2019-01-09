@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,25 +25,35 @@
 
 package com.sun.xml.internal.messaging.saaj.soap.impl;
 
-import java.util.*;
 import java.util.logging.Level;
 
 import javax.xml.namespace.QName;
-import javax.xml.soap.*;
 
 import org.w3c.dom.Element;
-import org.w3c.dom.Node;
 
 import com.sun.xml.internal.messaging.saaj.SOAPExceptionImpl;
 import com.sun.xml.internal.messaging.saaj.soap.SOAPDocument;
 import com.sun.xml.internal.messaging.saaj.soap.SOAPDocumentImpl;
 import com.sun.xml.internal.messaging.saaj.soap.name.NameImpl;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import javax.xml.soap.Name;
+import javax.xml.soap.SOAPElement;
+import javax.xml.soap.SOAPEnvelope;
+import javax.xml.soap.SOAPException;
+import javax.xml.soap.SOAPHeader;
+import javax.xml.soap.SOAPHeaderElement;
 
 public abstract class HeaderImpl extends ElementImpl implements SOAPHeader {
     protected static final boolean MUST_UNDERSTAND_ONLY = false;
 
     protected HeaderImpl(SOAPDocumentImpl ownerDoc, NameImpl name) {
         super(ownerDoc, name);
+    }
+
+    public HeaderImpl(SOAPDocumentImpl ownerDoc, Element domElement) {
+        super(ownerDoc, domElement);
     }
 
     protected abstract SOAPHeaderElement createHeaderElement(Name name)
@@ -54,6 +64,7 @@ public abstract class HeaderImpl extends ElementImpl implements SOAPHeader {
     protected abstract NameImpl getUpgradeName();
     protected abstract NameImpl getSupportedEnvelopeName();
 
+    @Override
     public SOAPHeaderElement addHeaderElement(Name name) throws SOAPException {
         SOAPElement newHeaderElement =
             ElementFactory.createNamedElement(
@@ -77,6 +88,7 @@ public abstract class HeaderImpl extends ElementImpl implements SOAPHeader {
         return (SOAPHeaderElement) newHeaderElement;
     }
 
+    @Override
     public SOAPHeaderElement addHeaderElement(QName name) throws SOAPException {
         SOAPElement newHeaderElement =
             ElementFactory.createNamedElement(
@@ -100,23 +112,27 @@ public abstract class HeaderImpl extends ElementImpl implements SOAPHeader {
         return (SOAPHeaderElement) newHeaderElement;
     }
 
+    @Override
     protected SOAPElement addElement(Name name) throws SOAPException {
         return addHeaderElement(name);
     }
 
+    @Override
     protected SOAPElement addElement(QName name) throws SOAPException {
         return addHeaderElement(name);
     }
 
-    public Iterator examineHeaderElements(String actor) {
+    @Override
+    public Iterator<SOAPHeaderElement> examineHeaderElements(String actor) {
         return getHeaderElementsForActor(actor, false, false);
     }
 
-    public Iterator extractHeaderElements(String actor) {
+    @Override
+    public Iterator<SOAPHeaderElement> extractHeaderElements(String actor) {
         return getHeaderElementsForActor(actor, true, false);
     }
 
-    protected Iterator getHeaderElementsForActor(
+    protected Iterator<SOAPHeaderElement> getHeaderElementsForActor(
         String actor,
         boolean detach,
         boolean mustUnderstand) {
@@ -127,15 +143,15 @@ public abstract class HeaderImpl extends ElementImpl implements SOAPHeader {
         return getHeaderElements(actor, detach, mustUnderstand);
     }
 
-    protected Iterator getHeaderElements(
+    protected Iterator<SOAPHeaderElement> getHeaderElements(
         String actor,
         boolean detach,
         boolean mustUnderstand) {
-        List elementList = new ArrayList();
+        List<SOAPHeaderElement> elementList = new ArrayList<>();
 
-        Iterator eachChild = getChildElements();
+        Iterator<javax.xml.soap.Node> eachChild = getChildElements();
 
-        Object currentChild = iterate(eachChild);
+        org.w3c.dom.Node currentChild = iterate(eachChild);
         while (currentChild != null) {
             if (!(currentChild instanceof SOAPHeaderElement)) {
                 currentChild = iterate(eachChild);
@@ -173,10 +189,11 @@ public abstract class HeaderImpl extends ElementImpl implements SOAPHeader {
         return elementList.listIterator();
     }
 
-    private Object iterate(Iterator each) {
+    private <T> T iterate(Iterator<T> each) {
         return each.hasNext() ? each.next() : null;
     }
 
+    @Override
     public void setParentElement(SOAPElement element) throws SOAPException {
         if (!(element instanceof SOAPEnvelope)) {
             log.severe("SAAJ0133.impl.header.parent.mustbe.envelope");
@@ -189,6 +206,7 @@ public abstract class HeaderImpl extends ElementImpl implements SOAPHeader {
     // namespace qualified. Holds for both SOAP versions.
     // TODO - This check needs to be made for other addChildElement() methods
     // as well.
+    @Override
     public SOAPElement addChildElement(String localName) throws SOAPException {
 
         SOAPElement element = super.addChildElement(localName);
@@ -201,19 +219,23 @@ public abstract class HeaderImpl extends ElementImpl implements SOAPHeader {
         return element;
     }
 
-    public Iterator examineAllHeaderElements() {
+    @Override
+    public Iterator<SOAPHeaderElement> examineAllHeaderElements() {
         return getHeaderElements(null, false, MUST_UNDERSTAND_ONLY);
     }
 
-    public Iterator examineMustUnderstandHeaderElements(String actor) {
+    @Override
+    public Iterator<SOAPHeaderElement> examineMustUnderstandHeaderElements(String actor) {
         return getHeaderElements(actor, false, true);
 
     }
 
-    public Iterator extractAllHeaderElements() {
+    @Override
+    public Iterator<SOAPHeaderElement> extractAllHeaderElements() {
         return getHeaderElements(null, true, false);
     }
 
+    @Override
     public SOAPHeaderElement addUpgradeHeaderElement(Iterator supportedSoapUris)
         throws SOAPException {
         if (supportedSoapUris == null) {
@@ -237,18 +259,19 @@ public abstract class HeaderImpl extends ElementImpl implements SOAPHeader {
                 NameImpl.createFromUnqualifiedName("qname"),
                 ns + ":Envelope");
             subElement.addNamespaceDeclaration(
-                ns,
-                (String) supportedSoapUris.next());
+                ns, (String) supportedSoapUris.next());
             i ++;
         }
         return upgradeHeaderElement;
     }
 
+    @Override
     public SOAPHeaderElement addUpgradeHeaderElement(String supportedSoapUri)
         throws SOAPException {
         return addUpgradeHeaderElement(new String[] {supportedSoapUri});
     }
 
+    @Override
     public SOAPHeaderElement addUpgradeHeaderElement(String[] supportedSoapUris)
         throws SOAPException {
 
@@ -276,9 +299,11 @@ public abstract class HeaderImpl extends ElementImpl implements SOAPHeader {
         return upgradeHeaderElement;
     }
 
+    @Override
     protected SOAPElement convertToSoapElement(Element element) {
-        if (element instanceof SOAPHeaderElement) {
-            return (SOAPElement) element;
+        final org.w3c.dom.Node soapNode = getSoapDocument().findIfPresent(element);
+        if (soapNode instanceof SOAPHeaderElement) {
+            return (SOAPElement) soapNode;
         } else {
             SOAPHeaderElement headerElement;
             try {
@@ -293,6 +318,7 @@ public abstract class HeaderImpl extends ElementImpl implements SOAPHeader {
         }
     }
 
+    @Override
     public SOAPElement setElementQName(QName newName) throws SOAPException {
        log.log(Level.SEVERE,
                 "SAAJ0146.impl.invalid.name.change.requested",

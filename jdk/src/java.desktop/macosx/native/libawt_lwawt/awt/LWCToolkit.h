@@ -23,11 +23,12 @@
  * questions.
  */
 
+#include "jni.h"
+
 #import <pthread.h>
 #import <assert.h>
 
 #import <Cocoa/Cocoa.h>
-#import <JavaNativeFoundation/JavaNativeFoundation.h>
 
 #define DEBUG 1
 
@@ -40,6 +41,8 @@ extern jint* gButtonDownMasks;
 @interface AWTToolkit : NSObject { }
 + (long) getEventCount;
 + (void) eventCountPlusPlus;
++ (jint) scrollStateWithEvent: (NSEvent*) event;
++ (BOOL) hasPreciseScrollingDeltas: (NSEvent*) event;
 @end
 
 /*

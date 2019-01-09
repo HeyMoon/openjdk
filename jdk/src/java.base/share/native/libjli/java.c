@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -61,22 +61,27 @@
  * interfaces.
  */
 
-/* we always print to stderr */
-#define USE_STDERR JNI_TRUE
+#define USE_STDERR JNI_TRUE     /* we usually print to stderr */
+#define USE_STDOUT JNI_FALSE
 
 static jboolean printVersion = JNI_FALSE; /* print and exit */
 static jboolean showVersion = JNI_FALSE;  /* print but continue */
 static jboolean printUsage = JNI_FALSE;   /* print and exit*/
+static jboolean printTo = USE_STDERR;     /* where to print version/usage */
 static jboolean printXUsage = JNI_FALSE;  /* print and exit*/
-static char     *showSettings = NULL;      /* print but continue */
+static jboolean dryRun = JNI_FALSE;       /* initialize VM and exit */
+static char     *showSettings = NULL;     /* print but continue */
+static jboolean showResolvedModules = JNI_FALSE;
+static jboolean listModules = JNI_FALSE;
+static char     *describeModule = NULL;
+static jboolean validateModules = JNI_FALSE;
 
 static const char *_program_name;
 static const char *_launcher_name;
 static jboolean _is_java_args = JNI_FALSE;
+static jboolean _have_classpath = JNI_FALSE;
 static const char *_fVersion;
-static const char *_dVersion;
 static jboolean _wc_enabled = JNI_FALSE;
-static jint _ergo_policy = DEFAULT_POLICY;
 
 /*
  * Entries for splash screen environment variables.
@@ -97,6 +102,7 @@ static int numOptions, maxOptions;
  * Prototypes for functions internal to launcher.
  */
 static void SetClassPath(const char *s);
+static void SetMainModule(const char *s);
 static void SelectVersion(int argc, char **argv, char **main_class);
 static void SetJvmEnvironment(int argc, char **argv);
 static jboolean ParseArguments(int *pargc, char ***pargv,
@@ -115,11 +121,27 @@ static void SetApplicationClassPath(const char**);
 static void PrintJavaVersion(JNIEnv *env, jboolean extraLF);
 static void PrintUsage(JNIEnv* env, jboolean doXUsage);
 static void ShowSettings(JNIEnv* env, char *optString);
+static void ShowResolvedModules(JNIEnv* env);
+static void ListModules(JNIEnv* env);
+static void DescribeModule(JNIEnv* env, char* optString);
+static jboolean ValidateModules(JNIEnv* env);
 
 static void SetPaths(int argc, char **argv);
 
 static void DumpState();
 static jboolean RemovableOption(char *option);
+
+enum OptionKind {
+    LAUNCHER_OPTION = 0,
+    LAUNCHER_OPTION_WITH_ARGUMENT,
+    LAUNCHER_MAIN_OPTION,
+    VM_LONG_OPTION,
+    VM_LONG_OPTION_WITH_ARGUMENT,
+    VM_OPTION
+};
+
+static int GetOpt(int *pargc, char ***pargv, char **poption, char **pvalue);
+static jboolean IsOptionWithArgument(int argc, char **argv);
 
 /* Maximum supported entries from jvm.cfg. */
 #define INIT_MAX_KNOWN_VMS      10
@@ -149,6 +171,19 @@ static void GrowKnownVMs(int minimum);
 static int  KnownVMIndex(const char* name);
 static void FreeKnownVMs();
 static jboolean IsWildCardEnabled();
+
+/*
+ * This reports error.  VM will not be created and no usage is printed.
+ */
+#define REPORT_ERROR(AC_ok, AC_failure_message, AC_questionable_arg) \
+    do { \
+        if (!AC_ok) { \
+            JLI_ReportErrorMessage(AC_failure_message, AC_questionable_arg); \
+            printUsage = JNI_FALSE; \
+            *pret = 1; \
+            return JNI_FALSE; \
+        } \
+    } while (JNI_FALSE)
 
 #define ARG_CHECK(AC_arg_count, AC_failure_message, AC_questionable_arg) \
     do { \
@@ -183,18 +218,17 @@ JLI_Launch(int argc, char ** argv,              /* main argc, argc */
         int jargc, const char** jargv,          /* java args */
         int appclassc, const char** appclassv,  /* app classpath */
         const char* fullversion,                /* full version defined */
-        const char* dotversion,                 /* dot version defined */
+        const char* dotversion,                 /* UNUSED dot version defined */
         const char* pname,                      /* program name */
         const char* lname,                      /* launcher name */
         jboolean javaargs,                      /* JAVA_ARGS */
         jboolean cpwildcard,                    /* classpath wildcard*/
         jboolean javaw,                         /* windows-only javaw */
-        jint ergo                               /* ergonomics class policy */
+        jint ergo                               /* unused */
 )
 {
     int mode = LM_UNKNOWN;
     char *what = NULL;
-    char *cpath = 0;
     char *main_class = NULL;
     int ret;
     InvocationFunctions ifn;
@@ -204,12 +238,10 @@ JLI_Launch(int argc, char ** argv,              /* main argc, argc */
     char jvmcfg[MAXPATHLEN];
 
     _fVersion = fullversion;
-    _dVersion = dotversion;
     _launcher_name = lname;
     _program_name = pname;
     _is_java_args = javaargs;
     _wc_enabled = cpwildcard;
-    _ergo_policy = ergo;
 
     InitLauncher(javaw);
     DumpState();
@@ -272,11 +304,10 @@ JLI_Launch(int argc, char ** argv,              /* main argc, argc */
         }
     } else {
         /* Set default CLASSPATH */
-        cpath = getenv("CLASSPATH");
-        if (cpath == NULL) {
-            cpath = ".";
+        char* cpath = getenv("CLASSPATH");
+        if (cpath != NULL) {
+            SetClassPath(cpath);
         }
-        SetClassPath(cpath);
     }
 
     /* Parse command line options; if the return value of
@@ -384,6 +415,34 @@ JavaMain(void * _args)
         CHECK_EXCEPTION_LEAVE(1);
     }
 
+    // show resolved modules and continue
+    if (showResolvedModules) {
+        ShowResolvedModules(env);
+        CHECK_EXCEPTION_LEAVE(1);
+    }
+
+    // list observable modules, then exit
+    if (listModules) {
+        ListModules(env);
+        CHECK_EXCEPTION_LEAVE(1);
+        LEAVE();
+    }
+
+    // describe a module, then exit
+    if (describeModule != NULL) {
+        DescribeModule(env, describeModule);
+        CHECK_EXCEPTION_LEAVE(1);
+        LEAVE();
+    }
+
+    // validate modules on the module path, then exit
+    if (validateModules) {
+        jboolean okay = ValidateModules(env);
+        CHECK_EXCEPTION_LEAVE(1);
+        if (!okay) ret = 1;
+        LEAVE();
+    }
+
     if (printVersion || showVersion) {
         PrintJavaVersion(env, showVersion);
         CHECK_EXCEPTION_LEAVE(0);
@@ -399,7 +458,7 @@ JavaMain(void * _args)
         LEAVE();
     }
 
-    FreeKnownVMs();  /* after last possible PrintUsage() */
+    FreeKnownVMs(); /* after last possible PrintUsage */
 
     if (JLI_IsTraceLauncher()) {
         end = CounterGet();
@@ -420,7 +479,8 @@ JavaMain(void * _args)
     ret = 1;
 
     /*
-     * Get the application's main class.
+     * Get the application's main class. It also checks if the main
+     * method exists.
      *
      * See bugid 5030265.  The Main-Class name has already been parsed
      * from the manifest, but not parsed properly for UTF-8 support.
@@ -452,6 +512,16 @@ JavaMain(void * _args)
      */
     appClass = GetApplicationClass(env);
     NULL_CHECK_RETURN_VALUE(appClass, -1);
+
+    /* Build platform specific argument array */
+    mainArgs = CreateApplicationArgs(env, argv, argc);
+    CHECK_EXCEPTION_NULL_LEAVE(mainArgs);
+
+    if (dryRun) {
+        ret = 0;
+        LEAVE();
+    }
+
     /*
      * PostJVMInit uses the class name as the application name for GUI purposes,
      * for example, on OSX this sets the application name in the menu bar for
@@ -461,6 +531,7 @@ JavaMain(void * _args)
      */
     PostJVMInit(env, appClass, vm);
     CHECK_EXCEPTION_LEAVE(1);
+
     /*
      * The LoadMainClass not only loads the main class, it will also ensure
      * that the main method's signature is correct, therefore further checking
@@ -471,10 +542,6 @@ JavaMain(void * _args)
                                        "([Ljava/lang/String;)V");
     CHECK_EXCEPTION_NULL_LEAVE(mainID);
 
-    /* Build platform specific argument array */
-    mainArgs = CreateApplicationArgs(env, argv, argc);
-    CHECK_EXCEPTION_NULL_LEAVE(mainArgs);
-
     /* Invoke main method. */
     (*env)->CallStaticVoidMethod(env, mainClass, mainID, mainArgs);
 
@@ -483,7 +550,76 @@ JavaMain(void * _args)
      * System.exit) will be non-zero if main threw an exception.
      */
     ret = (*env)->ExceptionOccurred(env) == NULL ? 0 : 1;
+
     LEAVE();
+}
+
+/*
+ * Test if the given name is one of the class path options.
+ */
+static jboolean
+IsClassPathOption(const char* name) {
+    return JLI_StrCmp(name, "-classpath") == 0 ||
+           JLI_StrCmp(name, "-cp") == 0 ||
+           JLI_StrCmp(name, "--class-path") == 0;
+}
+
+/*
+ * Test if the given name is a launcher option taking the main entry point.
+ */
+static jboolean
+IsLauncherMainOption(const char* name) {
+    return JLI_StrCmp(name, "--module") == 0 ||
+           JLI_StrCmp(name, "-m") == 0;
+}
+
+/*
+ * Test if the given name is a white-space launcher option.
+ */
+static jboolean
+IsLauncherOption(const char* name) {
+    return IsClassPathOption(name) ||
+           IsLauncherMainOption(name) ||
+           JLI_StrCmp(name, "--describe-module") == 0 ||
+           JLI_StrCmp(name, "-d") == 0;
+}
+
+/*
+ * Test if the given name is a module-system white-space option that
+ * will be passed to the VM with its corresponding long-form option
+ * name and "=" delimiter.
+ */
+static jboolean
+IsModuleOption(const char* name) {
+    return JLI_StrCmp(name, "--module-path") == 0 ||
+           JLI_StrCmp(name, "-p") == 0 ||
+           JLI_StrCmp(name, "--upgrade-module-path") == 0 ||
+           JLI_StrCmp(name, "--add-modules") == 0 ||
+           JLI_StrCmp(name, "--limit-modules") == 0 ||
+           JLI_StrCmp(name, "--add-exports") == 0 ||
+           JLI_StrCmp(name, "--add-opens") == 0 ||
+           JLI_StrCmp(name, "--add-reads") == 0 ||
+           JLI_StrCmp(name, "--patch-module") == 0;
+}
+
+static jboolean
+IsLongFormModuleOption(const char* name) {
+    return JLI_StrCCmp(name, "--module-path=") == 0 ||
+           JLI_StrCCmp(name, "--upgrade-module-path=") == 0 ||
+           JLI_StrCCmp(name, "--add-modules=") == 0 ||
+           JLI_StrCCmp(name, "--limit-modules=") == 0 ||
+           JLI_StrCCmp(name, "--add-exports=") == 0 ||
+           JLI_StrCCmp(name, "--add-reads=") == 0 ||
+           JLI_StrCCmp(name, "--patch-module=") == 0;
+}
+
+/*
+ * Test if the given name has a white space option.
+ */
+jboolean
+IsWhiteSpaceOption(const char* name) {
+    return IsModuleOption(name) ||
+           IsLauncherOption(name);
 }
 
 /*
@@ -521,8 +657,7 @@ CheckJvmType(int *pargc, char ***argv, jboolean speculative) {
                 continue;
             }
         } else {
-            if (JLI_StrCmp(arg, "-classpath") == 0 ||
-                JLI_StrCmp(arg, "-cp") == 0) {
+            if (IsWhiteSpaceOption(arg)) {
                 newArgv[newArgvIdx++] = arg;
                 argi++;
                 if (argi < argc) {
@@ -574,11 +709,6 @@ CheckJvmType(int *pargc, char ***argv, jboolean speculative) {
     /* use the default VM type if not specified (no alias processing) */
     if (jvmtype == NULL) {
       char* result = knownVMs[0].name+1;
-      /* Use a different VM type if we are on a server class machine? */
-      if ((knownVMs[0].flag == VM_IF_SERVER_CLASS) &&
-          (ServerClassMachine() == JNI_TRUE)) {
-        result = knownVMs[0].server_class+1;
-      }
       JLI_TraceLauncher("Default VM: %s\n", result);
       return result;
     }
@@ -664,19 +794,11 @@ SetJvmEnvironment(int argc, char **argv) {
         if (i > 0) {
             char *prev = argv[i - 1];
             // skip non-dash arg preceded by class path specifiers
-            if (*arg != '-' &&
-                    ((JLI_StrCmp(prev, "-cp") == 0
-                    || JLI_StrCmp(prev, "-classpath") == 0))) {
+            if (*arg != '-' && IsWhiteSpaceOption(prev)) {
                 continue;
             }
 
-            if (*arg != '-'
-                    || JLI_StrCmp(arg, "-version") == 0
-                    || JLI_StrCmp(arg, "-fullversion") == 0
-                    || JLI_StrCmp(arg, "-help") == 0
-                    || JLI_StrCmp(arg, "-?") == 0
-                    || JLI_StrCmp(arg, "-jar") == 0
-                    || JLI_StrCmp(arg, "-X") == 0) {
+            if (*arg != '-' || isTerminalOpt(arg)) {
                 return;
             }
         }
@@ -843,6 +965,42 @@ SetClassPath(const char *s)
     AddOption(def, NULL);
     if (s != orig)
         JLI_MemFree((char *) s);
+    _have_classpath = JNI_TRUE;
+}
+
+static void
+AddLongFormOption(const char *option, const char *arg)
+{
+    static const char format[] = "%s=%s";
+    char *def;
+    size_t def_len;
+
+    def_len = JLI_StrLen(option) + 1 + JLI_StrLen(arg) + 1;
+    def = JLI_MemAlloc(def_len);
+    JLI_Snprintf(def, def_len, format, option, arg);
+    AddOption(def, NULL);
+}
+
+static void
+SetMainModule(const char *s)
+{
+    static const char format[] = "-Djdk.module.main=%s";
+    char* slash = JLI_StrChr(s, '/');
+    size_t s_len, def_len;
+    char *def;
+
+    /* value may be <module> or <module>/<mainclass> */
+    if (slash == NULL) {
+        s_len = JLI_StrLen(s);
+    } else {
+        s_len = (size_t) (slash - s);
+    }
+    def_len = sizeof(format)
+               - 2 /* strlen("%s") */
+               + s_len;
+    def = JLI_MemAlloc(def_len);
+    JLI_Snprintf(def, def_len, format, s);
+    AddOption(def, NULL);
 }
 
 /*
@@ -869,6 +1027,7 @@ SelectVersion(int argc, char **argv, char **main_class)
     char    *splash_jar_name = NULL;
     char    *env_in;
     int     res;
+    jboolean has_arg;
 
     /*
      * If the version has already been selected, set *main_class
@@ -899,9 +1058,11 @@ SelectVersion(int argc, char **argv, char **main_class)
      * This capability is no longer available with JRE versions 1.9 and later.
      * These command line options are reported as errors.
      */
+
     argc--;
     argv++;
     while ((arg = *argv) != 0 && *arg == '-') {
+        has_arg = IsOptionWithArgument(argc, argv);
         if (JLI_StrCCmp(arg, "-version:") == 0) {
             JLI_ReportErrorMessage(SPC_ERROR1);
         } else if (JLI_StrCmp(arg, "-jre-restrict-search") == 0) {
@@ -911,12 +1072,12 @@ SelectVersion(int argc, char **argv, char **main_class)
         } else {
             if (JLI_StrCmp(arg, "-jar") == 0)
                 jarflag = 1;
-            /* deal with "unfortunate" classpath syntax */
-            if ((JLI_StrCmp(arg, "-classpath") == 0 || JLI_StrCmp(arg, "-cp") == 0) &&
-              (argc >= 2)) {
-                argc--;
-                argv++;
-                arg = *argv;
+            if (IsWhiteSpaceOption(arg)) {
+                if (has_arg) {
+                    argc--;
+                    argv++;
+                    arg = *argv;
+                }
             }
 
             /*
@@ -1008,6 +1169,82 @@ SelectVersion(int argc, char **argv, char **main_class)
 }
 
 /*
+ * Test if the current argv is an option, i.e. with a leading `-`
+ * and followed with an argument without a leading `-`.
+ */
+static jboolean
+IsOptionWithArgument(int argc, char** argv) {
+    char* option;
+    char* arg;
+
+    if (argc <= 1)
+        return JNI_FALSE;
+
+    option = *argv;
+    arg = *(argv+1);
+    return *option == '-' && *arg != '-';
+}
+
+/*
+ * Gets the option, and its argument if the option has an argument.
+ * It will update *pargc, **pargv to the next option.
+ */
+static int
+GetOpt(int *pargc, char ***pargv, char **poption, char **pvalue) {
+    int argc = *pargc;
+    char** argv = *pargv;
+    char* arg = *argv;
+
+    char* option = arg;
+    char* value = NULL;
+    char* equals = NULL;
+    int kind = LAUNCHER_OPTION;
+    jboolean has_arg = JNI_FALSE;
+
+    // check if this option may be a white-space option with an argument
+    has_arg = IsOptionWithArgument(argc, argv);
+
+    argv++; --argc;
+    if (IsLauncherOption(arg)) {
+        if (has_arg) {
+            value = *argv;
+            argv++; --argc;
+        }
+        kind = IsLauncherMainOption(arg) ? LAUNCHER_MAIN_OPTION
+                                         : LAUNCHER_OPTION_WITH_ARGUMENT;
+    } else if (IsModuleOption(arg)) {
+        kind = VM_LONG_OPTION_WITH_ARGUMENT;
+        if (has_arg) {
+            value = *argv;
+            argv++; --argc;
+        }
+
+        /*
+         * Support short form alias
+         */
+        if (JLI_StrCmp(arg, "-p") == 0) {
+            option = "--module-path";
+        }
+
+    } else if (JLI_StrCCmp(arg, "--") == 0 && (equals = JLI_StrChr(arg, '=')) != NULL) {
+        value = equals+1;
+        if (JLI_StrCCmp(arg, "--describe-module=") == 0 ||
+            JLI_StrCCmp(arg, "--module=") == 0 ||
+            JLI_StrCCmp(arg, "--class-path=") == 0) {
+            kind = LAUNCHER_OPTION_WITH_ARGUMENT;
+        } else {
+            kind = VM_LONG_OPTION;
+        }
+    }
+
+    *pargc = argc;
+    *pargv = argv;
+    *poption = option;
+    *pvalue = value;
+    return kind;
+}
+
+/*
  * Parses command line arguments.  Returns JNI_FALSE if launcher
  * should exit without starting vm, returns JNI_TRUE if vm needs
  * to be started to process given options.  *pret (the launcher
@@ -1026,43 +1263,119 @@ ParseArguments(int *pargc, char ***pargv,
     *pret = 0;
 
     while ((arg = *argv) != 0 && *arg == '-') {
-        argv++; --argc;
-        if (JLI_StrCmp(arg, "-classpath") == 0 || JLI_StrCmp(arg, "-cp") == 0) {
-            ARG_CHECK (argc, ARG_ERROR1, arg);
-            SetClassPath(*argv);
-            mode = LM_CLASS;
-            argv++; --argc;
-        } else if (JLI_StrCmp(arg, "-jar") == 0) {
-            ARG_CHECK (argc, ARG_ERROR2, arg);
+        char *option = NULL;
+        char *value = NULL;
+        int kind = GetOpt(&argc, &argv, &option, &value);
+        jboolean has_arg = value != NULL && JLI_StrLen(value) > 0;
+        jboolean has_arg_any_len = value != NULL;
+
+/*
+ * Option to set main entry point
+ */
+        if (JLI_StrCmp(arg, "-jar") == 0) {
+            ARG_CHECK(argc, ARG_ERROR2, arg);
             mode = LM_JAR;
+        } else if (JLI_StrCmp(arg, "--module") == 0 ||
+                   JLI_StrCCmp(arg, "--module=") == 0 ||
+                   JLI_StrCmp(arg, "-m") == 0) {
+            REPORT_ERROR (has_arg, ARG_ERROR5, arg);
+            SetMainModule(value);
+            mode = LM_MODULE;
+            if (has_arg) {
+               *pwhat = value;
+                break;
+            }
+        } else if (JLI_StrCmp(arg, "--class-path") == 0 ||
+                   JLI_StrCCmp(arg, "--class-path=") == 0 ||
+                   JLI_StrCmp(arg, "-classpath") == 0 ||
+                   JLI_StrCmp(arg, "-cp") == 0) {
+            REPORT_ERROR (has_arg_any_len, ARG_ERROR1, arg);
+            SetClassPath(value);
+            mode = LM_CLASS;
+        } else if (JLI_StrCmp(arg, "--list-modules") == 0) {
+            listModules = JNI_TRUE;
+        } else if (JLI_StrCmp(arg, "--show-resolved-modules") == 0) {
+            showResolvedModules = JNI_TRUE;
+        } else if (JLI_StrCmp(arg, "--validate-modules") == 0) {
+            AddOption("-Djdk.module.minimumBoot=true", NULL);
+            validateModules = JNI_TRUE;
+        } else if (JLI_StrCmp(arg, "--describe-module") == 0 ||
+                   JLI_StrCCmp(arg, "--describe-module=") == 0 ||
+                   JLI_StrCmp(arg, "-d") == 0) {
+            REPORT_ERROR (has_arg_any_len, ARG_ERROR12, arg);
+            describeModule = value;
+/*
+ * Parse white-space options
+ */
+        } else if (has_arg) {
+            if (kind == VM_LONG_OPTION) {
+                AddOption(option, NULL);
+            } else if (kind == VM_LONG_OPTION_WITH_ARGUMENT) {
+                AddLongFormOption(option, value);
+            }
+/*
+ * Error missing argument
+ */
+        } else if (!has_arg && (JLI_StrCmp(arg, "--module-path") == 0 ||
+                                JLI_StrCmp(arg, "-p") == 0 ||
+                                JLI_StrCmp(arg, "--upgrade-module-path") == 0)) {
+            REPORT_ERROR (has_arg, ARG_ERROR4, arg);
+
+        } else if (!has_arg && (IsModuleOption(arg) || IsLongFormModuleOption(arg))) {
+            REPORT_ERROR (has_arg, ARG_ERROR6, arg);
+/*
+ * The following cases will cause the argument parsing to stop
+ */
         } else if (JLI_StrCmp(arg, "-help") == 0 ||
                    JLI_StrCmp(arg, "-h") == 0 ||
                    JLI_StrCmp(arg, "-?") == 0) {
             printUsage = JNI_TRUE;
             return JNI_TRUE;
+        } else if (JLI_StrCmp(arg, "--help") == 0) {
+            printUsage = JNI_TRUE;
+            printTo = USE_STDOUT;
+            return JNI_TRUE;
         } else if (JLI_StrCmp(arg, "-version") == 0) {
             printVersion = JNI_TRUE;
             return JNI_TRUE;
+        } else if (JLI_StrCmp(arg, "--version") == 0) {
+            printVersion = JNI_TRUE;
+            printTo = USE_STDOUT;
+            return JNI_TRUE;
         } else if (JLI_StrCmp(arg, "-showversion") == 0) {
             showVersion = JNI_TRUE;
+        } else if (JLI_StrCmp(arg, "--show-version") == 0) {
+            showVersion = JNI_TRUE;
+            printTo = USE_STDOUT;
+        } else if (JLI_StrCmp(arg, "--dry-run") == 0) {
+            dryRun = JNI_TRUE;
         } else if (JLI_StrCmp(arg, "-X") == 0) {
             printXUsage = JNI_TRUE;
+            return JNI_TRUE;
+        } else if (JLI_StrCmp(arg, "--help-extra") == 0) {
+            printXUsage = JNI_TRUE;
+            printTo = USE_STDOUT;
             return JNI_TRUE;
 /*
  * The following case checks for -XshowSettings OR -XshowSetting:SUBOPT.
  * In the latter case, any SUBOPT value not recognized will default to "all"
  */
         } else if (JLI_StrCmp(arg, "-XshowSettings") == 0 ||
-                JLI_StrCCmp(arg, "-XshowSettings:") == 0) {
+                   JLI_StrCCmp(arg, "-XshowSettings:") == 0) {
             showSettings = arg;
         } else if (JLI_StrCmp(arg, "-Xdiag") == 0) {
             AddOption("-Dsun.java.launcher.diag=true", NULL);
+        } else if (JLI_StrCmp(arg, "--show-module-resolution") == 0) {
+            AddOption("-Djdk.module.showModuleResolution=true", NULL);
 /*
  * The following case provide backward compatibility with old-style
  * command line options.
  */
         } else if (JLI_StrCmp(arg, "-fullversion") == 0) {
             JLI_ReportMessage("%s full version \"%s\"", _launcher_name, GetFullVersion());
+            return JNI_FALSE;
+        } else if (JLI_StrCmp(arg, "--full-version") == 0) {
+            JLI_ShowMessage("%s %s", _launcher_name, GetFullVersion());
             return JNI_FALSE;
         } else if (JLI_StrCmp(arg, "-verbosegc") == 0) {
             AddOption("-verbose:gc", NULL);
@@ -1082,15 +1395,6 @@ ParseArguments(int *pargc, char ***pargv,
             AddOption("-Xverify:remote", NULL);
         } else if (JLI_StrCmp(arg, "-noverify") == 0) {
             AddOption("-Xverify:none", NULL);
-        } else if (JLI_StrCCmp(arg, "-prof") == 0) {
-            char *p = arg + 5;
-            char *tmp = JLI_MemAlloc(JLI_StrLen(arg) + 50);
-            if (*p) {
-                sprintf(tmp, "-Xrunhprof:cpu=old,file=%s", p + 1);
-            } else {
-                sprintf(tmp, "-Xrunhprof:cpu=old,file=java.prof");
-            }
-            AddOption(tmp, NULL);
         } else if (JLI_StrCCmp(arg, "-ss") == 0 ||
                    JLI_StrCCmp(arg, "-oss") == 0 ||
                    JLI_StrCCmp(arg, "-ms") == 0 ||
@@ -1110,19 +1414,29 @@ ParseArguments(int *pargc, char ***pargv,
         } else if (RemovableOption(arg)) {
             ; /* Do not pass option to vm. */
         } else {
+            /* java.class.path set on the command line */
+            if (JLI_StrCCmp(arg, "-Djava.class.path=") == 0) {
+                _have_classpath = JNI_TRUE;
+            }
             AddOption(arg, NULL);
         }
     }
 
-    if (--argc >= 0) {
+    if (*pwhat == NULL && --argc >= 0) {
         *pwhat = *argv++;
     }
 
     if (*pwhat == NULL) {
-        *pret = 1;
+        /* LM_UNKNOWN okay for options that exit */
+        if (!listModules && !describeModule && !validateModules) {
+            *pret = 1;
+        }
     } else if (mode == LM_UNKNOWN) {
-        /* default to LM_CLASS if -jar and -cp option are
+        /* default to LM_CLASS if -m, -jar and -cp options are
          * not specified */
+        if (!_have_classpath) {
+            SetClassPath(".");
+        }
         mode = LM_CLASS;
     }
 
@@ -1226,6 +1540,7 @@ NewPlatformStringArray(JNIEnv *env, char **strv, int strc)
 
     NULL_CHECK0(cls = FindBootStrapClass(env, "java/lang/String"));
     NULL_CHECK0(ary = (*env)->NewObjectArray(env, strc, cls, 0));
+    CHECK_EXCEPTION_RETURN_VALUE(0);
     for (i = 0; i < strc; i++) {
         jstring str = NewPlatformString(env, *strv++);
         NULL_CHECK0(str);
@@ -1282,6 +1597,31 @@ GetApplicationClass(JNIEnv *env)
     return (*env)->CallStaticObjectMethod(env, cls, mid);
 }
 
+static char* expandWildcardOnLongOpt(char* arg) {
+    char *p, *value;
+    size_t optLen, valueLen;
+    p = JLI_StrChr(arg, '=');
+
+    if (p == NULL || p[1] == '\0') {
+        JLI_ReportErrorMessage(ARG_ERROR1, arg);
+        exit(1);
+    }
+    p++;
+    value = (char *) JLI_WildcardExpandClasspath(p);
+    if (p == value) {
+        // no wildcard
+        return arg;
+    }
+
+    optLen = p - arg;
+    valueLen = JLI_StrLen(value);
+    p = JLI_MemAlloc(optLen + valueLen + 1);
+    memcpy(p, arg, optLen);
+    memcpy(p + optLen, value, valueLen);
+    p[optLen + valueLen] = '\0';
+    return p;
+}
+
 /*
  * For tools, convert command line args thus:
  *   javac -cp foo:foo/"*" -J-ms32m ...
@@ -1332,14 +1672,17 @@ TranslateApplicationArgs(int jargc, const char **jargv, int *pargc, char ***parg
         if (arg[0] == '-') {
             if (arg[1] == 'J')
                 continue;
-            if (IsWildCardEnabled() && arg[1] == 'c'
-                && (JLI_StrCmp(arg, "-cp") == 0 ||
-                    JLI_StrCmp(arg, "-classpath") == 0)
-                && i < argc - 1) {
-                *nargv++ = arg;
-                *nargv++ = (char *) JLI_WildcardExpandClasspath(argv[i+1]);
-                i++;
-                continue;
+            if (IsWildCardEnabled()) {
+                if (IsClassPathOption(arg) && i < argc - 1) {
+                    *nargv++ = arg;
+                    *nargv++ = (char *) JLI_WildcardExpandClasspath(argv[i+1]);
+                    i++;
+                    continue;
+                }
+                if (JLI_StrCCmp(arg, "--class-path=") == 0) {
+                    *nargv++ = expandWildcardOnLongOpt(arg);
+                    continue;
+                }
             }
         }
         *nargv++ = arg;
@@ -1392,19 +1735,21 @@ AddApplicationOptions(int cpathc, const char **cpathv)
     AddOption(apphome, NULL);
 
     /* How big is the application's classpath? */
-    size = 40;                                 /* 40: "-Djava.class.path=" */
-    for (i = 0; i < cpathc; i++) {
-        size += (int)JLI_StrLen(home) + (int)JLI_StrLen(cpathv[i]) + 1; /* 1: separator */
+    if (cpathc > 0) {
+        size = 40;                                 /* 40: "-Djava.class.path=" */
+        for (i = 0; i < cpathc; i++) {
+            size += (int)JLI_StrLen(home) + (int)JLI_StrLen(cpathv[i]) + 1; /* 1: separator */
+        }
+        appcp = (char *)JLI_MemAlloc(size + 1);
+        JLI_StrCpy(appcp, "-Djava.class.path=");
+        for (i = 0; i < cpathc; i++) {
+            JLI_StrCat(appcp, home);                        /* c:\program files\myapp */
+            JLI_StrCat(appcp, cpathv[i]);           /* \lib\myapp.jar         */
+            JLI_StrCat(appcp, separator);           /* ;                      */
+        }
+        appcp[JLI_StrLen(appcp)-1] = '\0';  /* remove trailing path separator */
+        AddOption(appcp, NULL);
     }
-    appcp = (char *)JLI_MemAlloc(size + 1);
-    JLI_StrCpy(appcp, "-Djava.class.path=");
-    for (i = 0; i < cpathc; i++) {
-        JLI_StrCat(appcp, home);                        /* c:\program files\myapp */
-        JLI_StrCat(appcp, cpathv[i]);           /* \lib\myapp.jar         */
-        JLI_StrCat(appcp, separator);           /* ;                      */
-    }
-    appcp[JLI_StrLen(appcp)-1] = '\0';  /* remove trailing path separator */
-    AddOption(appcp, NULL);
     return JNI_TRUE;
 }
 
@@ -1481,15 +1826,15 @@ PrintJavaVersion(JNIEnv *env, jboolean extraLF)
     jclass ver;
     jmethodID print;
 
-    NULL_CHECK(ver = FindBootStrapClass(env, "sun/misc/Version"));
+    NULL_CHECK(ver = FindBootStrapClass(env, "java/lang/VersionProps"));
     NULL_CHECK(print = (*env)->GetStaticMethodID(env,
                                                  ver,
                                                  (extraLF == JNI_TRUE) ? "println" : "print",
-                                                 "()V"
+                                                 "(Z)V"
                                                  )
               );
 
-    (*env)->CallStaticVoidMethod(env, ver, print);
+    (*env)->CallStaticVoidMethod(env, ver, print, printTo);
 }
 
 /*
@@ -1503,15 +1848,72 @@ ShowSettings(JNIEnv *env, char *optString)
     jclass cls = GetLauncherHelperClass(env);
     NULL_CHECK(cls);
     NULL_CHECK(showSettingsID = (*env)->GetStaticMethodID(env, cls,
-            "showSettings", "(ZLjava/lang/String;JJJZ)V"));
+            "showSettings", "(ZLjava/lang/String;JJJ)V"));
     NULL_CHECK(joptString = (*env)->NewStringUTF(env, optString));
     (*env)->CallStaticVoidMethod(env, cls, showSettingsID,
                                  USE_STDERR,
                                  joptString,
                                  (jlong)initialHeapSize,
                                  (jlong)maxHeapSize,
-                                 (jlong)threadStackSize,
-                                 ServerClassMachine());
+                                 (jlong)threadStackSize);
+}
+
+/**
+ * Show resolved modules
+ */
+static void
+ShowResolvedModules(JNIEnv *env)
+{
+    jmethodID showResolvedModulesID;
+    jclass cls = GetLauncherHelperClass(env);
+    NULL_CHECK(cls);
+    NULL_CHECK(showResolvedModulesID = (*env)->GetStaticMethodID(env, cls,
+            "showResolvedModules", "()V"));
+    (*env)->CallStaticVoidMethod(env, cls, showResolvedModulesID);
+}
+
+/**
+ * List observable modules
+ */
+static void
+ListModules(JNIEnv *env)
+{
+    jmethodID listModulesID;
+    jclass cls = GetLauncherHelperClass(env);
+    NULL_CHECK(cls);
+    NULL_CHECK(listModulesID = (*env)->GetStaticMethodID(env, cls,
+            "listModules", "()V"));
+    (*env)->CallStaticVoidMethod(env, cls, listModulesID);
+}
+
+/**
+ * Describe a module
+ */
+static void
+DescribeModule(JNIEnv *env, char *optString)
+{
+    jmethodID describeModuleID;
+    jstring joptString = NULL;
+    jclass cls = GetLauncherHelperClass(env);
+    NULL_CHECK(cls);
+    NULL_CHECK(describeModuleID = (*env)->GetStaticMethodID(env, cls,
+            "describeModule", "(Ljava/lang/String;)V"));
+    NULL_CHECK(joptString = (*env)->NewStringUTF(env, optString));
+    (*env)->CallStaticVoidMethod(env, cls, describeModuleID, joptString);
+}
+
+/**
+ * Validate modules
+ */
+static jboolean
+ValidateModules(JNIEnv *env)
+{
+    jmethodID validateModulesID;
+    jclass cls = GetLauncherHelperClass(env);
+    NULL_CHECK_RETURN_VALUE(cls, JNI_FALSE);
+    validateModulesID = (*env)->GetStaticMethodID(env, cls, "validateModules", "()Z");
+    NULL_CHECK_RETURN_VALUE(cls, JNI_FALSE);
+    return (*env)->CallStaticBooleanMethod(env, cls, validateModulesID);
 }
 
 /*
@@ -1520,7 +1922,7 @@ ShowSettings(JNIEnv *env, char *optString)
 static void
 PrintUsage(JNIEnv* env, jboolean doXUsage)
 {
-  jmethodID initHelp, vmSelect, vmSynonym, vmErgo, printHelp, printXUsageMessage;
+  jmethodID initHelp, vmSelect, vmSynonym, printHelp, printXUsageMessage;
   jstring jprogname, vm1, vm2;
   int i;
   jclass cls = GetLauncherHelperClass(env);
@@ -1528,7 +1930,7 @@ PrintUsage(JNIEnv* env, jboolean doXUsage)
   if (doXUsage) {
     NULL_CHECK(printXUsageMessage = (*env)->GetStaticMethodID(env, cls,
                                         "printXUsageMessage", "(Z)V"));
-    (*env)->CallStaticVoidMethod(env, cls, printXUsageMessage, USE_STDERR);
+    (*env)->CallStaticVoidMethod(env, cls, printXUsageMessage, printTo);
   } else {
     NULL_CHECK(initHelp = (*env)->GetStaticMethodID(env, cls,
                                         "initHelpMessage", "(Ljava/lang/String;)V"));
@@ -1539,8 +1941,6 @@ PrintUsage(JNIEnv* env, jboolean doXUsage)
     NULL_CHECK(vmSynonym = (*env)->GetStaticMethodID(env, cls,
                                         "appendVmSynonymMessage",
                                         "(Ljava/lang/String;Ljava/lang/String;)V"));
-    NULL_CHECK(vmErgo = (*env)->GetStaticMethodID(env, cls,
-                                        "appendVmErgoMessage", "(ZLjava/lang/String;)V"));
 
     NULL_CHECK(printHelp = (*env)->GetStaticMethodID(env, cls,
                                         "printHelpMessage", "(Z)V"));
@@ -1553,13 +1953,6 @@ PrintUsage(JNIEnv* env, jboolean doXUsage)
 
 
     /* Assemble the other variant part of the usage */
-    if ((knownVMs[0].flag == VM_KNOWN) ||
-        (knownVMs[0].flag == VM_IF_SERVER_CLASS)) {
-      NULL_CHECK(vm1 = (*env)->NewStringUTF(env, knownVMs[0].name));
-      NULL_CHECK(vm2 =  (*env)->NewStringUTF(env, knownVMs[0].name+1));
-      (*env)->CallStaticVoidMethod(env, cls, vmSelect, vm1, vm2);
-      CHECK_EXCEPTION_RETURN();
-    }
     for (i=1; i<knownVMsCount; i++) {
       if (knownVMs[i].flag == VM_KNOWN) {
         NULL_CHECK(vm1 =  (*env)->NewStringUTF(env, knownVMs[i].name));
@@ -1577,22 +1970,8 @@ PrintUsage(JNIEnv* env, jboolean doXUsage)
       }
     }
 
-    /* The first known VM is the default */
-    {
-      jboolean isServerClassMachine = ServerClassMachine();
-
-      const char* defaultVM  =  knownVMs[0].name+1;
-      if ((knownVMs[0].flag == VM_IF_SERVER_CLASS) && isServerClassMachine) {
-        defaultVM = knownVMs[0].server_class+1;
-      }
-
-      NULL_CHECK(vm1 =  (*env)->NewStringUTF(env, defaultVM));
-      (*env)->CallStaticVoidMethod(env, cls, vmErgo, isServerClassMachine,  vm1);
-      CHECK_EXCEPTION_RETURN();
-    }
-
     /* Complete the usage message and print to stderr*/
-    (*env)->CallStaticVoidMethod(env, cls, printHelp, USE_STDERR);
+    (*env)->CallStaticVoidMethod(env, cls, printHelp, printTo);
   }
   return;
 }
@@ -1719,19 +2098,7 @@ ReadKnownVMs(const char *jvmCfgName, jboolean speculative)
                 } else if (!JLI_StrCCmp(tmpPtr, "ERROR")) {
                     vmType = VM_ERROR;
                 } else if (!JLI_StrCCmp(tmpPtr, "IF_SERVER_CLASS")) {
-                    tmpPtr += JLI_StrCSpn(tmpPtr, whiteSpace);
-                    if (*tmpPtr != 0) {
-                        tmpPtr += JLI_StrSpn(tmpPtr, whiteSpace);
-                    }
-                    if (*tmpPtr == 0) {
-                        JLI_ReportErrorMessage(CFG_WARN4, lineno, jvmCfgName);
-                    } else {
-                        /* Null terminate server class VM name */
-                        serverClassVMName = tmpPtr;
-                        tmpPtr += JLI_StrCSpn(tmpPtr, whiteSpace);
-                        *tmpPtr = 0;
-                        vmType = VM_IF_SERVER_CLASS;
-                    }
+                    /* ignored */
                 } else {
                     JLI_ReportErrorMessage(CFG_WARN5, lineno, &jvmCfgName[0]);
                     vmType = VM_KNOWN;
@@ -1750,11 +2117,6 @@ ReadKnownVMs(const char *jvmCfgName, jboolean speculative)
                 knownVMs[cnt].alias = JLI_StringDup(altVMName);
                 JLI_TraceLauncher("    name: %s  vmType: %s  alias: %s\n",
                    knownVMs[cnt].name, "VM_ALIASED_TO", knownVMs[cnt].alias);
-                break;
-            case VM_IF_SERVER_CLASS:
-                knownVMs[cnt].server_class = JLI_StringDup(serverClassVMName);
-                JLI_TraceLauncher("    name: %s  vmType: %s  server_class: %s\n",
-                    knownVMs[cnt].name, "VM_IF_SERVER_CLASS", knownVMs[cnt].server_class);
                 break;
             }
             cnt++;
@@ -1831,16 +2193,21 @@ ShowSplashScreen()
     void *image_data = NULL;
     float scale_factor = 1;
     char *scaled_splash_name = NULL;
-
+    jboolean isImageScaled = JNI_FALSE;
+    size_t maxScaledImgNameLength = 0;
     if (file_name == NULL){
         return;
     }
+    maxScaledImgNameLength = DoSplashGetScaledImgNameMaxPstfixLen(file_name);
 
-    scaled_splash_name = DoSplashGetScaledImageName(
-                        jar_name, file_name, &scale_factor);
+    scaled_splash_name = JLI_MemAlloc(
+                            maxScaledImgNameLength * sizeof(char));
+    isImageScaled = DoSplashGetScaledImageName(jar_name, file_name,
+                            &scale_factor,
+                            scaled_splash_name, maxScaledImgNameLength);
     if (jar_name) {
 
-        if (scaled_splash_name) {
+        if (isImageScaled) {
             image_data = JLI_JarUnpackFile(
                     jar_name, scaled_splash_name, &data_size);
         }
@@ -1858,17 +2225,14 @@ ShowSplashScreen()
         }
     } else {
         DoSplashInit();
-        if (scaled_splash_name) {
+        if (isImageScaled) {
             DoSplashSetScaleFactor(scale_factor);
             DoSplashLoadFile(scaled_splash_name);
         } else {
             DoSplashLoadFile(file_name);
         }
     }
-
-    if (scaled_splash_name) {
-        JLI_MemFree(scaled_splash_name);
-    }
+    JLI_MemFree(scaled_splash_name);
 
     DoSplashSetFileJarName(file_name, jar_name);
 
@@ -1883,12 +2247,6 @@ ShowSplashScreen()
     JLI_MemFree(splash_jar_entry);
     JLI_MemFree(splash_file_entry);
 
-}
-
-const char*
-GetDotVersion()
-{
-    return _dVersion;
 }
 
 const char*
@@ -1907,12 +2265,6 @@ const char*
 GetLauncherName()
 {
     return _launcher_name;
-}
-
-jint
-GetErgoPolicy()
-{
-    return _ergo_policy;
 }
 
 jboolean
@@ -1972,24 +2324,13 @@ DumpState()
 {
     if (!JLI_IsTraceLauncher()) return ;
     printf("Launcher state:\n");
+    printf("\tFirst application arg index: %d\n", JLI_GetAppArgIndex());
     printf("\tdebug:%s\n", (JLI_IsTraceLauncher() == JNI_TRUE) ? "on" : "off");
     printf("\tjavargs:%s\n", (_is_java_args == JNI_TRUE) ? "on" : "off");
     printf("\tprogram name:%s\n", GetProgramName());
     printf("\tlauncher name:%s\n", GetLauncherName());
     printf("\tjavaw:%s\n", (IsJavaw() == JNI_TRUE) ? "on" : "off");
     printf("\tfullversion:%s\n", GetFullVersion());
-    printf("\tdotversion:%s\n", GetDotVersion());
-    printf("\tergo_policy:");
-    switch(GetErgoPolicy()) {
-        case NEVER_SERVER_CLASS:
-            printf("NEVER_ACT_AS_A_SERVER_CLASS_MACHINE\n");
-            break;
-        case ALWAYS_SERVER_CLASS:
-            printf("ALWAYS_ACT_AS_A_SERVER_CLASS_MACHINE\n");
-            break;
-        default:
-            printf("DEFAULT_ERGONOMICS_POLICY\n");
-    }
 }
 
 /*
@@ -2030,5 +2371,18 @@ JLI_ReportMessage(const char* fmt, ...)
     va_start(vl, fmt);
     vfprintf(stderr, fmt, vl);
     fprintf(stderr, "\n");
+    va_end(vl);
+}
+
+/*
+ * A utility procedure to always print to stdout
+ */
+void
+JLI_ShowMessage(const char* fmt, ...)
+{
+    va_list vl;
+    va_start(vl, fmt);
+    vfprintf(stdout, fmt, vl);
+    fprintf(stdout, "\n");
     va_end(vl);
 }

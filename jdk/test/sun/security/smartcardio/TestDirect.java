@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,11 +21,13 @@
  * questions.
  */
 
-/**
+/*
  * @test
- * @bug 8046343
+ * @bug 8046343 8168851
  * @summary Make sure that direct protocol is available
+ * @modules java.smartcardio/javax.smartcardio
  * @run main/manual TestDirect
+ * @run main/othervm/manual/java.security.policy==test.policy TestDirect
  */
 
 // This test requires special hardware.
@@ -40,10 +42,12 @@ public class TestDirect {
     public static void main(String[] args) throws Exception {
         TerminalFactory terminalFactory = TerminalFactory.getDefault();
         List<CardTerminal> cardTerminals = terminalFactory.terminals().list();
-        System.out.println("Terminals: " + cardTerminals);
         if (cardTerminals.isEmpty()) {
-            throw new Exception("No card terminals available");
+            System.out.println("Skipping the test: " +
+                    "no card terminals available");
+            return;
         }
+        System.out.println("Terminals: " + cardTerminals);
         CardTerminal cardTerminal = cardTerminals.get(0);
         Card card = cardTerminal.connect("DIRECT");
         card.disconnect(true);

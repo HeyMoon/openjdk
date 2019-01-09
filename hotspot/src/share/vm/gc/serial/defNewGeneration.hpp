@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@
 #include "gc/shared/copyFailedInfo.hpp"
 #include "gc/shared/generation.hpp"
 #include "gc/shared/generationCounters.hpp"
+#include "gc/shared/preservedMarks.hpp"
 #include "utilities/stack.hpp"
 
 class ContiguousSpace;
@@ -47,11 +48,11 @@ class DefNewGeneration: public Generation {
 protected:
   Generation* _old_gen;
   uint        _tenuring_threshold;   // Tenuring threshold for next collection.
-  ageTable    _age_table;
+  AgeTable    _age_table;
   // Size of object to pretenure in words; command line provides bytes
   size_t      _pretenure_size_threshold_words;
 
-  ageTable*   age_table() { return &_age_table; }
+  AgeTable*   age_table() { return &_age_table; }
 
   // Initialize state to optimistically assume no promotion failure will
   // happen.
@@ -87,15 +88,8 @@ protected:
   // therefore we must remove their forwarding pointers.
   void remove_forwarding_pointers();
 
-  // Preserve the mark of "obj", if necessary, in preparation for its mark
-  // word being overwritten with a self-forwarding-pointer.
-  void   preserve_mark_if_necessary(oop obj, markOop m);
-  void   preserve_mark(oop obj, markOop m);    // work routine used by the above
-
-  // Together, these keep <object with a preserved mark, mark value> pairs.
-  // They should always contain the same number of elements.
-  Stack<oop, mtGC>     _objs_with_preserved_marks;
-  Stack<markOop, mtGC> _preserved_marks_of_objs;
+  // Preserved marks
+  PreservedMarksSet _preserved_marks_set;
 
   // Promotion failure handling
   ExtendedOopClosure *_promo_failure_scan_stack_closure;
@@ -193,7 +187,7 @@ protected:
 
   class FastEvacuateFollowersClosure: public VoidClosure {
     GenCollectedHeap* _gch;
-    DefNewGeneration* _gen;
+    DefNewGeneration* _young_gen;
     FastScanClosure* _scan_cur_or_nonheap;
     FastScanClosure* _scan_older;
   public:
@@ -231,7 +225,7 @@ protected:
   size_t max_survivor_size() const          { return _max_survivor_size; }
 
   bool supports_inline_contig_alloc() const { return true; }
-  HeapWord** top_addr() const;
+  HeapWord* volatile* top_addr() const;
   HeapWord** end_addr() const;
 
   // Thread-local allocation buffers
@@ -285,9 +279,6 @@ protected:
   // Save the tops for eden, from, and to
   virtual void record_spaces_top();
 
-  // Doesn't require additional work during GC prologue and epilogue
-  virtual bool performs_in_place_marking() const { return false; }
-
   // Accessing marks
   void save_marks();
   void reset_saved_marks();
@@ -339,7 +330,6 @@ protected:
   virtual const char* name() const;
   virtual const char* short_name() const { return "DefNew"; }
 
-  // PrintHeapAtGC support.
   void print_on(outputStream* st) const;
 
   void verify();
@@ -355,6 +345,14 @@ protected:
   void compute_space_boundaries(uintx minimum_eden_size,
                                 bool clear_space,
                                 bool mangle_space);
+
+  // Return adjusted new size for NewSizeThreadIncrease.
+  // If any overflow happens, revert to previous new size.
+  size_t adjust_for_thread_increase(size_t new_size_candidate,
+                                    size_t new_size_before,
+                                    size_t alignment) const;
+
+
   // Scavenge support
   void swap_spaces();
 };

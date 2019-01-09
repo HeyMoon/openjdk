@@ -103,6 +103,9 @@ public abstract class AbstractParser {
      * @param lineOffset Offset from which lines should be counted
      */
     protected AbstractParser(final Source source, final ErrorManager errors, final boolean strict, final int lineOffset) {
+        if (source.getLength() > Token.LENGTH_MASK) {
+            throw new RuntimeException("Source exceeds size limit of " + Token.LENGTH_MASK + " bytes");
+        }
         this.source       = source;
         this.errors       = errors;
         this.k            = -1;
@@ -200,8 +203,10 @@ public abstract class AbstractParser {
      * @return tokenType of next token.
      */
     private TokenType nextToken() {
-        // Capture last token tokenType.
-        last = type;
+        // Capture last token type, but ignore comments (which are irrelevant for the purpose of newline detection).
+        if (type != COMMENT) {
+            last = type;
+        }
         if (type != EOF) {
 
             // Set up next token.

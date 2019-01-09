@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,26 +21,26 @@
  * questions.
  */
 
-import java.io.PrintWriter;
-import java.io.File;
-
-import jdk.test.lib.*;
-
 /*
  * @test TestCompileCommand
  * @bug 8069389
- * @summary "Regression tests of -XX:CompileCommand"
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @summary Regression tests of -XX:CompileCommand
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
- * @run main TestCompileCommand
+ * @run driver compiler.oracle.TestCompileCommand
  */
+
+package compiler.oracle;
+
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
 
 public class TestCompileCommand {
 
     private static final String[][] ARGUMENTS = {
         {
-            "-XX:CompileCommand=print,*01234567890123456789012345678901234567890123456789,*0123456789012345678901234567890123456789",
+            "-XX:CompileCommand=print,*01234567890123456789012345678901234567890123456789.*0123456789012345678901234567890123456789",
             "-version"
         }
     };

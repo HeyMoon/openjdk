@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,12 +28,14 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.StringReader;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Function;
 import java.util.function.Supplier;
-
 import jdk.nashorn.internal.codegen.CompileUnit;
 import jdk.nashorn.internal.runtime.logging.DebugLogger;
 import jdk.nashorn.internal.runtime.logging.Loggable;
@@ -156,11 +158,12 @@ public final class Timing implements Loggable {
     }
 
     final class TimeSupplier implements Supplier<String> {
-        private final Map<String, Long> timings;
-
-        TimeSupplier() {
-            timings   = new LinkedHashMap<>();
-        }
+        private final Map<String, LongAdder> timings = new ConcurrentHashMap<>();
+        private final LinkedBlockingQueue<String> orderedTimingNames = new LinkedBlockingQueue<>();
+        private final Function<String, LongAdder> newTimingCreator = s -> {
+            orderedTimingNames.add(s);
+            return new LongAdder();
+        };
 
         String[] getStrings() {
             final List<String> strs = new ArrayList<>();
@@ -173,7 +176,7 @@ public final class Timing implements Loggable {
             } catch (final IOException e) {
                 throw new RuntimeException(e);
             }
-            return strs.toArray(new String[strs.size()]);
+            return strs.toArray(new String[0]);
         }
 
         @Override
@@ -184,26 +187,26 @@ public final class Timing implements Loggable {
             int  maxKeyLength = 0;
             int  maxValueLength = 0;
 
-            for (final Map.Entry<String, Long> entry : timings.entrySet()) {
+            for (final Map.Entry<String, LongAdder> entry : timings.entrySet()) {
                 maxKeyLength   = Math.max(maxKeyLength, entry.getKey().length());
-                maxValueLength = Math.max(maxValueLength, toMillisPrint(entry.getValue()).length());
+                maxValueLength = Math.max(maxValueLength, toMillisPrint(entry.getValue().longValue()).length());
             }
             maxKeyLength++;
 
             final StringBuilder sb = new StringBuilder();
             sb.append("Accumulated compilation phase timings:\n\n");
-            for (final Map.Entry<String, Long> entry : timings.entrySet()) {
+            for (final String timingName: orderedTimingNames) {
                 int len;
 
                 len = sb.length();
-                sb.append(entry.getKey());
+                sb.append(timingName);
                 len = sb.length() - len;
 
                 while (len++ < maxKeyLength) {
                     sb.append(' ');
                 }
 
-                final Long duration = entry.getValue();
+                final long duration = timings.get(timingName).longValue();
                 final String strDuration = toMillisPrint(duration);
                 len = strDuration.length();
                 for (int i = 0; i < maxValueLength - len; i++) {
@@ -217,27 +220,24 @@ public final class Timing implements Loggable {
             }
 
             final long total = t - startTime;
-            sb.append('\n');
-            sb.append("Total runtime: ").
+            return sb.append("\nTotal runtime: ").
                 append(toMillisPrint(total)).
                 append(" ms (Non-runtime: ").
                 append(toMillisPrint(knownTime)).
                 append(" ms [").
                 append((int)(knownTime * 100.0 / total)).
-                append("%])");
-
-            sb.append("\n\nEmitted compile units: ").
-                append(CompileUnit.getEmittedUnitCount());
-
-            return sb.toString();
+                append("%])").
+                append("\n\nEmitted compile units: ").
+                append(CompileUnit.getEmittedUnitCount()).
+                append("\nCompile units installed as named classes: ").
+                append(Context.getNamedInstalledScriptCount()).
+                append("\nCompile units installed as anonymous classes: ").
+                append(Context.getAnonymousInstalledScriptCount()).
+                toString();
         }
 
         private void accumulateTime(final String module, final long duration) {
-            Long accumulatedTime = timings.get(module);
-            if (accumulatedTime == null) {
-                accumulatedTime = 0L;
-            }
-            timings.put(module, accumulatedTime + duration);
+            timings.computeIfAbsent(module, newTimingCreator).add(duration);
         }
     }
 }

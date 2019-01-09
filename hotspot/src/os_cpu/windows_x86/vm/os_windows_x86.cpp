@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,7 @@
 #include "interpreter/interpreter.hpp"
 #include "jvm_windows.h"
 #include "memory/allocation.inline.hpp"
-#include "mutex_windows.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "nativeInst_x86.hpp"
 #include "os_share_windows.hpp"
 #include "prims/jniFastGetField.hpp"
@@ -71,7 +71,7 @@
 extern LONG WINAPI topLevelExceptionFilter(_EXCEPTION_POINTERS* );
 
 // Install a win32 structured exception handler around thread.
-void os::os_exception_wrapper(java_call_t f, JavaValue* value, methodHandle* method, JavaCallArguments* args, Thread* thread) {
+void os::os_exception_wrapper(java_call_t f, JavaValue* value, const methodHandle& method, JavaCallArguments* args, Thread* thread) {
   __try {
 
 #ifndef AMD64
@@ -85,14 +85,14 @@ void os::os_exception_wrapper(java_call_t f, JavaValue* value, methodHandle* met
     //
     volatile Thread* wrapperthread = thread;
 
-    if ( ThreadLocalStorage::get_thread_ptr_offset() == 0 ) {
+    if (os::win32::get_thread_ptr_offset() == 0) {
       int thread_ptr_offset;
       __asm {
         lea eax, dword ptr wrapperthread;
         sub eax, dword ptr FS:[0H];
         mov thread_ptr_offset, eax
       };
-      ThreadLocalStorage::set_thread_ptr_offset(thread_ptr_offset);
+      os::win32::set_thread_ptr_offset(thread_ptr_offset);
     }
 #ifdef ASSERT
     // Verify that the offset hasn't changed since we initally captured
@@ -105,7 +105,7 @@ void os::os_exception_wrapper(java_call_t f, JavaValue* value, methodHandle* met
         sub eax, dword ptr FS:[0H];
         mov test_thread_ptr_offset, eax
       };
-      assert(test_thread_ptr_offset == ThreadLocalStorage::get_thread_ptr_offset(),
+      assert(test_thread_ptr_offset == os::win32::get_thread_ptr_offset(),
              "thread pointer offset from SEH changed");
     }
 #endif // ASSERT
@@ -359,7 +359,7 @@ cmpxchg_long_func_t* os::atomic_cmpxchg_long_func = os::atomic_cmpxchg_long_boot
  *     while (...) {...  fr = os::get_sender_for_C_frame(&fr); }
  * loop in vmError.cpp. We need to roll our own loop.
  */
-bool os::platform_print_native_stack(outputStream* st, void* context,
+bool os::platform_print_native_stack(outputStream* st, const void* context,
                                      char *buf, int buf_size)
 {
   CONTEXT ctx;
@@ -435,7 +435,7 @@ bool os::platform_print_native_stack(outputStream* st, void* context,
 }
 #endif // AMD64
 
-ExtendedPC os::fetch_frame_from_context(void* ucVoid,
+ExtendedPC os::fetch_frame_from_context(const void* ucVoid,
                     intptr_t** ret_sp, intptr_t** ret_fp) {
 
   ExtendedPC  epc;
@@ -455,7 +455,7 @@ ExtendedPC os::fetch_frame_from_context(void* ucVoid,
   return epc;
 }
 
-frame os::fetch_frame_from_context(void* ucVoid) {
+frame os::fetch_frame_from_context(const void* ucVoid) {
   intptr_t* sp;
   intptr_t* fp;
   ExtendedPC epc = fetch_frame_from_context(ucVoid, &sp, &fp);
@@ -496,7 +496,15 @@ intptr_t* _get_previous_fp() {
   __asm {
     mov frameptr, ebp
   };
+  // ebp (frameptr) is for this frame (_get_previous_fp). We want the ebp for the
+  // caller of os::current_frame*(), so go up two frames. However, for
+  // optimized builds, _get_previous_fp() will be inlined, so only go
+  // up 1 frame in that case.
+#ifdef _NMT_NOINLINE_
+  return **(intptr_t***)frameptr;
+#else
   return *frameptr;
+#endif
 }
 #endif // !AMD64
 
@@ -527,10 +535,10 @@ frame os::current_frame() {
   }
 }
 
-void os::print_context(outputStream *st, void *context) {
+void os::print_context(outputStream *st, const void *context) {
   if (context == NULL) return;
 
-  CONTEXT* uc = (CONTEXT*)context;
+  const CONTEXT* uc = (const CONTEXT*)context;
 
   st->print_cr("Registers:");
 #ifdef AMD64
@@ -588,10 +596,10 @@ void os::print_context(outputStream *st, void *context) {
 }
 
 
-void os::print_register_info(outputStream *st, void *context) {
+void os::print_register_info(outputStream *st, const void *context) {
   if (context == NULL) return;
 
-  CONTEXT* uc = (CONTEXT*)context;
+  const CONTEXT* uc = (const CONTEXT*)context;
 
   st->print_cr("Register to memory mapping:");
   st->cr();
@@ -599,6 +607,7 @@ void os::print_register_info(outputStream *st, void *context) {
   // this is only for the "general purpose" registers
 
 #ifdef AMD64
+  st->print("RIP="); print_location(st, uc->Rip);
   st->print("RAX="); print_location(st, uc->Rax);
   st->print("RBX="); print_location(st, uc->Rbx);
   st->print("RCX="); print_location(st, uc->Rcx);
@@ -616,6 +625,7 @@ void os::print_register_info(outputStream *st, void *context) {
   st->print("R14="); print_location(st, uc->R14);
   st->print("R15="); print_location(st, uc->R15);
 #else
+  st->print("EIP="); print_location(st, uc->Eip);
   st->print("EAX="); print_location(st, uc->Eax);
   st->print("EBX="); print_location(st, uc->Ebx);
   st->print("ECX="); print_location(st, uc->Ecx);

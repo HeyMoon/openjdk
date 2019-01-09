@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -65,11 +65,11 @@ import com.sun.xml.internal.messaging.saaj.util.SAAJUtil;
  * <p>
  * Note that to get the actual bytes of a mail-safe String (say,
  * for sending over SMTP), one must do
- * <p><blockquote><pre>
+ * <blockquote><pre>
  *
  *      byte[] bytes = string.getBytes("iso-8859-1");
  *
- * </pre></blockquote><p>
+ * </pre></blockquote>
  *
  * The <code>setHeader</code> and <code>addHeader</code> methods
  * on MimeMessage and MimeBodyPart assume that the given header values
@@ -222,6 +222,10 @@ public class MimeUtility {
      * <code>DataHandler</code> uses a thread, a pair of pipe streams,
      * and the <code>writeTo</code> method to produce the data. <p>
      *
+     * @param dh data handler
+     *
+     * @return encoding
+     *
      * @since   JavaMail 1.2
      */
     public static String getEncoding(DataHandler dh) {
@@ -294,6 +298,7 @@ public class MimeUtility {
      * @param   is              input stream
      * @param   encoding        the encoding of the stream.
      * @return                  decoded input stream.
+     * @exception MessagingException in case of error
      */
     public static InputStream decode(InputStream is, String encoding)
                 throws MessagingException {
@@ -323,6 +328,7 @@ public class MimeUtility {
      * @param   encoding        the encoding of the stream.
      * @return                  output stream that applies the
      *                          specified encoding.
+     * @exception MessagingException in case of error
      */
     public static OutputStream encode(OutputStream os, String encoding)
                 throws MessagingException {
@@ -358,6 +364,7 @@ public class MimeUtility {
      *                          with uuencode)
      * @return                  output stream that applies the
      *                          specified encoding.
+     * @exception MessagingException in case of error
      * @since                   JavaMail 1.2
      */
     public static OutputStream encode(OutputStream os, String encoding,
@@ -397,7 +404,7 @@ public class MimeUtility {
      * "unstructured" RFC 822 headers. <p>
      *
      * Example of usage:
-     * <p><blockquote><pre>
+     * <blockquote><pre>
      *
      *  MimeBodyPart part = ...
      *  String rawvalue = "FooBar Mailer, Japanese version 1.1"
@@ -411,7 +418,7 @@ public class MimeUtility {
      *   // setHeader() failure
      *  }
      *
-     * </pre></blockquote><p>
+     * </pre></blockquote>
      *
      * @param   text    unicode string
      * @return  Unicode string containing only US-ASCII characters
@@ -446,6 +453,7 @@ public class MimeUtility {
      *          encoded are in the ASCII charset, otherwise "B" encoding
      *          is used.
      * @return  Unicode string containing only US-ASCII characters
+     * @exception UnsupportedEncodingException in case of unsupported encoding
      */
     public static String encodeText(String text, String charset,
                                     String encoding)
@@ -464,7 +472,7 @@ public class MimeUtility {
      * returned as-is <p>
      *
      * Example of usage:
-     * <p><blockquote><pre>
+     * <blockquote><pre>
      *
      *  MimeBodyPart part = ...
      *  String rawvalue = null;
@@ -479,9 +487,10 @@ public class MimeUtility {
      *
      *  return value;
      *
-     * </pre></blockquote><p>
+     * </pre></blockquote>
      *
      * @param   etext   the possibly encoded value
+     * @return decoded text
      * @exception       UnsupportedEncodingException if the charset
      *                  conversion failed.
      */
@@ -510,8 +519,8 @@ public class MimeUtility {
         // Encoded words found. Start decoding ...
 
         st = new StringTokenizer(etext, lwsp, true);
-        StringBuffer sb = new StringBuffer();  // decode buffer
-        StringBuffer wsb = new StringBuffer(); // white space buffer
+        StringBuilder sb = new StringBuilder();  // decode buffer
+        StringBuilder wsb = new StringBuilder(); // white space buffer
         boolean prevWasEncoded = false;
 
         while (st.hasMoreTokens()) {
@@ -568,7 +577,7 @@ public class MimeUtility {
      * The InternetAddress class, for example, uses this to encode
      * it's 'phrase' component.
      *
-     * @param   text    unicode string
+     * @param   word    unicode string
      * @return  Array of Unicode strings containing only US-ASCII
      *          characters.
      * @exception UnsupportedEncodingException if the encoding fails
@@ -590,7 +599,7 @@ public class MimeUtility {
      * The resulting bytes are then returned as a Unicode string
      * containing only ASCII characters. <p>
      *
-     * @param   text    unicode string
+     * @param   word    unicode string
      * @param   charset the MIME charset
      * @param   encoding the encoding to be used. Currently supported
      *          values are "B" and "Q". If this parameter is null, then
@@ -648,7 +657,7 @@ public class MimeUtility {
             throw new UnsupportedEncodingException(
                         "Unknown transfer encoding: " + encoding);
 
-        StringBuffer outb = new StringBuffer(); // the output buffer
+        StringBuilder outb = new StringBuilder(); // the output buffer
         doEncode(string, b64, jcharset,
                  // As per RFC 2047, size of an encoded string should not
                  // exceed 75 bytes.
@@ -662,7 +671,7 @@ public class MimeUtility {
 
     private static void doEncode(String string, boolean b64,
                 String jcharset, int avail, String prefix,
-                boolean first, boolean encodingWord, StringBuffer buf)
+                boolean first, boolean encodingWord, StringBuilder buf)
                         throws UnsupportedEncodingException {
 
         // First find out what the length of the encoded version of
@@ -720,6 +729,7 @@ public class MimeUtility {
      * fails, an UnsupportedEncodingException is thrown.<p>
      *
      * @param   eword   the possibly encoded value
+     * @return deocoded word
      * @exception       ParseException if the string is not an
      *                  encoded-word as per RFC 2047.
      * @exception       UnsupportedEncodingException if the charset
@@ -812,7 +822,7 @@ public class MimeUtility {
     private static String decodeInnerWords(String word)
                                 throws UnsupportedEncodingException {
         int start = 0, i;
-        StringBuffer buf = new StringBuffer();
+        StringBuilder buf = new StringBuilder();
         while ((i = word.indexOf("=?", start)) >= 0) {
             buf.append(word.substring(start, i));
             int end = word.indexOf("?=", i);
@@ -847,8 +857,8 @@ public class MimeUtility {
      * @param   word    word to be quoted
      * @param   specials the set of special characters
      * @return          the possibly quoted word
-     * @see     javax.mail.internet.HeaderTokenizer#MIME
-     * @see     javax.mail.internet.HeaderTokenizer#RFC822
+     * @see     com.sun.xml.internal.messaging.saaj.packaging.mime.internet.HeaderTokenizer#MIME
+     * @see     com.sun.xml.internal.messaging.saaj.packaging.mime.internet.HeaderTokenizer#RFC822
      */
     public static String quote(String word, String specials) {
         int len = word.length();
@@ -862,7 +872,7 @@ public class MimeUtility {
             char c = word.charAt(i);
             if (c == '"' || c == '\\' || c == '\r' || c == '\n') {
                 // need to escape them and then quote the whole string
-                StringBuffer sb = new StringBuffer(len + 3);
+                StringBuilder sb = new StringBuilder(len + 3);
                 sb.append('"');
                 sb.append(word.substring(0, i));
                 int lastc = 0;
@@ -885,7 +895,7 @@ public class MimeUtility {
         }
 
         if (needQuoting) {
-            StringBuffer sb = new StringBuffer(len + 2);
+            StringBuilder sb = new StringBuilder(len + 2);
             sb.append('"').append(word).append('"');
             return sb.toString();
         } else
@@ -927,7 +937,7 @@ public class MimeUtility {
             return s;
 
         // have to actually fold the string
-        StringBuffer sb = new StringBuffer(s.length() + 4);
+        StringBuilder sb = new StringBuilder(s.length() + 4);
         char lastc = 0;
         while (used + s.length() > 76) {
             int lastspace = -1;
@@ -969,7 +979,7 @@ public class MimeUtility {
         if (!foldText)
             return s;
 
-        StringBuffer sb = null;
+        StringBuilder sb = null;
         int i;
         while ((i = indexOfAny(s, "\r\n")) >= 0) {
             int start = i;
@@ -986,7 +996,7 @@ public class MimeUtility {
                     while (i < l && ((c = s.charAt(i)) == ' ' || c == '\t'))
                         i++;
                     if (sb == null)
-                        sb = new StringBuffer(s.length());
+                        sb = new StringBuilder(s.length());
                     if (start != 0) {
                         sb.append(s.substring(0, start));
                         sb.append(' ');
@@ -996,14 +1006,14 @@ public class MimeUtility {
                 }
                 // it's not a continuation line, just leave it in
                 if (sb == null)
-                    sb = new StringBuffer(s.length());
+                    sb = new StringBuilder(s.length());
                 sb.append(s.substring(0, i));
                 s = s.substring(i);
             } else {
                 // there's a backslash at "start - 1"
                 // strip it out, but leave in the line break
                 if (sb == null)
-                    sb = new StringBuffer(s.length());
+                    sb = new StringBuilder(s.length());
                 sb.append(s.substring(0, start - 1));
                 sb.append(s.substring(start, i));
                 s = s.substring(i);
@@ -1051,7 +1061,7 @@ public class MimeUtility {
             // no mapping table, or charset parameter is null
             return charset;
 
-        String alias = (String)mime2java.get(charset.toLowerCase());
+        String alias = mime2java.get(charset.toLowerCase());
         return alias == null ? charset : alias;
     }
 
@@ -1073,7 +1083,7 @@ public class MimeUtility {
             // no mapping table or charset param is null
             return charset;
 
-        String alias = (String)java2mime.get(charset.toLowerCase());
+        String alias = java2mime.get(charset.toLowerCase());
         return alias == null ? charset : alias;
     }
 
@@ -1111,7 +1121,8 @@ public class MimeUtility {
             } catch (SecurityException sex) {
 
                 class NullInputStream extends InputStream {
-                    public int read() {
+                    @Override
+                   public int read() {
                         return 0;
                     }
                 }
@@ -1140,12 +1151,12 @@ public class MimeUtility {
 
     // Tables to map MIME charset names to Java names and vice versa.
     // XXX - Should eventually use J2SE 1.4 java.nio.charset.Charset
-    private static Hashtable mime2java;
-    private static Hashtable java2mime;
+    private static Hashtable<String, String> mime2java;
+    private static Hashtable<String, String> java2mime;
 
     static {
-        java2mime = new Hashtable(40);
-        mime2java = new Hashtable(10);
+        java2mime = new Hashtable<String, String>(40);
+        mime2java = new Hashtable<String, String>(10);
 
         try {
             // Use this class's classloader to load the mapping file
@@ -1229,7 +1240,7 @@ public class MimeUtility {
         }
     }
 
-    private static void loadMappings(LineInputStream is, Hashtable table) {
+    private static void loadMappings(LineInputStream is, Hashtable<String, String> table) {
         String currLine;
 
         while (true) {
@@ -1277,7 +1288,7 @@ public class MimeUtility {
         int l = s.length();
 
         for (int i = 0; i < l; i++) {
-            if (nonascii((int)s.charAt(i))) // non-ascii
+            if (nonascii(s.charAt(i))) // non-ascii
                 non_ascii++;
             else
                 ascii++;
@@ -1444,14 +1455,17 @@ class AsciiOutputStream extends OutputStream {
         checkEOL = encodeEolStrict && breakOnNonAscii;
     }
 
+    @Override
     public void write(int b) throws IOException {
         check(b);
     }
 
+    @Override
     public void write(byte b[]) throws IOException {
         write(b, 0, b.length);
     }
 
+    @Override
     public void write(byte b[], int off, int len) throws IOException {
         len += off;
         for (int i = off; i < len ; i++)

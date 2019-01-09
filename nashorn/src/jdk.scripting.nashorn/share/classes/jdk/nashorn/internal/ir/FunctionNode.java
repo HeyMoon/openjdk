@@ -33,10 +33,9 @@ import static jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor.CALL
 import static jdk.nashorn.internal.runtime.linker.NashornCallSiteDescriptor.CALLSITE_TRACE_VALUES;
 
 import java.util.Collections;
-import java.util.EnumSet;
 import java.util.Iterator;
 import java.util.List;
-import jdk.nashorn.internal.AssertsEnabled;
+import java.util.Map;
 import jdk.nashorn.internal.codegen.CompileUnit;
 import jdk.nashorn.internal.codegen.Compiler;
 import jdk.nashorn.internal.codegen.CompilerConstants;
@@ -71,41 +70,13 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
         /** a getter, @see {@link UserAccessorProperty} */
         GETTER,
         /** a setter, @see {@link UserAccessorProperty} */
-        SETTER
-    }
-
-    /** Compilation states available */
-    public enum CompilationState {
-        /** compiler is ready */
-        INITIALIZED,
-        /** method has been parsed */
-        PARSED,
-        /** method has been parsed */
-        PARSE_ERROR,
-        /** constant folding pass */
-        CONSTANT_FOLDED,
-        /** method has been lowered */
-        LOWERED,
-        /** program points have been assigned to unique locations */
-        PROGRAM_POINTS_ASSIGNED,
-        /** any transformations of builtins have taken place, e.g. apply=&gt;call */
-        BUILTINS_TRANSFORMED,
-        /** method has been split */
-        SPLIT,
-        /** method has had symbols assigned */
-        SYMBOLS_ASSIGNED,
-        /** computed scope depths for symbols */
-        SCOPE_DEPTHS_COMPUTED,
-        /** method has had types calculated*/
-        OPTIMISTIC_TYPES_ASSIGNED,
-        /** method has had types calculated */
-        LOCAL_VARIABLE_TYPES_CALCULATED,
-        /** compile units reused (optional) */
-        COMPILE_UNITS_REUSED,
-        /** method has been emitted to bytecode */
-        BYTECODE_GENERATED,
-        /** method has been installed */
-        BYTECODE_INSTALLED
+        SETTER,
+        /** an arrow function */
+        ARROW,
+        /** a generator function */
+        GENERATOR,
+        /** a module function */
+        MODULE
     }
 
     /** Source of entity. */
@@ -136,6 +107,9 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
     /** List of parameters. */
     private final List<IdentNode> parameters;
 
+    /** Map of ES6 function parameter expressions. */
+    private final Map<IdentNode, Expression> parameterExpressions;
+
     /** First token of function. **/
     private final long firstToken;
 
@@ -144,10 +118,6 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
 
     /** Method's namespace. */
     private transient final Namespace namespace;
-
-    /** Current compilation state */
-    @Ignore
-    private final EnumSet<CompilationState> compilationState;
 
     /** Number of properties of "this" object assigned in this function */
     @Ignore
@@ -161,6 +131,12 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
 
     /** Root class for function */
     private final Class<?> rootClass;
+
+    /** The ES6 module */
+    private final Module module;
+
+    /** The debug flags */
+    private final int debugFlags;
 
     /** Is anonymous function flag. */
     public static final int IS_ANONYMOUS                = 1 << 0;
@@ -212,49 +188,21 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
     /**
      * Is this function the top-level program?
      */
-    public static final int IS_PROGRAM = 1 << 13;
+    public static final int IS_PROGRAM                  = 1 << 13;
 
     /**
      * Flag indicating whether this function uses the local variable symbol for itself. Only named function expressions
      * can have this flag set if they reference themselves (e.g. "(function f() { return f })". Declared functions will
      * use the symbol in their parent scope instead when they reference themselves by name.
      */
-    public static final int USES_SELF_SYMBOL = 1 << 14;
+    public static final int USES_SELF_SYMBOL            = 1 << 14;
 
     /** Does this function use the "this" keyword? */
-    public static final int USES_THIS = 1 << 15;
+    public static final int USES_THIS                   = 1 << 15;
 
     /** Is this declared in a dynamic context */
-    public static final int IN_DYNAMIC_CONTEXT = 1 << 16;
+    public static final int IN_DYNAMIC_CONTEXT          = 1 << 16;
 
-    /**
-     * The following flags are derived from directive comments within this function.
-     * Note that even IS_STRICT is one such flag but that requires special handling.
-     */
-
-    /** parser, print parse tree */
-    public static final int IS_PRINT_PARSE       = 1 << 17;
-    /** parser, print lower parse tree */
-    public static final int IS_PRINT_LOWER_PARSE = 1 << 18;
-    /** parser, print AST */
-    public static final int IS_PRINT_AST         = 1 << 19;
-    /** parser, print lower AST */
-    public static final int IS_PRINT_LOWER_AST   = 1 << 20;
-    /** parser, print symbols */
-    public static final int IS_PRINT_SYMBOLS     = 1 << 21;
-
-    // callsite tracing, profiling within this function
-    /** profile callsites in this function? */
-    public static final int IS_PROFILE         = 1 << 22;
-
-    /** trace callsite enterexit in this function? */
-    public static final int IS_TRACE_ENTEREXIT = 1 << 23;
-
-    /** trace callsite misses in this function? */
-    public static final int IS_TRACE_MISSES    = 1 << 24;
-
-    /** trace callsite values in this function? */
-    public static final int IS_TRACE_VALUES    = 1 << 25;
 
     /**
      * Whether this function needs the callee {@link ScriptFunction} instance passed to its code as a
@@ -262,19 +210,50 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
      * Rather, it is always calculated (see {@link #needsCallee()}). {@link RecompilableScriptFunctionData}
      * will, however, cache the value of this flag.
      */
-    public static final int NEEDS_CALLEE       = 1 << 26;
+    public static final int NEEDS_CALLEE                = 1 << 17;
 
-    /** extension callsite flags mask */
-    public static final int EXTENSION_CALLSITE_FLAGS = IS_PRINT_PARSE |
-        IS_PRINT_LOWER_PARSE | IS_PRINT_AST | IS_PRINT_LOWER_AST |
-        IS_PRINT_SYMBOLS | IS_PROFILE | IS_TRACE_ENTEREXIT |
-        IS_TRACE_MISSES | IS_TRACE_VALUES;
+    /**
+     * Is the function node cached?
+     */
+    public static final int IS_CACHED                   = 1 << 18;
+
+    /**
+     * Does this function contain a super call? (cf. ES6 14.3.5 Static Semantics: HasDirectSuper)
+     */
+    public static final int ES6_HAS_DIRECT_SUPER        = 1 << 19;
+
+    /**
+     * Does this function use the super binding?
+     */
+    public static final int ES6_USES_SUPER              = 1 << 20;
+
+    /**
+     * Is this function a (class or object) method?
+     */
+    public static final int ES6_IS_METHOD               = 1 << 21;
+
+    /**
+     * Is this the constructor method?
+     */
+    public static final int ES6_IS_CLASS_CONSTRUCTOR    = 1 << 22;
+
+    /** Is this the constructor of a subclass (i.e., a class with an extends declaration)? */
+    public static final int ES6_IS_SUBCLASS_CONSTRUCTOR = 1 << 23;
+
+    /** is this a strong mode function? */
+    public static final int ES6_IS_STRONG               = 1 << 24;
+
+    /** Does this function use new.target? */
+    public static final int ES6_USES_NEW_TARGET         = 1 << 25;
+
+    /** Does this function have expression as its body? */
+    public static final int HAS_EXPRESSION_BODY         = 1 << 26;
 
     /** Does this function or any nested functions contain an eval? */
     private static final int HAS_DEEP_EVAL = HAS_EVAL | HAS_NESTED_EVAL;
 
     /** Does this function need to store all its variables in scope? */
-    private static final int HAS_ALL_VARS_IN_SCOPE = HAS_DEEP_EVAL;
+    public static final int HAS_ALL_VARS_IN_SCOPE = HAS_DEEP_EVAL;
 
     /** Does this function potentially need "arguments"? Note that this is not a full test, as further negative check of REDEFINES_ARGS is needed. */
     private static final int MAYBE_NEEDS_ARGUMENTS = USES_ARGUMENTS | HAS_EVAL;
@@ -282,8 +261,44 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
     /** Does this function need the parent scope? It needs it if either it or its descendants use variables from it, or have a deep eval, or it's the program. */
     public static final int NEEDS_PARENT_SCOPE = USES_ANCESTOR_SCOPE | HAS_DEEP_EVAL | IS_PROGRAM;
 
+
+    /**
+     * The following flags are derived from directive comments within this function.
+     * Note that even IS_STRICT is one such flag but that requires special handling.
+     */
+
+    /** parser, print parse tree */
+    public static final int DEBUG_PRINT_PARSE       = 1 << 0;
+    /** parser, print lower parse tree */
+    public static final int DEBUG_PRINT_LOWER_PARSE = 1 << 1;
+    /** parser, print AST */
+    public static final int DEBUG_PRINT_AST         = 1 << 2;
+    /** parser, print lower AST */
+    public static final int DEBUG_PRINT_LOWER_AST   = 1 << 3;
+    /** parser, print symbols */
+    public static final int DEBUG_PRINT_SYMBOLS     = 1 << 4;
+
+    // callsite tracing, profiling within this function
+    /** profile callsites in this function? */
+    public static final int DEBUG_PROFILE           = 1 << 5;
+
+    /** trace callsite enterexit in this function? */
+    public static final int DEBUG_TRACE_ENTEREXIT   = 1 << 6;
+
+    /** trace callsite misses in this function? */
+    public static final int DEBUG_TRACE_MISSES      = 1 << 7;
+
+    /** trace callsite values in this function? */
+    public static final int DEBUG_TRACE_VALUES      = 1 << 8;
+
+    /** extension callsite flags mask */
+    public static final int DEBUG_CALLSITE_FLAGS = DEBUG_PRINT_PARSE |
+            DEBUG_PRINT_LOWER_PARSE | DEBUG_PRINT_AST | DEBUG_PRINT_LOWER_AST |
+            DEBUG_PRINT_SYMBOLS | DEBUG_PROFILE | DEBUG_TRACE_ENTEREXIT |
+            DEBUG_TRACE_MISSES | DEBUG_TRACE_VALUES;
+
     /** What is the return type of this function? */
-    private Type returnType = Type.UNKNOWN;
+    public Type returnType = Type.UNKNOWN;
 
     /**
      * Constructor
@@ -298,11 +313,13 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
      * @param ident      the identifier
      * @param name       the name of the function
      * @param parameters parameter list
+     * @param paramExprs the ES6 function parameter expressions
      * @param kind       kind of function as in {@link FunctionNode.Kind}
      * @param flags      initial flags
      * @param body       body of the function
-     * @param state      The initial state from the parser. Must be one of {@link CompilationState#PARSED} and {@link CompilationState#PARSE_ERROR}
      * @param endParserState The parser state at the end of the parsing.
+     * @param module     the module
+     * @param debugFlags the debug flags
      */
     public FunctionNode(
         final Source source,
@@ -315,11 +332,13 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
         final IdentNode ident,
         final String name,
         final List<IdentNode> parameters,
+        final Map<IdentNode, Expression> paramExprs,
         final FunctionNode.Kind kind,
         final int flags,
         final Block body,
-        final CompilationState state,
-        final Object endParserState) {
+        final Object endParserState,
+        final Module module,
+        final int debugFlags) {
         super(token, finish);
 
         this.source           = source;
@@ -328,16 +347,18 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
         this.name             = name;
         this.kind             = kind;
         this.parameters       = parameters;
+        this.parameterExpressions = paramExprs;
         this.firstToken       = firstToken;
         this.lastToken        = lastToken;
         this.namespace        = namespace;
-        this.compilationState = EnumSet.of(CompilationState.INITIALIZED, state);
         this.flags            = flags;
         this.compileUnit      = null;
         this.body             = body;
         this.thisProperties   = 0;
         this.rootClass        = null;
-        this.endParserState    = endParserState;
+        this.endParserState   = endParserState;
+        this.module           = module;
+        this.debugFlags       = debugFlags;
     }
 
     private FunctionNode(
@@ -348,12 +369,11 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
         final String name,
         final Type returnType,
         final CompileUnit compileUnit,
-        final EnumSet<CompilationState> compilationState,
         final Block body,
         final List<IdentNode> parameters,
         final int thisProperties,
         final Class<?> rootClass,
-        final Source source, Namespace namespace) {
+        final Source source, final Namespace namespace) {
         super(functionNode);
 
         this.endParserState    = endParserState;
@@ -363,9 +383,9 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
         this.returnType       = returnType;
         this.compileUnit      = compileUnit;
         this.lastToken        = lastToken;
-        this.compilationState = compilationState;
         this.body             = body;
         this.parameters       = parameters;
+        this.parameterExpressions = functionNode.parameterExpressions;
         this.thisProperties   = thisProperties;
         this.rootClass        = rootClass;
         this.source           = source;
@@ -375,6 +395,8 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
         this.ident           = functionNode.ident;
         this.kind            = functionNode.kind;
         this.firstToken      = functionNode.firstToken;
+        this.module          = functionNode.module;
+        this.debugFlags      = functionNode.debugFlags;
     }
 
     @Override
@@ -406,23 +428,23 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
         }
 
         // quick check for extension callsite flags turned on by directives.
-        if ((flags & EXTENSION_CALLSITE_FLAGS) == 0) {
+        if ((debugFlags & DEBUG_CALLSITE_FLAGS) == 0) {
             return callsiteFlags;
         }
 
-        if (getFlag(IS_PROFILE)) {
+        if (getDebugFlag(DEBUG_PROFILE)) {
             callsiteFlags |= CALLSITE_PROFILE;
         }
 
-        if (getFlag(IS_TRACE_MISSES)) {
+        if (getDebugFlag(DEBUG_TRACE_MISSES)) {
             callsiteFlags |= CALLSITE_TRACE | CALLSITE_TRACE_MISSES;
         }
 
-        if (getFlag(IS_TRACE_VALUES)) {
+        if (getDebugFlag(DEBUG_TRACE_VALUES)) {
             callsiteFlags |= CALLSITE_TRACE | CALLSITE_TRACE_ENTEREXIT | CALLSITE_TRACE_VALUES;
         }
 
-        if (getFlag(IS_TRACE_ENTEREXIT)) {
+        if (getDebugFlag(DEBUG_TRACE_ENTEREXIT)) {
             callsiteFlags |= CALLSITE_TRACE | CALLSITE_TRACE_ENTEREXIT;
         }
 
@@ -463,7 +485,6 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
             name,
             returnType,
             compileUnit,
-            compilationState,
             body,
             parameters,
             thisProperties,
@@ -507,23 +528,23 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
     public static int getDirectiveFlag(final String directive) {
         switch (directive) {
             case "nashorn callsite trace enterexit":
-                return IS_TRACE_ENTEREXIT;
+                return DEBUG_TRACE_ENTEREXIT;
             case "nashorn callsite trace misses":
-                return IS_TRACE_MISSES;
+                return DEBUG_TRACE_MISSES;
             case "nashorn callsite trace objects":
-                return IS_TRACE_VALUES;
+                return DEBUG_TRACE_VALUES;
             case "nashorn callsite profile":
-                return IS_PROFILE;
+                return DEBUG_PROFILE;
             case "nashorn print parse":
-                return IS_PRINT_PARSE;
+                return DEBUG_PRINT_PARSE;
             case "nashorn print lower parse":
-                return IS_PRINT_LOWER_PARSE;
+                return DEBUG_PRINT_LOWER_PARSE;
             case "nashorn print ast":
-                return IS_PRINT_AST;
+                return DEBUG_PRINT_AST;
             case "nashorn print lower ast":
-                return IS_PRINT_LOWER_AST;
+                return DEBUG_PRINT_LOWER_AST;
             case "nashorn print symbols":
-                return IS_PRINT_SYMBOLS;
+                return DEBUG_PRINT_SYMBOLS;
             default:
                 // unknown/unsupported directive
                 return 0;
@@ -537,80 +558,6 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
     public int getLineNumber() {
         return lineNumber;
     }
-
-    /**
-     * Get the compilation state of this function
-     * @return the compilation state
-     */
-    public EnumSet<CompilationState> getState() {
-        return compilationState;
-    }
-
-    /**
-     * Check whether this FunctionNode has reached a give CompilationState.
-     *
-     * @param state the state to check for
-     * @return true of the node is in the given state
-     */
-    public boolean hasState(final EnumSet<CompilationState> state) {
-        return !AssertsEnabled.assertsEnabled() || compilationState.containsAll(state);
-    }
-
-    /**
-     * Add a state to the total CompilationState of this node, e.g. if
-     * FunctionNode has been lowered, the compiler will add
-     * {@code CompilationState#LOWERED} to the state vector
-     *
-     * @param lc lexical context
-     * @param state {@link CompilationState} to add
-     * @return function node or a new one if state was changed
-     */
-    public FunctionNode setState(final LexicalContext lc, final CompilationState state) {
-        if (!AssertsEnabled.assertsEnabled() || this.compilationState.contains(state)) {
-            return this;
-        }
-        final EnumSet<CompilationState> newState = EnumSet.copyOf(this.compilationState);
-        newState.add(state);
-        return setCompilationState(lc, newState);
-    }
-
-    /**
-     * Copy a compilation state from an original function to this function. Used when creating synthetic
-     * function nodes by the splitter.
-     *
-     * @param lc lexical context
-     * @param original the original function node to copy compilation state from
-     * @return function node or a new one if state was changed
-     */
-    public FunctionNode copyCompilationState(final LexicalContext lc, final FunctionNode original) {
-        final EnumSet<CompilationState> origState = original.compilationState;
-        if (!AssertsEnabled.assertsEnabled() || this.compilationState.containsAll(origState)) {
-            return this;
-        }
-        final EnumSet<CompilationState> newState = EnumSet.copyOf(this.compilationState);
-        newState.addAll(origState);
-        return setCompilationState(lc, newState);
-    }
-
-    private FunctionNode setCompilationState(final LexicalContext lc, final EnumSet<CompilationState> compilationState) {
-        return Node.replaceInLexicalContext(
-                lc,
-                this,
-                new FunctionNode(
-                        this,
-                        lastToken,
-                        endParserState,
-                        flags,
-                        name,
-                        returnType,
-                        compileUnit,
-                        compilationState,
-                        body,
-                        parameters,
-                        thisProperties,
-                        rootClass, source, namespace));
-    }
-
 
     /**
      * Create a unique name in the namespace of this FunctionNode
@@ -677,7 +624,6 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
                         name,
                         returnType,
                         compileUnit,
-                        compilationState,
                         body,
                         parameters,
                         thisProperties,
@@ -692,6 +638,25 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
     @Override
     public FunctionNode setFlag(final LexicalContext lc, final int flag) {
         return setFlags(lc, flags | flag);
+    }
+
+    /**
+     * Returns the debug flags for this function.
+     *
+     * @return the debug flags
+     */
+    public int getDebugFlags() {
+        return debugFlags;
+    }
+
+    /**
+     * Checks whether a debug flag is set for this function.
+     *
+     * @param debugFlag the debug flag
+     * @return true if the flag is set
+     */
+    public boolean getDebugFlag(final int debugFlag) {
+        return (debugFlags & debugFlag) != 0;
     }
 
     /**
@@ -757,7 +722,7 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
      */
     public boolean needsCallee() {
         // NOTE: we only need isSplit() here to ensure that :scope can never drop below slot 2 for splitting array units.
-        return needsParentScope() || usesSelfSymbol() || isSplit() || (needsArguments() && !isStrict()) || hasOptimisticApplyToCall();
+        return needsParentScope() || usesSelfSymbol() || isSplit() || (needsArguments() && !isStrict()) || hasApplyToCallSpecialization();
     }
 
     /**
@@ -774,7 +739,7 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
      * Return true if function contains an apply to call transform
      * @return true if this function has transformed apply to call
      */
-    public boolean hasOptimisticApplyToCall() {
+    public boolean hasApplyToCallSpecialization() {
         return getFlag(HAS_APPLY_TO_CALL_SPECIALIZATION);
     }
 
@@ -818,7 +783,6 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
                         name,
                         returnType,
                         compileUnit,
-                        compilationState,
                         body,
                         parameters,
                         thisProperties,
@@ -914,7 +878,6 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
                         name,
                         returnType,
                         compileUnit,
-                        compilationState,
                         body,
                         parameters,
                         thisProperties,
@@ -991,7 +954,6 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
                         name,
                         returnType,
                         compileUnit,
-                        compilationState,
                         body,
                         parameters,
                         thisProperties,
@@ -1026,6 +988,23 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
     }
 
     /**
+     * Get the ES6 style parameter expressions of this function. This may be null.
+     *
+     * @return a Map of parameter IdentNode to Expression node (for ES6 parameter expressions)
+     */
+    public Map<IdentNode, Expression> getParameterExpressions() {
+        return parameterExpressions;
+    }
+
+    /**
+     * Return the number of parameters to this function
+     * @return the number of parameters
+     */
+    public int getNumOfParams() {
+        return parameters.size();
+    }
+
+    /**
      * Returns the identifier for a named parameter at the specified position in this function's parameter list.
      * @param index the parameter's position.
      * @return the identifier for the requested named parameter.
@@ -1057,7 +1036,6 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
                         name,
                         returnType,
                         compileUnit,
-                        compilationState,
                         body,
                         parameters,
                         thisProperties,
@@ -1145,7 +1123,6 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
                 name,
                 type,
                 compileUnit,
-                compilationState,
                 body,
                 parameters,
                 thisProperties,
@@ -1159,6 +1136,104 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
      */
     public boolean isStrict() {
         return getFlag(IS_STRICT);
+    }
+
+    /**
+     * Returns true if this function node has been cached.
+     * @return true if this function node has been cached.
+     */
+    public boolean isCached() {
+        return getFlag(IS_CACHED);
+    }
+
+    /**
+     * Mark this function node as having been cached.
+     * @param lc the current lexical context
+     * @return a function node equivalent to this one, with the flag set.
+     */
+    public FunctionNode setCached(final LexicalContext lc) {
+        return setFlag(lc, IS_CACHED);
+    }
+
+    /**
+     * Checks if the function is generated in strong mode.
+     *
+     * @return true if strong mode enabled for function
+     */
+    public boolean isStrong() {
+        return getFlag(ES6_IS_STRONG);
+    }
+
+    /**
+     * Checks if this is an ES6 method.
+     *
+     * @return true if the ES6 method flag is set
+     */
+    public boolean isMethod() {
+        return getFlag(ES6_IS_METHOD);
+    }
+
+    /**
+     * Checks if this function uses the ES6 super binding.
+     *
+     * @return true if the ES6 super flag is set
+     */
+    public boolean usesSuper() {
+        return getFlag(ES6_USES_SUPER);
+    }
+
+    /**
+     * Checks if this function directly uses the super binding.
+     *
+     * @return true if the ES6 has-direct-super flag is set
+     */
+    public boolean hasDirectSuper() {
+        return getFlag(ES6_HAS_DIRECT_SUPER);
+    }
+
+    /**
+     * Checks if this is an ES6 class constructor.
+     *
+     * @return true if the ES6 class constructor flag is set
+     */
+    public boolean isClassConstructor() {
+        return getFlag(ES6_IS_CLASS_CONSTRUCTOR);
+    }
+
+    /**
+     * Checks if this is an ES6 subclass constructor.
+     *
+     * @return true if the ES6 subclass constructor flag is set
+     */
+    public boolean isSubclassConstructor() {
+        return getFlag(ES6_IS_SUBCLASS_CONSTRUCTOR);
+    }
+
+    /**
+     * Checks if this function uses the ES6 new-targert.
+     *
+     * @return true if the ES6 new-target flag is set
+     */
+    public boolean usesNewTarget() {
+        return getFlag(ES6_USES_NEW_TARGET);
+    }
+
+    /**
+     * Checks if this is an ES6 module.
+     *
+     * @return true if this is an ES6 module
+     */
+    public boolean isModule() {
+        return kind == Kind.MODULE;
+    }
+
+    /**
+     * Returns the functions's ES6 module.
+     *
+     * @return the module, or null if this function is not part of one
+     */
+    public Module getModule() {
+        return module;
     }
 
     /**
@@ -1193,7 +1268,6 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
                         name,
                         returnType,
                         compileUnit,
-                        compilationState,
                         body,
                         parameters,
                         thisProperties,
@@ -1249,7 +1323,6 @@ public final class FunctionNode extends LexicalContextExpression implements Flag
                         name,
                         returnType,
                         compileUnit,
-                        compilationState,
                         body,
                         parameters,
                         thisProperties,

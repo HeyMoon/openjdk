@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -59,6 +59,10 @@ class TemplateInterpreterGenerator: public AbstractInterpreterGenerator {
   address generate_safept_entry_for(TosState state, address runtime_entry);
   void    generate_throw_exception();
 
+  void lock_method();
+
+  void bang_stack_shadow_pages(bool native_call);
+
   // Instruction generation
   void generate_and_dispatch (Template* t, TosState tos_out = ilgl);
   void set_vtos_entry_points (Template* t, address& bep, address& cep, address& sep, address& aep, address& iep, address& lep, address& fep, address& dep, address& vep);
@@ -80,29 +84,48 @@ class TemplateInterpreterGenerator: public AbstractInterpreterGenerator {
 
   void generate_all();
 
+  // entry point generator
+  address generate_method_entry(AbstractInterpreter::MethodKind kind);
+
+  address generate_normal_entry(bool synchronized);
+  address generate_native_entry(bool synchronized);
+  address generate_abstract_entry(void);
+  address generate_math_entry(AbstractInterpreter::MethodKind kind);
+  address generate_Reference_get_entry();
+  address generate_CRC32_update_entry();
+  address generate_CRC32_updateBytes_entry(AbstractInterpreter::MethodKind kind);
+  address generate_CRC32C_updateBytes_entry(AbstractInterpreter::MethodKind kind);
+#ifdef IA32
+  address generate_Float_intBitsToFloat_entry();
+  address generate_Float_floatToRawIntBits_entry();
+  address generate_Double_longBitsToDouble_entry();
+  address generate_Double_doubleToRawLongBits_entry();
+#endif // IA32
+  // Some platforms don't need registers, other need two. Unused function is
+  // left unimplemented.
+  void generate_stack_overflow_check(void);
+  void generate_stack_overflow_check(Register Rframe_size, Register Rscratch);
+
+  void generate_counter_incr(Label* overflow, Label* profile_method, Label* profile_method_continue);
+  void generate_counter_overflow(Label& continue_entry);
+
+  void generate_fixed_frame(bool native_call);
+#ifdef SPARC
+  void save_native_result(void);
+  void restore_native_result(void);
+#endif // SPARC
+
+#ifdef AARCH64
+  void generate_transcendental_entry(AbstractInterpreter::MethodKind kind, int fpargs);
+#endif // AARCH64
+
+#ifdef PPC
+  void lock_method(Register Rflags, Register Rscratch1, Register Rscratch2, bool flags_preloaded=false);
+  void generate_fixed_frame(bool native_call, Register Rsize_of_parameters, Register Rsize_of_locals);
+#endif // PPC
+
  public:
   TemplateInterpreterGenerator(StubQueue* _code);
-
-#ifdef TARGET_ARCH_x86
-# include "templateInterpreterGenerator_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "templateInterpreterGenerator_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "templateInterpreterGenerator_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "templateInterpreterGenerator_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "templateInterpreterGenerator_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "templateInterpreterGenerator_aarch64.hpp"
-#endif
-
-
 };
 
 #endif // !CC_INTERP

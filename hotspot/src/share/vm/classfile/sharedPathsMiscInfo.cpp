@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,15 +26,16 @@
 #include "classfile/classLoader.hpp"
 #include "classfile/classLoaderData.inline.hpp"
 #include "classfile/sharedPathsMiscInfo.hpp"
+#include "logging/log.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/metaspaceShared.hpp"
+#include "memory/resourceArea.hpp"
 #include "runtime/arguments.hpp"
+#include "utilities/ostream.hpp"
 
 void SharedPathsMiscInfo::add_path(const char* path, int type) {
-  if (TraceClassPaths) {
-    tty->print("[type=%s] ", type_name(type));
-    trace_class_path("[Add misc shared path ", path);
-  }
+  log_info(class, path)("type=%s ", type_name(type));
+  ClassLoader::trace_class_path("add misc shared path ", path);
   write(path, strlen(path) + 1);
   write_jint(jint(type));
 }
@@ -72,6 +73,24 @@ bool SharedPathsMiscInfo::fail(const char* msg, const char* name) {
   return false;
 }
 
+void SharedPathsMiscInfo::print_path(int type, const char* path) {
+  ResourceMark rm;
+  outputStream* out = Log(class, path)::info_stream();
+  switch (type) {
+  case BOOT:
+    out->print("Expecting BOOT path=%s", path);
+    break;
+  case NON_EXIST:
+    out->print("Expecting that %s does not exist", path);
+    break;
+  case REQUIRED:
+    out->print("Expecting that file %s must exist and is not altered", path);
+    break;
+  default:
+    ShouldNotReachHere();
+  }
+}
+
 bool SharedPathsMiscInfo::check() {
   // The whole buffer must be 0 terminated so that we can use strlen and strcmp
   // without fear.
@@ -90,17 +109,14 @@ bool SharedPathsMiscInfo::check() {
     if (!read_jint(&type)) {
       return fail("Corrupted archive file header");
     }
-    if (TraceClassPaths) {
-      tty->print("[type=%s ", type_name(type));
-      print_path(tty, type, path);
-      tty->print_cr("]");
-    }
+    log_info(class, path)("type=%s ", type_name(type));
+    print_path(type, path);
     if (!check(type, path)) {
       if (!PrintSharedArchiveAndExit) {
         return false;
       }
     } else {
-      trace_class_path("[ok");
+      ClassLoader::trace_class_path("ok");
     }
   }
 
@@ -111,7 +127,7 @@ bool SharedPathsMiscInfo::check(jint type, const char* path) {
   switch (type) {
   case BOOT:
     if (os::file_name_strcmp(path, Arguments::get_sysclasspath()) != 0) {
-      return fail("[BOOT classpath mismatch, actual: -Dsun.boot.class.path=", Arguments::get_sysclasspath());
+      return fail("[BOOT classpath mismatch, actual =", Arguments::get_sysclasspath());
     }
     break;
   case NON_EXIST: // fall-through
@@ -130,6 +146,9 @@ bool SharedPathsMiscInfo::check(jint type, const char* path) {
           // But we want it to not exist -> fail
           return fail("File must not exist");
         }
+        if ((st.st_mode & S_IFMT) != S_IFREG) {
+          return fail("Did not get a regular file as expected.");
+        }
         time_t    timestamp;
         long      filesize;
 
@@ -145,7 +164,6 @@ bool SharedPathsMiscInfo::check(jint type, const char* path) {
       }
     }
     break;
-
   default:
     return fail("Corrupted archive file header");
   }

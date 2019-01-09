@@ -81,7 +81,7 @@ ciMethodData::ciMethodData() : ciMetadata(NULL) {
 void ciMethodData::load_extra_data() {
   MethodData* mdo = get_MethodData();
 
-  MutexLocker(mdo->extra_data_lock());
+  MutexLocker ml(mdo->extra_data_lock());
 
   // speculative trap entries also hold a pointer to a Method so need to be translated
   DataLayout* dp_src  = mdo->extra_data_base();
@@ -103,16 +103,13 @@ void ciMethodData::load_extra_data() {
 
     switch(tag) {
     case DataLayout::speculative_trap_data_tag: {
-      ciSpeculativeTrapData* data_dst = new ciSpeculativeTrapData(dp_dst);
-      SpeculativeTrapData* data_src = new SpeculativeTrapData(dp_src);
+      ciSpeculativeTrapData data_dst(dp_dst);
+      SpeculativeTrapData   data_src(dp_src);
 
-      data_dst->translate_from(data_src);
-
-#ifdef ASSERT
-      SpeculativeTrapData* data_src2 = new SpeculativeTrapData(dp_src);
-      assert(data_src2->method() == data_src->method() && data_src2->bci() == data_src->bci(), "entries changed while translating");
-#endif
-
+      { // During translation a safepoint can happen or VM lock can be taken (e.g., Compile_lock).
+        MutexUnlocker ml(mdo->extra_data_lock());
+        data_dst.translate_from(&data_src);
+      }
       break;
     }
     case DataLayout::bit_data_tag:
@@ -120,9 +117,11 @@ void ciMethodData::load_extra_data() {
     case DataLayout::no_tag:
     case DataLayout::arg_info_data_tag:
       // An empty slot or ArgInfoData entry marks the end of the trap data
-      return;
+      {
+        return; // Need a block to avoid SS compiler bug
+      }
     default:
-      fatal(err_msg("bad tag = %d", dp_dst->tag()));
+      fatal("bad tag = %d", tag);
     }
   }
 }
@@ -289,7 +288,7 @@ ciProfileData* ciMethodData::bci_to_extra_data(int bci, ciMethod* m, bool& two_f
       break;
     }
     default:
-      fatal(err_msg("bad tag = %d", dp->tag()));
+      fatal("bad tag = %d", dp->tag());
     }
   }
   return NULL;
@@ -409,11 +408,13 @@ void ciMethodData::set_argument_type(int bci, int i, ciKlass* k) {
   MethodData* mdo = get_MethodData();
   if (mdo != NULL) {
     ProfileData* data = mdo->bci_to_data(bci);
-    if (data->is_CallTypeData()) {
-      data->as_CallTypeData()->set_argument_type(i, k->get_Klass());
-    } else {
-      assert(data->is_VirtualCallTypeData(), "no arguments!");
-      data->as_VirtualCallTypeData()->set_argument_type(i, k->get_Klass());
+    if (data != NULL) {
+      if (data->is_CallTypeData()) {
+        data->as_CallTypeData()->set_argument_type(i, k->get_Klass());
+      } else {
+        assert(data->is_VirtualCallTypeData(), "no arguments!");
+        data->as_VirtualCallTypeData()->set_argument_type(i, k->get_Klass());
+      }
     }
   }
 }
@@ -431,11 +432,13 @@ void ciMethodData::set_return_type(int bci, ciKlass* k) {
   MethodData* mdo = get_MethodData();
   if (mdo != NULL) {
     ProfileData* data = mdo->bci_to_data(bci);
-    if (data->is_CallTypeData()) {
-      data->as_CallTypeData()->set_return_type(k->get_Klass());
-    } else {
-      assert(data->is_VirtualCallTypeData(), "no arguments!");
-      data->as_VirtualCallTypeData()->set_return_type(k->get_Klass());
+    if (data != NULL) {
+      if (data->is_CallTypeData()) {
+        data->as_CallTypeData()->set_return_type(k->get_Klass());
+      } else {
+        assert(data->is_VirtualCallTypeData(), "no arguments!");
+        data->as_VirtualCallTypeData()->set_return_type(k->get_Klass());
+      }
     }
   }
 }
@@ -578,7 +581,7 @@ void ciMethodData::dump_replay_data_extra_data_helper(outputStream* out, int rou
       break;
     }
     default:
-      fatal(err_msg("bad tag = %d", dp->tag()));
+      fatal("bad tag = %d", dp->tag());
     }
   }
 }
@@ -690,7 +693,7 @@ void ciMethodData::print_data_on(outputStream* st) {
       data = new ciSpeculativeTrapData(dp);
       break;
     default:
-      fatal(err_msg("unexpected tag %d", dp->tag()));
+      fatal("unexpected tag %d", dp->tag());
     }
     st->print("%d", dp_to_di(data->dp()));
     st->fill_to(6);

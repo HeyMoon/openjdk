@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@
 #include "c1/c1_Instruction.hpp"
 #include "c1/c1_LIR.hpp"
 #include "ci/ciMethodData.hpp"
+#include "utilities/macros.hpp"
 #include "utilities/sizes.hpp"
 
 // The classes responsible for code emission and register allocation
@@ -39,8 +40,7 @@ class Invoke;
 class SwitchRange;
 class LIRItem;
 
-define_array(LIRItemArray, LIRItem*)
-define_stack(LIRItemList, LIRItemArray)
+typedef GrowableArray<LIRItem*> LIRItemList;
 
 class SwitchRange: public CompilationResourceObj {
  private:
@@ -56,15 +56,12 @@ class SwitchRange: public CompilationResourceObj {
   BlockBegin* sux() const { return _sux; }
 };
 
-define_array(SwitchRangeArray, SwitchRange*)
-define_stack(SwitchRangeList, SwitchRangeArray)
-
+typedef GrowableArray<SwitchRange*> SwitchRangeArray;
+typedef GrowableArray<SwitchRange*> SwitchRangeList;
 
 class ResolveNode;
 
-define_array(NodeArray, ResolveNode*);
-define_stack(NodeList, NodeArray);
-
+typedef GrowableArray<ResolveNode*> NodeList;
 
 // Node objects form a directed graph of LIR_Opr
 // Edges between Nodes represent moves from one Node to its destinations
@@ -86,7 +83,7 @@ class ResolveNode: public CompilationResourceObj {
   // accessors
   LIR_Opr operand() const           { return _operand; }
   int no_of_destinations() const    { return _destinations.length(); }
-  ResolveNode* destination_at(int i)     { return _destinations[i]; }
+  ResolveNode* destination_at(int i)     { return _destinations.at(i); }
   bool assigned() const             { return _assigned; }
   bool visited() const              { return _visited; }
   bool start_node() const           { return _start_node; }
@@ -153,8 +150,13 @@ class PhiResolver: public CompilationResourceObj {
 
 // only the classes below belong in the same file
 class LIRGenerator: public InstructionVisitor, public BlockClosure {
-
+ // LIRGenerator should never get instatiated on the heap.
  private:
+  void* operator new(size_t size) throw();
+  void* operator new[](size_t size) throw();
+  void operator delete(void* p) { ShouldNotReachHere(); }
+  void operator delete[](void* p) { ShouldNotReachHere(); }
+
   Compilation*  _compilation;
   ciMethod*     _method;    // method that we are compiling
   PhiResolverState  _resolver_state;
@@ -241,15 +243,20 @@ class LIRGenerator: public InstructionVisitor, public BlockClosure {
 
   void do_RegisterFinalizer(Intrinsic* x);
   void do_isInstance(Intrinsic* x);
+  void do_isPrimitive(Intrinsic* x);
   void do_getClass(Intrinsic* x);
   void do_currentThread(Intrinsic* x);
+  void do_FmaIntrinsic(Intrinsic* x);
   void do_MathIntrinsic(Intrinsic* x);
+  void do_LibmIntrinsic(Intrinsic* x);
   void do_ArrayCopy(Intrinsic* x);
   void do_CompareAndSwap(Intrinsic* x, ValueType* type);
   void do_NIOCheckIndex(Intrinsic* x);
   void do_FPIntrinsics(Intrinsic* x);
   void do_Reference_get(Intrinsic* x);
   void do_update_CRC32(Intrinsic* x);
+  void do_update_CRC32C(Intrinsic* x);
+  void do_vectorizedMismatch(Intrinsic* x);
 
   LIR_Opr call_runtime(BasicTypeArray* signature, LIRItemList* args, address entry, ValueType* result_type, CodeEmitInfo* info);
   LIR_Opr call_runtime(BasicTypeArray* signature, LIR_OprList* args, address entry, ValueType* result_type, CodeEmitInfo* info);
@@ -306,7 +313,7 @@ class LIRGenerator: public InstructionVisitor, public BlockClosure {
   // is_strictfp is only needed for mul and div (and only generates different code on i486)
   void arithmetic_op(Bytecodes::Code code, LIR_Opr result, LIR_Opr left, LIR_Opr right, bool is_strictfp, LIR_Opr tmp, CodeEmitInfo* info = NULL);
   // machine dependent.  returns true if it emitted code for the multiply
-  bool strength_reduce_multiply(LIR_Opr left, int constant, LIR_Opr result, LIR_Opr tmp);
+  bool strength_reduce_multiply(LIR_Opr left, jint constant, LIR_Opr result, LIR_Opr tmp);
 
   void store_stack_parameter (LIR_Opr opr, ByteSize offset_from_sp_in_bytes);
 
@@ -354,7 +361,7 @@ class LIRGenerator: public InstructionVisitor, public BlockClosure {
   void add_large_constant(LIR_Opr src, int c, LIR_Opr dest);
 
   // machine preferences and characteristics
-  bool can_inline_as_constant(Value i) const;
+  bool can_inline_as_constant(Value i S390_ONLY(COMMA int bits = 20)) const;
   bool can_inline_as_constant(LIR_Const* c) const;
   bool can_store_as_constant(Value i, BasicType type) const;
 
@@ -408,7 +415,7 @@ class LIRGenerator: public InstructionVisitor, public BlockClosure {
   }
 
   static LIR_Condition lir_cond(If::Condition cond) {
-    LIR_Condition l;
+    LIR_Condition l = lir_cond_unknown;
     switch (cond) {
     case If::eql: l = lir_cond_equal;        break;
     case If::neq: l = lir_cond_notEqual;     break;
@@ -418,6 +425,7 @@ class LIRGenerator: public InstructionVisitor, public BlockClosure {
     case If::gtr: l = lir_cond_greater;      break;
     case If::aeq: l = lir_cond_aboveEqual;   break;
     case If::beq: l = lir_cond_belowEqual;   break;
+    default: fatal("You must pass valid If::Condition");
     };
     return l;
   }
@@ -432,17 +440,20 @@ class LIRGenerator: public InstructionVisitor, public BlockClosure {
   SwitchRangeArray* create_lookup_ranges(LookupSwitch* x);
   void do_SwitchRanges(SwitchRangeArray* x, LIR_Opr value, BlockBegin* default_sux);
 
-  void do_RuntimeCall(address routine, int expected_arguments, Intrinsic* x);
 #ifdef TRACE_HAVE_INTRINSICS
-  void do_ThreadIDIntrinsic(Intrinsic* x);
   void do_ClassIDIntrinsic(Intrinsic* x);
+  void do_getBufferWriter(Intrinsic* x);
 #endif
+
+  void do_RuntimeCall(address routine, Intrinsic* x);
+
   ciKlass* profile_type(ciMethodData* md, int md_first_offset, int md_offset, intptr_t profiled_k,
                         Value arg, LIR_Opr& mdp, bool not_null, ciKlass* signature_at_call_k,
                         ciKlass* callee_signature_k);
   void profile_arguments(ProfileCall* x);
   void profile_parameters(Base* x);
   void profile_parameters_at_call(ProfileCall* x);
+  LIR_Opr maybe_mask_boolean(StoreIndexed* x, LIR_Opr array, LIR_Opr value, CodeEmitInfo*& null_check_info);
 
  public:
   Compilation*  compilation() const              { return _compilation; }
@@ -468,7 +479,7 @@ class LIRGenerator: public InstructionVisitor, public BlockClosure {
     : _compilation(compilation)
     , _method(method)
     , _virtual_register_number(LIR_OprDesc::vreg_base)
-    , _vreg_flags(NULL, 0, num_vreg_flags) {
+    , _vreg_flags(num_vreg_flags) {
     init();
   }
 
@@ -487,7 +498,14 @@ class LIRGenerator: public InstructionVisitor, public BlockClosure {
   static LIR_Opr divInOpr();
   static LIR_Opr divOutOpr();
   static LIR_Opr remOutOpr();
+#ifdef S390
+  // On S390 we can do ldiv, lrem without RT call.
+  static LIR_Opr ldivInOpr();
+  static LIR_Opr ldivOutOpr();
+  static LIR_Opr lremOutOpr();
+#endif
   static LIR_Opr shiftCountOpr();
+  LIR_Opr syncLockOpr();
   LIR_Opr syncTempOpr();
   LIR_Opr atomicLockOpr();
 
@@ -611,7 +629,7 @@ class LIRItem: public CompilationResourceObj {
 
   void load_item();
   void load_byte_item();
-  void load_nonconstant();
+  void load_nonconstant(S390_ONLY(int bits = 20));
   // load any values which can't be expressed as part of a single store instruction
   void load_for_store(BasicType store_type);
   void load_item_force(LIR_Opr reg);

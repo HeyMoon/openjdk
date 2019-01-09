@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,7 +21,10 @@
  * questions.
  */
 
-import jdk.test.lib.ExitCode;
+package compiler.intrinsics.sha.cli.testcases;
+
+import compiler.intrinsics.sha.cli.SHAOptionsBase;
+import jdk.test.lib.process.ExitCode;
 import jdk.test.lib.Platform;
 import jdk.test.lib.cli.CommandLineOptionTest;
 import jdk.test.lib.cli.predicate.AndPredicate;
@@ -49,6 +52,7 @@ public class GenericTestCaseForSupportedCPU extends
         CommandLineOptionTest.verifySameJVMStartup(null, new String[] {
                         SHAOptionsBase.getWarningForUnsupportedCPU(optionName)
                 }, shouldPassMessage, shouldPassMessage, ExitCode.OK,
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(optionName, true));
 
         // Verify that option could be disabled even if +UseSHA was passed to
@@ -60,6 +64,7 @@ public class GenericTestCaseForSupportedCPU extends
                         optionName, CommandLineOptionTest.prepareBooleanFlag(
                             SHAOptionsBase.USE_SHA_OPTION, true)),
                 ExitCode.OK,
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(
                         SHAOptionsBase.USE_SHA_OPTION, true),
                 CommandLineOptionTest.prepareBooleanFlag(optionName, false));
@@ -75,6 +80,7 @@ public class GenericTestCaseForSupportedCPU extends
                                   optionName,
                                   CommandLineOptionTest.prepareBooleanFlag(SHAOptionsBase.USE_SHA_OPTION, false)),
                     ExitCode.OK,
+                    SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                     CommandLineOptionTest.prepareBooleanFlag(SHAOptionsBase.USE_SHA_OPTION, false),
                     CommandLineOptionTest.prepareBooleanFlag(optionName, true));
         }
@@ -86,18 +92,21 @@ public class GenericTestCaseForSupportedCPU extends
 
         CommandLineOptionTest.verifyOptionValueForSameVM(optionName, "true",
                 String.format("Option '%s' should be enabled by default",
-                        optionName));
+                        optionName),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS);
 
         // Verify that it is possible to explicitly enable the option.
         CommandLineOptionTest.verifyOptionValueForSameVM(optionName, "true",
                 String.format("Option '%s' was set to have value 'true'",
                         optionName),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(optionName, true));
 
         // Verify that it is possible to explicitly disable the option.
         CommandLineOptionTest.verifyOptionValueForSameVM(optionName, "false",
                 String.format("Option '%s' was set to have value 'false'",
                         optionName),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(optionName, false));
 
         // verify that option is disabled when -UseSHA was passed to JVM.
@@ -106,6 +115,7 @@ public class GenericTestCaseForSupportedCPU extends
                         + " flag set to JVM", optionName,
                         CommandLineOptionTest.prepareBooleanFlag(
                             SHAOptionsBase.USE_SHA_OPTION, false)),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(optionName, true),
                 CommandLineOptionTest.prepareBooleanFlag(
                         SHAOptionsBase.USE_SHA_OPTION, false));
@@ -117,6 +127,7 @@ public class GenericTestCaseForSupportedCPU extends
                         + " even if %s flag set to JVM", optionName,
                         CommandLineOptionTest.prepareBooleanFlag(
                             SHAOptionsBase.USE_SHA_OPTION, true)),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(
                         SHAOptionsBase.USE_SHA_OPTION, true),
                 CommandLineOptionTest.prepareBooleanFlag(optionName, false));

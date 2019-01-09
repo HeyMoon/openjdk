@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,8 +27,8 @@
 
 #include "memory/allocation.hpp"
 #include "runtime/timer.hpp"
+#include "utilities/globalDefinitions.hpp"
 
-class GCId;
 DEBUG_ONLY(class ResourceMark;)
 
 // Output streams for printing
@@ -49,12 +49,21 @@ class outputStream : public ResourceObj {
    int _newlines;    // number of '\n' output so far
    julong _precount; // number of chars output, less _position
    TimeStamp _stamp; // for time stamps
+   char* _scratch;   // internal scratch buffer for printf
+   size_t _scratch_len; // size of internal scratch buffer
 
    void update_position(const char* s, size_t len);
    static const char* do_vsnprintf(char* buffer, size_t buflen,
                                    const char* format, va_list ap,
                                    bool add_cr,
                                    size_t& result_len)  ATTRIBUTE_PRINTF(3, 0);
+
+   // calls do_vsnprintf and writes output to stream; uses an on-stack buffer.
+   void do_vsnprintf_and_write_with_automatic_buffer(const char* format, va_list ap, bool add_cr) ATTRIBUTE_PRINTF(2, 0);
+   // calls do_vsnprintf and writes output to stream; uses the user-provided buffer;
+   void do_vsnprintf_and_write_with_scratch_buffer(const char* format, va_list ap, bool add_cr) ATTRIBUTE_PRINTF(2, 0);
+   // calls do_vsnprintf, then writes output to stream.
+   void do_vsnprintf_and_write(const char* format, va_list ap, bool add_cr) ATTRIBUTE_PRINTF(2, 0);
 
  public:
    // creation
@@ -108,7 +117,6 @@ class outputStream : public ResourceObj {
    void date_stamp(bool guard) {
      date_stamp(guard, "", ": ");
    }
-   void gclog_stamp(const GCId& gc_id);
 
    // portable printing of 64 bit integers
    void print_jlong(jlong value);
@@ -120,6 +128,10 @@ class outputStream : public ResourceObj {
    virtual void rotate_log(bool force, outputStream* out = NULL) {} // GC log rotation
    virtual ~outputStream() {}   // close properly on deletion
 
+   // Caller may specify their own scratch buffer to use for printing; otherwise,
+   // an automatic buffer on the stack (with O_BUFLEN len) is used.
+   void set_scratch_buffer(char* p, size_t len) { _scratch = p; _scratch_len = len; }
+
    void dec_cr() { dec(); cr(); }
    void inc_cr() { inc(); cr(); }
 };
@@ -127,7 +139,6 @@ class outputStream : public ResourceObj {
 // standard output
 // ANSI C++ name collision
 extern outputStream* tty;           // tty output
-extern outputStream* gclog_or_tty;  // stream for gc log if -Xloggc:<f>, or tty
 
 class streamIndentor : public StackObj {
  private:
@@ -235,54 +246,10 @@ class fdStream : public outputStream {
   void flush() {};
 };
 
-class gcLogFileStream : public fileStream {
- protected:
-  const char*  _file_name;
-  jlong  _bytes_written;
-  uintx  _cur_file_num;             // current logfile rotation number, from 0 to NumberOfGCLogFiles-1
- public:
-  gcLogFileStream(const char* file_name);
-  ~gcLogFileStream();
-  virtual void write(const char* c, size_t len);
-  virtual void rotate_log(bool force, outputStream* out = NULL);
-  void dump_loggc_header();
-
-  /* If "force" sets true, force log file rotation from outside JVM */
-  bool should_rotate(bool force) {
-    return force ||
-             ((GCLogFileSize != 0) && (_bytes_written >= (jlong)GCLogFileSize));
-  }
-};
-
-#ifndef PRODUCT
-// unit test for checking -Xloggc:<filename> parsing result
-void test_loggc_filename();
-#endif
-
 void ostream_init();
 void ostream_init_log();
 void ostream_exit();
 void ostream_abort();
-
-// staticBufferStream uses a user-supplied buffer for all formatting.
-// Used for safe formatting during fatal error handling.  Not MT safe.
-// Do not share the stream between multiple threads.
-class staticBufferStream : public outputStream {
- private:
-  char* _buffer;
-  size_t _buflen;
-  outputStream* _outer_stream;
- public:
-  staticBufferStream(char* buffer, size_t buflen,
-                     outputStream *outer_stream);
-  ~staticBufferStream() {};
-  virtual void write(const char* c, size_t len);
-  void flush();
-  void print(const char* format, ...) ATTRIBUTE_PRINTF(2, 3);
-  void print_cr(const char* format, ...) ATTRIBUTE_PRINTF(2, 3);
-  void vprint(const char *format, va_list argptr) ATTRIBUTE_PRINTF(2, 0);
-  void vprint_cr(const char* format, va_list argptr) ATTRIBUTE_PRINTF(2, 0);
-};
 
 // In the non-fixed buffer case an underlying buffer will be created and
 // managed in C heap. Not MT-safe.

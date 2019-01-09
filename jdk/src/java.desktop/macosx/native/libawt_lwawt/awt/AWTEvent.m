@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,18 +23,15 @@
  * questions.
  */
 
-#import <JavaNativeFoundation/JavaNativeFoundation.h>
-#import <JavaRuntimeSupport/JavaRuntimeSupport.h>
-#import <sys/time.h>
-#include <Carbon/Carbon.h>
-
-#import "jni_util.h" 
-#import "LWCToolkit.h"
-#import "ThreadUtilities.h"
-
 #import "java_awt_event_InputEvent.h"
 #import "java_awt_event_KeyEvent.h"
-#import "java_awt_event_MouseEvent.h"
+#import "LWCToolkit.h"
+
+#import "jni_util.h"
+
+#import <JavaNativeFoundation/JavaNativeFoundation.h>
+#import <sys/time.h>
+#import <Carbon/Carbon.h>
 
 /*
  * Table to map typed characters to their Java virtual key equivalent and back.
@@ -134,10 +131,10 @@ const keyTable[] =
     {0x3A, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_ALT},       // ****
     {0x3B, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_CONTROL},   // ****
     {0x3C, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_UNDEFINED},
-    {0x3D, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_UNDEFINED},
+    {0x3D, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_ALT_GRAPH},
     {0x3E, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_UNDEFINED},
     {0x3F, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_UNDEFINED}, // the 'fn' key on PowerBooks
-    {0x40, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_UNDEFINED},
+    {0x40, NO,  KL_STANDARD, java_awt_event_KeyEvent_VK_F17},
     {0x41, YES, KL_NUMPAD,   java_awt_event_KeyEvent_VK_DECIMAL},
     {0x42, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_UNDEFINED},
     {0x43, YES, KL_NUMPAD,   java_awt_event_KeyEvent_VK_MULTIPLY},
@@ -152,8 +149,8 @@ const keyTable[] =
     {0x4C, YES, KL_NUMPAD,   java_awt_event_KeyEvent_VK_ENTER},
     {0x4D, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_UNDEFINED},
     {0x4E, YES, KL_NUMPAD,   java_awt_event_KeyEvent_VK_SUBTRACT},
-    {0x4F, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_UNDEFINED},
-    {0x50, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_UNDEFINED},
+    {0x4F, NO,  KL_STANDARD, java_awt_event_KeyEvent_VK_F18},
+    {0x50, NO,  KL_STANDARD, java_awt_event_KeyEvent_VK_F19},
     {0x51, YES, KL_NUMPAD,   java_awt_event_KeyEvent_VK_EQUALS},
     {0x52, YES, KL_NUMPAD,   java_awt_event_KeyEvent_VK_NUMPAD0},
     {0x53, YES, KL_NUMPAD,   java_awt_event_KeyEvent_VK_NUMPAD1},
@@ -163,7 +160,7 @@ const keyTable[] =
     {0x57, YES, KL_NUMPAD,   java_awt_event_KeyEvent_VK_NUMPAD5},
     {0x58, YES, KL_NUMPAD,   java_awt_event_KeyEvent_VK_NUMPAD6},
     {0x59, YES, KL_NUMPAD,   java_awt_event_KeyEvent_VK_NUMPAD7},
-    {0x5A, NO,  KL_UNKNOWN,  java_awt_event_KeyEvent_VK_UNDEFINED},
+    {0x5A, NO,  KL_STANDARD, java_awt_event_KeyEvent_VK_F20},
     {0x5B, YES, KL_NUMPAD,   java_awt_event_KeyEvent_VK_NUMPAD8},
     {0x5C, YES, KL_NUMPAD,   java_awt_event_KeyEvent_VK_NUMPAD9},
     {0x5D, YES, KL_STANDARD, java_awt_event_KeyEvent_VK_BACK_SLASH}, // This is a combo yen/backslash on JIS keyboards.
@@ -281,16 +278,6 @@ const nsKeyToJavaModifierTable[] =
         java_awt_event_KeyEvent_VK_CONTROL
     },
     {
-        NSAlternateKeyMask,
-        //kCGSFlagsMaskAppleLeftAlternateKey,
-        //kCGSFlagsMaskAppleRightAlternateKey,
-        58,
-        61,
-        java_awt_event_InputEvent_ALT_DOWN_MASK,
-        java_awt_event_InputEvent_ALT_MASK,
-        java_awt_event_KeyEvent_VK_ALT
-    },
-    {
         NSCommandKeyMask,
         //kCGSFlagsMaskAppleLeftCommandKey,
         //kCGSFlagsMaskAppleRightCommandKey,
@@ -299,6 +286,24 @@ const nsKeyToJavaModifierTable[] =
         java_awt_event_InputEvent_META_DOWN_MASK,
         java_awt_event_InputEvent_META_MASK,
         java_awt_event_KeyEvent_VK_META
+    },
+    {
+        NSAlternateKeyMask,
+        //kCGSFlagsMaskAppleLeftAlternateKey,
+        //kCGSFlagsMaskAppleRightAlternateKey,
+        58,
+        0,
+        java_awt_event_InputEvent_ALT_DOWN_MASK,
+        java_awt_event_InputEvent_ALT_MASK,
+        java_awt_event_KeyEvent_VK_ALT
+    },
+    {
+        NSAlternateKeyMask,
+        0,
+        61,
+        java_awt_event_InputEvent_ALT_DOWN_MASK | java_awt_event_InputEvent_ALT_GRAPH_DOWN_MASK,
+        java_awt_event_InputEvent_ALT_MASK | java_awt_event_InputEvent_ALT_GRAPH_MASK,
+        java_awt_event_KeyEvent_VK_ALT | java_awt_event_KeyEvent_VK_ALT_GRAPH
     },
     // NSNumericPadKeyMask
     {
@@ -312,6 +317,9 @@ const nsKeyToJavaModifierTable[] =
     // NSFunctionKeyMask
     {0, 0, 0, 0, 0, 0}
 };
+
+static BOOL leftAltKeyPressed;
+static BOOL altGRPressed = NO;
 
 /*
  * Almost all unicode characters just go from NS to Java with no translation.
@@ -342,7 +350,7 @@ const charTable[] = {
     {0, 0, 0}
 };
 
-unichar NsCharToJavaChar(unichar nsChar, NSUInteger modifiers)
+unichar NsCharToJavaChar(unichar nsChar, NSUInteger modifiers, BOOL spaceKeyTyped)
 {
     const struct _char *cur;
     // Mask off just the keyboard modifiers from the event modifier mask.
@@ -375,6 +383,11 @@ unichar NsCharToJavaChar(unichar nsChar, NSUInteger modifiers)
         return java_awt_event_KeyEvent_CHAR_UNDEFINED;
     }
 
+    // nsChar receives value 0 when SPACE key is typed.
+    if (nsChar == 0 && spaceKeyTyped == YES) {
+        return java_awt_event_KeyEvent_VK_SPACE;
+    }
+	
     // otherwise return character unchanged
     return nsChar;
 }
@@ -526,13 +539,17 @@ NsKeyModifiersToJavaKeyInfo(NSUInteger nsFlags, unsigned short eventKeyCode,
             //    *javaKeyLocation = java_awt_event_KeyEvent_KEY_LOCATION_RIGHT;
             //}
             if (eventKeyCode == cur->leftKeyCode) {
+                leftAltKeyPressed = YES;
                 *javaKeyLocation = java_awt_event_KeyEvent_KEY_LOCATION_LEFT;
             } else if (eventKeyCode == cur->rightKeyCode) {
                 *javaKeyLocation = java_awt_event_KeyEvent_KEY_LOCATION_RIGHT;
+            } else if (cur->nsMask == NSAlternateKeyMask) {
+                leftAltKeyPressed = NO;
+                continue;
             }
             *javaKeyType = (cur->nsMask & nsFlags) ?
-                java_awt_event_KeyEvent_KEY_PRESSED :
-                java_awt_event_KeyEvent_KEY_RELEASED;
+            java_awt_event_KeyEvent_KEY_PRESSED :
+            java_awt_event_KeyEvent_KEY_RELEASED;
             break;
         }
     }
@@ -545,10 +562,22 @@ jint NsKeyModifiersToJavaModifiers(NSUInteger nsFlags, BOOL isExtMods)
 {
     jint javaModifiers = 0;
     const struct _nsKeyToJavaModifier* cur;
-
+	
     for (cur = nsKeyToJavaModifierTable; cur->nsMask != 0; ++cur) {
         if ((cur->nsMask & nsFlags) != 0) {
-            javaModifiers |= isExtMods? cur->javaExtMask : cur->javaMask;
+			
+            if (cur->nsMask == NSAlternateKeyMask) {
+                if (leftAltKeyPressed == YES) {
+                    javaModifiers |= isExtMods? cur->javaExtMask : cur->javaMask;
+                    if (altGRPressed == NO)
+                        break;
+                    } else {
+                        leftAltKeyPressed = YES;
+                        altGRPressed = YES;
+                        continue;
+                    }
+                }
+            javaModifiers |= isExtMods ? cur->javaExtMask : cur->javaMask;
         }
     }
 
@@ -582,7 +611,7 @@ NSUInteger JavaModifiersToNsKeyModifiers(jint javaModifiers, BOOL isExtMods)
 }
 
 
-jint GetJavaMouseModifiers(NSInteger button, NSUInteger modifierFlags)
+jint GetJavaMouseModifiers(NSUInteger modifierFlags)
 {
     // Mousing needs the key modifiers
     jint modifiers = NsKeyModifiersToJavaModifiers(modifierFlags, YES);
@@ -635,38 +664,18 @@ Java_java_awt_AWTEvent_nativeSetSource
 
 /*
  * Class:     sun_lwawt_macosx_NSEvent
- * Method:    nsToJavaMouseModifiers
+ * Method:    nsToJavaModifiers
  * Signature: (II)I
  */
 JNIEXPORT jint JNICALL
-Java_sun_lwawt_macosx_NSEvent_nsToJavaMouseModifiers
-(JNIEnv *env, jclass cls, jint buttonNumber, jint modifierFlags)
-{
-    jint jmodifiers = 0;
-
-JNF_COCOA_ENTER(env);
-
-    jmodifiers = GetJavaMouseModifiers(buttonNumber, modifierFlags);
-
-JNF_COCOA_EXIT(env);
-
-    return jmodifiers;
-}
-
-/*
- * Class:     sun_lwawt_macosx_NSEvent
- * Method:    nsToJavaKeyModifiers
- * Signature: (I)I
- */
-JNIEXPORT jint JNICALL
-Java_sun_lwawt_macosx_NSEvent_nsToJavaKeyModifiers
+Java_sun_lwawt_macosx_NSEvent_nsToJavaModifiers
 (JNIEnv *env, jclass cls, jint modifierFlags)
 {
     jint jmodifiers = 0;
 
 JNF_COCOA_ENTER(env);
 
-    jmodifiers = NsKeyModifiersToJavaModifiers(modifierFlags, YES);
+    jmodifiers = GetJavaMouseModifiers(modifierFlags);
 
 JNF_COCOA_EXIT(env);
 
@@ -762,13 +771,13 @@ JNF_COCOA_EXIT(env);
  */
 JNIEXPORT jint JNICALL
 Java_sun_lwawt_macosx_NSEvent_nsToJavaChar
-(JNIEnv *env, jclass cls, jchar nsChar, jint modifierFlags)
+(JNIEnv *env, jclass cls, jchar nsChar, jint modifierFlags, jboolean spaceKeyTyped)
 {
     jchar javaChar = 0;
 
 JNF_COCOA_ENTER(env);
 
-    javaChar = NsCharToJavaChar(nsChar, modifierFlags);
+    javaChar = NsCharToJavaChar(nsChar, modifierFlags, spaceKeyTyped);
 
 JNF_COCOA_EXIT(env);
 

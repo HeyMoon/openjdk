@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,10 +52,9 @@ public final class Toolkit {
         }
     }
 
-
     /**
      * Swaps bytes.
-     * @throws ArrayOutOfBoundsException if len is not a multiple of 2.
+     * @throws ArrayIndexOutOfBoundsException if len is not a multiple of 2.
      */
     static void getByteSwapped(byte[] b, int off, int len) {
 
@@ -68,7 +67,6 @@ public final class Toolkit {
         }
     }
 
-
     /**
      * Linear to DB scale conversion.
      */
@@ -77,7 +75,6 @@ public final class Toolkit {
         float dB = (float) (Math.log(((linear==0.0)?0.0001:linear))/Math.log(10.0) * 20.0);
         return dB;
     }
-
 
     /**
      * DB to linear scale conversion.
@@ -107,7 +104,6 @@ public final class Toolkit {
         }
         return bytes - (bytes % blockSize);
     }
-
 
     /*
      * gets the number of bytes needed to play the specified number of milliseconds
@@ -153,6 +149,20 @@ public final class Toolkit {
         return (long) (((double) frames) / format.getFrameRate() * 1000000.0d);
     }
 
+    /**
+     * Throws an exception if the buffer size does not represent an integral
+     * number of sample frames.
+     */
+    static void validateBuffer(final int frameSize, final int bufferSize) {
+        if (bufferSize % frameSize == 0) {
+            return;
+        }
+        throw new IllegalArgumentException(String.format(
+                "Buffer size (%d) does not represent an integral number of "
+                        + "sample frames (%d)", bufferSize, frameSize));
+    }
+
+
     static void isFullySpecifiedAudioFormat(AudioFormat format) {
         if (!format.getEncoding().equals(AudioFormat.Encoding.PCM_SIGNED)
             && !format.getEncoding().equals(AudioFormat.Encoding.PCM_UNSIGNED)
@@ -188,7 +198,6 @@ public final class Toolkit {
         }
     }
 
-
     static boolean isFullySpecifiedPCMFormat(AudioFormat format) {
         if (!format.getEncoding().equals(AudioFormat.Encoding.PCM_SIGNED)
             && !format.getEncoding().equals(AudioFormat.Encoding.PCM_UNSIGNED)) {
@@ -203,7 +212,6 @@ public final class Toolkit {
         }
         return true;
     }
-
 
     public static AudioInputStream getPCMConvertedAudioInputStream(AudioInputStream ais) {
         // we can't open the device for non-PCM playback, so we have
@@ -231,5 +239,4 @@ public final class Toolkit {
 
         return ais;
     }
-
 }

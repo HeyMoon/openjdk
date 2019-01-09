@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,10 +26,9 @@
 #include "classfile/symbolTable.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/codeCache.hpp"
-#include "code/codeCacheExtensions.hpp"
 #include "compiler/compileBroker.hpp"
-#include "compiler/compilerOracle.hpp"
 #include "gc/shared/isGCActiveMark.hpp"
+#include "logging/log.hpp"
 #include "memory/heapInspection.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/symbol.hpp"
@@ -41,8 +40,6 @@
 #include "runtime/vm_operations.hpp"
 #include "services/threadService.hpp"
 #include "trace/tracing.hpp"
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
 
 #define VM_OP_NAME_INITIALIZE(name) #name,
 
@@ -58,13 +55,19 @@ void VM_Operation::set_calling_thread(Thread* thread, ThreadPriority priority) {
 
 void VM_Operation::evaluate() {
   ResourceMark rm;
-  if (TraceVMOperation) {
-    tty->print("[");
-    NOT_PRODUCT(print();)
+  outputStream* debugstream;
+  bool enabled = log_is_enabled(Debug, vmoperation);
+  if (enabled) {
+    debugstream = Log(vmoperation)::debug_stream();
+    debugstream->print("begin ");
+    print_on_error(debugstream);
+    debugstream->cr();
   }
   doit();
-  if (TraceVMOperation) {
-    tty->print_cr("]");
+  if (enabled) {
+    debugstream->print("end ");
+    print_on_error(debugstream);
+    debugstream->cr();
   }
 }
 
@@ -79,14 +82,14 @@ const char* VM_Operation::mode_to_string(Mode mode) {
 }
 // Called by fatal error handler.
 void VM_Operation::print_on_error(outputStream* st) const {
-  st->print("VM_Operation (" PTR_FORMAT "): ", this);
+  st->print("VM_Operation (" PTR_FORMAT "): ", p2i(this));
   st->print("%s", name());
 
   const char* mode = mode_to_string(evaluation_mode());
   st->print(", mode: %s", mode);
 
   if (calling_thread()) {
-    st->print(", requested by thread " PTR_FORMAT, calling_thread());
+    st->print(", requested by thread " PTR_FORMAT, p2i(calling_thread()));
   }
 }
 
@@ -101,6 +104,14 @@ void VM_ThreadStop::doit() {
   }
 }
 
+void VM_ClearICs::doit() {
+  if (_preserve_static_stubs) {
+    CodeCache::cleanup_inline_caches();
+  } else {
+    CodeCache::clear_inline_caches();
+  }
+}
+
 void VM_Deoptimize::doit() {
   // We do not want any GCs to happen while we are in the middle of this VM operation
   ResourceMark rm;
@@ -109,22 +120,24 @@ void VM_Deoptimize::doit() {
   // Deoptimize all activations depending on marked nmethods
   Deoptimization::deoptimize_dependents();
 
-  // Make the dependent methods zombies
-  CodeCache::make_marked_nmethods_zombies();
+  // Make the dependent methods not entrant
+  CodeCache::make_marked_nmethods_not_entrant();
 }
 
 void VM_MarkActiveNMethods::doit() {
   NMethodSweeper::mark_active_nmethods();
 }
 
-VM_DeoptimizeFrame::VM_DeoptimizeFrame(JavaThread* thread, intptr_t* id) {
+VM_DeoptimizeFrame::VM_DeoptimizeFrame(JavaThread* thread, intptr_t* id, int reason) {
   _thread = thread;
   _id     = id;
+  _reason = reason;
 }
 
 
 void VM_DeoptimizeFrame::doit() {
-  Deoptimization::deoptimize_frame_internal(_thread, _id);
+  assert(_reason > Deoptimization::Reason_none && _reason < Deoptimization::Reason_LIMIT, "invalid deopt reason");
+  Deoptimization::deoptimize_frame_internal(_thread, _id, (Deoptimization::DeoptReason)_reason);
 }
 
 
@@ -183,14 +196,16 @@ void VM_UnlinkSymbols::doit() {
 
 void VM_Verify::doit() {
   Universe::heap()->prepare_for_verify();
-  Universe::verify(_silent);
+  Universe::verify();
 }
 
 bool VM_PrintThreads::doit_prologue() {
-  assert(Thread::current()->is_Java_thread(), "just checking");
-
   // Make sure AbstractOwnableSynchronizer is loaded
-  java_util_concurrent_locks_AbstractOwnableSynchronizer::initialize(JavaThread::current());
+  JavaThread* jt = JavaThread::current();
+  java_util_concurrent_locks_AbstractOwnableSynchronizer::initialize(jt);
+  if (jt->has_pending_exception()) {
+    return false;
+  }
 
   // Get Heap_lock if concurrent locks will be dumped
   if (_print_concurrent_locks) {
@@ -226,11 +241,13 @@ VM_FindDeadlocks::~VM_FindDeadlocks() {
 }
 
 bool VM_FindDeadlocks::doit_prologue() {
-  assert(Thread::current()->is_Java_thread(), "just checking");
-
-  // Load AbstractOwnableSynchronizer class
   if (_concurrent_locks) {
-    java_util_concurrent_locks_AbstractOwnableSynchronizer::initialize(JavaThread::current());
+    // Make sure AbstractOwnableSynchronizer is loaded
+    JavaThread* jt = JavaThread::current();
+    java_util_concurrent_locks_AbstractOwnableSynchronizer::initialize(jt);
+    if (jt->has_pending_exception()) {
+      return false;
+    }
   }
 
   return true;
@@ -284,10 +301,12 @@ VM_ThreadDump::VM_ThreadDump(ThreadDumpResult* result,
 }
 
 bool VM_ThreadDump::doit_prologue() {
-  assert(Thread::current()->is_Java_thread(), "just checking");
-
-  // Load AbstractOwnableSynchronizer class before taking thread snapshots
-  java_util_concurrent_locks_AbstractOwnableSynchronizer::initialize(JavaThread::current());
+  // Make sure AbstractOwnableSynchronizer is loaded
+  JavaThread* jt = JavaThread::current();
+  java_util_concurrent_locks_AbstractOwnableSynchronizer::initialize(jt);
+  if (jt->has_pending_exception()) {
+    return false;
+  }
 
   if (_with_locked_synchronizers) {
     // Acquire Heap_lock to dump concurrent locks
@@ -370,9 +389,8 @@ volatile bool VM_Exit::_vm_exited = false;
 Thread * VM_Exit::_shutdown_thread = NULL;
 
 int VM_Exit::set_vm_exited() {
-  CodeCacheExtensions::complete_step(CodeCacheExtensionsSteps::LastStep);
 
-  Thread * thr_cur = ThreadLocalStorage::get_thread_slow();
+  Thread * thr_cur = Thread::current();
 
   assert(SafepointSynchronize::is_at_safepoint(), "must be at safepoint already");
 
@@ -394,7 +412,7 @@ int VM_Exit::wait_for_threads_in_native_to_block() {
   // to wait for threads in _thread_in_native state to be quiescent.
   assert(SafepointSynchronize::is_at_safepoint(), "must be at safepoint already");
 
-  Thread * thr_cur = ThreadLocalStorage::get_thread_slow();
+  Thread * thr_cur = Thread::current();
   Monitor timer(Mutex::leaf, "VM_Exit timer", true,
                 Monitor::_safepoint_check_never);
 
@@ -471,7 +489,7 @@ void VM_Exit::doit() {
 
 void VM_Exit::wait_if_vm_exited() {
   if (_vm_exited &&
-      ThreadLocalStorage::get_thread_slow() != _shutdown_thread) {
+      Thread::current_or_null() != _shutdown_thread) {
     // _vm_exited is set at safepoint, and the Threads_lock is never released
     // we will block here until the process dies
     Threads_lock->lock_without_safepoint_check();
@@ -481,14 +499,6 @@ void VM_Exit::wait_if_vm_exited() {
 
 void VM_PrintCompileQueue::doit() {
   CompileBroker::print_compile_queues(_out);
-}
-
-void VM_PrintCodeList::doit() {
-  CodeCache::print_codelist(_out);
-}
-
-void VM_PrintCodeCache::doit() {
-  CodeCache::print_layout(_out);
 }
 
 #if INCLUDE_SERVICES

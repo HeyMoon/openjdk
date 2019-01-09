@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2010, 2011, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -40,8 +40,7 @@ HOTSPOT_DIR=$(TOPDIR)/hotspot
 define SUBDIR_TEST # subdirectory target
 if [ -d $1 ] ; then \
   if [ -r $1/test/Makefile ] ; then \
-    echo "$(MAKE) -k -C $1/test $2" ; \
-    $(MAKE) -k -C $1/test $2 ; \
+    $(MAKE) --no-print-directory -k -C $1/test $2 ; \
   else \
     echo "ERROR: File does not exist: $1/test/Makefile"; \
     exit 1; \
@@ -57,25 +56,44 @@ default: jdk_core langtools_jtreg jaxp_all
 # All testing
 all: jdk_all langtools_all jaxp_all
 
+# Bring in closed test targets if present
+-include $(TOPDIR)/closed/test/Makefile
+
+ifeq ($(TEST_JOBS), 0)
+  ifeq ($(shell $(EXPR) $(JOBS) \> 50), 1)
+    # JTReg cannot handle more than 50 in concurrency
+    JDK_TEST_JOBS=50
+  else
+    JDK_TEST_JOBS=$(JOBS)
+  endif
+else
+  JDK_TEST_JOBS=$(TEST_JOBS)
+endif
 # Test targets
 langtools_% :
-	@$(NO_STOPPING)$(call SUBDIR_TEST, $(LANGTOOLS_DIR), JT_JAVA=$(PRODUCT_HOME) JTREG_HOME=$(JT_HOME) TEST="$(subst langtools_,,$@)" $(subst langtools_,,$@))
+	@$(NO_STOPPING)$(call SUBDIR_TEST, $(LANGTOOLS_DIR), CONCURRENCY=$(JDK_TEST_JOBS) JT_JAVA=$(PRODUCT_HOME) JTREG_HOME=$(JT_HOME) TEST="$(subst langtools_,,$@)" $(subst langtools_,,$@))
 
 jdk_% core_%s svc_%:
-	@$(NO_STOPPING)$(call SUBDIR_TEST, $(JDK_DIR), TEST="$@" $@)
+	@$(NO_STOPPING)$(call SUBDIR_TEST, $(JDK_DIR), CONCURRENCY=$(JDK_TEST_JOBS) TEST="$@" $@)
 
 jaxp_%:
-	@$(NO_STOPPING)$(call SUBDIR_TEST, $(JAXP_DIR), TEST="$@" $@)
+	@$(NO_STOPPING)$(call SUBDIR_TEST, $(JAXP_DIR), CONCURRENCY=$(JDK_TEST_JOBS) TEST="$@" $@)
 
+SUB_MAKE_ARGS :=
+ifneq ($(TEST_JOBS), 0)
+  ifneq ($(TEST_JOBS), )
+    SUB_MAKE_ARGS += CONCURRENCY=$(TEST_JOBS)
+  endif
+endif
 hotspot_%:
-	@$(NO_STOPPING)$(call SUBDIR_TEST, $(HOTSPOT_DIR), TEST="$@" $@)
+	@$(NO_STOPPING)$(call SUBDIR_TEST, $(HOTSPOT_DIR), $(SUB_MAKE_ARGS) TEST="$@" $@)
 
 #
 # jtreg_tests
 #
 # Invocation:
 #
-# make jtreg_tests TESTDIRS=<test-dirs>
+# make jtreg_tests TESTDIRS=<test-dirs> TEST_SELECTION=<path to test or jtreg group> TEST_OUTPUT_DIR=<path>
 #
 # where <test-dirs> is something like '../<component>/test/runtime',
 # <component> in turn being one of the top level directories (for

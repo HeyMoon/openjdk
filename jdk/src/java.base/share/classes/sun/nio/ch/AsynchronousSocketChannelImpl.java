@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,7 +39,7 @@ import java.util.Collections;
 import java.util.concurrent.*;
 import java.util.concurrent.locks.*;
 import sun.net.NetHooks;
-import sun.net.ExtendedOptionsImpl;
+import sun.net.ext.ExtendedSocketOptions;
 
 /**
  * Base implementation of AsynchronousSocketChannel
@@ -54,8 +54,8 @@ abstract class AsynchronousSocketChannelImpl
     // protects state, localAddress, and remoteAddress
     protected final Object stateLock = new Object();
 
-    protected volatile InetSocketAddress localAddress = null;
-    protected volatile InetSocketAddress remoteAddress = null;
+    protected volatile InetSocketAddress localAddress;
+    protected volatile InetSocketAddress remoteAddress;
 
     // State, increases monotonically
     static final int ST_UNINITIALIZED = -1;
@@ -78,7 +78,7 @@ abstract class AsynchronousSocketChannelImpl
 
     // close support
     private final ReadWriteLock closeLock = new ReentrantReadWriteLock();
-    private volatile boolean open = true;
+    private volatile boolean closed;
 
     // set true when exclusive binding is on and SO_REUSEADDR is emulated
     private boolean isReuseAddress;
@@ -106,7 +106,7 @@ abstract class AsynchronousSocketChannelImpl
 
     @Override
     public final boolean isOpen() {
-        return open;
+        return !closed;
     }
 
     /**
@@ -135,9 +135,9 @@ abstract class AsynchronousSocketChannelImpl
         // synchronize with any threads initiating asynchronous operations
         closeLock.writeLock().lock();
         try {
-            if (!open)
+            if (closed)
                 return;     // already closed
-            open = false;
+            closed = true;
         } finally {
             closeLock.writeLock().unlock();
         }
@@ -508,10 +508,13 @@ abstract class AsynchronousSocketChannelImpl
             set.add(StandardSocketOptions.SO_RCVBUF);
             set.add(StandardSocketOptions.SO_KEEPALIVE);
             set.add(StandardSocketOptions.SO_REUSEADDR);
-            set.add(StandardSocketOptions.TCP_NODELAY);
-            if (ExtendedOptionsImpl.flowSupported()) {
-                set.add(jdk.net.ExtendedSocketOptions.SO_FLOW_SLA);
+            if (Net.isReusePortAvailable()) {
+                set.add(StandardSocketOptions.SO_REUSEPORT);
             }
+            set.add(StandardSocketOptions.TCP_NODELAY);
+            ExtendedSocketOptions extendedOptions =
+                    ExtendedSocketOptions.getInstance();
+            set.addAll(extendedOptions.options());
             return Collections.unmodifiableSet(set);
         }
     }

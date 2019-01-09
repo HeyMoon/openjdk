@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,8 +24,18 @@
 import java.io.*;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
+import java.util.Map.Entry;
+import java.util.jar.JarFile;
+import java.util.jar.JarOutputStream;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.regex.*;
+import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
+
 import javax.annotation.processing.Processor;
 import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
@@ -61,8 +71,13 @@ class Example implements Comparable<Example> {
         declaredKeys = new TreeSet<String>();
         srcFiles = new ArrayList<File>();
         procFiles = new ArrayList<File>();
-        supportFiles = new ArrayList<File>();
         srcPathFiles = new ArrayList<File>();
+        moduleSourcePathFiles = new ArrayList<File>();
+        patchModulePathFiles = new ArrayList<File>();
+        modulePathFiles = new ArrayList<File>();
+        classPathFiles = new ArrayList<File>();
+        additionalFiles = new ArrayList<File>();
+        nonEmptySrcFiles = new ArrayList<File>();
 
         findFiles(file, srcFiles);
         for (File f: srcFiles) {
@@ -81,13 +96,29 @@ class Example implements Comparable<Example> {
                 else if (files == srcFiles && c.getName().equals("sourcepath")) {
                     srcPathDir = c;
                     findFiles(c, srcPathFiles);
-                } else if (files == srcFiles && c.getName().equals("support"))
-                    findFiles(c, supportFiles);
-                else
+                } else if (files == srcFiles && c.getName().equals("modulesourcepath")) {
+                    moduleSourcePathDir = c;
+                    findFiles(c, moduleSourcePathFiles);
+                } else if (files == srcFiles && c.getName().equals("patchmodule")) {
+                    patchModulePathDir = c;
+                    findFiles(c, patchModulePathFiles);
+                } else if (files == srcFiles && c.getName().equals("additional")) {
+                    additionalFilesDir = c;
+                    findFiles(c, additionalFiles);
+                } else if (files == srcFiles && c.getName().equals("modulepath")) {
+                    findFiles(c, modulePathFiles);
+                } else if (files == srcFiles && c.getName().equals("classpath")) {
+                    findFiles(c, classPathFiles);
+                } else {
                     findFiles(c, files);
+                }
             }
-        } else if (f.isFile() && f.getName().endsWith(".java")) {
-            files.add(f);
+        } else if (f.isFile()) {
+            if (f.getName().endsWith(".java")) {
+                files.add(f);
+            } else if (f.getName().equals("modulesourcepath")) {
+                moduleSourcePathDir = f;
+            }
         }
     }
 
@@ -116,8 +147,10 @@ class Example implements Comparable<Example> {
                     foundInfo(f);
                     runOpts = Arrays.asList(runMatch.group(1).trim().split(" +"));
                 }
-                if (javaPat.matcher(line).matches())
+                if (javaPat.matcher(line).matches()) {
+                    nonEmptySrcFiles.add(f);
                     break;
+                }
             }
         } catch (IOException e) {
             throw new Error(e);
@@ -182,30 +215,93 @@ class Example implements Comparable<Example> {
      */
     private void run(PrintWriter out, Set<String> keys, boolean raw, boolean verbose)
             throws IOException {
-        ClassLoader loader = getClass().getClassLoader();
-        if (supportFiles.size() > 0) {
-            File supportDir = new File(tempDir, "support");
-            supportDir.mkdirs();
-            clean(supportDir);
-            List<String> sOpts = Arrays.asList("-d", supportDir.getPath());
-            new Jsr199Compiler(verbose).run(null, null, false, sOpts, procFiles);
-            URLClassLoader ucl =
-                    new URLClassLoader(new URL[] { supportDir.toURI().toURL() }, loader);
-            loader = ucl;
+        List<String> opts = new ArrayList<String>();
+        if (!modulePathFiles.isEmpty()) {
+            File modulepathDir = new File(tempDir, "modulepath");
+            modulepathDir.mkdirs();
+            clean(modulepathDir);
+            boolean hasModuleInfo =
+                    modulePathFiles.stream()
+                                   .anyMatch(f -> f.getName().equalsIgnoreCase("module-info.java"));
+            Path modulePath = new File(file, "modulepath").toPath().toAbsolutePath();
+            if (hasModuleInfo) {
+                //ordinary modules
+                List<String> sOpts =
+                        Arrays.asList("-d", modulepathDir.getPath(),
+                                      "--module-source-path", modulePath.toString());
+                new Jsr199Compiler(verbose).run(null, null, false, sOpts, modulePathFiles);
+            } else {
+                //automatic modules:
+                Map<String, List<Path>> module2Files =
+                        modulePathFiles.stream()
+                                       .map(f -> f.toPath())
+                                       .collect(Collectors.groupingBy(p -> modulePath.relativize(p)
+                                                                            .getName(0)
+                                                                            .toString()));
+                for (Entry<String, List<Path>> e : module2Files.entrySet()) {
+                    File scratchDir = new File(tempDir, "scratch");
+                    scratchDir.mkdirs();
+                    clean(scratchDir);
+                    List<String> sOpts =
+                            Arrays.asList("-d", scratchDir.getPath());
+                    new Jsr199Compiler(verbose).run(null,
+                                                    null,
+                                                    false,
+                                                    sOpts,
+                                                    e.getValue().stream()
+                                                                .map(p -> p.toFile())
+                                                                .collect(Collectors.toList()));
+                    try (JarOutputStream jarOut =
+                            new JarOutputStream(new FileOutputStream(new File(modulepathDir, e.getKey() + ".jar")))) {
+                        Files.find(scratchDir.toPath(), Integer.MAX_VALUE, (p, attr) -> attr.isRegularFile())
+                                .forEach(p -> {
+                                    try (InputStream in = Files.newInputStream(p)) {
+                                        jarOut.putNextEntry(new ZipEntry(scratchDir.toPath()
+                                                                                   .relativize(p)
+                                                                                   .toString()));
+                                        jarOut.write(in.readAllBytes());
+                                    } catch (IOException ex) {
+                                        throw new IllegalStateException(ex);
+                                    }
+                                });
+                    }
+                }
+            }
+            opts.add("--module-path");
+            opts.add(modulepathDir.getAbsolutePath());
+        }
+
+        if (!classPathFiles.isEmpty()) {
+            File classpathDir = new File(tempDir, "classpath");
+            classpathDir.mkdirs();
+            clean(classpathDir);
+            List<String> sOpts = Arrays.asList("-d", classpathDir.getPath());
+            new Jsr199Compiler(verbose).run(null, null, false, sOpts, classPathFiles);
+            opts.add("--class-path");
+            opts.add(classpathDir.getAbsolutePath());
         }
 
         File classesDir = new File(tempDir, "classes");
         classesDir.mkdirs();
         clean(classesDir);
 
-        List<String> opts = new ArrayList<String>();
         opts.add("-d");
         opts.add(classesDir.getPath());
         if (options != null)
             opts.addAll(options);
 
         if (procFiles.size() > 0) {
-            List<String> pOpts = Arrays.asList("-d", classesDir.getPath());
+            List<String> pOpts = new ArrayList<>(Arrays.asList("-d", classesDir.getPath()));
+
+            // hack to automatically add exports; a better solution would be to grep the
+            // source for import statements or a magic comment
+            for (File pf: procFiles) {
+                if (pf.getName().equals("CreateBadClassFile.java")) {
+                    pOpts.add("--add-modules=jdk.jdeps");
+                    pOpts.add("--add-exports=jdk.jdeps/com.sun.tools.classfile=ALL-UNNAMED");
+                }
+            }
+
             new Jsr199Compiler(verbose).run(null, null, false, pOpts, procFiles);
             opts.add("-classpath"); // avoid using -processorpath for now
             opts.add(classesDir.getPath());
@@ -219,14 +315,39 @@ class Example implements Comparable<Example> {
             }
         }
 
+        List<File> files = srcFiles;
+
         if (srcPathDir != null) {
             opts.add("-sourcepath");
             opts.add(srcPathDir.getPath());
         }
 
+        if (moduleSourcePathDir != null) {
+            opts.add("--module-source-path");
+            opts.add(moduleSourcePathDir.getPath());
+            files = new ArrayList<>();
+            files.addAll(moduleSourcePathFiles);
+            files.addAll(nonEmptySrcFiles); // srcFiles containing declarations
+        }
+
+        if (patchModulePathDir != null) {
+            for (File mod : patchModulePathDir.listFiles()) {
+                opts.add("--patch-module");
+                opts.add(mod.getName() + "=" + mod.getPath());
+            }
+            files = new ArrayList<>();
+            files.addAll(patchModulePathFiles);
+            files.addAll(nonEmptySrcFiles); // srcFiles containing declarations
+        }
+
+        if (additionalFiles.size() > 0) {
+            List<String> sOpts = Arrays.asList("-d", classesDir.getPath());
+            new Jsr199Compiler(verbose).run(null, null, false, sOpts, additionalFiles);
+        }
+
         try {
             Compiler c = Compiler.getCompiler(runOpts, verbose);
-            c.run(out, keys, raw, opts, srcFiles);
+            c.run(out, keys, raw, opts, files);
         } catch (IllegalArgumentException e) {
             if (out != null) {
                 out.println("Invalid value for run tag: " + runOpts);
@@ -289,8 +410,16 @@ class Example implements Comparable<Example> {
     List<File> srcFiles;
     List<File> procFiles;
     File srcPathDir;
+    File moduleSourcePathDir;
+    File patchModulePathDir;
+    File additionalFilesDir;
     List<File> srcPathFiles;
-    List<File> supportFiles;
+    List<File> moduleSourcePathFiles;
+    List<File> patchModulePathFiles;
+    List<File> modulePathFiles;
+    List<File> classPathFiles;
+    List<File> additionalFiles;
+    List<File> nonEmptySrcFiles;
     File infoFile;
     private List<String> runOpts;
     private List<String> options;
@@ -331,7 +460,7 @@ class Example implements Comparable<Example> {
                 else if (first.equals("backdoor"))
                     return new BackdoorCompiler(verbose);
                 else if (first.equals("exec"))
-                    return new ExecCompiler(verbose);
+                    return new ExecCompiler(verbose, rest);
                 else
                     throw new IllegalArgumentException(first);
             }
@@ -515,8 +644,11 @@ class Example implements Comparable<Example> {
      * Run the test in a separate process.
      */
     static class ExecCompiler extends Compiler {
-        ExecCompiler(boolean verbose) {
+        List<String> vmOpts;
+
+        ExecCompiler(boolean verbose, String... args) {
             super(verbose);
+            vmOpts = Arrays.asList(args);
         }
 
         @Override
@@ -525,7 +657,7 @@ class Example implements Comparable<Example> {
                 throw new IllegalArgumentException();
 
             if (verbose)
-                System.err.println("run_exec: " + opts + " " + files);
+                System.err.println("run_exec: " + vmOpts + " " + opts + " " + files);
 
             List<String> args = new ArrayList<String>();
 
@@ -541,6 +673,7 @@ class Example implements Comparable<Example> {
                 args.add(toolsJar.getPath());
             }
 
+            args.addAll(vmOpts);
             addOpts(args, "test.vm.opts");
             addOpts(args, "test.java.opts");
             args.add(com.sun.tools.javac.Main.class.getName());

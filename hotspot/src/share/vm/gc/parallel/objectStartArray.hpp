@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -121,8 +121,8 @@ class ObjectStartArray : public CHeapObj<mtGC> {
 
 #define assert_covered_region_contains(addr)                                                                 \
         assert(_covered_region.contains(addr),                                                               \
-               err_msg(#addr " (" PTR_FORMAT ") is not in covered region [" PTR_FORMAT ", " PTR_FORMAT "]",  \
-                       p2i(addr), p2i(_covered_region.start()), p2i(_covered_region.end())))
+               #addr " (" PTR_FORMAT ") is not in covered region [" PTR_FORMAT ", " PTR_FORMAT "]",          \
+               p2i(addr), p2i(_covered_region.start()), p2i(_covered_region.end()))
 
   void allocate_block(HeapWord* p) {
     assert_covered_region_contains(p);
@@ -139,23 +139,7 @@ class ObjectStartArray : public CHeapObj<mtGC> {
   // a given block. The blocks contain the offset of the last
   // object in that block. Scroll backwards by one, and the first
   // object hit should be at the beginning of the block
-  HeapWord* object_start(HeapWord* addr) const {
-    assert_covered_region_contains(addr);
-    jbyte* block = block_for_addr(addr);
-    HeapWord* scroll_forward = offset_addr_for_block(block--);
-    while (scroll_forward > addr) {
-      scroll_forward = offset_addr_for_block(block--);
-    }
-
-    HeapWord* next = scroll_forward;
-    while (next <= addr) {
-      scroll_forward = next;
-      next += oop(next)->size();
-    }
-    assert(scroll_forward <= addr, "wrong order for current and arg");
-    assert(addr <= next, "wrong order for arg and next");
-    return scroll_forward;
-  }
+  inline HeapWord* object_start(HeapWord* addr) const;
 
   bool is_block_allocated(HeapWord* addr) {
     assert_covered_region_contains(addr);
@@ -165,7 +149,6 @@ class ObjectStartArray : public CHeapObj<mtGC> {
 
     return true;
   }
-#undef assert_covered_region_contains
 
   // Return true if an object starts in the range of heap addresses.
   // If an object starts at an address corresponding to

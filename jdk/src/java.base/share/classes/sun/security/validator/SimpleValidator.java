@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@ import java.security.cert.*;
 import javax.security.auth.x500.X500Principal;
 
 import sun.security.x509.X509CertImpl;
+import sun.security.x509.KeyIdentifier;
 import sun.security.x509.NetscapeCertTypeExtension;
 import sun.security.util.DerValue;
 import sun.security.util.DerInputStream;
@@ -59,23 +60,23 @@ public final class SimpleValidator extends Validator {
 
     // Constants for the OIDs we need
 
-    final static String OID_BASIC_CONSTRAINTS = "2.5.29.19";
+    static final String OID_BASIC_CONSTRAINTS = "2.5.29.19";
 
-    final static String OID_NETSCAPE_CERT_TYPE = "2.16.840.1.113730.1.1";
+    static final String OID_NETSCAPE_CERT_TYPE = "2.16.840.1.113730.1.1";
 
-    final static String OID_KEY_USAGE = "2.5.29.15";
+    static final String OID_KEY_USAGE = "2.5.29.15";
 
-    final static String OID_EXTENDED_KEY_USAGE = "2.5.29.37";
+    static final String OID_EXTENDED_KEY_USAGE = "2.5.29.37";
 
-    final static String OID_EKU_ANY_USAGE = "2.5.29.37.0";
+    static final String OID_EKU_ANY_USAGE = "2.5.29.37.0";
 
-    final static ObjectIdentifier OBJID_NETSCAPE_CERT_TYPE =
+    static final ObjectIdentifier OBJID_NETSCAPE_CERT_TYPE =
         NetscapeCertTypeExtension.NetscapeCertType_Id;
 
-    private final static String NSCT_SSL_CA =
+    private static final String NSCT_SSL_CA =
                                 NetscapeCertTypeExtension.SSL_CA;
 
-    private final static String NSCT_CODE_SIGNING_CA =
+    private static final String NSCT_CODE_SIGNING_CA =
                                 NetscapeCertTypeExtension.OBJECT_SIGNING_CA;
 
     /**
@@ -122,6 +123,7 @@ public final class SimpleValidator extends Validator {
     @Override
     X509Certificate[] engineValidate(X509Certificate[] chain,
             Collection<X509Certificate> otherCerts,
+            List<byte[]> responseList,
             AlgorithmConstraints constraints,
             Object parameter) throws CertificateException {
         if ((chain == null) || (chain.length == 0)) {
@@ -153,12 +155,14 @@ public final class SimpleValidator extends Validator {
 
         // create default algorithm constraints checker
         TrustAnchor anchor = new TrustAnchor(anchorCert, null);
-        AlgorithmChecker defaultAlgChecker = new AlgorithmChecker(anchor);
+        AlgorithmChecker defaultAlgChecker =
+                new AlgorithmChecker(anchor, variant);
 
         // create application level algorithm constraints checker
         AlgorithmChecker appAlgChecker = null;
         if (constraints != null) {
-            appAlgChecker = new AlgorithmChecker(anchor, constraints);
+            appAlgChecker = new AlgorithmChecker(anchor, constraints, null,
+                    null, variant);
         }
 
         // verify top down, starting at the certificate issued by
@@ -385,8 +389,21 @@ public final class SimpleValidator extends Validator {
         X500Principal issuer = cert.getIssuerX500Principal();
         List<X509Certificate> list = trustedX500Principals.get(issuer);
         if (list != null) {
-            X509Certificate trustedCert = list.iterator().next();
-            c.add(trustedCert);
+            X509Certificate matchedCert = list.get(0);
+            X509CertImpl certImpl = X509CertImpl.toImpl(cert);
+            KeyIdentifier akid = certImpl.getAuthKeyId();
+            if (akid != null) {
+                for (X509Certificate sup : list) {
+                    // Look for a best match issuer.
+                    X509CertImpl supCert = X509CertImpl.toImpl(sup);
+                    if (akid.equals(supCert.getSubjectKeyId())) {
+                        matchedCert = sup;
+                        break;
+                    }
+                }
+            }
+
+            c.add(matchedCert);
             return c.toArray(CHAIN0);
         }
 

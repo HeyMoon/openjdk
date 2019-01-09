@@ -22,6 +22,7 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package com.sun.media.sound;
 
 import java.util.ArrayList;
@@ -38,8 +39,8 @@ import java.util.List;
  */
 public final class DLSRegion {
 
-    public final static int OPTION_SELFNONEXCLUSIVE = 0x0001;
-    List<DLSModulator> modulators = new ArrayList<DLSModulator>();
+    public static final int OPTION_SELFNONEXCLUSIVE = 0x0001;
+    List<DLSModulator> modulators = new ArrayList<>();
     int keyfrom;
     int keyto;
     int velfrom;

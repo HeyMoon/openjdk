@@ -73,11 +73,7 @@ public class JCDiagnostic implements Diagnostic<JavaFileObject> {
 
             final Options options = Options.instance(context);
             initOptions(options);
-            options.addListener(new Runnable() {
-               public void run() {
-                   initOptions(options);
-               }
-            });
+            options.addListener(() -> initOptions(options));
         }
 
         private void initOptions(Options options) {
@@ -435,7 +431,10 @@ public class JCDiagnostic implements Diagnostic<JavaFileObject> {
         COMPRESSED,
         /** Print multiple errors for same source locations.
          */
-        MULTIPLE;
+        MULTIPLE,
+        /** Flag for not-supported-in-source-X errors.
+         */
+        SOURCE_LEVEL;
     }
 
     private final DiagnosticSource source;

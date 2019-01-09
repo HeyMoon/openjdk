@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,11 +28,13 @@ import java.net.*;
 import java.io.*;
 import java.lang.reflect.Method;
 import java.security.SecureRandom;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalAmount;
+import java.time.temporal.TemporalUnit;
 import java.util.*;
 import java.util.concurrent.*;
 
-import sun.net.spi.nameservice.NameService;
-import sun.net.spi.nameservice.NameServiceDescriptor;
 import sun.security.krb5.*;
 import sun.security.krb5.internal.*;
 import sun.security.krb5.internal.ccache.CredentialsCache;
@@ -125,6 +127,8 @@ public class KDC {
     public static final int DEFAULT_LIFETIME = 39600;
     public static final int DEFAULT_RENEWTIME = 86400;
 
+    public static String NOT_EXISTING_HOST = "not.existing.host";
+
     // Under the hood.
 
     // The random generator to generate random keys (including session keys)
@@ -215,7 +219,10 @@ public class KDC {
     };
 
     static {
-        System.setProperty("sun.net.spi.nameservice.provider.1", "ns,mock");
+        if (System.getProperty("jdk.net.hosts.file") == null) {
+            String hostsFileName = System.getProperty("test.src", ".") + "/TestHosts";
+            System.setProperty("jdk.net.hosts.file", hostsFileName);
+        }
     }
 
     /**
@@ -239,7 +246,7 @@ public class KDC {
      * @throws java.io.IOException for any socket creation error
      */
     public static KDC create(String realm) throws IOException {
-        return create(realm, "kdc." + realm.toLowerCase(), 0, true);
+        return create(realm, "kdc." + realm.toLowerCase(Locale.US), 0, true);
     }
 
     public static KDC existing(String realm, String kdc, int port) {
@@ -741,9 +748,10 @@ public class KDC {
                     bFlags[Krb5.TKT_OPTS_FORWARDABLE] = true;
                 }
             }
+            // We do not request for addresses for FORWARDED tickets
             if (options.containsKey(Option.CHECK_ADDRESSES)
                     && body.kdcOptions.get(KDCOptions.FORWARDED)
-                    && body.addresses == null) {
+                    && body.addresses != null) {
                 throw new KrbException(Krb5.KDC_ERR_BADOPTION);
             }
             if (body.kdcOptions.get(KDCOptions.FORWARDED) ||
@@ -884,8 +892,9 @@ public class KDC {
 
         PrincipalName service = asReq.reqBody.sname;
         if (options.containsKey(KDC.Option.RESP_NT)) {
-            service = new PrincipalName(service.getNameStrings(),
-                    (int)options.get(KDC.Option.RESP_NT));
+            service = new PrincipalName((int)options.get(KDC.Option.RESP_NT),
+                    service.getNameStrings(),
+                    Realm.getDefault());
         }
         try {
             System.out.println(realm + "> " + asReq.reqBody.cname +
@@ -939,6 +948,13 @@ public class KDC {
             } else if (till.isZero()) {
                 till = new KerberosTime(
                         new Date().getTime() + 1000 * DEFAULT_LIFETIME);
+            } else if (till.greaterThan(new KerberosTime(Instant.now()
+                    .plus(1, ChronoUnit.DAYS)))) {
+                // If till is more than 1 day later, make it renewable
+                till = new KerberosTime(
+                        new Date().getTime() + 1000 * DEFAULT_LIFETIME);
+                body.kdcOptions.set(KDCOptions.RENEWABLE, true);
+                if (rtime == null) rtime = till;
             }
             if (rtime == null && body.kdcOptions.get(KDCOptions.RENEWABLE)) {
                 rtime = new KerberosTime(
@@ -1267,7 +1283,11 @@ public class KDC {
                         System.out.println(">>>>> TCP connection established");
                         DataInputStream in = new DataInputStream(socket.getInputStream());
                         DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-                        byte[] token = new byte[in.readInt()];
+                        int len = in.readInt();
+                        if (len > 65535) {
+                            throw new Exception("Huge request not supported");
+                        }
+                        byte[] token = new byte[len];
                         in.readFully(token);
                         q.put(new Job(processMessage(token), socket, out));
                     } catch (Exception e) {
@@ -1320,14 +1340,17 @@ public class KDC {
         }
     }
 
-    public static void startKDC(final String host, final String krbConfFileName,
+    public static KDC startKDC(final String host, final String krbConfFileName,
             final String realm, final Map<String, String> principals,
             final String ktab, final KtabMode mode) {
 
+        KDC kdc;
         try {
-            KDC kdc = KDC.create(realm, host, 0, true);
+            kdc = KDC.create(realm, host, 0, true);
             kdc.setOption(KDC.Option.PREAUTH_REQUIRED, Boolean.FALSE);
-            KDC.saveConfig(krbConfFileName, kdc);
+            if (krbConfFileName != null) {
+                KDC.saveConfig(krbConfFileName, kdc);
+            }
 
             // Add principals
             if (principals != null) {
@@ -1379,6 +1402,7 @@ public class KDC {
             throw new RuntimeException("KDC: unexpected exception", e);
         }
 
+        return kdc;
     }
 
     /**
@@ -1427,38 +1451,6 @@ public class KDC {
         }
     }
 
-    public static class KDCNameService implements NameServiceDescriptor {
-        @Override
-        public NameService createNameService() throws Exception {
-            NameService ns = new NameService() {
-                @Override
-                public InetAddress[] lookupAllHostAddr(String host)
-                        throws UnknownHostException {
-                    // Everything is localhost
-                    return new InetAddress[]{
-                        InetAddress.getByAddress(host, new byte[]{127,0,0,1})
-                    };
-                }
-                @Override
-                public String getHostByAddr(byte[] addr)
-                        throws UnknownHostException {
-                    // No reverse lookup, PrincipalName use original string
-                    throw new UnknownHostException();
-                }
-            };
-            return ns;
-        }
-
-        @Override
-        public String getProviderName() {
-            return "mock";
-        }
-
-        @Override
-        public String getType() {
-            return "ns";
-        }
-    }
 
     // Calling private methods thru reflections
     private static final Field getPADataField;

@@ -22,12 +22,14 @@
  */
 
 /**
+ * @test
+ * @bug 5008856 5023573 5024917 5062569 7172176
+ * @summary 'missing resource key' error for key = "Operating system"
  *
- *  @test
- *  @bug 5008856 5023573 5024917 5062569 7172176
- *  @summary 'missing resource key' error for key = "Operating system"
- *  @modules jdk.jconsole/sun.tools.jconsole
- *  @run main ResourceCheckTest
+ * @modules jdk.jconsole/sun.tools.jconsole
+ *          jdk.jconsole/sun.tools.jconsole.resources:open
+ *
+ * @run main ResourceCheckTest
  */
 
 import java.lang.reflect.Field;
@@ -68,7 +70,8 @@ public class ResourceCheckTest {
         // Ensure that all Message fields have a corresponding key/value
         // in the resource bundle and that mnemonics can be looked
         // up where applicable.
-        ResourceBundle rb = ResourceBundle.getBundle(RESOURCE_BUNDLE);
+        Module module = sun.tools.jconsole.Messages.class.getModule();
+        ResourceBundle rb = ResourceBundle.getBundle(RESOURCE_BUNDLE, module);
         for (Field field : Messages.class.getFields()) {
             if (isResourceKeyField(field)) {
                 String resourceKey = field.getName();

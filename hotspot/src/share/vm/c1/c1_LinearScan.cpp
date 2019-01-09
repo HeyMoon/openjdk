@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,6 +32,7 @@
 #include "c1/c1_LinearScan.hpp"
 #include "c1/c1_ValueStack.hpp"
 #include "code/vmreg.inline.hpp"
+#include "runtime/timerTrace.hpp"
 #include "utilities/bitMap.inline.hpp"
 
 #ifndef PRODUCT
@@ -87,7 +88,7 @@ LinearScan::LinearScan(IR* ir, LIRGenerator* gen, FrameMap* frame_map)
  , _has_info(0)
  , _has_call(0)
  , _scope_value_cache(0) // initialized later with correct length
- , _interval_in_loop(0, 0) // initialized later with correct length
+ , _interval_in_loop(0)  // initialized later with correct length
  , _cached_blocks(*ir->linear_scan_order())
 #ifdef X86
  , _fpu_stack_allocator(NULL)
@@ -495,8 +496,8 @@ void LinearScan::number_instructions() {
   }
 
   // initialize with correct length
-  _lir_ops = LIR_OpArray(num_instructions);
-  _block_of_op = BlockBeginArray(num_instructions);
+  _lir_ops = LIR_OpArray(num_instructions, num_instructions, NULL);
+  _block_of_op = BlockBeginArray(num_instructions, num_instructions, NULL);
 
   int op_id = 0;
   int idx = 0;
@@ -523,8 +524,8 @@ void LinearScan::number_instructions() {
   assert(idx == num_instructions, "must match");
   assert(idx * 2 == op_id, "must match");
 
-  _has_call = BitMap(num_instructions); _has_call.clear();
-  _has_info = BitMap(num_instructions); _has_info.clear();
+  _has_call.initialize(num_instructions);
+  _has_info.initialize(num_instructions);
 }
 
 
@@ -561,14 +562,13 @@ void LinearScan::compute_local_live_sets() {
   LIR_OpVisitState visitor;
 
   BitMap2D local_interval_in_loop = BitMap2D(_num_virtual_regs, num_loops());
-  local_interval_in_loop.clear();
 
   // iterate all blocks
   for (int i = 0; i < num_blocks; i++) {
     BlockBegin* block = block_at(i);
 
-    BitMap live_gen(live_size);  live_gen.clear();
-    BitMap live_kill(live_size); live_kill.clear();
+    ResourceBitMap live_gen(live_size);
+    ResourceBitMap live_kill(live_size);
 
     if (block->is_set(BlockBegin::exception_entry_flag)) {
       // Phi functions at the begin of an exception handler are
@@ -714,8 +714,8 @@ void LinearScan::compute_local_live_sets() {
 
     block->set_live_gen (live_gen);
     block->set_live_kill(live_kill);
-    block->set_live_in  (BitMap(live_size)); block->live_in().clear();
-    block->set_live_out (BitMap(live_size)); block->live_out().clear();
+    block->set_live_in  (ResourceBitMap(live_size));
+    block->set_live_out (ResourceBitMap(live_size));
 
     TRACE_LINEAR_SCAN(4, tty->print("live_gen  B%d ", block->block_id()); print_bitmap(block->live_gen()));
     TRACE_LINEAR_SCAN(4, tty->print("live_kill B%d ", block->block_id()); print_bitmap(block->live_kill()));
@@ -740,7 +740,7 @@ void LinearScan::compute_global_live_sets() {
   bool change_occurred;
   bool change_occurred_in_block;
   int  iteration_count = 0;
-  BitMap live_out(live_set_size()); live_out.clear(); // scratch set for calculations
+  ResourceBitMap live_out(live_set_size()); // scratch set for calculations
 
   // Perform a backward dataflow analysis to compute live_out and live_in for each block.
   // The loop is executed until a fixpoint is reached (no changes in an iteration)
@@ -774,7 +774,7 @@ void LinearScan::compute_global_live_sets() {
 
         if (!block->live_out().is_same(live_out)) {
           // A change occurred.  Swap the old and new live out sets to avoid copying.
-          BitMap temp = block->live_out();
+          ResourceBitMap temp = block->live_out();
           block->set_live_out(live_out);
           live_out = temp;
 
@@ -786,7 +786,7 @@ void LinearScan::compute_global_live_sets() {
       if (iteration_count == 0 || change_occurred_in_block) {
         // live_in(block) is the union of live_gen(block) with (live_out(block) & !live_kill(block))
         // note: live_in has to be computed only in first iteration or if live_out has changed!
-        BitMap live_in = block->live_in();
+        ResourceBitMap live_in = block->live_in();
         live_in.set_from(block->live_out());
         live_in.set_difference(block->live_kill());
         live_in.set_union(block->live_gen());
@@ -825,8 +825,7 @@ void LinearScan::compute_global_live_sets() {
 #endif
 
   // check that the live_in set of the first block is empty
-  BitMap live_in_args(ir()->start()->live_in().size());
-  live_in_args.clear();
+  ResourceBitMap live_in_args(ir()->start()->live_in().size());
   if (!ir()->start()->live_in().is_same(live_in_args)) {
 #ifdef ASSERT
     tty->print_cr("Error: live_in set of first block must be empty (when this fails, virtual registers are used before they are defined)");
@@ -1078,7 +1077,7 @@ IntervalUseKind LinearScan::use_kind_of_input_operand(LIR_Op* op, LIR_Opr opr) {
   }
 
 
-#ifdef X86
+#if defined(X86) || defined(S390)
   if (op->code() == lir_cmove) {
     // conditional moves can handle stack operands
     assert(op->result_opr()->is_register(), "result must always be in a register");
@@ -1089,7 +1088,7 @@ IntervalUseKind LinearScan::use_kind_of_input_operand(LIR_Op* op, LIR_Opr opr) {
   // this operand is allowed to be on the stack in some cases
   BasicType opr_type = opr->type_register();
   if (opr_type == T_FLOAT || opr_type == T_DOUBLE) {
-    if ((UseSSE == 1 && opr_type == T_FLOAT) || UseSSE >= 2) {
+    if ((UseSSE == 1 && opr_type == T_FLOAT) || UseSSE >= 2 S390_ONLY(|| true)) {
       // SSE float instruction (T_DOUBLE only supported with SSE2)
       switch (op->code()) {
         case lir_cmp:
@@ -1145,7 +1144,7 @@ IntervalUseKind LinearScan::use_kind_of_input_operand(LIR_Op* op, LIR_Opr opr) {
       }
     }
   }
-#endif // X86
+#endif // X86 S390
 
   // all other operands require a register
   return mustHaveRegister;
@@ -1316,7 +1315,7 @@ void LinearScan::build_intervals() {
     assert(block_to   == instructions->at(instructions->length() - 1)->id(), "must be");
 
     // Update intervals for registers live at the end of this block;
-    BitMap live = block->live_out();
+    ResourceBitMap live = block->live_out();
     int size = (int)live.size();
     for (int number = (int)live.get_next_one_offset(0, size); number < size; number = (int)live.get_next_one_offset(number + 1, size)) {
       assert(live.at(number), "should not stop here otherwise");
@@ -1434,41 +1433,73 @@ int LinearScan::interval_cmp(Interval** a, Interval** b) {
 }
 
 #ifndef PRODUCT
-bool LinearScan::is_sorted(IntervalArray* intervals) {
-  int from = -1;
-  int i, j;
-  for (i = 0; i < intervals->length(); i ++) {
-    Interval* it = intervals->at(i);
-    if (it != NULL) {
-      if (from > it->from()) {
-        assert(false, "");
-        return false;
-      }
-      from = it->from();
+int interval_cmp(Interval* const& l, Interval* const& r) {
+  return l->from() - r->from();
+}
+
+bool find_interval(Interval* interval, IntervalArray* intervals) {
+  bool found;
+  int idx = intervals->find_sorted<Interval*, interval_cmp>(interval, found);
+
+  if (!found) {
+    return false;
+  }
+
+  int from = interval->from();
+
+  // The index we've found using binary search is pointing to an interval
+  // that is defined in the same place as the interval we were looking for.
+  // So now we have to look around that index and find exact interval.
+  for (int i = idx; i >= 0; i--) {
+    if (intervals->at(i) == interval) {
+      return true;
+    }
+    if (intervals->at(i)->from() != from) {
+      break;
     }
   }
 
-  // check in both directions if sorted list and unsorted list contain same intervals
-  for (i = 0; i < interval_count(); i++) {
-    if (interval_at(i) != NULL) {
-      int num_found = 0;
-      for (j = 0; j < intervals->length(); j++) {
-        if (interval_at(i) == intervals->at(j)) {
-          num_found++;
-        }
-      }
-      assert(num_found == 1, "lists do not contain same intervals");
+  for (int i = idx + 1; i < intervals->length(); i++) {
+    if (intervals->at(i) == interval) {
+      return true;
+    }
+    if (intervals->at(i)->from() != from) {
+      break;
     }
   }
-  for (j = 0; j < intervals->length(); j++) {
-    int num_found = 0;
-    for (i = 0; i < interval_count(); i++) {
-      if (interval_at(i) == intervals->at(j)) {
-        num_found++;
-      }
+
+  return false;
+}
+
+bool LinearScan::is_sorted(IntervalArray* intervals) {
+  int from = -1;
+  int null_count = 0;
+
+  for (int i = 0; i < intervals->length(); i++) {
+    Interval* it = intervals->at(i);
+    if (it != NULL) {
+      assert(from <= it->from(), "Intervals are unordered");
+      from = it->from();
+    } else {
+      null_count++;
     }
-    assert(num_found == 1, "lists do not contain same intervals");
   }
+
+  assert(null_count == 0, "Sorted intervals should not contain nulls");
+
+  null_count = 0;
+
+  for (int i = 0; i < interval_count(); i++) {
+    Interval* interval = interval_at(i);
+    if (interval != NULL) {
+      assert(find_interval(interval, intervals), "Lists do not contain same intervals");
+    } else {
+      null_count++;
+    }
+  }
+
+  assert(interval_count() - null_count == intervals->length(),
+      "Sorted list should contain the same amount of non-NULL intervals as unsorted list");
 
   return true;
 }
@@ -1536,7 +1567,7 @@ void LinearScan::sort_intervals_before_allocation() {
       sorted_len++;
     }
   }
-  IntervalArray* sorted_list = new IntervalArray(sorted_len);
+  IntervalArray* sorted_list = new IntervalArray(sorted_len, sorted_len, NULL);
 
   // special sorting algorithm: the original interval-list is almost sorted,
   // only some intervals are swapped. So this is much faster than a complete QuickSort
@@ -1574,8 +1605,8 @@ void LinearScan::sort_intervals_after_allocation() {
     _needs_full_resort = false;
   }
 
-  IntervalArray* old_list      = _sorted_intervals;
-  IntervalList*  new_list      = _new_intervals_from_allocation;
+  IntervalArray* old_list = _sorted_intervals;
+  IntervalList* new_list = _new_intervals_from_allocation;
   int old_len = old_list->length();
   int new_len = new_list->length();
 
@@ -1589,7 +1620,8 @@ void LinearScan::sort_intervals_after_allocation() {
   new_list->sort(interval_cmp);
 
   // merge old and new list (both already sorted) into one combined list
-  IntervalArray* combined_list = new IntervalArray(old_len + new_len);
+  int combined_list_len = old_len + new_len;
+  IntervalArray* combined_list = new IntervalArray(combined_list_len, combined_list_len, NULL);
   int old_idx = 0;
   int new_idx = 0;
 
@@ -1683,7 +1715,7 @@ void LinearScan::resolve_collect_mappings(BlockBegin* from_block, BlockBegin* to
 
   const int num_regs = num_virtual_regs();
   const int size = live_set_size();
-  const BitMap live_at_edge = to_block->live_in();
+  const ResourceBitMap live_at_edge = to_block->live_in();
 
   // visit all registers where the live_at_edge bit is set
   for (int r = (int)live_at_edge.get_next_one_offset(0, size); r < size; r = (int)live_at_edge.get_next_one_offset(r + 1, size)) {
@@ -1740,8 +1772,8 @@ void LinearScan::resolve_data_flow() {
 
   int num_blocks = block_count();
   MoveResolver move_resolver(this);
-  BitMap block_completed(num_blocks);  block_completed.clear();
-  BitMap already_resolved(num_blocks); already_resolved.clear();
+  ResourceBitMap block_completed(num_blocks);
+  ResourceBitMap already_resolved(num_blocks);
 
   int i;
   for (i = 0; i < num_blocks; i++) {
@@ -2087,7 +2119,7 @@ LIR_Opr LinearScan::calc_operand_for_interval(const Interval* interval) {
 #ifdef _LP64
         return LIR_OprFact::double_cpu(assigned_reg, assigned_reg);
 #else
-#if defined(SPARC) || defined(PPC)
+#if defined(SPARC) || defined(PPC32)
         return LIR_OprFact::double_cpu(assigned_regHi, assigned_reg);
 #else
         return LIR_OprFact::double_cpu(assigned_reg, assigned_regHi);
@@ -2473,7 +2505,8 @@ LocationValue*         _illegal_value = new (ResourceObj::C_HEAP, mtCompiler) Lo
 void LinearScan::init_compute_debug_info() {
   // cache for frequently used scope values
   // (cpu registers and stack slots)
-  _scope_value_cache = ScopeValueArray((LinearScan::nof_cpu_regs + frame_map()->argcount() + max_spills()) * 2, NULL);
+  int cache_size = (LinearScan::nof_cpu_regs + frame_map()->argcount() + max_spills()) * 2;
+  _scope_value_cache = ScopeValueArray(cache_size, cache_size, NULL);
 }
 
 MonitorValue* LinearScan::location_for_monitor_index(int monitor_index) {
@@ -2620,6 +2653,11 @@ int LinearScan::append_scope_value_for_operand(LIR_Opr opr, GrowableArray<ScopeV
     VMReg rname = frame_map()->fpu_regname(opr->fpu_regnr());
 #ifndef __SOFTFP__
 #ifndef VM_LITTLE_ENDIAN
+    // On S390 a (single precision) float value occupies only the high
+    // word of the full double register. So when the double register is
+    // stored to memory (e.g. by the RegisterSaver), then the float value
+    // is found at offset 0. I.e. the code below is not needed on S390.
+#ifndef S390
     if (! float_saved_as_double) {
       // On big endian system, we may have an issue if float registers use only
       // the low half of the (same) double registers.
@@ -2634,6 +2672,7 @@ int LinearScan::append_scope_value_for_operand(LIR_Opr opr, GrowableArray<ScopeV
         rname = next; // VMReg for the low bits, e.g. the real VMReg for the float
       }
     }
+#endif // !S390
 #endif
 #endif
     LocationValue* sv = new LocationValue(Location::new_reg_loc(loc_type, rname));
@@ -2728,7 +2767,7 @@ int LinearScan::append_scope_value_for_operand(LIR_Opr opr, GrowableArray<ScopeV
 #ifdef ARM32
       assert(opr->fpu_regnrHi() == opr->fpu_regnrLo() + 1, "assumed in calculation (only fpu_regnrLo is used)");
 #endif
-#ifdef PPC
+#ifdef PPC32
       assert(opr->fpu_regnrLo() == opr->fpu_regnrHi(), "assumed in calculation (only fpu_regnrHi is used)");
 #endif
 
@@ -3008,7 +3047,7 @@ void LinearScan::assign_reg_num(LIR_OpList* instructions, IntervalWalker* iw) {
         insert_point++;
       }
     }
-    instructions->truncate(insert_point);
+    instructions->trunc_to(insert_point);
   }
 }
 
@@ -3211,6 +3250,10 @@ void LinearScan::verify_intervals() {
       has_error = true;
     }
 
+    // special intervals that are created in MoveResolver
+    // -> ignore them because the range information has no meaning there
+    if (i1->from() == 1 && i1->to() == 2) continue;
+
     if (i1->first() == Range::end()) {
       tty->print_cr("Interval %d has no Range", i1->reg_num()); i1->print(); tty->cr();
       has_error = true;
@@ -3225,18 +3268,13 @@ void LinearScan::verify_intervals() {
 
     for (int j = i + 1; j < len; j++) {
       Interval* i2 = interval_at(j);
-      if (i2 == NULL) continue;
-
-      // special intervals that are created in MoveResolver
-      // -> ignore them because the range information has no meaning there
-      if (i1->from() == 1 && i1->to() == 2) continue;
-      if (i2->from() == 1 && i2->to() == 2) continue;
+      if (i2 == NULL || (i2->from() == 1 && i2->to() == 2)) continue;
 
       int r1 = i1->assigned_reg();
       int r1Hi = i1->assigned_regHi();
       int r2 = i2->assigned_reg();
       int r2Hi = i2->assigned_regHi();
-      if (i1->intersects(i2) && (r1 == r2 || r1 == r2Hi || (r1Hi != any_reg && (r1Hi == r2 || r1Hi == r2Hi)))) {
+      if ((r1 == r2 || r1 == r2Hi || (r1Hi != any_reg && (r1Hi == r2 || r1Hi == r2Hi))) && i1->intersects(i2)) {
         tty->print_cr("Intervals %d and %d overlap and have the same register assigned", i1->reg_num(), i2->reg_num());
         i1->print(); tty->cr();
         i2->print(); tty->cr();
@@ -3363,7 +3401,7 @@ void LinearScan::verify_constants() {
 
   for (int i = 0; i < num_blocks; i++) {
     BlockBegin* block = block_at(i);
-    BitMap live_at_edge = block->live_in();
+    ResourceBitMap live_at_edge = block->live_in();
 
     // visit all registers where the live_at_edge bit is set
     for (int r = (int)live_at_edge.get_next_one_offset(0, size); r < size; r = (int)live_at_edge.get_next_one_offset(r + 1, size)) {
@@ -3413,7 +3451,7 @@ class RegisterVerifier: public StackObj {
   RegisterVerifier(LinearScan* allocator)
     : _allocator(allocator)
     , _work_list(16)
-    , _saved_states(BlockBegin::number_of_blocks(), NULL)
+    , _saved_states(BlockBegin::number_of_blocks(), BlockBegin::number_of_blocks(), NULL)
   { }
 
   void verify(BlockBegin* start);
@@ -3429,7 +3467,8 @@ void LinearScan::verify_registers() {
 
 void RegisterVerifier::verify(BlockBegin* start) {
   // setup input registers (method arguments) for first block
-  IntervalList* input_state = new IntervalList(state_size(), NULL);
+  int input_state_len = state_size();
+  IntervalList* input_state = new IntervalList(input_state_len, input_state_len, NULL);
   CallingConvention* args = compilation()->frame_map()->incoming_arguments();
   for (int n = 0; n < args->length(); n++) {
     LIR_Opr opr = args->at(n);
@@ -3543,7 +3582,7 @@ void RegisterVerifier::process_successor(BlockBegin* block, IntervalList* input_
 
 IntervalList* RegisterVerifier::copy(IntervalList* input_state) {
   IntervalList* copy_state = new IntervalList(input_state->length());
-  copy_state->push_all(input_state);
+  copy_state->appendAll(input_state);
   return copy_state;
 }
 
@@ -3714,8 +3753,7 @@ void MoveResolver::verify_before_resolve() {
   }
 
 
-  BitMap used_regs(LinearScan::nof_regs + allocator()->frame_map()->argcount() + allocator()->max_spills());
-  used_regs.clear();
+  ResourceBitMap used_regs(LinearScan::nof_regs + allocator()->frame_map()->argcount() + allocator()->max_spills());
   if (!_multiple_reads_allowed) {
     for (i = 0; i < _mapping_from.length(); i++) {
       Interval* it = _mapping_from.at(i);
@@ -4418,7 +4456,7 @@ Interval* Interval::split(int split_pos) {
     new_use_pos_and_kinds.append(_use_pos_and_kinds.at(i));
   }
 
-  _use_pos_and_kinds.truncate(start_idx + 2);
+  _use_pos_and_kinds.trunc_to(start_idx + 2);
   result->_use_pos_and_kinds = _use_pos_and_kinds;
   _use_pos_and_kinds = new_use_pos_and_kinds;
 
@@ -5486,7 +5524,8 @@ int LinearScanWalker::find_locked_double_reg(int reg_needed_until, int interval_
     }
   }
 
-  if (_block_pos[max_reg] <= interval_to || _block_pos[max_reg + 1] <= interval_to) {
+  if (max_reg != any_reg &&
+      (_block_pos[max_reg] <= interval_to || _block_pos[max_reg + 1] <= interval_to)) {
     *need_split = true;
   }
 
@@ -5506,7 +5545,7 @@ void LinearScanWalker::split_and_spill_intersecting_intervals(int reg, int regHi
     IntervalList* processed = _spill_intervals[reg];
     for (int i = 0; i < _spill_intervals[regHi]->length(); i++) {
       Interval* it = _spill_intervals[regHi]->at(i);
-      if (processed->index_of(it) == -1) {
+      if (processed->find(it) == -1) {
         remove_from_list(it);
         split_and_spill_interval(it);
       }
@@ -6177,7 +6216,7 @@ void ControlFlowOptimizer::delete_empty_blocks(BlockList* code) {
       _original_preds.clear();
       for (j = block->number_of_preds() - 1; j >= 0; j--) {
         BlockBegin* pred = block->pred_at(j);
-        if (_original_preds.index_of(pred) == -1) {
+        if (_original_preds.find(pred) == -1) {
           _original_preds.append(pred);
         }
       }
@@ -6197,7 +6236,7 @@ void ControlFlowOptimizer::delete_empty_blocks(BlockList* code) {
     }
     old_pos++;
   }
-  code->truncate(new_pos);
+  code->trunc_to(new_pos);
 
   DEBUG_ONLY(verify(code));
 }
@@ -6222,7 +6261,7 @@ void ControlFlowOptimizer::delete_unnecessary_jumps(BlockList* code) {
           TRACE_LINEAR_SCAN(3, tty->print_cr("Deleting unconditional branch at end of block B%d", block->block_id()));
 
           // delete last branch instruction
-          instructions->truncate(instructions->length() - 1);
+          instructions->trunc_to(instructions->length() - 1);
 
         } else {
           LIR_Op* prev_op = instructions->at(instructions->length() - 2);
@@ -6233,9 +6272,19 @@ void ControlFlowOptimizer::delete_unnecessary_jumps(BlockList* code) {
             if (prev_branch->stub() == NULL) {
 
               LIR_Op2* prev_cmp = NULL;
+              // There might be a cmove inserted for profiling which depends on the same
+              // compare. If we change the condition of the respective compare, we have
+              // to take care of this cmove as well.
+              LIR_Op2* prev_cmove = NULL;
 
               for(int j = instructions->length() - 3; j >= 0 && prev_cmp == NULL; j--) {
                 prev_op = instructions->at(j);
+                // check for the cmove
+                if (prev_op->code() == lir_cmove) {
+                  assert(prev_op->as_Op2() != NULL, "cmove must be of type LIR_Op2");
+                  prev_cmove = (LIR_Op2*)prev_op;
+                  assert(prev_branch->cond() == prev_cmove->condition(), "should be the same");
+                }
                 if (prev_op->code() == lir_cmp) {
                   assert(prev_op->as_Op2() != NULL, "branch must be of type LIR_Op2");
                   prev_cmp = (LIR_Op2*)prev_op;
@@ -6251,7 +6300,14 @@ void ControlFlowOptimizer::delete_unnecessary_jumps(BlockList* code) {
                 prev_branch->change_block(last_branch->block());
                 prev_branch->negate_cond();
                 prev_cmp->set_condition(prev_branch->cond());
-                instructions->truncate(instructions->length() - 1);
+                instructions->trunc_to(instructions->length() - 1);
+                // if we do change the condition, we have to change the cmove as well
+                if (prev_cmove != NULL) {
+                  prev_cmove->set_condition(prev_branch->cond());
+                  LIR_Opr t = prev_cmove->in_opr1();
+                  prev_cmove->set_in_opr1(prev_cmove->in_opr2());
+                  prev_cmove->set_in_opr2(t);
+                }
               }
             }
           }
@@ -6265,8 +6321,7 @@ void ControlFlowOptimizer::delete_unnecessary_jumps(BlockList* code) {
 
 void ControlFlowOptimizer::delete_jumps_to_return(BlockList* code) {
 #ifdef ASSERT
-  BitMap return_converted(BlockBegin::number_of_blocks());
-  return_converted.clear();
+  ResourceBitMap return_converted(BlockBegin::number_of_blocks());
 #endif
 
   for (int i = code->length() - 1; i >= 0; i--) {
@@ -6327,19 +6382,19 @@ void ControlFlowOptimizer::verify(BlockList* code) {
       LIR_OpBranch* op_branch = instructions->at(j)->as_OpBranch();
 
       if (op_branch != NULL) {
-        assert(op_branch->block() == NULL || code->index_of(op_branch->block()) != -1, "branch target not valid");
-        assert(op_branch->ublock() == NULL || code->index_of(op_branch->ublock()) != -1, "branch target not valid");
+        assert(op_branch->block() == NULL || code->find(op_branch->block()) != -1, "branch target not valid");
+        assert(op_branch->ublock() == NULL || code->find(op_branch->ublock()) != -1, "branch target not valid");
       }
     }
 
     for (j = 0; j < block->number_of_sux() - 1; j++) {
       BlockBegin* sux = block->sux_at(j);
-      assert(code->index_of(sux) != -1, "successor not valid");
+      assert(code->find(sux) != -1, "successor not valid");
     }
 
     for (j = 0; j < block->number_of_preds() - 1; j++) {
       BlockBegin* pred = block->pred_at(j);
-      assert(code->index_of(pred) != -1, "successor not valid");
+      assert(code->find(pred) != -1, "successor not valid");
     }
   }
 }
@@ -6445,8 +6500,9 @@ void LinearScanStatistic::print(const char* title) {
       if (_counters_sum[i] > 0 || _counters_max[i] >= 0) {
         tty->print("%25s: %8d", counter_name(i), _counters_sum[i]);
 
-        if (base_counter(i) != invalid_counter) {
-          tty->print("  (%5.1f%%) ", _counters_sum[i] * 100.0 / _counters_sum[base_counter(i)]);
+        LinearScanStatistic::Counter cntr = base_counter(i);
+        if (cntr != invalid_counter) {
+          tty->print("  (%5.1f%%) ", _counters_sum[i] * 100.0 / _counters_sum[cntr]);
         } else {
           tty->print("           ");
         }
@@ -6582,13 +6638,8 @@ void LinearScanStatistic::collect(LinearScan* allocator) {
         case lir_div_strictfp:
         case lir_rem:
         case lir_sqrt:
-        case lir_sin:
-        case lir_cos:
         case lir_abs:
         case lir_log10:
-        case lir_log:
-        case lir_pow:
-        case lir_exp:
         case lir_logic_and:
         case lir_logic_or:
         case lir_logic_xor:

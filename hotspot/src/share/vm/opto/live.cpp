@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
 
 #include "precompiled.hpp"
 #include "memory/allocation.inline.hpp"
+#include "memory/resourceArea.hpp"
 #include "opto/callnode.hpp"
 #include "opto/chaitin.hpp"
 #include "opto/live.hpp"
@@ -41,7 +42,14 @@
 // block is put on the worklist.
 //   The locally live-in stuff is computed once and added to predecessor
 // live-out sets.  This separate compilation is done in the outer loop below.
-PhaseLive::PhaseLive( const PhaseCFG &cfg, const LRG_List &names, Arena *arena ) : Phase(LIVE), _cfg(cfg), _names(names), _arena(arena), _live(0) {
+PhaseLive::PhaseLive(const PhaseCFG &cfg, const LRG_List &names, Arena *arena, bool keep_deltas)
+  : Phase(LIVE),
+  _cfg(cfg),
+  _names(names),
+  _arena(arena),
+  _live(0),
+  _livein(0),
+  _keep_deltas(keep_deltas) {
 }
 
 void PhaseLive::compute(uint maxlrg) {
@@ -54,6 +62,13 @@ void PhaseLive::compute(uint maxlrg) {
   uint i;
   for (i = 0; i < _cfg.number_of_blocks(); i++) {
     _live[i].initialize(_maxlrg);
+  }
+
+  if (_keep_deltas) {
+    _livein = (IndexSet*)_arena->Amalloc(sizeof(IndexSet) * _cfg.number_of_blocks());
+    for (i = 0; i < _cfg.number_of_blocks(); i++) {
+      _livein[i].initialize(_maxlrg);
+    }
   }
 
   // Init the sparse arrays for delta-sets.
@@ -124,7 +139,10 @@ void PhaseLive::compute(uint maxlrg) {
 
       // PhiNode uses go in the live-out set of prior blocks.
       for (uint k = i; k > 0; k--) {
-        add_liveout(p, _names.at(block->get_node(k-1)->in(l)->_idx), first_pass);
+        Node *phi = block->get_node(k - 1);
+        if (l < phi->req()) {
+          add_liveout(p, _names.at(phi->in(l)->_idx), first_pass);
+        }
       }
     }
     freeset(block);
@@ -200,8 +218,11 @@ IndexSet *PhaseLive::getfreeset( ) {
 }
 
 // Free an IndexSet from a block.
-void PhaseLive::freeset( const Block *p ) {
+void PhaseLive::freeset( Block *p ) {
   IndexSet *f = _deltas[p->_pre_order-1];
+  if ( _keep_deltas ) {
+    add_livein(p, f);
+  }
   f->set_next(_free_IndexSet);
   _free_IndexSet = f;           // Drop onto free list
   _deltas[p->_pre_order-1] = NULL;
@@ -249,10 +270,23 @@ void PhaseLive::add_liveout( Block *p, IndexSet *lo, VectorSet &first_pass ) {
   }
 }
 
+// Add a vector of live-in values to a given blocks live-in set.
+void PhaseLive::add_livein(Block *p, IndexSet *lo) {
+  IndexSet *livein = &_livein[p->_pre_order-1];
+  IndexSetIterator elements(lo);
+  uint r;
+  while ((r = elements.next()) != 0) {
+    livein->insert(r);         // Then add to live-in set
+  }
+}
+
 #ifndef PRODUCT
 // Dump the live-out set for a block
 void PhaseLive::dump( const Block *b ) const {
   tty->print("Block %d: ",b->_pre_order);
+  if ( _keep_deltas ) {
+    tty->print("LiveIn: ");  _livein[b->_pre_order-1].dump();
+  }
   tty->print("LiveOut: ");  _live[b->_pre_order-1].dump();
   uint cnt = b->number_of_nodes();
   for( uint i=0; i<cnt; i++ ) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,13 +24,15 @@
 /*
  * @test TestOnError
  * @summary Test using -XX:OnError=<cmd>
- * @library /testlibrary
- * @build TestOnError
+ * @modules java.base/jdk.internal.misc
+ * @library /test/lib
  * @run main TestOnError
  * @bug 8078470
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.Platform;
 
 public class TestOnError {
 
@@ -45,6 +47,7 @@ public class TestOnError {
         // Execute the VM so that a
         ProcessBuilder pb = ProcessTools.createJavaProcessBuilder(
            "-XX:-TransmitErrorReport",
+           "-XX:-CreateCoredumpOnCrash",
            "-XX:ErrorHandlerTest=12", // trigger potential SEGV
            "-XX:OnError=echo " + msg,
            TestOnError.class.getName());

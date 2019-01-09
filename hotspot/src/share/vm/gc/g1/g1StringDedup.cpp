@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,7 +31,7 @@
 #include "gc/g1/g1StringDedupStat.hpp"
 #include "gc/g1/g1StringDedupTable.hpp"
 #include "gc/g1/g1StringDedupThread.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 
 bool G1StringDedup::_enabled = false;
 
@@ -47,12 +47,12 @@ void G1StringDedup::initialize() {
 
 void G1StringDedup::stop() {
   assert(is_enabled(), "String deduplication not enabled");
-  G1StringDedupThread::stop();
+  G1StringDedupThread::thread()->stop();
 }
 
 bool G1StringDedup::is_candidate_from_mark(oop obj) {
   if (java_lang_String::is_instance_inlined(obj)) {
-    bool from_young = G1CollectedHeap::heap()->heap_region_containing_raw(obj)->is_young();
+    bool from_young = G1CollectedHeap::heap()->heap_region_containing(obj)->is_young();
     if (from_young && obj->age() < StringDeduplicationAgeThreshold) {
       // Candidate found. String is being evacuated from young to old but has not
       // reached the deduplication age threshold, i.e. has not previously been a

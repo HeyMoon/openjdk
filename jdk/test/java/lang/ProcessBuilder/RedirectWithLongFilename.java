@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 SAP SE.  All Rights Reserved.
+ * Copyright (c) 2015 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,6 @@
  * @test
  * @bug 8072611
  * @summary ProcessBuilder Redirect to file appending on Windows should work with long file names
- * @modules java.base/sun.misc
  * @author Thomas Stuefe
  */
 

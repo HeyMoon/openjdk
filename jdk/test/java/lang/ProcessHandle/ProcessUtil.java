@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,18 +23,13 @@
 
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
-import java.lang.ProcessBuilder;
 import java.time.Duration;
 import java.util.List;
-import java.util.Objects;
-import java.util.stream.Collectors;
-
-import com.sun.management.OperatingSystemMXBean;
-
-import jdk.testlibrary.Platform;
-
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import com.sun.management.OperatingSystemMXBean;
+import jdk.test.lib.Platform;
 
 /**
  * Useful utilities for testing Process and ProcessHandle.
@@ -63,8 +58,8 @@ public abstract class ProcessUtil {
      * @param ph the Process to get children of
      * @return a list of child ProcessHandles
      */
-    public static List<ProcessHandle> getAllChildren(ProcessHandle ph) {
-        return ph.allChildren()
+    public static List<ProcessHandle> getDescendants(ProcessHandle ph) {
+        return ph.descendants()
                 .filter(ProcessUtil::isNotWindowsConsole)
                 .collect(Collectors.toList());
     }
@@ -117,7 +112,7 @@ public abstract class ProcessUtil {
                     // ignore
                 }
             }
-            subprocesses = getAllChildren(ph);
+            subprocesses = getDescendants(ph);
             count = subprocesses.size();
             System.out.printf(" waiting for subprocesses of %s to start," +
                     " expected: %d, current: %d%n", ph, nchildren, count);
@@ -133,7 +128,7 @@ public abstract class ProcessUtil {
      * @return the ProcessHandle
      */
     public static ProcessHandle destroyProcessTree(ProcessHandle p) {
-        Stream<ProcessHandle> children = p.allChildren().filter(ProcessUtil::isNotWindowsConsole);
+        Stream<ProcessHandle> children = p.descendants().filter(ProcessUtil::isNotWindowsConsole);
         children.forEach(ph -> {
             System.out.printf("destroyProcessTree destroyForcibly%n");
             printProcess(ph);
@@ -204,7 +199,7 @@ public abstract class ProcessUtil {
      */
     static void printProcess(ProcessHandle ph, String prefix) {
         printf("%spid %s, alive: %s; parent: %s, %s%n", prefix,
-                ph.getPid(), ph.isAlive(), ph.parent(), ph.info());
+                ph.pid(), ph.isAlive(), ph.parent(), ph.info());
     }
 
     /**

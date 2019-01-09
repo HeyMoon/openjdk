@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,8 +26,7 @@
 #include "gc/g1/dirtyCardQueue.hpp"
 #include "gc/g1/g1CollectedHeap.inline.hpp"
 #include "gc/g1/g1HotCardCache.hpp"
-#include "gc/g1/g1RemSet.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 
 G1HotCardCache::G1HotCardCache(G1CollectedHeap *g1h):
   _g1h(g1h), _hot_cache(NULL), _use_cache(false), _card_counts(g1h) {}
@@ -37,7 +36,7 @@ void G1HotCardCache::initialize(G1RegionToSpaceMapper* card_counts_storage) {
     _use_cache = true;
 
     _hot_cache_size = (size_t)1 << G1ConcRSLogCacheSize;
-    _hot_cache = _hot_cache_memory.allocate(_hot_cache_size);
+    _hot_cache = ArrayAllocator<jbyte*, mtGC>::allocate(_hot_cache_size);
 
     reset_hot_cache_internal();
 
@@ -52,7 +51,7 @@ void G1HotCardCache::initialize(G1RegionToSpaceMapper* card_counts_storage) {
 G1HotCardCache::~G1HotCardCache() {
   if (default_use_cache()) {
     assert(_hot_cache != NULL, "Logic");
-    _hot_cache_memory.free();
+    ArrayAllocator<jbyte*, mtGC>::free(_hot_cache, _hot_cache_size);
     _hot_cache = NULL;
   }
 }
@@ -81,13 +80,8 @@ jbyte* G1HotCardCache::insert(jbyte* card_ptr) {
   return (previous_ptr == current_ptr) ? previous_ptr : card_ptr;
 }
 
-void G1HotCardCache::drain(uint worker_i,
-                           G1RemSet* g1rs,
-                           DirtyCardQueue* into_cset_dcq) {
-  if (!default_use_cache()) {
-    assert(_hot_cache == NULL, "Logic");
-    return;
-  }
+void G1HotCardCache::drain(CardTableEntryClosure* cl, uint worker_i) {
+  assert(default_use_cache(), "Drain only necessary if we use the hot card cache.");
 
   assert(_hot_cache != NULL, "Logic");
   assert(!use_cache(), "cache should be disabled");
@@ -101,22 +95,8 @@ void G1HotCardCache::drain(uint worker_i,
     for (size_t i = start_idx; i < end_idx; i++) {
       jbyte* card_ptr = _hot_cache[i];
       if (card_ptr != NULL) {
-        if (g1rs->refine_card(card_ptr, worker_i, true)) {
-          // The part of the heap spanned by the card contains references
-          // that point into the current collection set.
-          // We need to record the card pointer in the DirtyCardQueueSet
-          // that we use for such cards.
-          //
-          // The only time we care about recording cards that contain
-          // references that point into the collection set is during
-          // RSet updating while within an evacuation pause.
-          // In this case worker_i should be the id of a GC worker thread
-          assert(SafepointSynchronize::is_at_safepoint(), "Should be at a safepoint");
-          assert(worker_i < ParallelGCThreads,
-                 err_msg("incorrect worker id: %u", worker_i));
-
-          into_cset_dcq->enqueue(card_ptr);
-        }
+        bool result = cl->do_card_ptr(card_ptr, worker_i);
+        assert(result, "Closure should always return true");
       } else {
         break;
       }

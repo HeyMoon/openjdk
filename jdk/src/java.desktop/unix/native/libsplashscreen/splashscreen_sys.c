@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -753,6 +753,9 @@ SplashScreenThread(void *param) {
         XMapRaised(splash->display, splash->window);
         SplashUpdateShape(splash);
         SplashRedrawWindow(splash);
+        //map the splash co-ordinates as per system scale
+        splash->x /= splash->scaleFactor;
+        splash->y /= splash->scaleFactor;
         SplashEventLoop(splash);
     }
     SplashUnlock(splash);
@@ -797,10 +800,16 @@ SplashReconfigure(Splash * splash) {
     sendctl(splash, SPLASHCTL_RECONFIGURE);
 }
 
-SPLASHEXPORT char*
+SPLASHEXPORT jboolean
 SplashGetScaledImageName(const char* jarName, const char* fileName,
-                           float *scaleFactor)
+                           float *scaleFactor, char *scaledImgName,
+                           const size_t scaledImageNameLength)
 {
     *scaleFactor = 1;
-    return NULL;
+#ifndef __linux__
+    return JNI_FALSE;
+#endif
+    *scaleFactor = (float)getNativeScaleFactor(NULL);
+    return GetScaledImageName(fileName, scaledImgName, scaleFactor, scaledImageNameLength);
 }
+

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -235,7 +235,6 @@ address PhaseMacroExpand::basictype2arraycopy(BasicType t,
   return StubRoutines::select_arraycopy_function(t, aligned, disjoint, name, dest_uninitialized);
 }
 
-#define COMMA ,
 #define XTOP LP64_ONLY(COMMA top())
 
 // Generate an optimized call to arraycopy.
@@ -295,7 +294,7 @@ Node* PhaseMacroExpand::generate_arraycopy(ArrayCopyNode *ac, AllocateArrayNode*
   // out-edges of the dest, we need to avoid making derived pointers
   // from it until we have checked its uses.)
   if (ReduceBulkZeroing
-      && !ZeroTLAB              // pointless if already zeroed
+      && !(UseTLAB && ZeroTLAB) // pointless if already zeroed
       && basic_elem_type != T_CONFLICT // avoid corner case
       && !src->eqv_uncast(dest)
       && alloc != NULL
@@ -503,46 +502,50 @@ Node* PhaseMacroExpand::generate_arraycopy(ArrayCopyNode *ac, AllocateArrayNode*
     // further to JVM_ArrayCopy on the first per-oop check that fails.
     // (Actually, we don't move raw bits only; the GC requires card marks.)
 
-    // Get the klass* for both src and dest
-    Node* src_klass  = ac->in(ArrayCopyNode::SrcKlass);
-    Node* dest_klass = ac->in(ArrayCopyNode::DestKlass);
+    // We don't need a subtype check for validated copies and Object[].clone()
+    bool skip_subtype_check = ac->is_arraycopy_validated() || ac->is_copyof_validated() ||
+                              ac->is_copyofrange_validated() || ac->is_cloneoop();
+    if (!skip_subtype_check) {
+      // Get the klass* for both src and dest
+      Node* src_klass  = ac->in(ArrayCopyNode::SrcKlass);
+      Node* dest_klass = ac->in(ArrayCopyNode::DestKlass);
 
-    assert(src_klass != NULL && dest_klass != NULL, "should have klasses");
+      assert(src_klass != NULL && dest_klass != NULL, "should have klasses");
 
-    // Generate the subtype check.
-    // This might fold up statically, or then again it might not.
-    //
-    // Non-static example:  Copying List<String>.elements to a new String[].
-    // The backing store for a List<String> is always an Object[],
-    // but its elements are always type String, if the generic types
-    // are correct at the source level.
-    //
-    // Test S[] against D[], not S against D, because (probably)
-    // the secondary supertype cache is less busy for S[] than S.
-    // This usually only matters when D is an interface.
-    Node* not_subtype_ctrl = (ac->is_arraycopy_validated() || ac->is_copyof_validated() || ac->is_copyofrange_validated()) ? top() :
-      Phase::gen_subtype_check(src_klass, dest_klass, ctrl, mem, &_igvn);
-    // Plug failing path into checked_oop_disjoint_arraycopy
-    if (not_subtype_ctrl != top()) {
-      Node* local_ctrl = not_subtype_ctrl;
-      MergeMemNode* local_mem = MergeMemNode::make(mem);
-      transform_later(local_mem);
+      // Generate the subtype check.
+      // This might fold up statically, or then again it might not.
+      //
+      // Non-static example:  Copying List<String>.elements to a new String[].
+      // The backing store for a List<String> is always an Object[],
+      // but its elements are always type String, if the generic types
+      // are correct at the source level.
+      //
+      // Test S[] against D[], not S against D, because (probably)
+      // the secondary supertype cache is less busy for S[] than S.
+      // This usually only matters when D is an interface.
+      Node* not_subtype_ctrl = Phase::gen_subtype_check(src_klass, dest_klass, ctrl, mem, &_igvn);
+      // Plug failing path into checked_oop_disjoint_arraycopy
+      if (not_subtype_ctrl != top()) {
+        Node* local_ctrl = not_subtype_ctrl;
+        MergeMemNode* local_mem = MergeMemNode::make(mem);
+        transform_later(local_mem);
 
-      // (At this point we can assume disjoint_bases, since types differ.)
-      int ek_offset = in_bytes(ObjArrayKlass::element_klass_offset());
-      Node* p1 = basic_plus_adr(dest_klass, ek_offset);
-      Node* n1 = LoadKlassNode::make(_igvn, NULL, C->immutable_memory(), p1, TypeRawPtr::BOTTOM);
-      Node* dest_elem_klass = transform_later(n1);
-      Node* cv = generate_checkcast_arraycopy(&local_ctrl, &local_mem,
-                                              adr_type,
-                                              dest_elem_klass,
-                                              src, src_offset, dest, dest_offset,
-                                              ConvI2X(copy_length), dest_uninitialized);
-      if (cv == NULL)  cv = intcon(-1);  // failure (no stub available)
-      checked_control = local_ctrl;
-      checked_i_o     = *io;
-      checked_mem     = local_mem->memory_at(alias_idx);
-      checked_value   = cv;
+        // (At this point we can assume disjoint_bases, since types differ.)
+        int ek_offset = in_bytes(ObjArrayKlass::element_klass_offset());
+        Node* p1 = basic_plus_adr(dest_klass, ek_offset);
+        Node* n1 = LoadKlassNode::make(_igvn, NULL, C->immutable_memory(), p1, TypeRawPtr::BOTTOM);
+        Node* dest_elem_klass = transform_later(n1);
+        Node* cv = generate_checkcast_arraycopy(&local_ctrl, &local_mem,
+                                                adr_type,
+                                                dest_elem_klass,
+                                                src, src_offset, dest, dest_offset,
+                                                ConvI2X(copy_length), dest_uninitialized);
+        if (cv == NULL)  cv = intcon(-1);  // failure (no stub available)
+        checked_control = local_ctrl;
+        checked_i_o     = *io;
+        checked_mem     = local_mem->memory_at(alias_idx);
+        checked_value   = cv;
+      }
     }
     // At this point we know we do not need type checks on oop stores.
 
@@ -715,6 +718,15 @@ Node* PhaseMacroExpand::generate_arraycopy(ArrayCopyNode *ac, AllocateArrayNode*
   _igvn.replace_node(_ioproj_fallthrough, *io);
   _igvn.replace_node(_fallthroughcatchproj, *ctrl);
 
+#ifdef ASSERT
+  const TypeOopPtr* dest_t = _igvn.type(dest)->is_oopptr();
+  if (dest_t->is_known_instance()) {
+    ArrayCopyNode* ac = NULL;
+    assert(ArrayCopyNode::may_modify(dest_t, (*ctrl)->in(0)->as_MemBar(), &_igvn, ac), "dependency on arraycopy lost");
+    assert(ac == NULL, "no arraycopy anymore");
+  }
+#endif
+
   return out_mem;
 }
 
@@ -880,8 +892,14 @@ bool PhaseMacroExpand::generate_block_arraycopy(Node** ctrl, MergeMemNode** mem,
       Node* sptr = basic_plus_adr(src,  src_off);
       Node* dptr = basic_plus_adr(dest, dest_off);
       uint alias_idx = C->get_alias_index(adr_type);
-      Node* sval = transform_later(LoadNode::make(_igvn, *ctrl, (*mem)->memory_at(alias_idx), sptr, adr_type, TypeInt::INT, T_INT, MemNode::unordered));
-      Node* st = transform_later(StoreNode::make(_igvn, *ctrl, (*mem)->memory_at(alias_idx), dptr, adr_type, sval, T_INT, MemNode::unordered));
+      bool is_mismatched = (basic_elem_type != T_INT);
+      Node* sval = transform_later(
+          LoadNode::make(_igvn, *ctrl, (*mem)->memory_at(alias_idx), sptr, adr_type,
+                         TypeInt::INT, T_INT, MemNode::unordered, LoadNode::DependsOnlyOnTest,
+                         false /*unaligned*/, is_mismatched));
+      Node* st = transform_later(
+          StoreNode::make(_igvn, *ctrl, (*mem)->memory_at(alias_idx), dptr, adr_type,
+                          sval, T_INT, MemNode::unordered));
       (*mem)->set_memory_at(alias_idx, st);
       src_off += BytesPerInt;
       dest_off += BytesPerInt;
@@ -1130,8 +1148,25 @@ void PhaseMacroExpand::expand_arraycopy_node(ArrayCopyNode *ac) {
   const TypeAryPtr* top_src = src_type->isa_aryptr();
   const TypeAryPtr* top_dest = dest_type->isa_aryptr();
 
-  if (top_src  == NULL || top_src->klass()  == NULL ||
-      top_dest == NULL || top_dest->klass() == NULL) {
+  BasicType src_elem = T_CONFLICT;
+  BasicType dest_elem = T_CONFLICT;
+
+  if (top_dest != NULL && top_dest->klass() != NULL) {
+    dest_elem = top_dest->klass()->as_array_klass()->element_type()->basic_type();
+  }
+  if (top_src != NULL && top_src->klass() != NULL) {
+    src_elem = top_src->klass()->as_array_klass()->element_type()->basic_type();
+  }
+  if (src_elem  == T_ARRAY)  src_elem  = T_OBJECT;
+  if (dest_elem == T_ARRAY)  dest_elem = T_OBJECT;
+
+  if (ac->is_arraycopy_validated() &&
+      dest_elem != T_CONFLICT &&
+      src_elem == T_CONFLICT) {
+    src_elem = dest_elem;
+  }
+
+  if (src_elem == T_CONFLICT || dest_elem == T_CONFLICT) {
     // Conservatively insert a memory barrier on all memory slices.
     // Do not let writes into the source float below the arraycopy.
     {
@@ -1145,7 +1180,10 @@ void PhaseMacroExpand::expand_arraycopy_node(ArrayCopyNode *ac) {
     // Call StubRoutines::generic_arraycopy stub.
     Node* mem = generate_arraycopy(ac, NULL, &ctrl, merge_mem, &io,
                                    TypeRawPtr::BOTTOM, T_CONFLICT,
-                                   src, src_offset, dest, dest_offset, length);
+                                   src, src_offset, dest, dest_offset, length,
+                                   // If a  negative length guard was generated for the ArrayCopyNode,
+                                   // the length of the array can never be negative.
+                                   false, ac->has_negative_length_guard());
 
     // Do not let reads from the destination float above the arraycopy.
     // Since we cannot type the arrays, we don't know which slices
@@ -1157,13 +1195,11 @@ void PhaseMacroExpand::expand_arraycopy_node(ArrayCopyNode *ac) {
     }
     return;
   }
+
+  assert(!ac->is_arraycopy_validated() || (src_elem == dest_elem && dest_elem != T_VOID), "validated but different basic types");
+
   // (2) src and dest arrays must have elements of the same BasicType
   // Figure out the size and type of the elements we will be copying.
-  BasicType src_elem  = top_src->klass()->as_array_klass()->element_type()->basic_type();
-  BasicType dest_elem = top_dest->klass()->as_array_klass()->element_type()->basic_type();
-  if (src_elem  == T_ARRAY)  src_elem  = T_OBJECT;
-  if (dest_elem == T_ARRAY)  dest_elem = T_OBJECT;
-
   if (src_elem != dest_elem || dest_elem == T_VOID) {
     // The component types are not the same or are not recognized.  Punt.
     // (But, avoid the native method wrapper to JVM_ArrayCopy.)
@@ -1249,5 +1285,7 @@ void PhaseMacroExpand::expand_arraycopy_node(ArrayCopyNode *ac) {
   generate_arraycopy(ac, alloc, &ctrl, merge_mem, &io,
                      adr_type, dest_elem,
                      src, src_offset, dest, dest_offset, length,
-                     false, false, slow_region);
+                     // If a  negative length guard was generated for the ArrayCopyNode,
+                     // the length of the array can never be negative.
+                     false, ac->has_negative_length_guard(), slow_region);
 }

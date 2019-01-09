@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,8 +24,9 @@
 
 #include "precompiled.hpp"
 #include "gc/shared/collectedHeap.hpp"
-#include "gc/shared/plab.hpp"
+#include "gc/shared/plab.inline.hpp"
 #include "gc/shared/threadLocalAllocBuffer.hpp"
+#include "logging/log.hpp"
 #include "oops/arrayOop.hpp"
 #include "oops/oop.inline.hpp"
 
@@ -45,8 +46,8 @@ PLAB::PLAB(size_t desired_plab_sz_) :
   // ArrayOopDesc::header_size depends on command line initialization.
   AlignmentReserve = oopDesc::header_size() > MinObjAlignment ? align_object_size(arrayOopDesc::header_size(T_INT)) : 0;
   assert(min_size() > AlignmentReserve,
-         err_msg("Minimum PLAB size " SIZE_FORMAT " must be larger than alignment reserve " SIZE_FORMAT " "
-                 "to be able to contain objects", min_size(), AlignmentReserve));
+         "Minimum PLAB size " SIZE_FORMAT " must be larger than alignment reserve " SIZE_FORMAT " "
+         "to be able to contain objects", min_size(), AlignmentReserve);
 }
 
 // If the minimum object size is greater than MinObjAlignment, we can
@@ -109,28 +110,58 @@ void PLAB::undo_allocation(HeapWord* obj, size_t word_sz) {
   }
 }
 
+void PLABStats::log_plab_allocation() {
+  log_debug(gc, plab)("%s PLAB allocation: "
+                      "allocated: " SIZE_FORMAT "B, "
+                      "wasted: " SIZE_FORMAT "B, "
+                      "unused: " SIZE_FORMAT "B, "
+                      "used: " SIZE_FORMAT "B, "
+                      "undo waste: " SIZE_FORMAT "B, ",
+                      _description,
+                      _allocated * HeapWordSize,
+                      _wasted * HeapWordSize,
+                      _unused * HeapWordSize,
+                      used() * HeapWordSize,
+                      _undo_wasted * HeapWordSize);
+}
+
+void PLABStats::log_sizing(size_t calculated_words, size_t net_desired_words) {
+  log_debug(gc, plab)("%s sizing: "
+                      "calculated: " SIZE_FORMAT "B, "
+                      "actual: " SIZE_FORMAT "B",
+                      _description,
+                      calculated_words * HeapWordSize,
+                      net_desired_words * HeapWordSize);
+}
+
 // Calculates plab size for current number of gc worker threads.
 size_t PLABStats::desired_plab_sz(uint no_of_gc_workers) {
-  return MAX2(min_size(), (size_t)align_object_size(_desired_net_plab_sz / no_of_gc_workers));
+  return (size_t)align_object_size(MIN2(MAX2(min_size(), _desired_net_plab_sz / no_of_gc_workers), max_size()));
 }
 
 // Compute desired plab size for one gc worker thread and latch result for later
 // use. This should be called once at the end of parallel
 // scavenge; it clears the sensor accumulators.
 void PLABStats::adjust_desired_plab_sz() {
-  assert(ResizePLAB, "Not set");
+  log_plab_allocation();
+
+  if (!ResizePLAB) {
+    // Clear accumulators for next round.
+    reset();
+    return;
+  }
 
   assert(is_object_aligned(max_size()) && min_size() <= max_size(),
          "PLAB clipping computation may be incorrect");
 
   if (_allocated == 0) {
     assert(_unused == 0,
-           err_msg("Inconsistency in PLAB stats: "
-                   "_allocated: " SIZE_FORMAT ", "
-                   "_wasted: " SIZE_FORMAT ", "
-                   "_unused: " SIZE_FORMAT ", "
-                   "_undo_wasted: " SIZE_FORMAT,
-                   _allocated, _wasted, _unused, _undo_wasted));
+           "Inconsistency in PLAB stats: "
+           "_allocated: " SIZE_FORMAT ", "
+           "_wasted: " SIZE_FORMAT ", "
+           "_unused: " SIZE_FORMAT ", "
+           "_undo_wasted: " SIZE_FORMAT,
+           _allocated, _wasted, _unused, _undo_wasted);
 
     _allocated = 1;
   }
@@ -144,23 +175,9 @@ void PLABStats::adjust_desired_plab_sz() {
   size_t recent_plab_sz = used / target_refills;
   // Take historical weighted average
   _filter.sample(recent_plab_sz);
-  // Clip from above and below, and align to object boundary
-  size_t new_plab_sz = MAX2(min_size(), (size_t)_filter.average());
-  new_plab_sz = MIN2(max_size(), new_plab_sz);
-  new_plab_sz = align_object_size(new_plab_sz);
-  // Latch the result
-  if (PrintPLAB) {
-    gclog_or_tty->print(" (plab_sz = " SIZE_FORMAT " desired_net_plab_sz = " SIZE_FORMAT ") ", recent_plab_sz, new_plab_sz);
-  }
-  _desired_net_plab_sz = new_plab_sz;
+  _desired_net_plab_sz = MAX2(min_size(), (size_t)_filter.average());
+
+  log_sizing(recent_plab_sz, _desired_net_plab_sz);
 
   reset();
 }
-
-#ifndef PRODUCT
-void PLAB::print() {
-  gclog_or_tty->print_cr("PLAB: _bottom: " PTR_FORMAT "  _top: " PTR_FORMAT
-    "  _end: " PTR_FORMAT "  _hard_end: " PTR_FORMAT ")",
-    p2i(_bottom), p2i(_top), p2i(_end), p2i(_hard_end));
-}
-#endif // !PRODUCT

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 2012, 2015 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,7 +35,7 @@
 void OSThread::pd_initialize() {
   assert(this != NULL, "check");
   _thread_id        = 0;
-  _pthread_id       = 0;
+  _kernel_thread_id = 0;
   _siginfo = NULL;
   _ucontext = NULL;
   _expanding_stack = 0;

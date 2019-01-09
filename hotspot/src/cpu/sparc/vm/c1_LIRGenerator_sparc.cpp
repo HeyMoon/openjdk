@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -68,6 +68,7 @@ void LIRItem::load_nonconstant() {
 
 LIR_Opr LIRGenerator::exceptionOopOpr()              { return FrameMap::Oexception_opr;  }
 LIR_Opr LIRGenerator::exceptionPcOpr()               { return FrameMap::Oissuing_pc_opr; }
+LIR_Opr LIRGenerator::syncLockOpr()                  { return new_register(T_INT); }
 LIR_Opr LIRGenerator::syncTempOpr()                  { return new_register(T_OBJECT); }
 LIR_Opr LIRGenerator::getThreadTemp()                { return rlock_callee_saved(NOT_LP64(T_INT) LP64_ONLY(T_LONG)); }
 
@@ -146,10 +147,11 @@ LIR_Opr LIRGenerator::safepoint_poll_register() {
 LIR_Address* LIRGenerator::generate_address(LIR_Opr base, LIR_Opr index,
                                             int shift, int disp, BasicType type) {
   assert(base->is_register(), "must be");
+  intx large_disp = disp;
 
   // accumulate fixed displacements
   if (index->is_constant()) {
-    disp += index->as_constant_ptr()->as_jint() << shift;
+    large_disp += (intx)(index->as_constant_ptr()->as_jint()) << shift;
     index = LIR_OprFact::illegalOpr;
   }
 
@@ -160,31 +162,31 @@ LIR_Address* LIRGenerator::generate_address(LIR_Opr base, LIR_Opr index,
       __ shift_left(index, shift, tmp);
       index = tmp;
     }
-    if (disp != 0) {
+    if (large_disp != 0) {
       LIR_Opr tmp = new_pointer_register();
-      if (Assembler::is_simm13(disp)) {
-        __ add(tmp, LIR_OprFact::intptrConst(disp), tmp);
+      if (Assembler::is_simm13(large_disp)) {
+        __ add(tmp, LIR_OprFact::intptrConst(large_disp), tmp);
         index = tmp;
       } else {
-        __ move(LIR_OprFact::intptrConst(disp), tmp);
+        __ move(LIR_OprFact::intptrConst(large_disp), tmp);
         __ add(tmp, index, tmp);
         index = tmp;
       }
-      disp = 0;
+      large_disp = 0;
     }
-  } else if (disp != 0 && !Assembler::is_simm13(disp)) {
+  } else if (large_disp != 0 && !Assembler::is_simm13(large_disp)) {
     // index is illegal so replace it with the displacement loaded into a register
     index = new_pointer_register();
-    __ move(LIR_OprFact::intptrConst(disp), index);
-    disp = 0;
+    __ move(LIR_OprFact::intptrConst(large_disp), index);
+    large_disp = 0;
   }
 
   // at this point we either have base + index or base + displacement
-  if (disp == 0) {
+  if (large_disp == 0) {
     return new LIR_Address(base, index, type);
   } else {
-    assert(Assembler::is_simm13(disp), "must be");
-    return new LIR_Address(base, disp, type);
+    assert(Assembler::is_simm13(large_disp), "must be");
+    return new LIR_Address(base, large_disp, type);
   }
 }
 
@@ -195,11 +197,11 @@ LIR_Address* LIRGenerator::emit_array_address(LIR_Opr array_opr, LIR_Opr index_o
   int shift = exact_log2(elem_size);
 
   LIR_Opr base_opr;
-  int offset = arrayOopDesc::base_offset_in_bytes(type);
+  intx offset = arrayOopDesc::base_offset_in_bytes(type);
 
   if (index_opr->is_constant()) {
-    int i = index_opr->as_constant_ptr()->as_jint();
-    int array_offset = i * elem_size;
+    intx i = index_opr->as_constant_ptr()->as_jint();
+    intx array_offset = i * elem_size;
     if (Assembler::is_simm13(array_offset + offset)) {
       base_opr = array_opr;
       offset = array_offset + offset;
@@ -343,7 +345,7 @@ void LIRGenerator::do_StoreIndexed(StoreIndexed* x) {
     length.set_instruction(x->length());
     length.load_item();
   }
-  if (needs_store_check) {
+  if (needs_store_check || x->check_boolean()) {
     value.load_item();
   } else {
     value.load_for_store(x->elt_type());
@@ -388,7 +390,8 @@ void LIRGenerator::do_StoreIndexed(StoreIndexed* x) {
     pre_barrier(LIR_OprFact::address(array_addr), LIR_OprFact::illegalOpr /* pre_val */,
                 true /* do_load */, false /* patch */, NULL);
   }
-  __ move(value.result(), array_addr, null_check_info);
+  LIR_Opr result = maybe_mask_boolean(x, array.result(), value.result(), null_check_info);
+  __ move(result, array_addr, null_check_info);
   if (obj_store) {
     // Precise card mark
     post_barrier(LIR_OprFact::address(array_addr), value.result());
@@ -785,7 +788,178 @@ void LIRGenerator::do_ArrayCopy(Intrinsic* x) {
 }
 
 void LIRGenerator::do_update_CRC32(Intrinsic* x) {
-  fatal("CRC32 intrinsic is not implemented on this platform");
+  // Make all state_for calls early since they can emit code
+  LIR_Opr result = rlock_result(x);
+  int flags = 0;
+  switch (x->id()) {
+    case vmIntrinsics::_updateCRC32: {
+      LIRItem crc(x->argument_at(0), this);
+      LIRItem val(x->argument_at(1), this);
+      // val is destroyed by update_crc32
+      val.set_destroys_register();
+      crc.load_item();
+      val.load_item();
+      __ update_crc32(crc.result(), val.result(), result);
+      break;
+    }
+    case vmIntrinsics::_updateBytesCRC32:
+    case vmIntrinsics::_updateByteBufferCRC32: {
+
+      bool is_updateBytes = (x->id() == vmIntrinsics::_updateBytesCRC32);
+
+      LIRItem crc(x->argument_at(0), this);
+      LIRItem buf(x->argument_at(1), this);
+      LIRItem off(x->argument_at(2), this);
+      LIRItem len(x->argument_at(3), this);
+
+      buf.load_item();
+      off.load_nonconstant();
+
+      LIR_Opr index = off.result();
+      int offset = is_updateBytes ? arrayOopDesc::base_offset_in_bytes(T_BYTE) : 0;
+      if(off.result()->is_constant()) {
+        index = LIR_OprFact::illegalOpr;
+        offset += off.result()->as_jint();
+      }
+
+      LIR_Opr base_op = buf.result();
+
+      if (index->is_valid()) {
+        LIR_Opr tmp = new_register(T_LONG);
+        __ convert(Bytecodes::_i2l, index, tmp);
+        index = tmp;
+        if (index->is_constant()) {
+          offset += index->as_constant_ptr()->as_jint();
+          index = LIR_OprFact::illegalOpr;
+        } else if (index->is_register()) {
+          LIR_Opr tmp2 = new_register(T_LONG);
+          LIR_Opr tmp3 = new_register(T_LONG);
+          __ move(base_op, tmp2);
+          __ move(index, tmp3);
+          __ add(tmp2, tmp3, tmp2);
+          base_op = tmp2;
+        } else {
+          ShouldNotReachHere();
+        }
+      }
+
+      LIR_Address* a = new LIR_Address(base_op, offset, T_BYTE);
+
+      BasicTypeList signature(3);
+      signature.append(T_INT);
+      signature.append(T_ADDRESS);
+      signature.append(T_INT);
+      CallingConvention* cc = frame_map()->c_calling_convention(&signature);
+      const LIR_Opr result_reg = result_register_for(x->type());
+
+      LIR_Opr addr = new_pointer_register();
+      __ leal(LIR_OprFact::address(a), addr);
+
+      crc.load_item_force(cc->at(0));
+      __ move(addr, cc->at(1));
+      len.load_item_force(cc->at(2));
+
+      __ call_runtime_leaf(StubRoutines::updateBytesCRC32(), getThreadTemp(), result_reg, cc->args());
+      __ move(result_reg, result);
+
+      break;
+    }
+    default: {
+      ShouldNotReachHere();
+    }
+  }
+}
+
+void LIRGenerator::do_update_CRC32C(Intrinsic* x) {
+  // Make all state_for calls early since they can emit code
+  LIR_Opr result = rlock_result(x);
+  int flags = 0;
+  switch (x->id()) {
+    case vmIntrinsics::_updateBytesCRC32C:
+    case vmIntrinsics::_updateDirectByteBufferCRC32C: {
+
+      bool is_updateBytes = (x->id() == vmIntrinsics::_updateBytesCRC32C);
+      int array_offset = is_updateBytes ? arrayOopDesc::base_offset_in_bytes(T_BYTE) : 0;
+
+      LIRItem crc(x->argument_at(0), this);
+      LIRItem buf(x->argument_at(1), this);
+      LIRItem off(x->argument_at(2), this);
+      LIRItem end(x->argument_at(3), this);
+
+      buf.load_item();
+      off.load_nonconstant();
+      end.load_nonconstant();
+
+      // len = end - off
+      LIR_Opr len  = end.result();
+      LIR_Opr tmpA = new_register(T_INT);
+      LIR_Opr tmpB = new_register(T_INT);
+      __ move(end.result(), tmpA);
+      __ move(off.result(), tmpB);
+      __ sub(tmpA, tmpB, tmpA);
+      len = tmpA;
+
+      LIR_Opr index = off.result();
+
+      if(off.result()->is_constant()) {
+        index = LIR_OprFact::illegalOpr;
+        array_offset += off.result()->as_jint();
+      }
+
+      LIR_Opr base_op = buf.result();
+
+      if (index->is_valid()) {
+        LIR_Opr tmp = new_register(T_LONG);
+        __ convert(Bytecodes::_i2l, index, tmp);
+        index = tmp;
+        if (index->is_constant()) {
+          array_offset += index->as_constant_ptr()->as_jint();
+          index = LIR_OprFact::illegalOpr;
+        } else if (index->is_register()) {
+          LIR_Opr tmp2 = new_register(T_LONG);
+          LIR_Opr tmp3 = new_register(T_LONG);
+          __ move(base_op, tmp2);
+          __ move(index, tmp3);
+          __ add(tmp2, tmp3, tmp2);
+          base_op = tmp2;
+        } else {
+          ShouldNotReachHere();
+        }
+      }
+
+      LIR_Address* a = new LIR_Address(base_op, array_offset, T_BYTE);
+
+      BasicTypeList signature(3);
+      signature.append(T_INT);
+      signature.append(T_ADDRESS);
+      signature.append(T_INT);
+      CallingConvention* cc = frame_map()->c_calling_convention(&signature);
+      const LIR_Opr result_reg = result_register_for(x->type());
+
+      LIR_Opr addr = new_pointer_register();
+      __ leal(LIR_OprFact::address(a), addr);
+
+      crc.load_item_force(cc->at(0));
+      __ move(addr, cc->at(1));
+      __ move(len, cc->at(2));
+
+      __ call_runtime_leaf(StubRoutines::updateBytesCRC32C(), getThreadTemp(), result_reg, cc->args());
+      __ move(result_reg, result);
+
+      break;
+    }
+    default: {
+      ShouldNotReachHere();
+    }
+  }
+}
+
+void LIRGenerator::do_FmaIntrinsic(Intrinsic* x) {
+  fatal("FMA intrinsic is not implemented on this platform");
+}
+
+void LIRGenerator::do_vectorizedMismatch(Intrinsic* x) {
+  fatal("vectorizedMismatch intrinsic is not implemented on this platform");
 }
 
 // _i2l, _i2f, _i2d, _l2i, _l2f, _l2d, _f2i, _f2l, _f2d, _d2i, _d2l, _d2f
@@ -953,7 +1127,7 @@ void LIRGenerator::do_NewObjectArray(NewObjectArray* x) {
 void LIRGenerator::do_NewMultiArray(NewMultiArray* x) {
   Values* dims = x->dims();
   int i = dims->length();
-  LIRItemList* items = new LIRItemList(dims->length(), NULL);
+  LIRItemList* items = new LIRItemList(i, i, NULL);
   while (i-- > 0) {
     LIRItem* size = new LIRItem(dims->at(i), this);
     items->at_put(i, size);
@@ -1022,11 +1196,18 @@ void LIRGenerator::do_CheckCast(CheckCast* x) {
   obj.load_item();
   LIR_Opr out_reg = rlock_result(x);
   CodeStub* stub;
-  CodeEmitInfo* info_for_exception = state_for(x);
+  CodeEmitInfo* info_for_exception =
+      (x->needs_exception_state() ? state_for(x) :
+                                    state_for(x, x->state_before(), true /*ignore_xhandler*/));
 
   if (x->is_incompatible_class_change_check()) {
     assert(patching_info == NULL, "can't patch this");
     stub = new SimpleExceptionStub(Runtime1::throw_incompatible_class_change_error_id, LIR_OprFact::illegalOpr, info_for_exception);
+  } else if (x->is_invokespecial_receiver_check()) {
+    assert(patching_info == NULL, "can't patch this");
+    stub = new DeoptimizeStub(info_for_exception,
+                              Deoptimization::Reason_class_check,
+                              Deoptimization::Action_none);
   } else {
     stub = new SimpleExceptionStub(Runtime1::throw_class_cast_exception_id, obj.result(), info_for_exception);
   }

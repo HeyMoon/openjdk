@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,7 +47,6 @@ JVM_ENTRY_NO_ENV(void*, JVM_RegisterSignal(jint sig, void* handler))
                    : handler;
   switch (sig) {
     /* The following are already used by the VM. */
-    case INTERRUPT_SIGNAL:
     case SIGFPE:
     case SIGILL:
     case SIGSEGV:
@@ -109,91 +108,3 @@ JVM_ENTRY_NO_ENV(jboolean, JVM_RaiseSignal(jint sig))
   return JNI_TRUE;
 JVM_END
 
-/*
-  All the defined signal names for Linux.
-
-  NOTE that not all of these names are accepted by our Java implementation
-
-  Via an existing claim by the VM, sigaction restrictions, or
-  the "rules of Unix" some of these names will be rejected at runtime.
-  For example the VM sets up to handle USR1, sigaction returns EINVAL for
-  STOP, and Linux simply doesn't allow catching of KILL.
-
-  Here are the names currently accepted by a user of sun.misc.Signal with
-  1.4.1 (ignoring potential interaction with use of chaining, etc):
-
-    HUP, INT, TRAP, ABRT, IOT, BUS, USR2, PIPE, ALRM, TERM, STKFLT,
-    CLD, CHLD, CONT, TSTP, TTIN, TTOU, URG, XCPU, XFSZ, VTALRM, PROF,
-    WINCH, POLL, IO, PWR, SYS
-
-*/
-
-struct siglabel {
-  const char *name;
-  int   number;
-};
-
-struct siglabel siglabels[] = {
-  /* derived from /usr/include/bits/signum.h on RH7.2 */
-   "HUP",       SIGHUP,         /* Hangup (POSIX).  */
-  "INT",        SIGINT,         /* Interrupt (ANSI).  */
-  "QUIT",       SIGQUIT,        /* Quit (POSIX).  */
-  "ILL",        SIGILL,         /* Illegal instruction (ANSI).  */
-  "TRAP",       SIGTRAP,        /* Trace trap (POSIX).  */
-  "ABRT",       SIGABRT,        /* Abort (ANSI).  */
-  "IOT",        SIGIOT,         /* IOT trap (4.2 BSD).  */
-  "BUS",        SIGBUS,         /* BUS error (4.2 BSD).  */
-  "FPE",        SIGFPE,         /* Floating-point exception (ANSI).  */
-  "KILL",       SIGKILL,        /* Kill, unblockable (POSIX).  */
-  "USR1",       SIGUSR1,        /* User-defined signal 1 (POSIX).  */
-  "SEGV",       SIGSEGV,        /* Segmentation violation (ANSI).  */
-  "USR2",       SIGUSR2,        /* User-defined signal 2 (POSIX).  */
-  "PIPE",       SIGPIPE,        /* Broken pipe (POSIX).  */
-  "ALRM",       SIGALRM,        /* Alarm clock (POSIX).  */
-  "TERM",       SIGTERM,        /* Termination (ANSI).  */
-#ifdef SIGSTKFLT
-  "STKFLT",     SIGSTKFLT,      /* Stack fault.  */
-#endif
-  "CLD",        SIGCLD,         /* Same as SIGCHLD (System V).  */
-  "CHLD",       SIGCHLD,        /* Child status has changed (POSIX).  */
-  "CONT",       SIGCONT,        /* Continue (POSIX).  */
-  "STOP",       SIGSTOP,        /* Stop, unblockable (POSIX).  */
-  "TSTP",       SIGTSTP,        /* Keyboard stop (POSIX).  */
-  "TTIN",       SIGTTIN,        /* Background read from tty (POSIX).  */
-  "TTOU",       SIGTTOU,        /* Background write to tty (POSIX).  */
-  "URG",        SIGURG,         /* Urgent condition on socket (4.2 BSD).  */
-  "XCPU",       SIGXCPU,        /* CPU limit exceeded (4.2 BSD).  */
-  "XFSZ",       SIGXFSZ,        /* File size limit exceeded (4.2 BSD).  */
-  "VTALRM",     SIGVTALRM,      /* Virtual alarm clock (4.2 BSD).  */
-  "PROF",       SIGPROF,        /* Profiling alarm clock (4.2 BSD).  */
-  "WINCH",      SIGWINCH,       /* Window size change (4.3 BSD, Sun).  */
-  "POLL",       SIGPOLL,        /* Pollable event occurred (System V).  */
-  "IO",         SIGIO,          /* I/O now possible (4.2 BSD).  */
-  "PWR",        SIGPWR,         /* Power failure restart (System V).  */
-#ifdef SIGSYS
-  "SYS",        SIGSYS          /* Bad system call. Only on some Linuxen! */
-#endif
-  };
-
-JVM_ENTRY_NO_ENV(jint, JVM_FindSignal(const char *name))
-
-  /* find and return the named signal's number */
-
-  for(uint i=0; i<ARRAY_SIZE(siglabels); i++)
-    if(!strcmp(name, siglabels[i].name))
-      return siglabels[i].number;
-
-  return -1;
-
-JVM_END
-
-// used by os::exception_name()
-extern bool signal_name(int signo, char* buf, size_t len) {
-  for(uint i = 0; i < ARRAY_SIZE(siglabels); i++) {
-    if (signo == siglabels[i].number) {
-      jio_snprintf(buf, len, "SIG%s", siglabels[i].name);
-      return true;
-    }
-  }
-  return false;
-}

@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 1998, 2012, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -133,7 +132,6 @@ extern double log __P((double));
 extern double log10 __P((double));
 extern double modf __P((double, double *));
 
-extern double pow __P((double, double));
 extern double sqrt __P((double));
 
 extern double ceil __P((double));
@@ -187,7 +185,6 @@ extern double __ieee754_atan2 __P((double,double));
 extern double __ieee754_exp __P((double));
 extern double __ieee754_cosh __P((double));
 extern double __ieee754_fmod __P((double,double));
-extern double __ieee754_pow __P((double,double));
 extern double __ieee754_log10 __P((double));
 extern double __ieee754_sinh __P((double));
 extern double __ieee754_hypot __P((double,double));

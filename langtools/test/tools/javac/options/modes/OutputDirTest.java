@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,14 +29,14 @@
  *          jdk.compiler/com.sun.tools.javac.file
  *          jdk.compiler/com.sun.tools.javac.main
  *          jdk.compiler/com.sun.tools.javac.util
- * @build Tester
+ * @build OptionModesTester
  * @run main OutputDirTest
  */
 
 import com.sun.tools.javac.main.Main;
 import java.io.IOException;
 
-public class OutputDirTest extends Tester {
+public class OutputDirTest extends OptionModesTester {
     public static void main(String... args) throws Exception {
         OutputDirTest t = new OutputDirTest();
         t.writeFile("src/C.java", "class C { }");
@@ -58,7 +58,7 @@ public class OutputDirTest extends Tester {
         String[] files = { "src/C.java" };
 
         runMain(opts, files)
-                .checkResult(Main.Result.CMDERR.exitCode);
+                .checkResult(Main.Result.OK.exitCode);
 
 // The API tests are disabled (for now) because Args.validate does
 // not have an easy way to access/validate file manager options,

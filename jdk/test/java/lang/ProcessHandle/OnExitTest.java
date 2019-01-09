@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,16 +22,17 @@
  */
 
 import java.io.IOException;
-import java.lang.InterruptedException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
-import jdk.testlibrary.Utils;
+import jdk.test.lib.Utils;
 
 import org.testng.annotations.Test;
 import org.testng.Assert;
@@ -39,7 +40,11 @@ import org.testng.TestNG;
 
 /*
  * @test
- * @build jdk.testlibrary.Utils
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
+ *          jdk.management
+ * @build jdk.test.lib.Platform jdk.test.lib.Utils
+ * @run testng OnExitTest
  * @summary Functions of Process.onExit and ProcessHandle.onExit
  * @author Roger Riggs
  */
@@ -96,12 +101,10 @@ public class OnExitTest extends ProcessUtil {
             ConcurrentHashMap<ProcessHandle, ProcessHandle> processes = new ConcurrentHashMap<>();
             List<ProcessHandle> children = getChildren(ProcessHandle.current());
             children.forEach(ProcessUtil::printProcess);
-            Assert.assertEquals(children.size(), 0,
-                    "Expected to start with zero children; " + children);
 
             JavaChild proc = JavaChild.spawnJavaChild("stdin");
             procHandle = proc.toHandle();
-            printf(" spawned: %d%n", proc.getPid());
+            printf(" spawned: %d%n", proc.pid());
 
             proc.forEachOutputLine((s) -> {
                 String[] split = s.trim().split(" ");
@@ -126,7 +129,12 @@ public class OnExitTest extends ProcessUtil {
             } while (processes.size() < expected &&
                     Instant.now().isBefore(endTimeout));
 
-            children = getAllChildren(procHandle);
+            if (processes.size() < expected) {
+                printf("WARNING: not all children have been started. Can't complete test.%n");
+                printf("         You can try to increase the timeout or%n");
+                printf("         you can try to use a faster VM (i.e. not a debug version).%n");
+            }
+            children = getDescendants(procHandle);
 
             ConcurrentHashMap<ProcessHandle, CompletableFuture<ProcessHandle>> completions =
                     new ConcurrentHashMap<>();
@@ -181,16 +189,103 @@ public class OnExitTest extends ProcessUtil {
             children.forEach(p -> printProcess(p, "after onExit:"));
 
             Assert.assertEquals(proc.isAlive(), false, "destroyed process is alive:: %s%n" + proc);
-
-            List<ProcessHandle> children2 = getAllChildren(procHandle);
-            printf(" children2: %s%n", children2.toString());
-            Assert.assertEquals(children2.size(), 0, "After onExit, expected no children");
         } catch (IOException | InterruptedException ex) {
             Assert.fail(ex.getMessage());
         } finally {
             if (procHandle != null) {
                 destroyProcessTree(procHandle);
             }
+        }
+    }
+
+    /**
+     * Verify that onExit completes for a non-child process only when
+     * the process has exited.
+     * Spawn a child (A) waiting to be commanded to exit.
+     * Spawn a child (B) to wait for that process to exit.
+     * Command (A) to exit.
+     * Check that (B) does not complete until (A) has exited.
+     */
+    @Test
+    public static void peerOnExitTest() {
+        String line = null;
+        ArrayBlockingQueue<String> alines = new ArrayBlockingQueue<>(100);
+        ArrayBlockingQueue<String> blines = new ArrayBlockingQueue<>(100);
+        JavaChild A = null;
+        try {
+            String[] split;
+            A = JavaChild.spawnJavaChild("stdin");
+            A.forEachOutputLine(l -> alines.add(l));
+
+            // Verify A is running
+            A.sendAction("pid");
+            do {
+                split = getSplitLine(alines);
+            } while (!"pid".equals(split[1]));
+
+            JavaChild B = null;
+            try {
+                B = JavaChild.spawnJavaChild("stdin");
+                B.forEachOutputLine(l -> blines.add(l));
+
+                // Verify B is running
+                B.sendAction("pid");
+                do {
+                    split = getSplitLine(blines);
+                } while (!"pid".equals(split[1]));
+
+                // Tell B to wait for A's pid
+                B.sendAction("waitpid", A.pid());
+
+                // Wait a bit to see if B will prematurely report the termination of A
+                try {
+                    line = blines.poll(5L, TimeUnit.SECONDS);
+                } catch (InterruptedException ie) {
+                    Assert.fail("interrupted", ie);
+                }
+                Assert.assertNull(line, "waitpid didn't wait");
+
+                A.sendAction("exit", 0L);
+
+                // Look for B to report that A has exited
+                do {
+                    split = getSplitLine(blines);
+                } while (!"waitpid".equals(split[1]));
+
+                Assert.assertEquals(split[2], "false",  "Process A should not be alive");
+
+                B.sendAction("exit", 0L);
+            } catch (IOException ioe) {
+                Assert.fail("unable to start JavaChild B", ioe);
+            } finally {
+                B.destroyForcibly();
+            }
+        } catch (IOException ioe2) {
+            Assert.fail("unable to start JavaChild A", ioe2);
+        } finally {
+            A.destroyForcibly();
+        }
+    }
+
+    private static boolean DEBUG = true;
+
+    /**
+     * Get a line from the queue and split into words on whitespace.
+     * Log to stdout if requested.
+     * @param queue a queue of strings
+     * @return the words split from the line.
+     */
+    private static String[] getSplitLine(ArrayBlockingQueue<String> queue) {
+        try {
+            String line = queue.take();
+            String[] split = line.split("\\s");
+            if (DEBUG) {
+                System.out.printf("  Child Output: %s%n", line);
+            }
+            return split;
+        } catch (InterruptedException ie) {
+            Assert.fail("interrupted", ie);
+            return null;
         }
     }
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #
-# Copyright (c) 2002, 2014 Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2002, 2014, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@
 #  @summary TTY: surprising ExceptionSpec.resolveEventRequest() wildcard results
 #  @author Tim Bell
 #
+#  @key intermittent
 #  @run shell CatchPatternTest.sh
 classname=CatchPatternTestTarg
 createJavaFile()
@@ -86,7 +87,12 @@ dojdbCmds()
    cmd stop in ${classname}.partTwo
    runToBkpt
    cmd ignore uncaught java.lang.Throwable
-   cmd catch all java.lang.I*
+   # Instead of matching java.lang.I* we use two more specific
+   # patterns here. The reason is to avoid matching IncompatibleClassChangeError
+   # (or the subclass NoSuchMethodError) thrown by the
+   # java.lang.invoke infrastructure.
+   cmd catch all java.lang.Il*
+   cmd catch all java.lang.Ind*
    cmd cont
    cmd cont
    cmd cont
@@ -102,7 +108,7 @@ mysetup()
 
     for ii in . $TESTSRC $TESTSRC/.. ; do
         if [ -r "$ii/ShellScaffold.sh" ] ; then
-            . $ii/ShellScaffold.sh 
+            . $ii/ShellScaffold.sh
             break
         fi
     done

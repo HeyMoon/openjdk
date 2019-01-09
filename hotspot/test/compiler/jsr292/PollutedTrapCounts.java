@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,11 +24,20 @@
 /**
  * @test
  * @bug 8074551
- * @library /testlibrary
- * @run main PollutedTrapCounts
+ * @modules java.base/jdk.internal.misc
+ * @library /test/lib
+ *
+ * @run driver compiler.jsr292.PollutedTrapCounts
  */
-import java.lang.invoke.*;
-import jdk.test.lib.*;
+
+package compiler.jsr292;
+
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
+
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 
 public class PollutedTrapCounts {
     public static void main(String[] args) throws Exception {
@@ -37,7 +46,7 @@ public class PollutedTrapCounts {
                 "-XX:-TieredCompilation", "-Xbatch",
                 "-XX:PerBytecodeRecompilationCutoff=10", "-XX:PerMethodRecompilationCutoff=10",
                 "-XX:+PrintCompilation", "-XX:+UnlockDiagnosticVMOptions", "-XX:+PrintInlining",
-                    "PollutedTrapCounts$Test");
+                    Test.class.getName());
 
         OutputAnalyzer analyzer = new OutputAnalyzer(pb.start());
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,6 +41,7 @@
 
 class arrayOopDesc : public oopDesc {
   friend class VMStructs;
+  friend class arrayOopDescTest;
 
   // Interpreter/Compiler offsets
 
@@ -124,12 +125,6 @@ class arrayOopDesc : public oopDesc {
     return (int32_t)max_elements_per_size_t;
   }
 
-// for unit testing
-#ifndef PRODUCT
-  static bool check_max_length_overflow(BasicType type);
-  static int32_t old_max_array_length(BasicType type);
-  static void test_max_array_length();
-#endif
 };
 
 #endif // SHARE_VM_OOPS_ARRAYOOP_HPP

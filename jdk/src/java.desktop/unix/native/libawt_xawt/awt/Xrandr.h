@@ -5,8 +5,8 @@
 /*
  * $XFree86: xc/lib/Xrandr/Xrandr.h,v 1.9 2002/09/29 23:39:44 keithp Exp $
  *
- * Copyright © 2000 Compaq Computer Corporation, Inc.
- * Copyright © 2002 Hewlett-Packard Company, Inc.
+ * Copyright Â© 2000 Compaq Computer Corporation, Inc.
+ * Copyright Â© 2002 Hewlett-Packard Company, Inc.
  *
  * Permission to use, copy, modify, distribute, and sell this software and its
  * documentation for any purpose is hereby granted without fee, provided that
@@ -65,6 +65,83 @@ typedef struct {
     int mwidth;
     int mheight;
 } XRRScreenChangeNotifyEvent;
+
+typedef XID RROutput;
+typedef XID RRCrtc;
+typedef XID RRMode;
+
+typedef unsigned long XRRModeFlags;
+
+typedef struct {
+    RRMode              id;
+    unsigned int        width;
+    unsigned int        height;
+    unsigned long       dotClock;
+    unsigned int        hSyncStart;
+    unsigned int        hSyncEnd;
+    unsigned int        hTotal;
+    unsigned int        hSkew;
+    unsigned int        vSyncStart;
+    unsigned int        vSyncEnd;
+    unsigned int        vTotal;
+    char                *name;
+    unsigned int        nameLength;
+    XRRModeFlags        modeFlags;
+} XRRModeInfo;
+
+typedef struct {
+    Time        timestamp;
+    Time        configTimestamp;
+    int         ncrtc;
+    RRCrtc      *crtcs;
+    int         noutput;
+    RROutput    *outputs;
+    int         nmode;
+    XRRModeInfo *modes;
+} XRRScreenResources;
+
+typedef struct {
+    Time            timestamp;
+    RRCrtc          crtc;
+    char            *name;
+    int             nameLen;
+    unsigned long   mm_width;
+    unsigned long   mm_height;
+    Connection      connection;
+    SubpixelOrder   subpixel_order;
+    int             ncrtc;
+    RRCrtc          *crtcs;
+    int             nclone;
+    RROutput        *clones;
+    int             nmode;
+    int             npreferred;
+    RRMode          *modes;
+} XRROutputInfo;
+
+typedef struct {
+    Time            timestamp;
+    int             x, y;
+    unsigned int    width, height;
+    RRMode          mode;
+    Rotation        rotation;
+    int             noutput;
+    RROutput        *outputs;
+    Rotation        rotations;
+    int             npossible;
+    RROutput        *possible;
+} XRRCrtcInfo;
+
+XRRScreenResources *XRRGetScreenResources (Display *dpy, Window window);
+
+void XRRFreeScreenResources (XRRScreenResources *resources);
+
+XRROutputInfo * XRRGetOutputInfo (Display *dpy, XRRScreenResources *resources,
+                                                               RROutput output);
+void XRRFreeOutputInfo (XRROutputInfo *outputInfo);
+
+XRRCrtcInfo *XRRGetCrtcInfo (Display *dpy, XRRScreenResources *resources,
+                                                                   RRCrtc crtc);
+void XRRFreeCrtcInfo (XRRCrtcInfo *crtcInfo);
 
 
 /* internal representation is private to the library */

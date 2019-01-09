@@ -37,6 +37,7 @@ import java.io.EOFException;
  *
  * @see         Inflater
  * @author      David Connelly
+ * @since 1.1
  */
 public
 class InflaterInputStream extends FilterInputStream {
@@ -178,6 +179,10 @@ class InflaterInputStream extends FilterInputStream {
     public int available() throws IOException {
         ensureOpen();
         if (reachEOF) {
+            return 0;
+        } else if (inf.finished()) {
+            // the end of the compressed data stream has been reached
+            reachEOF = true;
             return 0;
         } else {
             return 1;

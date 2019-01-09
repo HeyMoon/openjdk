@@ -25,14 +25,13 @@
 
 package sun.tools.jstack;
 
-import java.lang.reflect.Method;
-import java.lang.reflect.Constructor;
-import java.io.IOException;
 import java.io.InputStream;
+import java.util.Collection;
 
 import com.sun.tools.attach.VirtualMachine;
-import com.sun.tools.attach.AttachNotSupportedException;
+import com.sun.tools.attach.VirtualMachineDescriptor;
 import sun.tools.attach.HotSpotVirtualMachine;
+import sun.tools.common.ProcessArgumentMatcher;
 
 /*
  * This class is the main class for the JStack utility. It parses its arguments
@@ -40,13 +39,14 @@ import sun.tools.attach.HotSpotVirtualMachine;
  * obtained the thread dump from a target process using the VM attach mechanism
  */
 public class JStack {
+
     public static void main(String[] args) throws Exception {
         if (args.length == 0) {
             usage(1); // no arguments
         }
 
-        boolean useSA = false;
-        boolean mixed = false;
+        checkForUnsupportedOptions(args);
+
         boolean locks = false;
 
         // Parse the options (arguments starting with "-" )
@@ -59,101 +59,44 @@ public class JStack {
             if (arg.equals("-help") || arg.equals("-h")) {
                 usage(0);
             }
-            else if (arg.equals("-F")) {
-                useSA = true;
-            }
             else {
-                if (arg.equals("-m")) {
-                    mixed = true;
+                if (arg.equals("-l")) {
+                    locks = true;
                 } else {
-                    if (arg.equals("-l")) {
-                       locks = true;
-                    } else {
-                        usage(1);
-                    }
+                    usage(1);
                 }
             }
             optionCount++;
         }
 
-        // mixed stack implies SA tool
-        if (mixed) {
-            useSA = true;
-        }
-
-        // Next we check the parameter count. If there are two parameters
-        // we assume core file and executable so we use SA.
+        // Next we check the parameter count.
         int paramCount = args.length - optionCount;
-        if (paramCount == 0 || paramCount > 2) {
+        if (paramCount != 1) {
             usage(1);
         }
-        if (paramCount == 2) {
-            useSA = true;
+
+        // pass -l to thread dump operation to get extra lock info
+        String pidArg = args[optionCount];
+        String params[];
+        if (locks) {
+            params = new String[] { "-l" };
         } else {
-            // If we can't parse it as a pid then it must be debug server
-            if (!args[optionCount].matches("[0-9]+")) {
-                useSA = true;
-            }
+            params = new String[0];
+        }
+        ProcessArgumentMatcher ap = new ProcessArgumentMatcher(pidArg);
+        Collection<String> pids = ap.getVirtualMachinePids(JStack.class);
+
+        if (pids.isEmpty()) {
+            System.err.println("Could not find any processes matching : '" + pidArg + "'");
+            System.exit(1);
         }
 
-        // now execute using the SA JStack tool or the built-in thread dumper
-        if (useSA) {
-            // parameters (<pid> or <exe> <core>
-            String params[] = new String[paramCount];
-            for (int i=optionCount; i<args.length; i++ ){
-                params[i-optionCount] = args[i];
-            }
-            runJStackTool(mixed, locks, params);
-        } else {
-            // pass -l to thread dump operation to get extra lock info
-            String pid = args[optionCount];
-            String params[];
-            if (locks) {
-                params = new String[] { "-l" };
-            } else {
-                params = new String[0];
+        for (String pid : pids) {
+            if (pids.size() > 1) {
+                System.out.println("Pid:" + pid);
             }
             runThreadDump(pid, params);
         }
-    }
-
-
-    // SA JStack tool
-    private static void runJStackTool(boolean mixed, boolean locks, String args[]) throws Exception {
-        Class<?> cl = loadSAClass();
-        if (cl == null) {
-            usage(1);            // SA not available
-        }
-
-        // JStack tool also takes -m and -l arguments
-        if (mixed) {
-            args = prepend("-m", args);
-        }
-        if (locks) {
-            args = prepend("-l", args);
-        }
-
-        Class<?>[] argTypes = { String[].class };
-        Method m = cl.getDeclaredMethod("main", argTypes);
-
-        Object[] invokeArgs = { args };
-        m.invoke(null, invokeArgs);
-    }
-
-    // Returns sun.jvm.hotspot.tools.JStack if available, otherwise null.
-    private static Class<?> loadSAClass() {
-        //
-        // Attempt to load JStack class - we specify the system class
-        // loader so as to cater for development environments where
-        // this class is on the boot class path but sa-jdi.jar is on
-        // the system class path. Once the JDK is deployed then both
-        // tools.jar and sa-jdi.jar are on the system class path.
-        //
-        try {
-            return Class.forName("sun.jvm.hotspot.tools.JStack", true,
-                                 ClassLoader.getSystemClassLoader());
-        } catch (Exception x)  { }
-        return null;
     }
 
     // Attach to pid and perform a thread dump
@@ -167,11 +110,6 @@ public class JStack {
                 System.err.println(pid + ": " + msg);
             } else {
                 x.printStackTrace();
-            }
-            if ((x instanceof AttachNotSupportedException) &&
-                (loadSAClass() != null)) {
-                System.err.println("The -F option can be used when the target " +
-                    "process is not responding");
             }
             System.exit(1);
         }
@@ -194,12 +132,35 @@ public class JStack {
         vm.detach();
     }
 
-    // return a new string array with arg as the first element
-    private static String[] prepend(String arg, String args[]) {
-        String[] newargs = new String[args.length+1];
-        newargs[0] = arg;
-        System.arraycopy(args, 0, newargs, 1, args.length);
-        return newargs;
+    private static void checkForUnsupportedOptions(String[] args) {
+        // Check arguments for -F, -m, and non-numeric value
+        // and warn the user that SA is not supported anymore
+
+        int paramCount = 0;
+
+        for (String s : args) {
+            if (s.equals("-F")) {
+                SAOptionError("-F option used");
+            }
+
+            if (s.equals("-m")) {
+                SAOptionError("-m option used");
+            }
+
+            if (! s.startsWith("-")) {
+                paramCount += 1;
+            }
+        }
+
+        if (paramCount > 1) {
+            SAOptionError("More than one non-option argument");
+        }
+    }
+
+    private static void SAOptionError(String msg) {
+        System.err.println("Error: " + msg);
+        System.err.println("Cannot connect to core dump or remote debug server. Use jhsdb jstack instead");
+        System.exit(1);
     }
 
     // print usage message
@@ -207,25 +168,8 @@ public class JStack {
         System.err.println("Usage:");
         System.err.println("    jstack [-l] <pid>");
         System.err.println("        (to connect to running process)");
-
-        if (loadSAClass() != null) {
-            System.err.println("    jstack -F [-m] [-l] <pid>");
-            System.err.println("        (to connect to a hung process)");
-            System.err.println("    jstack [-m] [-l] <executable> <core>");
-            System.err.println("        (to connect to a core file)");
-            System.err.println("    jstack [-m] [-l] [server_id@]<remote server IP or hostname>");
-            System.err.println("        (to connect to a remote debug server)");
-        }
-
         System.err.println("");
         System.err.println("Options:");
-
-        if (loadSAClass() != null) {
-            System.err.println("    -F  to force a thread dump. Use when jstack <pid> does not respond" +
-                " (process is hung)");
-            System.err.println("    -m  to print both java and native frames (mixed mode)");
-        }
-
         System.err.println("    -l  long listing. Prints additional information about locks");
         System.err.println("    -h or -help to print this help message");
         System.exit(exit);

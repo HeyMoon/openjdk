@@ -27,8 +27,7 @@ package sun.nio.fs;
 
 import java.nio.file.attribute.*;
 import java.util.concurrent.TimeUnit;
-import java.security.AccessController;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 import sun.security.action.GetPropertyAction;
 
 import static sun.nio.fs.WindowsNativeDispatcher.*;
@@ -115,8 +114,8 @@ class WindowsFileAttributes
     // indicates if accurate metadata is required (interesting on NTFS only)
     private static final boolean ensureAccurateMetadata;
     static {
-        String propValue = AccessController.doPrivileged(
-            new GetPropertyAction("sun.nio.fs.ensureAccurateMetadata", "false"));
+        String propValue = GetPropertyAction.privilegedGetProperty(
+            "sun.nio.fs.ensureAccurateMetadata", "false");
         ensureAccurateMetadata = (propValue.length() == 0) ?
             true : Boolean.valueOf(propValue);
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,9 +23,10 @@
  * questions.
  */
 
+#import "jni_util.h"
+
 #import <AppKit/AppKit.h>
 #import <JavaNativeFoundation/JavaNativeFoundation.h>
-#import "jni_util.h"
 
 #import "CTrayIcon.h"
 #import "ThreadUtilities.h"
@@ -38,18 +39,21 @@
  * If the image of the specified size won't fit into the status bar,
  * then scale it down proprtionally. Otherwise, leave it as is.
  */
-static NSSize ScaledImageSizeForStatusBar(NSSize imageSize) {
+static NSSize ScaledImageSizeForStatusBar(NSSize imageSize, BOOL autosize) {
     NSRect imageRect = NSMakeRect(0.0, 0.0, imageSize.width, imageSize.height);
 
     // There is a black line at the bottom of the status bar
     // that we don't want to cover with image pixels.
-    CGFloat desiredHeight = [[NSStatusBar systemStatusBar] thickness] - 1.0;
-    CGFloat scaleFactor = MIN(1.0, desiredHeight/imageSize.height);
-
-    imageRect.size.width *= scaleFactor;
-    imageRect.size.height *= scaleFactor;
+    CGFloat desiredSize = [[NSStatusBar systemStatusBar] thickness] - 1.0;
+    if (autosize) {
+        imageRect.size.width = desiredSize;
+        imageRect.size.height = desiredSize;
+    } else {
+        CGFloat scaleFactor = MIN(1.0, desiredSize/imageSize.height);
+        imageRect.size.width *= scaleFactor;
+        imageRect.size.height *= scaleFactor;
+    }
     imageRect = NSIntegralRect(imageRect);
-
     return imageRect.size;
 }
 
@@ -100,9 +104,9 @@ static NSSize ScaledImageSizeForStatusBar(NSSize imageSize) {
     return peer;
 }
 
-- (void) setImage:(NSImage *) imagePtr sizing:(BOOL)autosize{
+- (void) setImage:(NSImage *) imagePtr sizing:(BOOL)autosize {
     NSSize imageSize = [imagePtr size];
-    NSSize scaledSize = ScaledImageSizeForStatusBar(imageSize);
+    NSSize scaledSize = ScaledImageSizeForStatusBar(imageSize, autosize);
     if (imageSize.width != scaledSize.width ||
         imageSize.height != scaledSize.height) {
         [imagePtr setSize: scaledSize];
@@ -136,8 +140,15 @@ static NSSize ScaledImageSizeForStatusBar(NSSize imageSize) {
 
     clickCount = [event clickCount];
 
+    jdouble deltaX = [event deltaX];
+    jdouble deltaY = [event deltaY];
+    if ([AWTToolkit hasPreciseScrollingDeltas: event]) {
+        deltaX = [event scrollingDeltaX] * 0.1;
+        deltaY = [event scrollingDeltaY] * 0.1;
+    }
+
     static JNF_CLASS_CACHE(jc_NSEvent, "sun/lwawt/macosx/NSEvent");
-    static JNF_CTOR_CACHE(jctor_NSEvent, jc_NSEvent, "(IIIIIIIIDD)V");
+    static JNF_CTOR_CACHE(jctor_NSEvent, jc_NSEvent, "(IIIIIIIIDDI)V");
     jobject jEvent = JNFNewObject(env, jctor_NSEvent,
                                   [event type],
                                   [event modifierFlags],
@@ -145,8 +156,9 @@ static NSSize ScaledImageSizeForStatusBar(NSSize imageSize) {
                                   [event buttonNumber],
                                   (jint)localPoint.x, (jint)localPoint.y,
                                   (jint)absP.x, (jint)absP.y,
-                                  [event deltaY],
-                                  [event deltaX]);
+                                  deltaY,
+                                  deltaX,
+                                  [AWTToolkit scrollStateWithEvent: event]);
     CHECK_NULL(jEvent);
 
     static JNF_CLASS_CACHE(jc_TrayIcon, "sun/lwawt/macosx/CTrayIcon");
@@ -166,12 +178,27 @@ static NSSize ScaledImageSizeForStatusBar(NSSize imageSize) {
     [self setTrayIcon: theTrayIcon];
     isHighlighted = NO;
     image = nil;
-
+    trackingArea = nil;
+	
+    [self addTrackingArea];
+	
     return self;
+}
+
+- (void)addTrackingArea {
+    NSTrackingAreaOptions options = NSTrackingMouseMoved | 
+                                    NSTrackingInVisibleRect | 
+                                    NSTrackingActiveAlways;
+    trackingArea = [[NSTrackingArea alloc] initWithRect: CGRectZero
+                                                options: options
+                                                owner: self
+                                                userInfo: nil];
+    [self addTrackingArea:trackingArea];
 }
 
 -(void) dealloc {
     [image release];
+    [trackingArea release];
     [super dealloc];
 }
 
@@ -261,6 +288,10 @@ static NSSize ScaledImageSizeForStatusBar(NSSize imageSize) {
 }
 
 - (void) mouseDragged:(NSEvent *)event {
+    [trayIcon deliverJavaMouseEvent: event];
+}
+
+- (void) mouseMoved: (NSEvent *)event {
     [trayIcon deliverJavaMouseEvent: event];
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,11 +27,11 @@ package javax.xml.bind;
 
 import org.w3c.dom.Node;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Properties;
-import java.io.IOException;
-import java.io.InputStream;
 
 /**
  * The {@code JAXBContext} class provides the client's entry point to the
@@ -94,7 +94,7 @@ import java.io.InputStream;
  * allows the merging of global elements and type definitions across a set of schemas (listed
  * in the {@code contextPath}). Since each schema in the schema set can belong
  * to distinct namespaces, the unification of schemas to an unmarshalling
- * context should be namespace independent.  This means that a client
+ * context must be namespace independent.  This means that a client
  * application is able to unmarshal XML documents that are instances of
  * any of the schemas listed in the {@code contextPath}.  For example:
  *
@@ -200,29 +200,41 @@ import java.io.InputStream;
  *
  * <h3>Discovery of JAXB implementation</h3>
  * <p>
- * When one of the {@code newInstance} methods is called, a JAXB implementation is discovered
- * by the following steps.
+ * To create an instance of {@link JAXBContext}, one of {@code JAXBContext.newInstance(...)} methods is invoked. After
+ * JAX-B implementation is discovered, call is delegated to appropriate provider's method {@code createContext(...)}
+ * passing parameters from the original call.
+ * <p>
+ * JAX-B implementation discovery happens each time {@code JAXBContext.newInstance} is invoked. If there is no user
+ * specific configuration provided, default JAX-B provider must be returned.
+ * <p>
+ * Implementation discovery consists of following steps:
  *
  * <ol>
  *
  * <li>
- * For each package/class explicitly passed in to the {@link #newInstance} method, in the order they are specified,
- * {@code jaxb.properties} file is looked up in its package, by using the associated classloader &mdash;
+ * Packages/classes explicitly passed in to the {@link #newInstance} method are processed in the order they are
+ * specified, until {@code jaxb.properties} file is looked up in its package, by using the associated classloader &mdash;
  * this is {@link Class#getClassLoader() the owner class loader} for a {@link Class} argument, and for a package
  * the specified {@link ClassLoader}.
  *
  * <p>
- * If such a file is discovered, it is {@link Properties#load(InputStream) loaded} as a property file, and
- * the value of the {@link #JAXB_CONTEXT_FACTORY} key will be assumed to be the provider factory class.
- * This class is then loaded by the associated class loader discussed above.
+ * If such a resource is discovered, it is {@link Properties#load(InputStream) loaded} as a property file, and
+ * the value of the {@link #JAXB_CONTEXT_FACTORY} key will be assumed to be the provider factory class. If no value
+ * found, {@code "javax.xml.bind.context.factory"} is used as a key for backwards compatibility reasons. This class is
+ * then loaded by the associated class loader discussed above.
  *
  * <p>
  * This phase of the look up allows some packages to force the use of a certain JAXB implementation.
  * (For example, perhaps the schema compiler has generated some vendor extension in the code.)
  *
+ * <p>
+ * This configuration method is deprecated.
+ *
  * <li>
  * If the system property {@link #JAXB_CONTEXT_FACTORY} exists, then its value is assumed to be the provider
- * factory class. This phase of the look up enables per-JVM override of the JAXB implementation.
+ * factory class. If no such property exists, properties {@code "javax.xml.bind.context.factory"} and
+ * {@code "javax.xml.bind.JAXBContext"} are checked too (in this order), for backwards compatibility reasons. This phase
+ * of the look up enables per-JVM override of the JAXB implementation.
  *
  * <li>
  * Provider of {@link javax.xml.bind.JAXBContextFactory} is loaded using the service-provider loading
@@ -235,43 +247,58 @@ import java.io.InputStream;
  * <br>
  * In case of {@link java.util.ServiceConfigurationError service
  * configuration error} a {@link javax.xml.bind.JAXBException} will be thrown.
- * </li>
  *
  * <li>
  * Look for resource {@code /META-INF/services/javax.xml.bind.JAXBContext} using provided class loader.
  * Methods without class loader parameter use {@code Thread.currentThread().getContextClassLoader()}.
- * If such a resource exists, its content is assumed to be the provider factory class and must supply
- * an implementation class containing the following method signatures:
+ * If such a resource exists, its content is assumed to be the provider factory class.
  *
- * <pre>
- *
- * public static JAXBContext createContext(
- *                                      String contextPath,
- *                                      ClassLoader classLoader,
- *                                      Map&lt;String,Object&gt; properties throws JAXBException
- *
- * public static JAXBContext createContext(
- *                                      Class[] classes,
- *                                      Map&lt;String,Object&gt; properties ) throws JAXBException
- * </pre>
  * This configuration method is deprecated.
  *
  * <li>
  * Finally, if all the steps above fail, then the rest of the look up is unspecified. That said,
  * the recommended behavior is to simply look for some hard-coded platform default JAXB implementation.
- * This phase of the look up is so that JavaSE can have its own JAXB implementation as the last resort.
+ * This phase of the look up is so that Java SE can have its own JAXB implementation as the last resort.
  * </ol>
  *
  * <p>
- * Once the provider factory class {@link javax.xml.bind.JAXBContextFactory} is discovered, one of its methods
- * {@link javax.xml.bind.JAXBContextFactory#createContext(String, ClassLoader, java.util.Map)} or
- * {@link javax.xml.bind.JAXBContextFactory#createContext(Class[], java.util.Map)} is invoked
- * to create a {@link JAXBContext}.
+ * Once the provider factory class is discovered, context creation is delegated to one of its
+ * {@code createContext(...)} methods.
+ *
+ * For backward compatibility reasons, there are two ways how to implement provider factory class:
+ * <ol>
+ *     <li>the class is implementation of {@link javax.xml.bind.JAXBContextFactory}. It must also implement no-arg
+ *     constructor. If discovered in other step then 3, new instance using no-arg constructor is created first.
+ *     After that, appropriate instance method is invoked on this instance.
+ *     <li>the class is not implementation of interface above and then it is mandated to implement the following
+ *     static method signatures:
+ * <pre>
+ *
+ * public static JAXBContext createContext(
+ *                                      String contextPath,
+ *                                      ClassLoader classLoader,
+ *                                      Map&lt;String,Object&gt; properties ) throws JAXBException
+ *
+ * public static JAXBContext createContext(
+ *                                      Class[] classes,
+ *                                      Map&lt;String,Object&gt; properties ) throws JAXBException
+ * </pre>
+ *      In this scenario, appropriate static method is used instead of instance method. This approach is incompatible
+ *      with {@link java.util.ServiceLoader} so it can't be used with step 3.
+ * </ol>
+ * <p>
+ * There is no difference in behavior of given method {@code createContext(...)} regardless of whether it uses approach
+ * 1 (JAXBContextFactory) or 2 (no interface, static methods).
  *
  * @apiNote
- * <p>Service discovery method using file /META-INF/services/javax.xml.bind.JAXBContext (described in step 4)
- * and leveraging provider's static methods is supported only to allow backwards compatibility, but it is strongly
- * recommended to migrate to standard ServiceLoader mechanism (described in step 3).
+ * Service discovery method using resource {@code /META-INF/services/javax.xml.bind.JAXBContext} (described in step 4)
+ * is supported only to allow backwards compatibility, it is strongly recommended to migrate to standard
+ * {@link java.util.ServiceLoader} mechanism (described in step 3). The difference here is the resource name, which
+ * doesn't match service's type name.
+ * <p>
+ * Also using providers implementing interface {@link JAXBContextFactory} is preferred over using ones defining
+ * static methods, same as {@link JAXBContext#JAXB_CONTEXT_FACTORY} property is preferred over property
+ * {@code "javax.xml.bind.context.factory"}
  *
  * @implNote
  * Within the last step, if Glassfish AS environment detected, its specific service loader is used to find factory class.
@@ -314,10 +341,11 @@ public abstract class JAXBContext {
      *   <li>an ambiguity among global elements contained in the contextPath</li>
      *   <li>failure to locate a value for the context factory provider property</li>
      *   <li>mixing schema derived packages from different providers on the same contextPath</li>
+     *   <li>packages are not open to {@code java.xml.bind} module</li>
      * </ol>
      */
     public static JAXBContext newInstance( String contextPath )
-        throws JAXBException {
+            throws JAXBException {
 
         //return newInstance( contextPath, JAXBContext.class.getClassLoader() );
         return newInstance( contextPath, getContextClassLoader());
@@ -396,9 +424,12 @@ public abstract class JAXBContext {
      * <p>
      * The steps involved in discovering the JAXB implementation is discussed in the class javadoc.
      *
-     * @param contextPath list of java package names that contain schema
-     *                    derived class and/or java to schema (JAXB-annotated)
-     *                    mapped classes
+     * @param contextPath
+     *      List of java package names that contain schema
+     *      derived class and/or java to schema (JAXB-annotated)
+     *      mapped classes.
+     *      Packages in {@code contextPath} that are in named modules must be
+     *      {@linkplain java.lang.Module#isOpen open} to at least the {@code java.xml.bind} module.
      * @param classLoader
      *      This class loader will be used to locate the implementation
      *      classes.
@@ -411,6 +442,7 @@ public abstract class JAXBContext {
      *   <li>an ambiguity among global elements contained in the contextPath</li>
      *   <li>failure to locate a value for the context factory provider property</li>
      *   <li>mixing schema derived packages from different providers on the same contextPath</li>
+     *   <li>packages are not open to {@code java.xml.bind} module</li>
      * </ol>
      */
     public static JAXBContext newInstance( String contextPath, ClassLoader classLoader ) throws JAXBException {
@@ -427,10 +459,15 @@ public abstract class JAXBContext {
      * the instantiation of {@link JAXBContext}.
      *
      * <p>
-     * The interpretation of properties is up to implementations. Implementations should
+     * The interpretation of properties is up to implementations. Implementations must
      * throw {@code JAXBException} if it finds properties that it doesn't understand.
      *
-     * @param contextPath list of java package names that contain schema derived classes
+     * @param contextPath
+     *      List of java package names that contain schema
+     *      derived class and/or java to schema (JAXB-annotated)
+     *      mapped classes.
+     *      Packages in {@code contextPath} that are in named modules must be
+     *      {@linkplain java.lang.Module#isOpen open} to at least the {@code java.xml.bind} module.
      * @param classLoader
      *      This class loader will be used to locate the implementation classes.
      * @param properties
@@ -445,6 +482,7 @@ public abstract class JAXBContext {
      *   <li>an ambiguity among global elements contained in the contextPath</li>
      *   <li>failure to locate a value for the context factory provider property</li>
      *   <li>mixing schema derived packages from different providers on the same contextPath</li>
+     *   <li>packages are not open to {@code java.xml.bind} module</li>
      * </ol>
      * @since 1.6, JAXB 2.0
      */
@@ -454,14 +492,14 @@ public abstract class JAXBContext {
 
         return ContextFinder.find(
                         /* The default property name according to the JAXB spec */
-                        JAXB_CONTEXT_FACTORY,
+                JAXB_CONTEXT_FACTORY,
 
                         /* the context path supplied by the client app */
-                        contextPath,
+                contextPath,
 
                         /* class loader to be used */
-                        classLoader,
-                        properties );
+                classLoader,
+                properties );
     }
 
 // TODO: resurrect this once we introduce external annotations
@@ -576,7 +614,9 @@ public abstract class JAXBContext {
      * The steps involved in discovering the JAXB implementation is discussed in the class javadoc.
      *
      * @param classesToBeBound
-     *      list of java classes to be recognized by the new {@link JAXBContext}.
+     *      List of java classes to be recognized by the new {@link JAXBContext}.
+     *      Classes in {@code classesToBeBound} that are in named modules must be in a package
+     *      that is {@linkplain java.lang.Module#isOpen open} to at least the {@code java.xml.bind} module.
      *      Can be empty, in which case a {@link JAXBContext} that only knows about
      *      spec-defined classes will be returned.
      *
@@ -593,6 +633,7 @@ public abstract class JAXBContext {
      *  <li>The JAXB implementation was unable to locate
      *      provider-specific out-of-band information (such as additional
      *      files generated at the development time.)
+     *  <li>{@code classesToBeBound} are not open to {@code java.xml.bind} module
      * </ol>
      *
      * @throws IllegalArgumentException
@@ -601,7 +642,7 @@ public abstract class JAXBContext {
      * @since 1.6, JAXB 2.0
      */
     public static JAXBContext newInstance( Class<?> ... classesToBeBound )
-        throws JAXBException {
+            throws JAXBException {
 
         return newInstance(classesToBeBound,Collections.<String,Object>emptyMap());
     }
@@ -614,11 +655,13 @@ public abstract class JAXBContext {
      * to configure 'properties' for this instantiation of {@link JAXBContext}.
      *
      * <p>
-     * The interpretation of properties is up to implementations. Implementations should
+     * The interpretation of properties is up to implementations. Implementations must
      * throw {@code JAXBException} if it finds properties that it doesn't understand.
      *
      * @param classesToBeBound
-     *      list of java classes to be recognized by the new {@link JAXBContext}.
+     *      List of java classes to be recognized by the new {@link JAXBContext}.
+     *      Classes in {@code classesToBeBound} that are in named modules must be in a package
+     *      that is {@linkplain java.lang.Module#isOpen open} to at least the {@code java.xml.bind} module.
      *      Can be empty, in which case a {@link JAXBContext} that only knows about
      *      spec-defined classes will be returned.
      * @param properties
@@ -638,6 +681,7 @@ public abstract class JAXBContext {
      *  <li>The JAXB implementation was unable to locate
      *      provider-specific out-of-band information (such as additional
      *      files generated at the development time.)
+     *  <li>{@code classesToBeBound} are not open to {@code java.xml.bind} module
      * </ol>
      *
      * @throws IllegalArgumentException
@@ -646,10 +690,10 @@ public abstract class JAXBContext {
      * @since 1.6, JAXB 2.0
      */
     public static JAXBContext newInstance( Class<?>[] classesToBeBound, Map<String,?> properties )
-        throws JAXBException {
+            throws JAXBException {
 
         if (classesToBeBound == null) {
-                throw new IllegalArgumentException();
+            throw new IllegalArgumentException();
         }
 
         // but it is an error to have nulls in it.
@@ -699,6 +743,7 @@ public abstract class JAXBContext {
      *                       {@code Validator} object
      * @deprecated since JAXB2.0
      */
+    @Deprecated
     public abstract Validator createValidator() throws JAXBException;
 
     /**

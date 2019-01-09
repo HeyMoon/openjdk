@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,9 +44,9 @@ public abstract class ExtendedSSLSession implements SSLSession {
      * <p>
      * The signature algorithm name must be a standard Java Security
      * name (such as "SHA1withRSA", "SHA256withECDSA", and so on).
-     * See Appendix A in the <a href=
-     * "{@docRoot}/../technotes/guides/security/crypto/CryptoSpec.html#AppA">
-     * Java Cryptography Architecture API Specification &amp; Reference </a>
+     * See the <a href=
+     * "{@docRoot}/../specs/security/standard-names.html">
+     * Java Security Standard Algorithm Names</a> document
      * for information about standard algorithm names.
      * <p>
      * Note: the local supported signature algorithms should conform to
@@ -72,9 +72,9 @@ public abstract class ExtendedSSLSession implements SSLSession {
      * <p>
      * The signature algorithm name must be a standard Java Security
      * name (such as "SHA1withRSA", "SHA256withECDSA", and so on).
-     * See Appendix A in the <a href=
-     * "{@docRoot}/../technotes/guides/security/crypto/CryptoSpec.html#AppA">
-     * Java Cryptography Architecture API Specification &amp; Reference </a>
+     * See the <a href=
+     * "{@docRoot}/../specs/security/standard-names.html">
+     * Java Security Standard Algorithm Names</a> document
      * for information about standard algorithm names.
      *
      * @return An array of supported signature algorithms, in descending
@@ -113,6 +113,47 @@ public abstract class ExtendedSSLSession implements SSLSession {
      * @since 1.8
      */
     public List<SNIServerName> getRequestedServerNames() {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Returns a {@link List} containing DER-encoded OCSP responses
+     * (using the ASN.1 type OCSPResponse defined in RFC 6960) for
+     * the client to verify status of the server's certificate during
+     * handshaking.
+     *
+     * <P>
+     * This method only applies to certificate-based server
+     * authentication.  An {@link X509ExtendedTrustManager} will use the
+     * returned value for server certificate validation.
+     *
+     * @implSpec This method throws UnsupportedOperationException by default.
+     *         Classes derived from ExtendedSSLSession must implement
+     *         this method.
+     *
+     * @return a non-null unmodifiable list of byte arrays, each entry
+     *         containing a DER-encoded OCSP response (using the
+     *         ASN.1 type OCSPResponse defined in RFC 6960).  The order
+     *         of the responses must match the order of the certificates
+     *         presented by the server in its Certificate message (See
+     *         {@link SSLSession#getLocalCertificates()} for server mode,
+     *         and {@link SSLSession#getPeerCertificates()} for client mode).
+     *         It is possible that fewer response entries may be returned than
+     *         the number of presented certificates.  If an entry in the list
+     *         is a zero-length byte array, it should be treated by the
+     *         caller as if the OCSP entry for the corresponding certificate
+     *         is missing.  The returned list may be empty if no OCSP responses
+     *         were presented during handshaking or if OCSP stapling is not
+     *         supported by either endpoint for this handshake.
+     *
+     * @throws UnsupportedOperationException if the underlying provider
+     *         does not implement the operation
+     *
+     * @see X509ExtendedTrustManager
+     *
+     * @since 9
+     */
+    public List<byte[]> getStatusResponses() {
         throw new UnsupportedOperationException();
     }
 }

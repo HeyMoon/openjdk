@@ -56,7 +56,7 @@ final class AESCrypt extends SymmetricCipher implements AESConstants
     private boolean ROUNDS_14 = false;
 
     /** Session and Sub keys */
-    private Object[] sessionK = null;
+    private int[][] sessionK = null;
     private int[] K = null;
 
     /** Cipher encryption/decryption key */
@@ -99,7 +99,7 @@ final class AESCrypt extends SymmetricCipher implements AESConstants
         }
 
         // set sub key to the corresponding session Key
-        this.K = (int[]) sessionK[(decrypting? 1:0)];
+        this.K = sessionK[(decrypting? 1:0)];
     }
 
     /**
@@ -351,8 +351,8 @@ final class AESCrypt extends SymmetricCipher implements AESConstants
      */
     void encryptBlock(byte[] in, int inOffset,
                       byte[] out, int outOffset) {
-        cryptBlockCheck(in, inOffset);
-        cryptBlockCheck(out, outOffset);
+        Objects.checkFromIndexSize(inOffset, AES_BLOCK_SIZE, in.length);
+        Objects.checkFromIndexSize(outOffset, AES_BLOCK_SIZE, out.length);
         implEncryptBlock(in, inOffset, out, outOffset);
     }
 
@@ -430,8 +430,8 @@ final class AESCrypt extends SymmetricCipher implements AESConstants
      */
     void decryptBlock(byte[] in, int inOffset,
                       byte[] out, int outOffset) {
-        cryptBlockCheck(in, inOffset);
-        cryptBlockCheck(out, outOffset);
+        Objects.checkFromIndexSize(inOffset, AES_BLOCK_SIZE, in.length);
+        Objects.checkFromIndexSize(outOffset, AES_BLOCK_SIZE, out.length);
         implDecryptBlock(in, inOffset, out, outOffset);
     }
 
@@ -593,26 +593,6 @@ final class AESCrypt extends SymmetricCipher implements AESConstants
         out[outOffset  ] = (byte)(Si[(a0       ) & 0xFF] ^ (t1       ));
     }
 
-    // Used to perform all checks required by the Java semantics
-    // (i.e., null checks and bounds checks) on the input parameters
-    // to encryptBlock and to decryptBlock.
-    // Normally, the Java Runtime performs these checks, however, as
-    // encryptBlock and decryptBlock are possibly replaced with
-    // compiler intrinsics, the JDK performs the required checks instead.
-    // Does not check accesses to class-internal (private) arrays.
-    private static void cryptBlockCheck(byte[] array, int offset) {
-        Objects.requireNonNull(array);
-
-        if (offset < 0 || offset >= array.length) {
-            throw new ArrayIndexOutOfBoundsException(offset);
-        }
-
-        int largestIndex = offset + AES_BLOCK_SIZE - 1;
-        if (largestIndex < 0 || largestIndex >= array.length) {
-            throw new ArrayIndexOutOfBoundsException(largestIndex);
-        }
-    }
-
     /**
      * Expand a user-supplied key material into a session key.
      *
@@ -700,7 +680,7 @@ final class AESCrypt extends SymmetricCipher implements AESConstants
         limit = ROUNDS*4;
 
         // store the expanded sub keys into 'sessionK'
-        sessionK = new Object[] { expandedKe, expandedKd };
+        sessionK = new int[][] { expandedKe, expandedKd };
     }
 
 

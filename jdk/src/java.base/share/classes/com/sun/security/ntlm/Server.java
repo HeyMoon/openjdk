@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 2010, 2012, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -49,8 +48,8 @@ import java.util.Locale;
  * </pre>
  */
 public abstract class Server extends NTLM {
-    final private String domain;
-    final private boolean allVersion;
+    private final String domain;
+    private final boolean allVersion;
     /**
      * Creates a Server instance.
      * @param version the NTLM version to use, which can be:

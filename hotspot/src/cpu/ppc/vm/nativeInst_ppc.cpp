@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2014 SAP AG. All rights reserved.
+ * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2015 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -65,13 +65,17 @@ address NativeCall::destination() const {
   address destination = Assembler::bxx_destination(addr);
 
   // Do we use a trampoline stub for this call?
-  CodeBlob* cb = CodeCache::find_blob_unsafe(addr);   // Else we get assertion if nmethod is zombie.
-  assert(cb && cb->is_nmethod(), "sanity");
-  nmethod *nm = (nmethod *)cb;
-  if (nm->stub_contains(destination) && is_NativeCallTrampolineStub_at(destination)) {
-    // Yes we do, so get the destination from the trampoline stub.
-    const address trampoline_stub_addr = destination;
-    destination = NativeCallTrampolineStub_at(trampoline_stub_addr)->destination(nm);
+  // Trampoline stubs are located behind the main code.
+  if (destination > addr) {
+    // Filter out recursive method invocation (call to verified/unverified entry point).
+    CodeBlob* cb = CodeCache::find_blob_unsafe(addr);   // Else we get assertion if nmethod is zombie.
+    assert(cb && cb->is_nmethod(), "sanity");
+    nmethod *nm = (nmethod *)cb;
+    if (nm->stub_contains(destination) && is_NativeCallTrampolineStub_at(destination)) {
+      // Yes we do, so get the destination from the trampoline stub.
+      const address trampoline_stub_addr = destination;
+      destination = NativeCallTrampolineStub_at(trampoline_stub_addr)->destination(nm);
+    }
   }
 
   return destination;
@@ -133,7 +137,7 @@ address NativeCall::get_trampoline() {
     return NULL;
 
   address bl_destination = Assembler::bxx_destination(call_addr);
-  if (code->content_contains(bl_destination) &&
+  if (code->contains(bl_destination) &&
       is_NativeCallTrampolineStub_at(bl_destination))
     return bl_destination;
 
@@ -149,7 +153,7 @@ void NativeCall::verify() {
   if (!NativeCall::is_call_at(addr)) {
     tty->print_cr("not a NativeCall at " PTR_FORMAT, p2i(addr));
     // TODO: PPC port: Disassembler::decode(addr - 20, addr + 20, tty);
-    fatal(err_msg("not a NativeCall at " PTR_FORMAT, p2i(addr)));
+    fatal("not a NativeCall at " PTR_FORMAT, p2i(addr));
   }
 }
 #endif // ASSERT
@@ -162,7 +166,7 @@ void NativeFarCall::verify() {
   if (!NativeFarCall::is_far_call_at(addr)) {
     tty->print_cr("not a NativeFarCall at " PTR_FORMAT, p2i(addr));
     // TODO: PPC port: Disassembler::decode(addr, 20, 20, tty);
-    fatal(err_msg("not a NativeFarCall at " PTR_FORMAT, p2i(addr)));
+    fatal("not a NativeFarCall at " PTR_FORMAT, p2i(addr));
   }
 }
 #endif // ASSERT
@@ -267,7 +271,7 @@ void NativeMovConstReg::set_data(intptr_t data) {
           oop_addr = r->oop_addr();
           *oop_addr = cast_to_oop(data);
         } else {
-          assert(oop_addr == r->oop_addr(), "must be only one set-oop here") ;
+          assert(oop_addr == r->oop_addr(), "must be only one set-oop here");
         }
       }
       if (iter.type() == relocInfo::metadata_type) {
@@ -308,7 +312,7 @@ void NativeMovConstReg::verify() {
         ! MacroAssembler::is_bl(*((int*) addr))) {
       tty->print_cr("not a NativeMovConstReg at " PTR_FORMAT, p2i(addr));
       // TODO: PPC port: Disassembler::decode(addr, 20, 20, tty);
-      fatal(err_msg("not a NativeMovConstReg at " PTR_FORMAT, p2i(addr)));
+      fatal("not a NativeMovConstReg at " PTR_FORMAT, p2i(addr));
     }
   }
 }
@@ -346,10 +350,31 @@ void NativeJump::verify() {
   if (!NativeJump::is_jump_at(addr)) {
     tty->print_cr("not a NativeJump at " PTR_FORMAT, p2i(addr));
     // TODO: PPC port: Disassembler::decode(addr, 20, 20, tty);
-    fatal(err_msg("not a NativeJump at " PTR_FORMAT, p2i(addr)));
+    fatal("not a NativeJump at " PTR_FORMAT, p2i(addr));
   }
 }
 #endif // ASSERT
+
+
+void NativeGeneralJump::insert_unconditional(address code_pos, address entry) {
+  CodeBuffer cb(code_pos, BytesPerInstWord + 1);
+  MacroAssembler* a = new MacroAssembler(&cb);
+  a->b(entry);
+  ICache::ppc64_flush_icache_bytes(code_pos, NativeGeneralJump::instruction_size);
+}
+
+// MT-safe patching of a jmp instruction.
+void NativeGeneralJump::replace_mt_safe(address instr_addr, address code_buffer) {
+  // Bytes beyond offset NativeGeneralJump::instruction_size are copied by caller.
+
+  // Finally patch out the jump.
+  volatile juint *jump_addr = (volatile juint*)instr_addr;
+  // Release not needed because caller uses invalidate_range after copying the remaining bytes.
+  //OrderAccess::release_store(jump_addr, *((juint*)code_buffer));
+  *jump_addr = *((juint*)code_buffer); // atomically store code over branch instruction
+  ICache::ppc64_flush_icache_bytes(instr_addr, NativeGeneralJump::instruction_size);
+}
+
 
 //-------------------------------------------------------------------
 
@@ -364,10 +389,12 @@ void NativeJump::verify() {
 //
 
 address NativeCallTrampolineStub::encoded_destination_addr() const {
-  address instruction_addr = addr_at(2 * BytesPerInstWord);
-  assert(MacroAssembler::is_ld_largeoffset(instruction_addr),
-         "must be a ld with large offset (from the constant pool)");
-
+  address instruction_addr = addr_at(0 * BytesPerInstWord);
+  if (!MacroAssembler::is_ld_largeoffset(instruction_addr)) {
+    instruction_addr = addr_at(2 * BytesPerInstWord);
+    assert(MacroAssembler::is_ld_largeoffset(instruction_addr),
+           "must be a ld with large offset (from the constant pool)");
+  }
   return instruction_addr;
 }
 

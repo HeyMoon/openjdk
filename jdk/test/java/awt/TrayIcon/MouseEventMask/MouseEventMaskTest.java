@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,7 +32,10 @@ import java.awt.image.BufferedImage;
  *          checks if all listeners are triggered when AWTEventListeners
  *          and MouseListeners are added.
  * @author Dmitriy Ermashov (dmitriy.ermashov@oracle.com)
+ * @modules java.desktop/java.awt:open
+ * @library /java/awt/patchlib
  * @library ../../../../lib/testlibrary ../
+ * @build java.desktop/java.awt.Helper
  * @build ExtendedRobot SystemTrayIconHelper
  * @run main MouseEventMaskTest
  */
@@ -71,6 +74,8 @@ public class MouseEventMaskTest {
                         "\"Always show all icons and notifications on the taskbar\" true " +
                         "to avoid this problem. Or change behavior only for Java SE tray " +
                         "icon and rerun test.");
+            } else if (SystemTrayIconHelper.isOel7()) {
+                return;
             }
             new MouseEventMaskTest().doTest();
         }

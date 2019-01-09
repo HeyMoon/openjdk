@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,7 +35,6 @@ import java.security.*;
 import java.util.*;
 
 import sun.awt.*;
-import sun.misc.ManagedLocalsThread;
 import sun.print.*;
 import sun.awt.util.ThreadGroupUtils;
 
@@ -43,12 +42,12 @@ import static sun.lwawt.LWWindowPeer.PeerType;
 
 public abstract class LWToolkit extends SunToolkit implements Runnable {
 
-    private final static int STATE_NONE = 0;
-    private final static int STATE_INIT = 1;
-    private final static int STATE_MESSAGELOOP = 2;
-    private final static int STATE_SHUTDOWN = 3;
-    private final static int STATE_CLEANUP = 4;
-    private final static int STATE_DONE = 5;
+    private static final int STATE_NONE = 0;
+    private static final int STATE_INIT = 1;
+    private static final int STATE_MESSAGELOOP = 2;
+    private static final int STATE_SHUTDOWN = 3;
+    private static final int STATE_CLEANUP = 4;
+    private static final int STATE_DONE = 5;
 
     private int runState = STATE_NONE;
 
@@ -77,13 +76,14 @@ public abstract class LWToolkit extends SunToolkit implements Runnable {
                 shutdown();
                 waitForRunState(STATE_CLEANUP);
             };
-            Thread shutdown = new ManagedLocalsThread(
-                    ThreadGroupUtils.getRootThreadGroup(), shutdownRunnable);
+            Thread shutdown = new Thread(
+                    ThreadGroupUtils.getRootThreadGroup(), shutdownRunnable,
+                    "AWT-Shutdown", 0, false);
             shutdown.setContextClassLoader(null);
             Runtime.getRuntime().addShutdownHook(shutdown);
             String name = "AWT-LW";
-            Thread toolkitThread = new ManagedLocalsThread(
-                    ThreadGroupUtils.getRootThreadGroup(), this, name);
+            Thread toolkitThread = new Thread(
+                   ThreadGroupUtils.getRootThreadGroup(), this, name, 0, false);
             toolkitThread.setDaemon(true);
             toolkitThread.setPriority(Thread.NORM_PRIORITY + 1);
             toolkitThread.start();
@@ -359,14 +359,12 @@ public abstract class LWToolkit extends SunToolkit implements Runnable {
     // ---- NON-COMPONENT PEERS ---- //
 
     @Override
-    public final ColorModel getColorModel() throws HeadlessException {
-        return GraphicsEnvironment.getLocalGraphicsEnvironment()
-                                  .getDefaultScreenDevice()
-                                  .getDefaultConfiguration().getColorModel();
+    public final boolean isDesktopSupported() {
+        return true;
     }
 
     @Override
-    public final boolean isDesktopSupported() {
+    public final boolean isTaskbarSupported() {
         return true;
     }
 
@@ -399,6 +397,10 @@ public abstract class LWToolkit extends SunToolkit implements Runnable {
     public final PrintJob getPrintJob(Frame frame, String doctitle,
                                       JobAttributes jobAttributes,
                                       PageAttributes pageAttributes) {
+        if (frame == null) {
+            throw new NullPointerException("frame must not be null");
+        }
+
         if (GraphicsEnvironment.isHeadless()) {
             throw new IllegalArgumentException();
         }
@@ -454,14 +456,14 @@ public abstract class LWToolkit extends SunToolkit implements Runnable {
     /*
      * Expose non-public targetToPeer() method.
      */
-    public final static Object targetToPeer(Object target) {
+    public static final Object targetToPeer(Object target) {
         return SunToolkit.targetToPeer(target);
     }
 
     /*
      * Expose non-public targetDisposedPeer() method.
      */
-    public final static void targetDisposedPeer(Object target, Object peer) {
+    public static final void targetDisposedPeer(Object target, Object peer) {
         SunToolkit.targetDisposedPeer(target, peer);
     }
 

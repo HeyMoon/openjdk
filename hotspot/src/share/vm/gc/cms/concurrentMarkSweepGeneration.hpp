@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,6 +35,7 @@
 #include "gc/shared/generationCounters.hpp"
 #include "gc/shared/space.hpp"
 #include "gc/shared/taskqueue.hpp"
+#include "logging/log.hpp"
 #include "memory/freeBlockDictionary.hpp"
 #include "memory/iterator.hpp"
 #include "memory/virtualspace.hpp"
@@ -82,13 +83,12 @@ class SerialOldTracer;
 class CMSBitMap VALUE_OBJ_CLASS_SPEC {
   friend class VMStructs;
 
-  HeapWord* _bmStartWord;   // base address of range covered by map
-  size_t    _bmWordSize;    // map size (in #HeapWords covered)
-  const int _shifter;       // shifts to convert HeapWord to bit position
+  HeapWord*    _bmStartWord;   // base address of range covered by map
+  size_t       _bmWordSize;    // map size (in #HeapWords covered)
+  const int    _shifter;       // shifts to convert HeapWord to bit position
   VirtualSpace _virtual_space; // underlying the bit map
-  BitMap    _bm;            // the bit map itself
- public:
-  Mutex* const _lock;       // mutex protecting _bm;
+  BitMapView   _bm;            // the bit map itself
+  Mutex* const _lock;          // mutex protecting _bm;
 
  public:
   // constructor
@@ -296,8 +296,8 @@ class ChunkArray: public CHeapObj<mtGC> {
 
   size_t end() {
     assert(_index <= capacity(),
-           err_msg("_index (" SIZE_FORMAT ") > _capacity (" SIZE_FORMAT "): out of bounds",
-                   _index, _capacity));
+           "_index (" SIZE_FORMAT ") > _capacity (" SIZE_FORMAT "): out of bounds",
+           _index, _capacity);
     return _index;
   }  // exclusive
 
@@ -308,9 +308,8 @@ class ChunkArray: public CHeapObj<mtGC> {
 
   void reset() {
     _index = 0;
-    if (_overflows > 0 && PrintCMSStatistics > 1) {
-      warning("CMS: ChunkArray[" SIZE_FORMAT "] overflowed " SIZE_FORMAT " times",
-              _capacity, _overflows);
+    if (_overflows > 0) {
+      log_trace(gc)("CMS: ChunkArray[" SIZE_FORMAT "] overflowed " SIZE_FORMAT " times", _capacity, _overflows);
     }
     _overflows = 0;
   }
@@ -322,9 +321,9 @@ class ChunkArray: public CHeapObj<mtGC> {
     } else {
       ++_overflows;
       assert(_index == _capacity,
-             err_msg("_index (" SIZE_FORMAT ") > _capacity (" SIZE_FORMAT
-                     "): out of bounds at overflow#" SIZE_FORMAT,
-                     _index, _capacity, _overflows));
+             "_index (" SIZE_FORMAT ") > _capacity (" SIZE_FORMAT
+             "): out of bounds at overflow#" SIZE_FORMAT,
+             _index, _capacity, _overflows);
     }
   }
 };
@@ -451,7 +450,7 @@ class CMSStats VALUE_OBJ_CLASS_SPEC {
 
   // Debugging.
   void print_on(outputStream* st) const PRODUCT_RETURN;
-  void print() const { print_on(gclog_or_tty); }
+  void print() const { print_on(tty); }
 };
 
 // A closure related to weak references processing which
@@ -510,17 +509,17 @@ class CMSCollector: public CHeapObj<mtGC> {
   friend class ScanMarkedObjectsAgainCarefullyClosure;  // for sampling eden
   friend class SurvivorSpacePrecleanClosure;            // --- ditto -------
   friend class PushOrMarkClosure;             // to access _restart_addr
-  friend class Par_PushOrMarkClosure;             // to access _restart_addr
+  friend class ParPushOrMarkClosure;          // to access _restart_addr
   friend class MarkFromRootsClosure;          //  -- ditto --
                                               // ... and for clearing cards
-  friend class Par_MarkFromRootsClosure;      //  to access _restart_addr
+  friend class ParMarkFromRootsClosure;       //  to access _restart_addr
                                               // ... and for clearing cards
-  friend class Par_ConcMarkingClosure;        //  to access _restart_addr etc.
+  friend class ParConcMarkingClosure;         //  to access _restart_addr etc.
   friend class MarkFromRootsVerifyClosure;    // to access _restart_addr
   friend class PushAndMarkVerifyClosure;      //  -- ditto --
   friend class MarkRefsIntoAndScanClosure;    // to access _overflow_list
   friend class PushAndMarkClosure;            //  -- ditto --
-  friend class Par_PushAndMarkClosure;        //  -- ditto --
+  friend class ParPushAndMarkClosure;         //  -- ditto --
   friend class CMSKeepAliveClosure;           //  -- ditto --
   friend class CMSDrainMarkingStackClosure;   //  -- ditto --
   friend class CMSInnerParMarkAndPushClosure; //  -- ditto --
@@ -541,7 +540,7 @@ class CMSCollector: public CHeapObj<mtGC> {
 
   // Overflow list of grey objects, threaded through mark-word
   // Manipulated with CAS in the parallel/multi-threaded case.
-  oop _overflow_list;
+  oopDesc* volatile _overflow_list;
   // The following array-pair keeps track of mark words
   // displaced for accommodating overflow list above.
   // This code will likely be revisited under RFE#4922830.
@@ -723,14 +722,14 @@ class CMSCollector: public CHeapObj<mtGC> {
 
  private:
   // Support for parallelizing young gen rescan in CMS remark phase
-  ParNewGeneration* _young_gen;  // the younger gen
+  ParNewGeneration* _young_gen;
 
-  HeapWord** _top_addr;    // ... Top of Eden
-  HeapWord** _end_addr;    // ... End of Eden
-  Mutex*     _eden_chunk_lock;
-  HeapWord** _eden_chunk_array; // ... Eden partitioning array
-  size_t     _eden_chunk_index; // ... top (exclusive) of array
-  size_t     _eden_chunk_capacity;  // ... max entries in array
+  HeapWord* volatile* _top_addr;    // ... Top of Eden
+  HeapWord**          _end_addr;    // ... End of Eden
+  Mutex*              _eden_chunk_lock;
+  HeapWord**          _eden_chunk_array; // ... Eden partitioning array
+  size_t              _eden_chunk_index; // ... top (exclusive) of array
+  size_t              _eden_chunk_capacity;  // ... max entries in array
 
   // Support for parallelizing survivor space rescan
   HeapWord** _survivor_chunk_array;
@@ -738,10 +737,6 @@ class CMSCollector: public CHeapObj<mtGC> {
   size_t     _survivor_chunk_capacity;
   size_t*    _cursor;
   ChunkArray* _survivor_plab_array;
-
-  // A bounded minimum size of PLABs, should not return too small values since
-  // this will affect the size of the data structures used for parallel young gen rescan
-  size_t plab_sample_minimum_size();
 
   // Support for marking stack overflow handling
   bool take_from_overflow_list(size_t num, CMSMarkStack* to_stack);
@@ -776,9 +771,9 @@ class CMSCollector: public CHeapObj<mtGC> {
  private:
 
   // Concurrent precleaning work
-  size_t preclean_mod_union_table(ConcurrentMarkSweepGeneration* gen,
+  size_t preclean_mod_union_table(ConcurrentMarkSweepGeneration* old_gen,
                                   ScanMarkedObjectsAgainCarefullyClosure* cl);
-  size_t preclean_card_table(ConcurrentMarkSweepGeneration* gen,
+  size_t preclean_card_table(ConcurrentMarkSweepGeneration* old_gen,
                              ScanMarkedObjectsAgainCarefullyClosure* cl);
   // Does precleaning work, returning a quantity indicative of
   // the amount of "useful work" done.
@@ -801,10 +796,12 @@ class CMSCollector: public CHeapObj<mtGC> {
   void refProcessingWork();
 
   // Concurrent sweeping work
-  void sweepWork(ConcurrentMarkSweepGeneration* gen);
+  void sweepWork(ConcurrentMarkSweepGeneration* old_gen);
 
-  // (Concurrent) resetting of support data structures
-  void reset(bool concurrent);
+  // Concurrent resetting of support data structures
+  void reset_concurrent();
+  // Resetting of support data structures from a STW full GC
+  void reset_stw();
 
   // Clear _expansion_cause fields of constituent generations
   void clear_expansion_cause();
@@ -928,7 +925,7 @@ class CMSCollector: public CHeapObj<mtGC> {
   // one (foreground collector or background collector).
   static void check_correct_thread_executing() PRODUCT_RETURN;
 
-  bool is_cms_reachable(HeapWord* addr);
+  NOT_PRODUCT(bool is_cms_reachable(HeapWord* addr);)
 
   // Performance Counter Support
   CollectorCounters* counters()    { return _gc_counters; }
@@ -937,7 +934,7 @@ class CMSCollector: public CHeapObj<mtGC> {
   void    startTimer() { assert(!_timer.is_active(), "Error"); _timer.start();   }
   void    stopTimer()  { assert( _timer.is_active(), "Error"); _timer.stop();    }
   void    resetTimer() { assert(!_timer.is_active(), "Error"); _timer.reset();   }
-  double  timerValue() { assert(!_timer.is_active(), "Error"); return _timer.seconds(); }
+  jlong   timerTicks() { assert(!_timer.is_active(), "Error"); return _timer.ticks(); }
 
   int  yields()          { return _numYields; }
   void resetYields()     { _numYields = 0;    }
@@ -963,7 +960,7 @@ class CMSCollector: public CHeapObj<mtGC> {
 
   // Debugging
   void verify();
-  bool verify_after_remark(bool silent = VerifySilently);
+  bool verify_after_remark();
   void verify_ok_to_terminate() const PRODUCT_RETURN;
   void verify_work_stacks_empty() const PRODUCT_RETURN;
   void verify_overflow_empty() const PRODUCT_RETURN;
@@ -980,6 +977,8 @@ class CMSCollector: public CHeapObj<mtGC> {
   bool completed_initialization() { return _completed_initialization; }
 
   void print_eden_and_survivor_chunk_arrays();
+
+  ConcurrentGCTimer* gc_timer_cm() const { return _gc_timer_cm; }
 };
 
 class CMSExpansionCause : public AllStatic  {
@@ -1078,10 +1077,7 @@ class ConcurrentMarkSweepGeneration: public CardGeneration {
   void assert_correct_size_change_locking();
 
  public:
-  ConcurrentMarkSweepGeneration(ReservedSpace rs, size_t initial_byte_size,
-                                CardTableRS* ct,
-                                bool use_adaptive_freelists,
-                                FreeBlockDictionary<FreeChunk>::DictionaryChoice);
+  ConcurrentMarkSweepGeneration(ReservedSpace rs, size_t initial_byte_size, CardTableRS* ct);
 
   // Accessors
   CMSCollector* collector() const { return _collector; }
@@ -1123,14 +1119,6 @@ class ConcurrentMarkSweepGeneration: public CardGeneration {
   // over-rides
   MemRegion used_region_at_save_marks() const;
 
-  // Does a "full" (forced) collection invoked on this generation collect
-  // all younger generations as well? Note that the second conjunct is a
-  // hack to allow the collection of the younger gen first if the flag is
-  // set.
-  virtual bool full_collects_younger_generations() const {
-    return !ScavengeBeforeFullGC;
-  }
-
   // Adjust quantities in the generation affected by
   // the compaction.
   void reset_after_compaction();
@@ -1157,9 +1145,8 @@ class ConcurrentMarkSweepGeneration: public CardGeneration {
 
   virtual bool promotion_attempt_is_safe(size_t promotion_in_bytes) const;
 
-  // Inform this (non-young) generation that a promotion failure was
-  // encountered during a collection of a younger generation that
-  // promotes into this generation.
+  // Inform this (old) generation that a promotion failure was
+  // encountered during a collection of the young generation.
   virtual void promotion_failure_occurred();
 
   bool should_collect(bool full, size_t size, bool tlab);
@@ -1248,7 +1235,6 @@ class ConcurrentMarkSweepGeneration: public CardGeneration {
   const char* name() const;
   virtual const char* short_name() const { return "CMS"; }
   void        print() const;
-  void printOccupancy(const char* s);
 
   // Resize the generation after a compacting GC.  The
   // generation can be treated as a contiguous space
@@ -1295,7 +1281,7 @@ class MarkFromRootsClosure: public BitMapClosure {
 // marking from the roots following the first checkpoint.
 // XXX This should really be a subclass of The serial version
 // above, but i have not had the time to refactor things cleanly.
-class Par_MarkFromRootsClosure: public BitMapClosure {
+class ParMarkFromRootsClosure: public BitMapClosure {
   CMSCollector*  _collector;
   MemRegion      _whole_span;
   MemRegion      _span;
@@ -1308,11 +1294,11 @@ class Par_MarkFromRootsClosure: public BitMapClosure {
   HeapWord*      _threshold;
   CMSConcMarkingTask* _task;
  public:
-  Par_MarkFromRootsClosure(CMSConcMarkingTask* task, CMSCollector* collector,
-                       MemRegion span,
-                       CMSBitMap* bit_map,
-                       OopTaskQueue* work_queue,
-                       CMSMarkStack*  overflow_stack);
+  ParMarkFromRootsClosure(CMSConcMarkingTask* task, CMSCollector* collector,
+                          MemRegion span,
+                          CMSBitMap* bit_map,
+                          OopTaskQueue* work_queue,
+                          CMSMarkStack*  overflow_stack);
   bool do_bit(size_t offset);
   inline void do_yield_check();
 
@@ -1413,8 +1399,8 @@ class ScanMarkedObjectsAgainClosure: public UpwardsObjectClosure {
   bool                       _parallel;
   CMSBitMap*                 _bit_map;
   union {
-    MarkRefsIntoAndScanClosure*     _scan_closure;
-    Par_MarkRefsIntoAndScanClosure* _par_scan_closure;
+    MarkRefsIntoAndScanClosure*    _scan_closure;
+    ParMarkRefsIntoAndScanClosure* _par_scan_closure;
   };
 
  public:
@@ -1438,7 +1424,7 @@ class ScanMarkedObjectsAgainClosure: public UpwardsObjectClosure {
                                 ReferenceProcessor* rp,
                                 CMSBitMap* bit_map,
                                 OopTaskQueue* work_queue,
-                                Par_MarkRefsIntoAndScanClosure* cl):
+                                ParMarkRefsIntoAndScanClosure* cl):
     #ifdef ASSERT
       _collector(collector),
       _span(span),
@@ -1483,7 +1469,7 @@ class MarkFromDirtyCardsClosure: public MemRegionClosure {
                             CompactibleFreeListSpace* space,
                             CMSBitMap* bit_map,
                             OopTaskQueue* work_queue,
-                            Par_MarkRefsIntoAndScanClosure* cl):
+                            ParMarkRefsIntoAndScanClosure* cl):
     _space(space),
     _num_dirty_cards(0),
     _scan_cl(collector, span, collector->ref_processor(), bit_map,
@@ -1515,6 +1501,7 @@ class ScanMarkedObjectsAgainCarefullyClosure: public ObjectClosureCareful {
   CMSBitMap*                     _bitMap;
   CMSMarkStack*                  _markStack;
   MarkRefsIntoAndScanClosure*    _scanningClosure;
+  DEBUG_ONLY(HeapWord*           _last_scanned_object;)
 
  public:
   ScanMarkedObjectsAgainCarefullyClosure(CMSCollector* collector,
@@ -1528,8 +1515,9 @@ class ScanMarkedObjectsAgainCarefullyClosure: public ObjectClosureCareful {
     _yield(should_yield),
     _bitMap(bitMap),
     _markStack(markStack),
-    _scanningClosure(cl) {
-  }
+    _scanningClosure(cl)
+    DEBUG_ONLY(COMMA _last_scanned_object(NULL))
+  { }
 
   void do_object(oop p) {
     guarantee(false, "call do_object_careful instead");

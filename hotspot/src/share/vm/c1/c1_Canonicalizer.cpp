@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -222,33 +222,75 @@ void Canonicalizer::do_StoreField     (StoreField*      x) {
 }
 
 void Canonicalizer::do_ArrayLength    (ArrayLength*     x) {
-  NewArray* array = x->array()->as_NewArray();
-  if (array != NULL && array->length() != NULL) {
-    Constant* length = array->length()->as_Constant();
-    if (length != NULL) {
-      // do not use the Constant itself, but create a new Constant
-      // with same value Otherwise a Constant is live over multiple
-      // blocks without being registered in a state array.
+  NewArray*  na;
+  Constant*  ct;
+  LoadField* lf;
+
+  if ((na = x->array()->as_NewArray()) != NULL) {
+    // New arrays might have the known length.
+    // Do not use the Constant itself, but create a new Constant
+    // with same value Otherwise a Constant is live over multiple
+    // blocks without being registered in a state array.
+    Constant* length;
+    if (na->length() != NULL &&
+        (length = na->length()->as_Constant()) != NULL) {
       assert(length->type()->as_IntConstant() != NULL, "array length must be integer");
       set_constant(length->type()->as_IntConstant()->value());
     }
-  } else {
-    LoadField* lf = x->array()->as_LoadField();
-    if (lf != NULL) {
-      ciField* field = lf->field();
-      if (field->is_constant() && field->is_static()) {
-        // final static field
-        ciObject* c = field->constant_value().as_object();
-        if (c->is_array()) {
-          ciArray* array = (ciArray*) c;
-          set_constant(array->length());
-        }
+
+  } else if ((ct = x->array()->as_Constant()) != NULL) {
+    // Constant arrays have constant lengths.
+    ArrayConstant* cnst = ct->type()->as_ArrayConstant();
+    if (cnst != NULL) {
+      set_constant(cnst->value()->length());
+    }
+
+  } else if ((lf = x->array()->as_LoadField()) != NULL) {
+    ciField* field = lf->field();
+    if (field->is_static_constant()) {
+      // Constant field loads are usually folded during parsing.
+      // But it doesn't happen with PatchALot, ScavengeRootsInCode < 2, or when
+      // holder class is being initialized during parsing (for static fields).
+      ciObject* c = field->constant_value().as_object();
+      if (!c->is_null_object()) {
+        set_constant(c->as_array()->length());
       }
     }
   }
 }
 
-void Canonicalizer::do_LoadIndexed    (LoadIndexed*     x) {}
+void Canonicalizer::do_LoadIndexed    (LoadIndexed*     x) {
+  StableArrayConstant* array = x->array()->type()->as_StableArrayConstant();
+  IntConstant* index = x->index()->type()->as_IntConstant();
+
+  assert(array == NULL || FoldStableValues, "not enabled");
+
+  // Constant fold loads from stable arrays.
+  if (!x->mismatched() && array != NULL && index != NULL) {
+    jint idx = index->value();
+    if (idx < 0 || idx >= array->value()->length()) {
+      // Leave the load as is. The range check will handle it.
+      return;
+    }
+
+    ciConstant field_val = array->value()->element_value(idx);
+    if (!field_val.is_null_or_zero()) {
+      jint dimension = array->dimension();
+      assert(dimension <= array->value()->array_type()->dimension(), "inconsistent info");
+      ValueType* value = NULL;
+      if (dimension > 1) {
+        // Preserve information about the dimension for the element.
+        assert(field_val.as_object()->is_array(), "not an array");
+        value = new StableArrayConstant(field_val.as_object()->as_array(), dimension - 1);
+      } else {
+        assert(dimension == 1, "sanity");
+        value = as_ValueType(field_val);
+      }
+      set_canonical(new Constant(value));
+    }
+  }
+}
+
 void Canonicalizer::do_StoreIndexed   (StoreIndexed*    x) {
   // If a value is going to be stored into a field or array some of
   // the conversions emitted by javac are unneeded because the fields
@@ -265,12 +307,11 @@ void Canonicalizer::do_StoreIndexed   (StoreIndexed*    x) {
     // limit this optimization to current block
     if (value != NULL && in_current_block(conv)) {
       set_canonical(new StoreIndexed(x->array(), x->index(), x->length(),
-                                     x->elt_type(), value, x->state_before()));
+                                     x->elt_type(), value, x->state_before(),
+                                     x->check_boolean()));
       return;
     }
   }
-
-
 }
 
 
@@ -462,7 +503,7 @@ void Canonicalizer::do_Intrinsic      (Intrinsic*       x) {
     InstanceConstant* c = x->argument_at(0)->type()->as_InstanceConstant();
     if (c != NULL && !c->value()->is_null_object()) {
       // ciInstance::java_mirror_type() returns non-NULL only for Java mirrors
-      ciType* t = c->value()->as_instance()->java_mirror_type();
+      ciType* t = c->value()->java_mirror_type();
       if (t->is_klass()) {
         // substitute cls.isInstance(obj) of a constant Class into
         // an InstantOf instruction
@@ -475,6 +516,17 @@ void Canonicalizer::do_Intrinsic      (Intrinsic*       x) {
         // cls.isInstance(obj) always returns false for primitive classes
         set_constant(0);
       }
+    }
+    break;
+  }
+  case vmIntrinsics::_isPrimitive        : {
+    assert(x->number_of_arguments() == 1, "wrong type");
+
+    // Class.isPrimitive is known on constant classes:
+    InstanceConstant* c = x->argument_at(0)->type()->as_InstanceConstant();
+    if (c != NULL && !c->value()->is_null_object()) {
+      ciType* t = c->value()->java_mirror_type();
+      set_constant(t->is_primitive_type());
     }
     break;
   }
@@ -639,7 +691,7 @@ void Canonicalizer::do_If(If* x) {
 
   if (l == r && !lt->is_float_kind()) {
     // pattern: If (a cond a) => simplify to Goto
-    BlockBegin* sux;
+    BlockBegin* sux = NULL;
     switch (x->cond()) {
     case If::eql: sux = x->sux_for(true);  break;
     case If::neq: sux = x->sux_for(false); break;
@@ -647,6 +699,7 @@ void Canonicalizer::do_If(If* x) {
     case If::leq: sux = x->sux_for(true);  break;
     case If::gtr: sux = x->sux_for(false); break;
     case If::geq: sux = x->sux_for(true);  break;
+    default: ShouldNotReachHere();
     }
     // If is a safepoint then the debug information should come from the state_before of the If.
     set_canonical(new Goto(sux, x->state_before(), is_safepoint(x, sux)));
@@ -684,7 +737,7 @@ void Canonicalizer::do_If(If* x) {
       } else {
         // two successors differ and two successors are the same => simplify to: If (x cmp y)
         // determine new condition & successors
-        If::Condition cond;
+        If::Condition cond = If::eql;
         BlockBegin* tsux = NULL;
         BlockBegin* fsux = NULL;
              if (lss_sux == eql_sux) { cond = If::leq; tsux = lss_sux; fsux = gtr_sux; }
@@ -727,7 +780,9 @@ void Canonicalizer::do_If(If* x) {
         set_canonical(new IfInstanceOf(inst->klass(), inst->obj(), true, inst->state_before()->bci(), is_inst_sux, no_inst_sux));
       }
     }
-  } else if (rt == objectNull && (l->as_NewInstance() || l->as_NewArray())) {
+  } else if (rt == objectNull &&
+           (l->as_NewInstance() || l->as_NewArray() ||
+             (l->as_Local() && l->as_Local()->is_receiver()))) {
     if (x->cond() == Instruction::eql) {
       BlockBegin* sux = x->fsux();
       set_canonical(new Goto(sux, x->state_before(), is_safepoint(x, sux)));

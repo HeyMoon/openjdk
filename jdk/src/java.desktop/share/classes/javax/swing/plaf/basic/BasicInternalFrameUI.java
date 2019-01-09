@@ -200,7 +200,8 @@ public class BasicInternalFrameUI extends InternalFrameUI
                 }
             }
 
-            public boolean isEnabled(Object sender){
+            @Override
+            public boolean accept(Object sender){
                 if (sender instanceof JInternalFrame) {
                     JInternalFrame iFrame = (JInternalFrame)sender;
                     if (iFrame.getUI() instanceof BasicInternalFrameUI) {
@@ -1023,7 +1024,7 @@ public class BasicInternalFrameUI extends InternalFrameUI
                 return;
             }
         }
-
+        @SuppressWarnings("deprecation")
         public void mouseDragged(MouseEvent e) {
 
             if ( startingBounds == null ) {
@@ -1709,9 +1710,18 @@ public class BasicInternalFrameUI extends InternalFrameUI
                 } else {
                     parentBounds = null;
                 }
+                if ((frame.getParent() != null) && frame.isIcon()) {
+                    Boolean value = (Boolean) frame.getClientProperty("wasIconOnce");
+                    if (Boolean.FALSE.equals(value)) {
+                        iconifyFrame(frame);
+                    }
+                }
                 if ((frame.getParent() != null) && !componentListenerAdded) {
                     f.getParent().addComponentListener(componentListener);
                     componentListenerAdded = true;
+                    if (f.isMaximum()) {
+                        maximizeFrame(f);
+                    }
                 }
             } else if (JInternalFrame.TITLE_PROPERTY == prop ||
                     prop == "closable" || prop == "iconable" ||

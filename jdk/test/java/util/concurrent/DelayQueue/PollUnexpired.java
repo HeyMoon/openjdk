@@ -28,7 +28,9 @@
  * @author Martin Buchholz
  */
 
-import java.util.concurrent.*;
+import java.util.concurrent.DelayQueue;
+import java.util.concurrent.Delayed;
+import java.util.concurrent.TimeUnit;
 
 public class PollUnexpired {
     private static class Godot implements Delayed {
@@ -37,7 +39,7 @@ public class PollUnexpired {
     }
 
     private static void realMain(String[] args) throws Throwable {
-        DelayQueue<Godot> q = new DelayQueue<Godot>();
+        DelayQueue<Godot> q = new DelayQueue<>();
         for (int i = 0; i < 3; i++) {
             equal(q.size(), i);
             equal(q.poll(), null);

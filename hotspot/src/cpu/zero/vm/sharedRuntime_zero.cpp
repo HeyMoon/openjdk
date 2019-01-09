@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2015, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2007, 2008, 2009, 2010, 2011 Red Hat, Inc.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -31,7 +31,6 @@
 #include "code/vtableStubs.hpp"
 #include "interpreter/interpreter.hpp"
 #include "oops/compiledICHolder.hpp"
-#include "prims/jvmtiRedefineClassesTrace.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/vframeArray.hpp"
 #include "vmreg_zero.inline.hpp"
@@ -76,7 +75,7 @@ AdapterHandlerEntry* SharedRuntime::generate_i2c2i_adapters(
 }
 
 nmethod *SharedRuntime::generate_native_wrapper(MacroAssembler *masm,
-                                                methodHandle method,
+                                                const methodHandle& method,
                                                 int compile_id,
                                                 BasicType *sig_bt,
                                                 VMRegPair *regs,
@@ -132,6 +131,15 @@ RuntimeStub* SharedRuntime::generate_resolve_blob(address destination, const cha
   return generate_empty_runtime_stub("resolve_blob");
 }
 
+size_t SharedRuntime::trampoline_size() {
+  ShouldNotCallThis();
+  return 0;
+}
+
+void SharedRuntime::generate_trampoline(MacroAssembler *masm, address destination) {
+  ShouldNotCallThis();
+  return;
+}
 
 int SharedRuntime::c_calling_convention(const BasicType *sig_bt,
                                          VMRegPair *regs,

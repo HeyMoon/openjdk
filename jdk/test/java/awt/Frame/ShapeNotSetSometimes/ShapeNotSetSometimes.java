@@ -23,6 +23,7 @@
 
 /*
   @test
+  @key headful
   @bug 6988428
   @summary Tests whether shape is always set
   @author anthony.petrov@oracle.com: area=awt.toplevel
@@ -46,11 +47,8 @@ public class ShapeNotSetSometimes {
     private static Robot robot;
 
     public ShapeNotSetSometimes() throws Exception {
-        EventQueue.invokeAndWait(new Runnable() {
-            public void run() {
-                initializeGUI();
-            }
-        });
+        EventQueue.invokeAndWait(this::initializeGUI);
+        robot.waitForIdle();
     }
 
     private void initializeGUI() {
@@ -119,7 +117,7 @@ public class ShapeNotSetSometimes {
     public static void main(String[] args) throws Exception {
         robot = new Robot();
 
-        for(int i = 0; i < 100; i++) {
+        for(int i = 0; i < 50; i++) {
             System.out.println("Attempt " + i);
             new ShapeNotSetSometimes().doTest();
         }
@@ -134,11 +132,7 @@ public class ShapeNotSetSometimes {
         robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
         robot.delay(500);
 
-        EventQueue.invokeAndWait(new Runnable() {
-            public void run() {
-                window.requestFocus();
-            }
-        });
+        EventQueue.invokeAndWait(window::requestFocus);
 
         robot.waitForIdle();
         try {

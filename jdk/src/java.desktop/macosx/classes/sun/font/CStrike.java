@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,7 +31,7 @@ import java.util.*;
 
 import sun.awt.SunHints;
 
-public final class CStrike extends FontStrike {
+public final class CStrike extends PhysicalStrike {
 
     // Creates the native strike
     private static native long createNativeStrikePtr(long nativeFontPtr,
@@ -127,6 +127,7 @@ public final class CStrike extends FontStrike {
         return nativeStrikePtr;
     }
 
+    @SuppressWarnings("deprecation")
     protected synchronized void finalize() throws Throwable {
         if (nativeStrikePtr != 0) {
             disposeNativeStrikePtr(nativeStrikePtr);
@@ -386,7 +387,7 @@ public final class CStrike extends FontStrike {
             if (generalCache == null) {
                 return 0L;
             }
-            final Long value = generalCache.get(new Integer(index));
+            final Long value = generalCache.get(Integer.valueOf(index));
             if (value == null) {
                 return 0L;
             }
@@ -415,7 +416,7 @@ public final class CStrike extends FontStrike {
                 generalCache = new HashMap<Integer, Long>();
             }
 
-            generalCache.put(new Integer(index), Long.valueOf(value));
+            generalCache.put(Integer.valueOf(index), Long.valueOf(value));
         }
 
         public synchronized void dispose() {
@@ -526,7 +527,7 @@ public final class CStrike extends FontStrike {
             }
 
             if (generalCache == null) return 0;
-            final Float value = generalCache.get(new Integer(index));
+            final Float value = generalCache.get(Integer.valueOf(index));
             if (value == null) return 0;
             return value.floatValue();
         }
@@ -553,7 +554,7 @@ public final class CStrike extends FontStrike {
                 generalCache = new HashMap<Integer, Float>();
             }
 
-            generalCache.put(new Integer(index), new Float(value));
+            generalCache.put(Integer.valueOf(index), Float.valueOf(value));
         }
 
         private static class SparseBitShiftingTwoLayerArray {

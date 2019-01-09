@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,7 +52,7 @@
  *
  *  </ul>
  *
- * <p> The <tt>java.nio</tt> package defines the buffer classes, which
+ * <p> The {@code java.nio} package defines the buffer classes, which
  * are used throughout the NIO APIs.  The charset API is defined in
  * the {@link java.nio.charset} package, and the channel and selector
  * APIs are defined in the {@link java.nio.channels} package.  Each of
@@ -60,30 +60,33 @@
  * the contents of which can be used to extend the platform's default
  * implementations or to construct alternative implementations.
  *
- * <a name="buffers"> </a>
+ * <a id="buffers"> </a>
  *
- * <blockquote><table cellspacing=1 cellpadding=0 summary="Description of the various buffers">
- *   <tr><th align="left">Buffers</th><th align="left">Description</th></tr>
- *   <tr><td valign=top><tt>{@link java.nio.Buffer}</tt></td>
+ * <blockquote><table class="borderless">
+ *     <caption style="display:none">Description of the various buffers</caption>
+ *   <tr><th style="text-align:left">Buffers</th>
+ *       <th style="text-align:left">Description</th></tr>
+ *   <tr><td style="vertical-align:top">{@link java.nio.Buffer}</td>
  *       <td>Position, limit, and capacity;
  *           <br>clear, flip, rewind, and mark/reset</td></tr>
- *   <tr><td valign=top><tt>&nbsp;&nbsp;{@link java.nio.ByteBuffer}</tt></td>
+ *   <tr><td style="vertical-align:top">&nbsp;&nbsp;{@link java.nio.ByteBuffer}</td>
  *       <td>Get/put, compact, views; allocate,&nbsp;wrap</td></tr>
- *   <tr><td valign=top><tt>&nbsp;&nbsp;&nbsp;&nbsp;{@link java.nio.MappedByteBuffer}&nbsp;&nbsp;</tt></td>
+ *   <tr><td style="vertical-align:top">
+ *       &nbsp;&nbsp;&nbsp;&nbsp;{@link java.nio.MappedByteBuffer}&nbsp;&nbsp;</td>
  *       <td>A byte buffer mapped to a file</td></tr>
- *   <tr><td valign=top><tt>&nbsp;&nbsp;{@link java.nio.CharBuffer}</tt></td>
+ *   <tr><td style="vertical-align:top">&nbsp;&nbsp;{@link java.nio.CharBuffer}</td>
  *       <td>Get/put, compact; allocate,&nbsp;wrap</td></tr>
- *   <tr><td valign=top><tt>&nbsp;&nbsp;{@link java.nio.DoubleBuffer}</tt></td>
+ *   <tr><td style="vertical-align:top">&nbsp;&nbsp;{@link java.nio.DoubleBuffer}</td>
  *       <td>&nbsp;&nbsp;&nbsp;&nbsp;'&nbsp;'</td></tr>
- *   <tr><td valign=top><tt>&nbsp;&nbsp;{@link java.nio.FloatBuffer}</tt></td>
+ *   <tr><td style="vertical-align:top">&nbsp;&nbsp;{@link java.nio.FloatBuffer}</td>
  *       <td>&nbsp;&nbsp;&nbsp;&nbsp;'&nbsp;'</td></tr>
- *   <tr><td valign=top><tt>&nbsp;&nbsp;{@link java.nio.IntBuffer}</tt></td>
+ *   <tr><td style="vertical-align:top">&nbsp;&nbsp;{@link java.nio.IntBuffer}</td>
  *       <td>&nbsp;&nbsp;&nbsp;&nbsp;'&nbsp;'</td></tr>
- *   <tr><td valign=top><tt>&nbsp;&nbsp;{@link java.nio.LongBuffer}</tt></td>
+ *   <tr><td style="vertical-align:top">&nbsp;&nbsp;{@link java.nio.LongBuffer}</td>
  *       <td>&nbsp;&nbsp;&nbsp;&nbsp;'&nbsp;'</td></tr>
- *   <tr><td valign=top><tt>&nbsp;&nbsp;{@link java.nio.ShortBuffer}</tt></td>
+ *   <tr><td style="vertical-align:top">&nbsp;&nbsp;{@link java.nio.ShortBuffer}</td>
  *       <td>&nbsp;&nbsp;&nbsp;&nbsp;'&nbsp;'</td></tr>
- *   <tr><td valign=top><tt>{@link java.nio.ByteOrder}</tt></td>
+ *   <tr><td style="vertical-align:top">{@link java.nio.ByteOrder}</td>
  *       <td>Typesafe enumeration for&nbsp;byte&nbsp;orders</td></tr>
  * </table></blockquote>
  *
@@ -129,7 +132,7 @@
  *
  * </ul>
  *
- * <p> Unless otherwise noted, passing a <tt>null</tt> argument to a
+ * <p> Unless otherwise noted, passing a {@code null} argument to a
  * constructor or method in any class or interface in this package
  * will cause a {@link java.lang.NullPointerException
  * NullPointerException} to be thrown.

@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,8 +38,6 @@
 #include "runtime/stubRoutines.hpp"
 #include "runtime/synchronizer.hpp"
 #include "utilities/macros.hpp"
-
-#ifndef CC_INTERP
 
 #undef __
 #define __ _masm->
@@ -105,7 +103,7 @@ static void do_oop_store(InterpreterMacroAssembler* _masm,
       }
       break;
 #endif // INCLUDE_ALL_GCS
-    case BarrierSet::CardTableModRef:
+    case BarrierSet::CardTableForRS:
     case BarrierSet::CardTableExtension:
       {
         Label Lnull, Ldone;
@@ -172,6 +170,7 @@ void TemplateTable::patch_bytecode(Bytecodes::Code new_bc, Register Rnew_bc, Reg
   switch (new_bc) {
     case Bytecodes::_fast_aputfield:
     case Bytecodes::_fast_bputfield:
+    case Bytecodes::_fast_zputfield:
     case Bytecodes::_fast_cputfield:
     case Bytecodes::_fast_dputfield:
     case Bytecodes::_fast_fputfield:
@@ -983,9 +982,21 @@ void TemplateTable::bastore() {
                  Rarray   = R12_scratch2,
                  Rscratch = R3_ARG1;
   __ pop_i(Rindex);
+  __ pop_ptr(Rarray);
   // tos: val
-  // Rarray: array ptr (popped by index_check)
-  __ index_check(Rarray, Rindex, 0, Rscratch, Rarray);
+
+  // Need to check whether array is boolean or byte
+  // since both types share the bastore bytecode.
+  __ load_klass(Rscratch, Rarray);
+  __ lwz(Rscratch, in_bytes(Klass::layout_helper_offset()), Rscratch);
+  int diffbit = exact_log2(Klass::layout_helper_boolean_diffbit());
+  __ testbitdi(CCR0, R0, Rscratch, diffbit);
+  Label L_skip;
+  __ bfalse(CCR0, L_skip);
+  __ andi(R17_tos, R17_tos, 1);  // if it is a T_BOOLEAN array, mask the stored value to 0/1
+  __ bind(L_skip);
+
+  __ index_check_without_pop(Rarray, Rindex, 0, Rscratch, Rarray);
   __ stb(R17_tos, arrayOopDesc::base_offset_in_bytes(T_BYTE), Rarray);
 }
 
@@ -1626,12 +1637,13 @@ void TemplateTable::branch(bool is_jsr, bool is_wide) {
   // --------------------------------------------------------------------------
   // Normal (non-jsr) branch handling
 
+  // Bump bytecode pointer by displacement (take the branch).
+  __ add(R14_bcp, Rdisp, R14_bcp); // Add to bc addr.
+
   const bool increment_invocation_counter_for_backward_branches = UseCompiler && UseLoopCounter;
   if (increment_invocation_counter_for_backward_branches) {
-    //__ unimplemented("branch invocation counter");
-
     Label Lforward;
-    __ add(R14_bcp, Rdisp, R14_bcp); // Add to bc addr.
+    __ dispatch_prolog(vtos);
 
     // Check branch direction.
     __ cmpdi(CCR0, Rdisp, 0);
@@ -1642,7 +1654,6 @@ void TemplateTable::branch(bool is_jsr, bool is_wide) {
     if (TieredCompilation) {
       Label Lno_mdo, Loverflow;
       const int increment = InvocationCounter::count_increment;
-      const int mask = ((1 << Tier0BackedgeNotifyFreqLog) - 1) << InvocationCounter::count_shift;
       if (ProfileInterpreter) {
         Register Rmdo = Rscratch1;
 
@@ -1654,31 +1665,38 @@ void TemplateTable::branch(bool is_jsr, bool is_wide) {
         // Increment backedge counter in the MDO.
         const int mdo_bc_offs = in_bytes(MethodData::backedge_counter_offset()) + in_bytes(InvocationCounter::counter_offset());
         __ lwz(Rscratch2, mdo_bc_offs, Rmdo);
-        __ load_const_optimized(Rscratch3, mask, R0);
+        __ lwz(Rscratch3, in_bytes(MethodData::backedge_mask_offset()), Rmdo);
         __ addi(Rscratch2, Rscratch2, increment);
         __ stw(Rscratch2, mdo_bc_offs, Rmdo);
-        __ and_(Rscratch3, Rscratch2, Rscratch3);
-        __ bne(CCR0, Lforward);
-        __ b(Loverflow);
+        if (UseOnStackReplacement) {
+          __ and_(Rscratch3, Rscratch2, Rscratch3);
+          __ bne(CCR0, Lforward);
+          __ b(Loverflow);
+        } else {
+          __ b(Lforward);
+        }
       }
 
       // If there's no MDO, increment counter in method.
       const int mo_bc_offs = in_bytes(MethodCounters::backedge_counter_offset()) + in_bytes(InvocationCounter::counter_offset());
       __ bind(Lno_mdo);
       __ lwz(Rscratch2, mo_bc_offs, R4_counters);
-      __ load_const_optimized(Rscratch3, mask, R0);
+      __ lwz(Rscratch3, in_bytes(MethodCounters::backedge_mask_offset()), R4_counters);
       __ addi(Rscratch2, Rscratch2, increment);
-      __ stw(Rscratch2, mo_bc_offs, R19_method);
-      __ and_(Rscratch3, Rscratch2, Rscratch3);
-      __ bne(CCR0, Lforward);
-
+      __ stw(Rscratch2, mo_bc_offs, R4_counters);
+      if (UseOnStackReplacement) {
+        __ and_(Rscratch3, Rscratch2, Rscratch3);
+        __ bne(CCR0, Lforward);
+      } else {
+        __ b(Lforward);
+      }
       __ bind(Loverflow);
 
       // Notify point for loop, pass branch bytecode.
-      __ call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::frequency_counter_overflow), R14_bcp, true);
+      __ subf(R4_ARG2, Rdisp, R14_bcp); // Compute branch bytecode (previous bcp).
+      __ call_VM(noreg, CAST_FROM_FN_PTR(address, InterpreterRuntime::frequency_counter_overflow), R4_ARG2, true);
 
       // Was an OSR adapter generated?
-      // O0 = osr nmethod
       __ cmpdi(CCR0, R3_RET, 0);
       __ beq(CCR0, Lforward);
 
@@ -1714,27 +1732,23 @@ void TemplateTable::branch(bool is_jsr, bool is_wide) {
       __ increment_backedge_counter(R4_counters, invoke_ctr, Rscratch2, Rscratch3);
 
       if (ProfileInterpreter) {
-        __ test_invocation_counter_for_mdp(invoke_ctr, Rscratch2, Lforward);
+        __ test_invocation_counter_for_mdp(invoke_ctr, R4_counters, Rscratch2, Lforward);
         if (UseOnStackReplacement) {
-          __ test_backedge_count_for_osr(bumped_count, R14_bcp, Rscratch2);
+          __ test_backedge_count_for_osr(bumped_count, R4_counters, R14_bcp, Rdisp, Rscratch2);
         }
       } else {
         if (UseOnStackReplacement) {
-          __ test_backedge_count_for_osr(invoke_ctr, R14_bcp, Rscratch2);
+          __ test_backedge_count_for_osr(invoke_ctr, R4_counters, R14_bcp, Rdisp, Rscratch2);
         }
       }
     }
 
     __ bind(Lforward);
+    __ dispatch_epilog(vtos);
 
   } else {
-    // Bump bytecode pointer by displacement (take the branch).
-    __ add(R14_bcp, Rdisp, R14_bcp); // Add to bc addr.
+    __ dispatch_next(vtos);
   }
-  // Continue with bytecode @ target.
-  // %%%%% Like Intel, could speed things up by moving bytecode fetch to code above,
-  // %%%%% and changing dispatch_next to dispatch_only.
-  __ dispatch_next(vtos);
 }
 
 // Helper function for if_cmp* methods below.
@@ -2114,12 +2128,12 @@ void TemplateTable::_return(TosState state) {
   __ remove_activation(state, /* throw_monitor_exception */ true);
   // Restoration of lr done by remove_activation.
   switch (state) {
+    // Narrow result if state is itos but result type is smaller.
+    // Need to narrow in the return bytecode rather than in generate_return_entry
+    // since compiled code callers expect the result to already be narrowed.
+    case itos: __ narrow(R17_tos); /* fall through */
     case ltos:
-    case btos:
-    case ctos:
-    case stos:
-    case atos:
-    case itos: __ mr(R3_RET, R17_tos); break;
+    case atos: __ mr(R3_RET, R17_tos); break;
     case ftos:
     case dtos: __ fmr(F1_RET, F15_ftos); break;
     case vtos: // This might be a constructor. Final fields (and volatile fields on PPC64) need
@@ -2525,6 +2539,20 @@ void TemplateTable::getfield_or_static(int byte_no, bool is_static, RewriteContr
   __ dispatch_epilog(vtos, Bytecodes::length_for(bytecode()));
 
   __ align(32, 28, 28); // Align load.
+  // __ bind(Lztos); (same code as btos)
+  __ fence(); // Volatile entry point (one instruction before non-volatile_entry point).
+  assert(branch_table[ztos] == 0, "can't compute twice");
+  branch_table[ztos] = __ pc(); // non-volatile_entry point
+  __ lbzx(R17_tos, Rclass_or_obj, Roffset);
+  __ push(ztos);
+  if (!is_static && rc == may_rewrite) {
+    // use btos rewriting, no truncating to t/f bit is needed for getfield.
+    patch_bytecode(Bytecodes::_fast_bgetfield, Rbc, Rscratch);
+  }
+  __ beq(CCR6, Lacquire); // Volatile?
+  __ dispatch_epilog(vtos, Bytecodes::length_for(bytecode()));
+
+  __ align(32, 28, 28); // Align load.
   // __ bind(Lctos);
   __ fence(); // Volatile entry point (one instruction before non-volatile_entry point).
   assert(branch_table[ctos] == 0, "can't compute twice");
@@ -2624,6 +2652,7 @@ void TemplateTable::jvmti_post_field_mod(Register Rcache, Register Rscratch, boo
         case Bytecodes::_fast_aputfield: __ push_ptr(); offs+= Interpreter::stackElementSize; break;
         case Bytecodes::_fast_iputfield: // Fall through
         case Bytecodes::_fast_bputfield: // Fall through
+        case Bytecodes::_fast_zputfield: // Fall through
         case Bytecodes::_fast_cputfield: // Fall through
         case Bytecodes::_fast_sputfield: __ push_i(); offs+=  Interpreter::stackElementSize; break;
         case Bytecodes::_fast_lputfield: __ push_l(); offs+=2*Interpreter::stackElementSize; break;
@@ -2664,6 +2693,7 @@ void TemplateTable::jvmti_post_field_mod(Register Rcache, Register Rscratch, boo
       case Bytecodes::_fast_aputfield: __ pop_ptr(); break;
       case Bytecodes::_fast_iputfield: // Fall through
       case Bytecodes::_fast_bputfield: // Fall through
+      case Bytecodes::_fast_zputfield: // Fall through
       case Bytecodes::_fast_cputfield: // Fall through
       case Bytecodes::_fast_sputfield: __ pop_i(); break;
       case Bytecodes::_fast_lputfield: __ pop_l(); break;
@@ -2831,6 +2861,23 @@ void TemplateTable::putfield_or_static(int byte_no, bool is_static, RewriteContr
   __ dispatch_epilog(vtos, Bytecodes::length_for(bytecode()));
 
   __ align(32, 28, 28); // Align pop.
+  // __ bind(Lztos);
+  __ release(); // Volatile entry point (one instruction before non-volatile_entry point).
+  assert(branch_table[ztos] == 0, "can't compute twice");
+  branch_table[ztos] = __ pc(); // non-volatile_entry point
+  __ pop(ztos);
+  if (!is_static) { pop_and_check_object(Rclass_or_obj); } // Kills R11_scratch1.
+  __ andi(R17_tos, R17_tos, 0x1);
+  __ stbx(R17_tos, Rclass_or_obj, Roffset);
+  if (!is_static && rc == may_rewrite) {
+    patch_bytecode(Bytecodes::_fast_zputfield, Rbc, Rscratch, true, byte_no);
+  }
+  if (!support_IRIW_for_not_multiple_copy_atomic_cpu) {
+    __ beq(CR_is_vol, Lvolatile); // Volatile?
+  }
+  __ dispatch_epilog(vtos, Bytecodes::length_for(bytecode()));
+
+  __ align(32, 28, 28); // Align pop.
   // __ bind(Lctos);
   __ release(); // Volatile entry point (one instruction before non-volatile_entry point).
   assert(branch_table[ctos] == 0, "can't compute twice");
@@ -2955,6 +3002,9 @@ void TemplateTable::fast_storefield(TosState state) {
       __ stdx(R17_tos, Rclass_or_obj, Roffset);
       break;
 
+    case Bytecodes::_fast_zputfield:
+      __ andi(R17_tos, R17_tos, 0x1);  // boolean is true if LSB is 1
+      // fall through to bputfield
     case Bytecodes::_fast_bputfield:
       __ stbx(R17_tos, Rclass_or_obj, Roffset);
       break;
@@ -3288,9 +3338,9 @@ void TemplateTable::generate_vtable_call(Register Rrecv_klass, Register Rindex, 
   const Register Rtarget_method = Rindex;
 
   // Get target method & entry point.
-  const int base = InstanceKlass::vtable_start_offset() * wordSize;
+  const int base = in_bytes(Klass::vtable_start_offset());
   // Calc vtable addr scale the vtable index by 8.
-  __ sldi(Rindex, Rindex, exact_log2(vtableEntry::size() * wordSize));
+  __ sldi(Rindex, Rindex, exact_log2(vtableEntry::size_in_bytes()));
   // Load target.
   __ addi(Rrecv_klass, Rrecv_klass, base + vtableEntry::method_offset_in_bytes());
   __ ldx(Rtarget_method, Rindex, Rrecv_klass);
@@ -4047,20 +4097,8 @@ void TemplateTable::monitorenter() {
   __ lock_object(Rcurrent_monitor, Robj_to_lock);
 
   // Check if there's enough space on the stack for the monitors after locking.
-  Label Lskip_stack_check;
-  // Optimization: If the monitors stack section is less then a std page size (4K) don't run
-  // the stack check. There should be enough shadow pages to fit that in.
-  __ ld(Rscratch3, 0, R1_SP);
-  __ sub(Rscratch3, Rscratch3, R26_monitor);
-  __ cmpdi(CCR0, Rscratch3, 4*K);
-  __ blt(CCR0, Lskip_stack_check);
-
-  DEBUG_ONLY(__ untested("stack overflow check during monitor enter");)
-  __ li(Rscratch1, 0);
-  __ generate_stack_overflow_check_with_compare_and_throw(Rscratch1, Rscratch2);
-
-  __ align(32, 12);
-  __ bind(Lskip_stack_check);
+  // This emits a single store.
+  __ generate_stack_overflow_check(0);
 
   // The bcp has already been incremented. Just need to dispatch to next instruction.
   __ dispatch_next(vtos);
@@ -4145,4 +4183,3 @@ void TemplateTable::wide() {
   __ bctr();
   // Note: the bcp increment step is part of the individual wide bytecode implementations.
 }
-#endif // !CC_INTERP

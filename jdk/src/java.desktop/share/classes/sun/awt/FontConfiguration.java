@@ -182,11 +182,17 @@ public abstract class FontConfiguration {
             throw new Error("java.home property not set");
         }
         javaLib = javaHome + File.separator + "lib";
+        String javaConfFonts = javaHome +
+                               File.separator + "conf" +
+                               File.separator + "fonts";
         String userConfigFile = System.getProperty("sun.awt.fontconfig");
         if (userConfigFile != null) {
             fontConfigFile = new File(userConfigFile);
         } else {
-            fontConfigFile = findFontConfigFile(javaLib);
+            fontConfigFile = findFontConfigFile(javaConfFonts);
+            if (fontConfigFile == null) {
+                fontConfigFile = findFontConfigFile(javaLib);
+            }
         }
     }
 
@@ -251,20 +257,35 @@ public abstract class FontConfiguration {
 
     private File findImpl(String fname) {
         File f = new File(fname + ".properties");
+        if (FontUtilities.debugFonts()) {
+            logger.info("Looking for text fontconfig file : " + f);
+        }
         if (f.canRead()) {
+            if (FontUtilities.debugFonts()) {
+                logger.info("Found file : " + f);
+            }
             isProperties = true;
             return f;
         }
         f = new File(fname + ".bfc");
+        if (FontUtilities.debugFonts()) {
+            logger.info("Looking for binary fontconfig file : " + f);
+        }
         if (f.canRead()) {
+            if (FontUtilities.debugFonts()) {
+                logger.info("Found file : " + f);
+            }
             isProperties = false;
             return f;
         }
         return null;
     }
 
-    private File findFontConfigFile(String javaLib) {
-        String baseName = javaLib + File.separator + "fontconfig";
+    private File findFontConfigFile(String dir) {
+        if (!(new File(dir)).exists()) {
+            return null;
+        }
+        String baseName = dir + File.separator + "fontconfig";
         File configFile;
         String osMajorVersion = null;
         if (osVersion != null && osName != null) {
@@ -304,6 +325,9 @@ public abstract class FontConfiguration {
         configFile = findImpl(baseName);
         if (configFile != null) {
             return configFile;
+        }
+        if (FontUtilities.debugFonts()) {
+            logger.info("Did not find a fontconfig file.");
         }
         return null;
     }
@@ -956,7 +980,7 @@ public abstract class FontConfiguration {
 
             if (fcc != null) {
                 try {
-                    fc = (Charset) fcc.newInstance();
+                    fc = (Charset) fcc.getDeclaredConstructor().newInstance();
                 } catch (Exception e) {
                 }
             }

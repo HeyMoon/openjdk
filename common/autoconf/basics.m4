@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2011, 2017, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,74 @@
 # questions.
 #
 
+# Create a function/macro that takes a series of named arguments. The call is
+# similar to AC_DEFUN, but the setup of the function looks like this:
+# BASIC_DEFUN_NAMED([MYFUNC], [FOO *BAR], [$@], [
+# ... do something
+#   AC_MSG_NOTICE([Value of BAR is ARG_BAR])
+# ])
+# A star (*) in front of a named argument means that it is required and it's
+# presence will be verified. To pass e.g. the first value as a normal indexed
+# argument, use [m4_shift($@)] as the third argument instead of [$@]. These
+# arguments are referenced in the function by their name prefixed by ARG_, e.g.
+# "ARG_FOO".
+#
+# The generated function can be called like this:
+# MYFUNC(FOO: [foo-val],
+#     BAR: [
+#         $ECHO hello world
+#     ])
+# Note that the argument value must start on the same line as the argument name.
+#
+# Argument 1: Name of the function to define
+# Argument 2: List of legal named arguments, with a * prefix for required arguments
+# Argument 3: Argument array to treat as named, typically $@
+# Argument 4: The main function body
+AC_DEFUN([BASIC_DEFUN_NAMED],
+[
+  AC_DEFUN($1, [
+    m4_foreach(arg, m4_split($2), [
+      m4_if(m4_bregexp(arg, [^\*]), -1,
+        [
+          m4_set_add(legal_named_args, arg)
+        ],
+        [
+          m4_set_add(legal_named_args, m4_substr(arg, 1))
+          m4_set_add(required_named_args, m4_substr(arg, 1))
+        ]
+      )
+    ])
+
+    m4_foreach([arg], [$3], [
+      m4_define(arg_name, m4_substr(arg, 0, m4_bregexp(arg, [: ])))
+      m4_set_contains(legal_named_args, arg_name, [],[AC_MSG_ERROR([Internal error: arg_name is not a valid named argument to [$1]. Valid arguments are 'm4_set_contents(legal_named_args, [ ])'.])])
+      m4_set_remove(required_named_args, arg_name)
+      m4_set_remove(legal_named_args, arg_name)
+      m4_pushdef([ARG_][]arg_name, m4_substr(arg, m4_incr(m4_incr(m4_bregexp(arg, [: ])))))
+      m4_set_add(defined_args, arg_name)
+      m4_undefine([arg_name])
+    ])
+    m4_set_empty(required_named_args, [], [
+      AC_MSG_ERROR([Internal error: Required named arguments are missing for [$1]. Missing arguments: 'm4_set_contents(required_named_args, [ ])'])
+    ])
+    m4_foreach([arg], m4_indir([m4_dquote]m4_set_listc([legal_named_args])), [
+      m4_pushdef([ARG_][]arg, [])
+      m4_set_add(defined_args, arg)
+    ])
+    m4_set_delete(legal_named_args)
+    m4_set_delete(required_named_args)
+
+    # Execute function body
+    $4
+
+    m4_foreach([arg], m4_indir([m4_dquote]m4_set_listc([defined_args])), [
+      m4_popdef([ARG_][]arg)
+    ])
+
+    m4_set_delete(defined_args)
+  ])
+])
+
 # Test if $1 is a valid argument to $3 (often is $JAVA passed as $3)
 # If so, then append $1 to $2 \
 # Also set JVM_ARG_OK to true/false depending on outcome.
@@ -31,8 +99,8 @@ AC_DEFUN([ADD_JVM_ARG_IF_OK],
   $ECHO "Check if jvm arg is ok: $1" >&AS_MESSAGE_LOG_FD
   $ECHO "Command: $3 $1 -version" >&AS_MESSAGE_LOG_FD
   OUTPUT=`$3 $1 -version 2>&1`
-  FOUND_WARN=`$ECHO "$OUTPUT" | grep -i warn`
-  FOUND_VERSION=`$ECHO $OUTPUT | grep " version \""`
+  FOUND_WARN=`$ECHO "$OUTPUT" | $GREP -i warn`
+  FOUND_VERSION=`$ECHO $OUTPUT | $GREP " version \""`
   if test "x$FOUND_VERSION" != x && test "x$FOUND_WARN" = x; then
     $2="[$]$2 $1"
     JVM_ARG_OK=true
@@ -99,7 +167,13 @@ AC_DEFUN([BASIC_FIXUP_PATH],
         AC_MSG_ERROR([The path of $1, which resolves as "$path", is not found.])
       fi
 
-      $1="`cd "$path"; $THEPWDCMD -L`"
+      if test -d "$path"; then
+        $1="`cd "$path"; $THEPWDCMD -L`"
+      else
+        dir="`$DIRNAME "$path"`"
+        base="`$BASENAME "$path"`"
+        $1="`cd "$dir"; $THEPWDCMD -L`/$base"
+      fi
     fi
   fi
 ])
@@ -237,12 +311,18 @@ AC_DEFUN([BASIC_DEPRECATED_ARG_WITH],
 # Register a --enable argument but mark it as deprecated
 # $1: The name of the with argument to deprecate, not including --enable-
 # $2: The name of the argument to deprecate, in shell variable style (i.e. with _ instead of -)
+# $3: Messages to user.
 AC_DEFUN([BASIC_DEPRECATED_ARG_ENABLE],
 [
   AC_ARG_ENABLE($1, [AS_HELP_STRING([--enable-$1],
       [Deprecated. Option is kept for backwards compatibility and is ignored])])
   if test "x$enable_$2" != x; then
     AC_MSG_WARN([Option --enable-$1 is deprecated and will be ignored.])
+
+    if test "x$3" != x; then
+      AC_MSG_WARN([$3])
+    fi
+
   fi
 ])
 
@@ -283,12 +363,13 @@ AC_DEFUN([BASIC_CHECK_LEFTOVER_OVERRIDDEN],
 # use that value, otherwise search for the tool using the supplied code snippet.
 # $1: variable to set
 # $2: code snippet to call to look for the tool
+# $3: code snippet to call if variable was used to find tool
 AC_DEFUN([BASIC_SETUP_TOOL],
 [
   # Publish this variable in the help.
   AC_ARG_VAR($1, [Override default value for $1])
 
-  if test "x[$]$1" = x; then
+  if [[ -z "${$1+x}" ]]; then
     # The variable is not set by user, try to locate tool using the code snippet
     $2
   else
@@ -312,36 +393,45 @@ AC_DEFUN([BASIC_SETUP_TOOL],
       # for unknown variables in the end.
       CONFIGURE_OVERRIDDEN_VARIABLES="$try_remove_var"
 
-      # Check if the provided tool contains a complete path.
-      tool_specified="[$]$1"
-      tool_basename="${tool_specified##*/}"
-      if test "x$tool_basename" = "x$tool_specified"; then
-        # A command without a complete path is provided, search $PATH.
-        AC_MSG_NOTICE([Will search for user supplied tool $1=$tool_basename])
-        AC_PATH_PROG($1, $tool_basename)
-        if test "x[$]$1" = x; then
-          AC_MSG_ERROR([User supplied tool $tool_basename could not be found])
-        fi
-      else
-        # Otherwise we believe it is a complete path. Use it as it is.
-        AC_MSG_NOTICE([Will use user supplied tool $1=$tool_specified])
+      # Check if we try to supply an empty value
+      if test "x[$]$1" = x; then
+        AC_MSG_NOTICE([Setting user supplied tool $1= (no value)])
         AC_MSG_CHECKING([for $1])
-        if test ! -x "$tool_specified"; then
-          AC_MSG_RESULT([not found])
-          AC_MSG_ERROR([User supplied tool $1=$tool_specified does not exist or is not executable])
+        AC_MSG_RESULT([disabled])
+      else
+        # Check if the provided tool contains a complete path.
+        tool_specified="[$]$1"
+        tool_basename="${tool_specified##*/}"
+        if test "x$tool_basename" = "x$tool_specified"; then
+          # A command without a complete path is provided, search $PATH.
+          AC_MSG_NOTICE([Will search for user supplied tool $1=$tool_basename])
+          AC_PATH_PROG($1, $tool_basename)
+          if test "x[$]$1" = x; then
+            AC_MSG_ERROR([User supplied tool $tool_basename could not be found])
+          fi
+        else
+          # Otherwise we believe it is a complete path. Use it as it is.
+          AC_MSG_NOTICE([Will use user supplied tool $1=$tool_specified])
+          AC_MSG_CHECKING([for $1])
+          if test ! -x "$tool_specified"; then
+            AC_MSG_RESULT([not found])
+            AC_MSG_ERROR([User supplied tool $1=$tool_specified does not exist or is not executable])
+          fi
+          AC_MSG_RESULT([$tool_specified])
         fi
-        AC_MSG_RESULT([$tool_specified])
       fi
     fi
+    $3
   fi
 ])
 
 # Call BASIC_SETUP_TOOL with AC_PATH_PROGS to locate the tool
 # $1: variable to set
 # $2: executable name (or list of names) to look for
+# $3: [path]
 AC_DEFUN([BASIC_PATH_PROGS],
 [
-  BASIC_SETUP_TOOL($1, [AC_PATH_PROGS($1, $2)])
+  BASIC_SETUP_TOOL($1, [AC_PATH_PROGS($1, $2, , $3)])
 ])
 
 # Call BASIC_SETUP_TOOL with AC_CHECK_TOOLS to locate the tool
@@ -355,9 +445,10 @@ AC_DEFUN([BASIC_CHECK_TOOLS],
 # Like BASIC_PATH_PROGS but fails if no tool was found.
 # $1: variable to set
 # $2: executable name (or list of names) to look for
+# $3: [path]
 AC_DEFUN([BASIC_REQUIRE_PROGS],
 [
-  BASIC_PATH_PROGS($1, $2)
+  BASIC_PATH_PROGS($1, $2, , $3)
   BASIC_CHECK_NONEMPTY($1)
 ])
 
@@ -376,9 +467,7 @@ AC_DEFUN_ONCE([BASIC_SETUP_FUNDAMENTAL_TOOLS],
 [
   # Start with tools that do not need have cross compilation support
   # and can be expected to be found in the default PATH. These tools are
-  # used by configure. Nor are these tools expected to be found in the
-  # devkit from the builddeps server either, since they are
-  # needed to download the devkit.
+  # used by configure.
 
   # First are all the simple required tools.
   BASIC_REQUIRE_PROGS(BASENAME, basename)
@@ -397,6 +486,8 @@ AC_DEFUN_ONCE([BASIC_SETUP_FUNDAMENTAL_TOOLS],
   BASIC_REQUIRE_PROGS(FILE, file)
   BASIC_REQUIRE_PROGS(FIND, find)
   BASIC_REQUIRE_PROGS(HEAD, head)
+  BASIC_REQUIRE_PROGS(GUNZIP, gunzip)
+  BASIC_REQUIRE_PROGS(GZIP, pigz gzip)
   BASIC_REQUIRE_PROGS(LN, ln)
   BASIC_REQUIRE_PROGS(LS, ls)
   BASIC_REQUIRE_PROGS(MKDIR, mkdir)
@@ -405,10 +496,11 @@ AC_DEFUN_ONCE([BASIC_SETUP_FUNDAMENTAL_TOOLS],
   BASIC_REQUIRE_PROGS(NAWK, [nawk gawk awk])
   BASIC_REQUIRE_PROGS(PRINTF, printf)
   BASIC_REQUIRE_PROGS(RM, rm)
+  BASIC_REQUIRE_PROGS(RMDIR, rmdir)
   BASIC_REQUIRE_PROGS(SH, sh)
   BASIC_REQUIRE_PROGS(SORT, sort)
   BASIC_REQUIRE_PROGS(TAIL, tail)
-  BASIC_REQUIRE_PROGS(TAR, tar)
+  BASIC_REQUIRE_PROGS(TAR, gtar tar)
   BASIC_REQUIRE_PROGS(TEE, tee)
   BASIC_REQUIRE_PROGS(TOUCH, touch)
   BASIC_REQUIRE_PROGS(TR, tr)
@@ -437,6 +529,8 @@ AC_DEFUN_ONCE([BASIC_SETUP_FUNDAMENTAL_TOOLS],
   BASIC_PATH_PROGS(READLINK, [greadlink readlink])
   BASIC_PATH_PROGS(DF, df)
   BASIC_PATH_PROGS(CPIO, [cpio bsdcpio])
+  BASIC_PATH_PROGS(NICE, nice)
+  BASIC_PATH_PROGS(PANDOC, pandoc)
 ])
 
 # Setup basic configuration paths, and platform-specific stuff related to PATHs.
@@ -444,6 +538,15 @@ AC_DEFUN_ONCE([BASIC_SETUP_PATHS],
 [
   # Save the current directory this script was started from
   CURDIR="$PWD"
+
+  # We might need to rewrite ORIGINAL_PATH, if it includes "#", to quote them
+  # for make. We couldn't do this when we retrieved ORIGINAL_PATH, since SED
+  # was not available at that time.
+  REWRITTEN_PATH=`$ECHO "$ORIGINAL_PATH" | $SED -e 's/#/\\\\#/g'`
+  if test "x$REWRITTEN_PATH" != "x$ORIGINAL_PATH"; then
+    ORIGINAL_PATH="$REWRITTEN_PATH"
+    AC_MSG_NOTICE([Rewriting ORIGINAL_PATH to $REWRITTEN_PATH])
+  fi
 
   if test "x$OPENJDK_TARGET_OS" = "xwindows"; then
     PATH_SEP=";"
@@ -475,6 +578,11 @@ AC_DEFUN_ONCE([BASIC_SETUP_PATHS],
 
   # Locate the directory of this script.
   AUTOCONF_DIR=$TOPDIR/common/autoconf
+
+  # Setup username (for use in adhoc version strings etc)
+  # Outer [ ] to quote m4.
+  [ USERNAME=`$ECHO "$USER" | $TR -d -c '[a-z][A-Z][0-9]'` ]
+  AC_SUBST(USERNAME)
 ])
 
 # Evaluates platform specific overrides for devkit variables.
@@ -610,7 +718,7 @@ AC_DEFUN_ONCE([BASIC_SETUP_DEVKIT],
 
         if test -n "$SDKNAME"; then
           # Call xcodebuild to determine SYSROOT
-          SYSROOT=`"$XCODEBUILD" -sdk $SDKNAME -version | grep '^Path: ' | sed 's/Path: //'`
+          SYSROOT=`"$XCODEBUILD" -sdk $SDKNAME -version | $GREP '^Path: ' | $SED 's/Path: //'`
         fi
       else
         if test $HAVE_SYSTEM_FRAMEWORK_HEADERS -eq 0; then
@@ -639,16 +747,12 @@ AC_DEFUN_ONCE([BASIC_SETUP_DEVKIT],
     fi
 
     # set SDKROOT too, Xcode tools will pick it up
-    AC_SUBST(SDKROOT,$SYSROOT)
+    SDKROOT="$SYSROOT"
+    AC_SUBST(SDKROOT)
   fi
 
   # Prepend the extra path to the global path
   BASIC_PREPEND_TO_PATH([PATH],$EXTRA_PATH)
-
-  if test "x$OPENJDK_BUILD_OS" = "xsolaris"; then
-    # Add extra search paths on solaris for utilities like ar and as etc...
-    PATH="$PATH:/usr/ccs/bin:/usr/sfw/bin:/opt/csw/bin"
-  fi
 
   AC_MSG_CHECKING([for sysroot])
   AC_MSG_RESULT([$SYSROOT])
@@ -674,7 +778,7 @@ AC_DEFUN_ONCE([BASIC_SETUP_OUTPUT_DIR],
     # Create a default ./build/target-variant-debuglevel output root.
     if test "x${CONF_NAME}" = x; then
       AC_MSG_RESULT([in default location])
-      CONF_NAME="${OPENJDK_TARGET_OS}-${OPENJDK_TARGET_CPU}-${JDK_VARIANT}-${ANDED_JVM_VARIANTS}-${DEBUG_LEVEL}"
+      CONF_NAME="${OPENJDK_TARGET_OS}-${OPENJDK_TARGET_CPU}-${JDK_VARIANT}-${JVM_VARIANTS_WITH_AND}-${DEBUG_LEVEL}"
     else
       AC_MSG_RESULT([in build directory with custom name])
     fi
@@ -729,17 +833,18 @@ AC_DEFUN_ONCE([BASIC_SETUP_OUTPUT_DIR],
   CONFIGURESUPPORT_OUTPUTDIR="$OUTPUT_ROOT/configure-support"
   $MKDIR -p "$CONFIGURESUPPORT_OUTPUTDIR"
 
-  AC_SUBST(SPEC, $OUTPUT_ROOT/spec.gmk)
-  AC_SUBST(CONF_NAME, $CONF_NAME)
-  AC_SUBST(OUTPUT_ROOT, $OUTPUT_ROOT)
+  SPEC="$OUTPUT_ROOT/spec.gmk"
+  AC_SUBST(SPEC)
+  AC_SUBST(CONF_NAME)
+  AC_SUBST(OUTPUT_ROOT)
   AC_SUBST(CONFIGURESUPPORT_OUTPUTDIR)
 
   # The spec.gmk file contains all variables for the make system.
   AC_CONFIG_FILES([$OUTPUT_ROOT/spec.gmk:$AUTOCONF_DIR/spec.gmk.in])
-  # The hotspot-spec.gmk file contains legacy variables for the hotspot make system.
-  AC_CONFIG_FILES([$OUTPUT_ROOT/hotspot-spec.gmk:$AUTOCONF_DIR/hotspot-spec.gmk.in])
   # The bootcycle-spec.gmk file contains support for boot cycle builds.
   AC_CONFIG_FILES([$OUTPUT_ROOT/bootcycle-spec.gmk:$AUTOCONF_DIR/bootcycle-spec.gmk.in])
+  # The buildjdk-spec.gmk file contains support for building a buildjdk when cross compiling.
+  AC_CONFIG_FILES([$OUTPUT_ROOT/buildjdk-spec.gmk:$AUTOCONF_DIR/buildjdk-spec.gmk.in])
   # The compare.sh is used to compare the build output to other builds.
   AC_CONFIG_FILES([$OUTPUT_ROOT/compare.sh:$AUTOCONF_DIR/compare.sh.in])
   # The generated Makefile knows where the spec.gmk is and where the source is.
@@ -832,17 +937,8 @@ AC_DEFUN([BASIC_CHECK_MAKE_OUTPUT_SYNC],
 # Goes looking for a usable version of GNU make.
 AC_DEFUN([BASIC_CHECK_GNU_MAKE],
 [
-  # We need to find a recent version of GNU make. Especially on Solaris, this can be tricky.
-  if test "x$MAKE" != x; then
-    # User has supplied a make, test it.
-    if test ! -f "$MAKE"; then
-      AC_MSG_ERROR([The specified make (by MAKE=$MAKE) is not found.])
-    fi
-    BASIC_CHECK_MAKE_VERSION("$MAKE", [user supplied MAKE=$MAKE])
-    if test "x$FOUND_MAKE" = x; then
-      AC_MSG_ERROR([The specified make (by MAKE=$MAKE) is not GNU make $MAKE_REQUIRED_VERSION or newer.])
-    fi
-  else
+  BASIC_SETUP_TOOL([MAKE],
+  [
     # Try our hardest to locate a correct version of GNU make
     AC_PATH_PROGS(CHECK_GMAKE, gmake)
     BASIC_CHECK_MAKE_VERSION("$CHECK_GMAKE", [gmake in PATH])
@@ -870,7 +966,13 @@ AC_DEFUN([BASIC_CHECK_GNU_MAKE],
     if test "x$FOUND_MAKE" = x; then
       AC_MSG_ERROR([Cannot find GNU make $MAKE_REQUIRED_VERSION or newer! Please put it in the path, or add e.g. MAKE=/opt/gmake3.81/make as argument to configure.])
     fi
-  fi
+  ],[
+    # If MAKE was set by user, verify the version
+    BASIC_CHECK_MAKE_VERSION("$MAKE", [user supplied MAKE=$MAKE])
+    if test "x$FOUND_MAKE" = x; then
+      AC_MSG_ERROR([The specified make (by MAKE=$MAKE) is not GNU make $MAKE_REQUIRED_VERSION or newer.])
+    fi
+  ])
 
   MAKE=$FOUND_MAKE
   AC_SUBST(MAKE)
@@ -892,19 +994,76 @@ AC_DEFUN([BASIC_CHECK_FIND_DELETE],
   TEST_DELETE=`$FIND "$DELETEDIR" -name TestIfFindSupportsDelete $FIND_DELETE 2>&1`
   if test -f $DELETEDIR/TestIfFindSupportsDelete; then
     # No, it does not.
-    rm $DELETEDIR/TestIfFindSupportsDelete
+    $RM $DELETEDIR/TestIfFindSupportsDelete
     if test "x$OPENJDK_TARGET_OS" = "xaix"; then
       # AIX 'find' is buggy if called with '-exec {} \+' and an empty file list
-      FIND_DELETE="-print | xargs rm"
+      FIND_DELETE="-print | $XARGS $RM"
     else
-      FIND_DELETE="-exec rm \{\} \+"
+      FIND_DELETE="-exec $RM \{\} \+"
     fi
     AC_MSG_RESULT([no])
   else
     AC_MSG_RESULT([yes])
   fi
-  rmdir $DELETEDIR
+  $RMDIR $DELETEDIR
   AC_SUBST(FIND_DELETE)
+])
+
+AC_DEFUN([BASIC_CHECK_TAR],
+[
+  # Test which kind of tar was found
+  if test "x$($TAR --version | $GREP "GNU tar")" != "x"; then
+    TAR_TYPE="gnu"
+  elif test "x$($TAR --version | $GREP "bsdtar")" != "x"; then
+    TAR_TYPE="bsd"
+  elif test "x$($TAR -v | $GREP "bsdtar")" != "x"; then
+    TAR_TYPE="bsd"
+  elif test "x$OPENJDK_BUILD_OS" = "xsolaris"; then
+    TAR_TYPE="solaris"
+  fi
+  AC_MSG_CHECKING([what type of tar was found])
+  AC_MSG_RESULT([$TAR_TYPE])
+
+  TAR_CREATE_FILE_PARAM=""
+
+  if test "x$TAR_TYPE" = "xgnu"; then
+    TAR_INCLUDE_PARAM="T"
+    TAR_SUPPORTS_TRANSFORM="true"
+    if test "x$OPENJDK_TARGET_OS" = "xsolaris"; then
+      # When using gnu tar for Solaris targets, need to use compatibility mode
+      TAR_CREATE_EXTRA_PARAM="--format=ustar"
+    fi
+  else
+    TAR_INCLUDE_PARAM="I"
+    TAR_SUPPORTS_TRANSFORM="false"
+  fi
+  AC_SUBST(TAR_TYPE)
+  AC_SUBST(TAR_CREATE_EXTRA_PARAM)
+  AC_SUBST(TAR_INCLUDE_PARAM)
+  AC_SUBST(TAR_SUPPORTS_TRANSFORM)
+])
+
+AC_DEFUN([BASIC_CHECK_GREP],
+[
+  # Test that grep supports -Fx with a list of pattern which includes null pattern.
+  # This is a problem for the grep resident on AIX.
+  AC_MSG_CHECKING([that grep ($GREP) -Fx handles empty lines in the pattern list correctly])
+  # Multiple subsequent spaces..
+  STACK_SPACES='aaa   bbb   ccc'
+  # ..converted to subsequent newlines, causes STACK_LIST to be a list with some empty
+  # patterns in it.
+  STACK_LIST=${STACK_SPACES// /$'\n'}
+  NEEDLE_SPACES='ccc bbb aaa'
+  NEEDLE_LIST=${NEEDLE_SPACES// /$'\n'}
+  RESULT="$($GREP -Fvx "$STACK_LIST" <<< "$NEEDLE_LIST")"
+  if test "x$RESULT" == "x"; then
+    AC_MSG_RESULT([yes])
+  else
+    if test "x$OPENJDK_TARGET_OS" = "xaix"; then
+      ADDINFO="Please make sure you use GNU grep, usually found at /opt/freeware/bin."
+    fi
+    AC_MSG_ERROR([grep does not handle -Fx correctly. ${ADDINFO}])
+  fi
 ])
 
 AC_DEFUN_ONCE([BASIC_SETUP_COMPLEX_TOOLS],
@@ -912,11 +1071,15 @@ AC_DEFUN_ONCE([BASIC_SETUP_COMPLEX_TOOLS],
   BASIC_CHECK_GNU_MAKE
 
   BASIC_CHECK_FIND_DELETE
+  BASIC_CHECK_TAR
+  BASIC_CHECK_GREP
 
   # These tools might not be installed by default,
   # need hint on how to install them.
   BASIC_REQUIRE_PROGS(UNZIP, unzip)
-  BASIC_REQUIRE_PROGS(ZIP, zip)
+  # Since zip uses "ZIP" as a environment variable for passing options, we need
+  # to name our variable differently, hence ZIPEXE.
+  BASIC_REQUIRE_PROGS(ZIPEXE, zip)
 
   # Non-required basic tools
 
@@ -932,9 +1095,14 @@ AC_DEFUN_ONCE([BASIC_SETUP_COMPLEX_TOOLS],
     OTOOL="true"
   fi
   BASIC_PATH_PROGS(READELF, [greadelf readelf])
+  BASIC_PATH_PROGS(DOT, dot)
   BASIC_PATH_PROGS(HG, hg)
   BASIC_PATH_PROGS(STAT, stat)
   BASIC_PATH_PROGS(TIME, time)
+  # Dtrace is usually found in /usr/sbin on Solaris, but that directory may not
+  # be in the user path.
+  BASIC_PATH_PROGS(DTRACE, dtrace, $PATH:/usr/sbin)
+  BASIC_PATH_PROGS(PATCH, [gpatch patch])
   # Check if it's GNU time
   IS_GNU_TIME=`$TIME --version 2>&1 | $GREP 'GNU time'`
   if test "x$IS_GNU_TIME" != x; then
@@ -951,10 +1119,10 @@ AC_DEFUN_ONCE([BASIC_SETUP_COMPLEX_TOOLS],
     if test "x$CODESIGN" != "x"; then
       # Verify that the openjdk_codesign certificate is present
       AC_MSG_CHECKING([if openjdk_codesign certificate is present])
-      rm -f codesign-testfile
-      touch codesign-testfile
-      codesign -s openjdk_codesign codesign-testfile 2>&AS_MESSAGE_LOG_FD >&AS_MESSAGE_LOG_FD || CODESIGN=
-      rm -f codesign-testfile
+      $RM codesign-testfile
+      $TOUCH codesign-testfile
+      $CODESIGN -s openjdk_codesign codesign-testfile 2>&AS_MESSAGE_LOG_FD >&AS_MESSAGE_LOG_FD || CODESIGN=
+      $RM codesign-testfile
       if test "x$CODESIGN" = x; then
         AC_MSG_RESULT([no])
       else
@@ -1036,6 +1204,18 @@ AC_DEFUN_ONCE([BASIC_TEST_USABILITY_ISSUES],
 # Check for support for specific options in bash
 AC_DEFUN_ONCE([BASIC_CHECK_BASH_OPTIONS],
 [
+  # Check bash version
+  # Extra [ ] to stop m4 mangling
+  [ BASH_VER=`$BASH --version | $SED -n  -e 's/^.*bash.*ersion *\([0-9.]*\).*$/\1/ p'` ]
+  AC_MSG_CHECKING([bash version])
+  AC_MSG_RESULT([$BASH_VER])
+
+  BASH_MAJOR=`$ECHO $BASH_VER | $CUT -d . -f 1`
+  BASH_MINOR=`$ECHO $BASH_VER | $CUT -d . -f 2`
+  if test $BASH_MAJOR -lt 3 || (test $BASH_MAJOR -eq 3 && test $BASH_MINOR -lt 2); then
+    AC_MSG_ERROR([bash version 3.2 or better is required])
+  fi
+
   # Test if bash supports pipefail.
   AC_MSG_CHECKING([if bash supports pipefail])
   if ${BASH} -c 'set -o pipefail'; then
@@ -1056,6 +1236,26 @@ AC_DEFUN_ONCE([BASIC_CHECK_BASH_OPTIONS],
   AC_SUBST(BASH_ARGS)
 ])
 
+################################################################################
+#
+# Default make target
+#
+AC_DEFUN_ONCE([BASIC_SETUP_DEFAULT_MAKE_TARGET],
+[
+  AC_ARG_WITH(default-make-target, [AS_HELP_STRING([--with-default-make-target],
+      [set the default make target @<:@exploded-image@:>@])])
+  if test "x$with_default_make_target" = "x" \
+      || test "x$with_default_make_target" = "xyes"; then
+    DEFAULT_MAKE_TARGET="exploded-image"
+  elif test "x$with_default_make_target" = "xno"; then
+    AC_MSG_ERROR([--without-default-make-target is not a valid option])
+  else
+    DEFAULT_MAKE_TARGET="$with_default_make_target"
+  fi
+
+  AC_SUBST(DEFAULT_MAKE_TARGET)
+])
+
 # Code to run after AC_OUTPUT
 AC_DEFUN_ONCE([BASIC_POST_CONFIG_OUTPUT],
 [
@@ -1074,7 +1274,6 @@ AC_DEFUN_ONCE([BASIC_POST_CONFIG_OUTPUT],
 
   # Move configure.log from current directory to the build output root
   if test -e ./configure.log; then
-    echo found it
     $MV -f ./configure.log "$OUTPUT_ROOT/configure.log" 2> /dev/null
   fi
 

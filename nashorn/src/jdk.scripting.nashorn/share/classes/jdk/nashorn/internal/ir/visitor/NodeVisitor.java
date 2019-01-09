@@ -33,6 +33,7 @@ import jdk.nashorn.internal.ir.BreakNode;
 import jdk.nashorn.internal.ir.CallNode;
 import jdk.nashorn.internal.ir.CaseNode;
 import jdk.nashorn.internal.ir.CatchNode;
+import jdk.nashorn.internal.ir.ClassNode;
 import jdk.nashorn.internal.ir.ContinueNode;
 import jdk.nashorn.internal.ir.DebuggerNode;
 import jdk.nashorn.internal.ir.EmptyNode;
@@ -58,6 +59,7 @@ import jdk.nashorn.internal.ir.SetSplitState;
 import jdk.nashorn.internal.ir.SplitNode;
 import jdk.nashorn.internal.ir.SplitReturn;
 import jdk.nashorn.internal.ir.SwitchNode;
+import jdk.nashorn.internal.ir.TemplateLiteral;
 import jdk.nashorn.internal.ir.TernaryNode;
 import jdk.nashorn.internal.ir.ThrowNode;
 import jdk.nashorn.internal.ir.TryNode;
@@ -737,6 +739,26 @@ public abstract class NodeVisitor<T extends LexicalContext> {
     }
 
     /**
+     * Callback for entering a TemplateLiteral (used only in --parse-only mode)
+     *
+     * @param  templateLiteral the node
+     * @return true if traversal should continue and node children be traversed, false otherwise
+     */
+    public boolean enterTemplateLiteral(final TemplateLiteral templateLiteral) {
+        return enterDefault(templateLiteral);
+    }
+
+    /**
+     * Callback for leaving a TemplateLiteral (used only in --parse-only mode)
+     *
+     * @param  templateLiteral the node
+     * @return processed node, which will replace the original one, or the original node
+     */
+    public Node leaveTemplateLiteral(final TemplateLiteral templateLiteral) {
+        return leaveDefault(templateLiteral);
+    }
+
+    /**
      * Callback for entering a TernaryNode
      *
      * @param  ternaryNode the node
@@ -897,5 +919,23 @@ public abstract class NodeVisitor<T extends LexicalContext> {
         return leaveDefault(withNode);
     }
 
+    /**
+     * Callback for entering a ClassNode
+     *
+     * @param  classNode  the node
+     * @return true if traversal should continue and node children be traversed, false otherwise
+     */
+    public boolean enterClassNode(final ClassNode classNode) {
+        return enterDefault(classNode);
+    }
 
+    /**
+     * Callback for leaving a ClassNode
+     *
+     * @param  classNode  the node
+     * @return processed node, which will replace the original one, or the original node
+     */
+    public Node leaveClassNode(final ClassNode classNode) {
+        return leaveDefault(classNode);
+    }
 }

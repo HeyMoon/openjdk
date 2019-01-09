@@ -22,41 +22,100 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package com.sun.tools.jdeps;
 
+import java.lang.module.ModuleDescriptor;
+import java.net.URI;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 /**
- * JDeps internal representation of module for dependency analysis.
+ * Jdeps internal representation of module for dependency analysis.
  */
-final class Module extends Archive {
-    private final String moduleName;
-    private final Map<String, Boolean> requires;
+class Module extends Archive {
+    static final Module UNNAMED_MODULE = new UnnamedModule();
+    static final String JDK_UNSUPPORTED = "jdk.unsupported";
+
+    static final boolean DEBUG = Boolean.getBoolean("jdeps.debug");
+    static void trace(String fmt, Object... args) {
+        trace(DEBUG, fmt, args);
+    }
+
+    static void trace(boolean traceOn, String fmt, Object... args) {
+        if (traceOn) {
+            System.err.format(fmt, args);
+        }
+    }
+
+    private final ModuleDescriptor descriptor;
     private final Map<String, Set<String>> exports;
-    private final Set<String> packages;
+    private final Map<String, Set<String>> opens;
+    private final boolean isSystem;
+    private final URI location;
 
-    private Module(ClassFileReader reader, String name,
-                   Map<String, Boolean> requires,
+    protected Module(String name) {
+        super(name);
+        this.descriptor = null;
+        this.location = null;
+        this.exports = Collections.emptyMap();
+        this.opens = Collections.emptyMap();
+        this.isSystem = true;
+    }
+
+    private Module(String name,
+                   URI location,
+                   ModuleDescriptor descriptor,
                    Map<String, Set<String>> exports,
-                   Set<String> packages) {
-        super(name, reader);
-        this.moduleName = name;
-        this.requires = Collections.unmodifiableMap(requires);
+                   Map<String, Set<String>> opens,
+                   boolean isSystem,
+                   ClassFileReader reader) {
+        super(name, location, reader);
+        this.descriptor = descriptor;
+        this.location = location;
         this.exports = Collections.unmodifiableMap(exports);
-        this.packages = Collections.unmodifiableSet(packages);
+        this.opens = Collections.unmodifiableMap(opens);
+        this.isSystem = isSystem;
     }
 
+    /**
+     * Returns module name
+     */
     public String name() {
-        return moduleName;
+        return descriptor != null ? descriptor.name() : getName();
     }
 
-    public Map<String, Boolean> requires() {
-        return requires;
+    public boolean isNamed() {
+        return true;
+    }
+
+    public boolean isAutomatic() {
+        return descriptor.isAutomatic();
+    }
+
+    public Module getModule() {
+        return this;
+    }
+
+    public ModuleDescriptor descriptor() {
+        return descriptor;
+    }
+
+    public URI location() {
+        return location;
+    }
+
+    public boolean isJDK() {
+        String mn = name();
+        return isSystem &&
+            (mn.startsWith("java.") || mn.startsWith("jdk.") || mn.startsWith("javafx."));
+    }
+
+    public boolean isSystem() {
+        return isSystem;
     }
 
     public Map<String, Set<String>> exports() {
@@ -64,87 +123,55 @@ final class Module extends Archive {
     }
 
     public Set<String> packages() {
-        return packages;
+        return descriptor.packages();
+    }
+
+    public boolean isJDKUnsupported() {
+        return JDK_UNSUPPORTED.equals(this.name());
     }
 
     /**
-     * Tests if this module can read m
+     * Converts this module to a normal module with the given dependences
+     *
+     * @throws IllegalArgumentException if this module is not an automatic module
      */
-    public boolean canRead(Module m) {
-        // ## TODO: handle "re-exported=true"
-        // all JDK modules require all modules containing its direct dependences
-        // should not be an issue
-        return requires.containsKey(m.name());
+    public Module toNormalModule(Map<String, Boolean> requires) {
+        if (!isAutomatic()) {
+            throw new IllegalArgumentException(name() + " not an automatic module");
+        }
+        return new NormalModule(this, requires);
     }
 
     /**
-     * Tests if a given fully-qualified name is an exported type.
+     * Tests if the package of the given name is exported.
      */
-    public boolean isExported(String cn) {
-        int i = cn.lastIndexOf('.');
-        String pn = i > 0 ? cn.substring(0, i) : "";
-
-        return isExportedPackage(pn);
+    public boolean isExported(String pn) {
+        return exports.containsKey(pn) && exports.get(pn).isEmpty();
     }
 
     /**
-     * Tests if a given package name is exported.
+     * Tests if the package of the given name is exported to the target
+     * in a qualified fashion.
      */
-    public boolean isExportedPackage(String pn) {
-        return exports.containsKey(pn) ? exports.get(pn).isEmpty() : false;
+    public boolean isExported(String pn, String target) {
+        return isExported(pn)
+                || exports.containsKey(pn) && exports.get(pn).contains(target);
     }
 
     /**
-     * Tests if the given classname is accessible to module m
+     * Tests if the package of the given name is open.
      */
-    public boolean isAccessibleTo(String classname, Module m) {
-        int i = classname.lastIndexOf('.');
-        String pn = i > 0 ? classname.substring(0, i) : "";
-        if (!packages.contains(pn)) {
-            throw new IllegalArgumentException(classname + " is not a member of module " + name());
-        }
-
-        if (m != null && !m.canRead(this)) {
-            trace("%s not readable by %s%n", this.name(), m.name());
-            return false;
-        }
-
-        // exported API
-        Set<String> ms = exports().get(pn);
-        String mname = m != null ? m.name() : "unnamed";
-        if (ms == null) {
-            trace("%s not exported in %s%n", classname, this.name());
-        } else if (!(ms.isEmpty() || ms.contains(mname))) {
-            trace("%s not permit to %s %s%n", classname, mname, ms);
-        }
-        return ms != null && (ms.isEmpty() || ms.contains(mname));
+    public boolean isOpen(String pn) {
+        return opens.containsKey(pn) && opens.get(pn).isEmpty();
     }
 
-    private static final boolean traceOn = Boolean.getBoolean("jdeps.debug");
-    private void trace(String fmt, Object... args) {
-        if (traceOn) {
-            System.err.format(fmt, args);
-        }
-    }
-
-    @Override
-    public boolean equals(Object ob) {
-        if (!(ob instanceof Module))
-            return false;
-        Module that = (Module)ob;
-        return (moduleName.equals(that.moduleName)
-                && requires.equals(that.requires)
-                && exports.equals(that.exports)
-                && packages.equals(that.packages));
-    }
-
-    @Override
-    public int hashCode() {
-        int hc = moduleName.hashCode();
-        hc = hc * 43 + requires.hashCode();
-        hc = hc * 43 + exports.hashCode();
-        hc = hc * 43 + packages.hashCode();
-        return hc;
+    /**
+     * Tests if the package of the given name is open to the target
+     * in a qualified fashion.
+     */
+    public boolean isOpen(String pn, String target) {
+        return isOpen(pn)
+            || opens.containsKey(pn) && opens.get(pn).contains(target);
     }
 
     @Override
@@ -153,45 +180,117 @@ final class Module extends Archive {
     }
 
     public final static class Builder {
-        String name;
+        final String name;
+        final ModuleDescriptor descriptor;
+        final boolean isSystem;
         ClassFileReader reader;
-        final Map<String, Boolean> requires = new HashMap<>();
-        final Map<String, Set<String>> exports = new HashMap<>();
-        final Set<String> packages = new HashSet<>();
+        URI location;
 
-        public Builder() {
+        public Builder(ModuleDescriptor md) {
+            this(md, false);
         }
 
-        public Builder name(String n) {
-            name = n;
+        public Builder(ModuleDescriptor md, boolean isSystem) {
+            this.name = md.name();
+            this.descriptor = md;
+            this.isSystem = isSystem;
+        }
+
+        public Builder location(URI location) {
+            this.location = location;
             return this;
         }
 
-        public Builder require(String d, boolean reexport) {
-         //   System.err.format("%s depend %s reexports %s%n", name, d, reexport);
-            requires.put(d, reexport);
-            return this;
-        }
-
-        public Builder packages(Set<String> pkgs) {
-            packages.addAll(pkgs);
-            return this;
-        }
-
-        public Builder export(String p, Set<String> ms) {
-            Objects.requireNonNull(p);
-            Objects.requireNonNull(ms);
-            exports.put(p, new HashSet<>(ms));
-            return this;
-        }
-        public Builder classes(ClassFileReader.ModuleClassReader reader) {
+        public Builder classes(ClassFileReader reader) {
             this.reader = reader;
             return this;
         }
 
         public Module build() {
-            Module m = new Module(reader, name, requires, exports, packages);
-            return m;
+            if (descriptor.isAutomatic() && isSystem) {
+                throw new InternalError("JDK module: " + name + " can't be automatic module");
+            }
+
+            Map<String, Set<String>> exports = new HashMap<>();
+            Map<String, Set<String>> opens = new HashMap<>();
+
+            if (descriptor.isAutomatic()) {
+                // ModuleDescriptor::exports and opens returns an empty set
+                descriptor.packages().forEach(pn -> exports.put(pn, Collections.emptySet()));
+                descriptor.packages().forEach(pn -> opens.put(pn, Collections.emptySet()));
+            } else {
+                descriptor.exports().stream()
+                          .forEach(exp -> exports.computeIfAbsent(exp.source(), _k -> new HashSet<>())
+                                                 .addAll(exp.targets()));
+                descriptor.opens().stream()
+                    .forEach(exp -> opens.computeIfAbsent(exp.source(), _k -> new HashSet<>())
+                        .addAll(exp.targets()));
+            }
+            return new Module(name, location, descriptor, exports, opens, isSystem, reader);
+        }
+    }
+
+    private static class UnnamedModule extends Module {
+        private UnnamedModule() {
+            super("unnamed", null, null,
+                  Collections.emptyMap(), Collections.emptyMap(),
+                  false, null);
+        }
+
+        @Override
+        public String name() {
+            return "unnamed";
+        }
+
+        @Override
+        public boolean isNamed() {
+            return false;
+        }
+
+        @Override
+        public boolean isAutomatic() {
+            return false;
+        }
+
+        @Override
+        public boolean isExported(String pn) {
+            return true;
+        }
+    }
+
+    /**
+     * A normal module has a module-info.class
+     */
+    private static class NormalModule extends Module {
+        private final ModuleDescriptor md;
+
+        /**
+         * Converts the given automatic module to a normal module.
+         *
+         * Replace this module's dependences with the given requires and also
+         * declare service providers, if specified in META-INF/services configuration file
+         */
+        private NormalModule(Module m, Map<String, Boolean> requires) {
+            super(m.name(), m.location, m.descriptor, m.exports, m.opens, m.isSystem, m.reader());
+
+            ModuleDescriptor.Builder builder = ModuleDescriptor.newModule(m.name());
+            requires.keySet().forEach(mn -> {
+                if (requires.get(mn).equals(Boolean.TRUE)) {
+                    builder.requires(Set.of(ModuleDescriptor.Requires.Modifier.TRANSITIVE), mn);
+                } else {
+                    builder.requires(mn);
+                }
+            });
+            // exports all packages
+            m.descriptor.packages().forEach(builder::exports);
+            m.descriptor.uses().forEach(builder::uses);
+            m.descriptor.provides().forEach(builder::provides);
+            this.md = builder.build();
+        }
+
+        @Override
+        public ModuleDescriptor descriptor() {
+            return md;
         }
     }
 }

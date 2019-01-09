@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,22 +25,22 @@
 
 package com.sun.media.sound;
 
-import java.io.File;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.IOException;
-
 import java.io.BufferedOutputStream;
-import java.io.DataOutputStream;
-import java.io.FileOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.io.SequenceInputStream;
+import java.util.Objects;
 
 import javax.sound.sampled.AudioFileFormat;
-import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioFormat;
+import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioSystem;
 
 //$$fb this class is buggy. Should be replaced in future.
@@ -59,9 +59,9 @@ public final class AiffFileWriter extends SunFileWriter {
         super(new AudioFileFormat.Type[]{AudioFileFormat.Type.AIFF});
     }
 
-
     // METHODS TO IMPLEMENT AudioFileWriter
 
+    @Override
     public AudioFileFormat.Type[] getAudioFileTypes(AudioInputStream stream) {
 
         AudioFileFormat.Type[] filetypes = new AudioFileFormat.Type[types.length];
@@ -82,8 +82,11 @@ public final class AiffFileWriter extends SunFileWriter {
         return new AudioFileFormat.Type[0];
     }
 
-
+    @Override
     public int write(AudioInputStream stream, AudioFileFormat.Type fileType, OutputStream out) throws IOException {
+        Objects.requireNonNull(stream);
+        Objects.requireNonNull(fileType);
+        Objects.requireNonNull(out);
 
         //$$fb the following check must come first ! Otherwise
         // the next frame length check may throw an IOException and
@@ -97,12 +100,14 @@ public final class AiffFileWriter extends SunFileWriter {
             throw new IOException("stream length not specified");
         }
 
-        int bytesWritten = writeAiffFile(stream, aiffFileFormat, out);
-        return bytesWritten;
+        return writeAiffFile(stream, aiffFileFormat, out);
     }
 
-
+    @Override
     public int write(AudioInputStream stream, AudioFileFormat.Type fileType, File out) throws IOException {
+        Objects.requireNonNull(stream);
+        Objects.requireNonNull(fileType);
+        Objects.requireNonNull(out);
 
         // throws IllegalArgumentException if not supported
         AiffFileFormat aiffFileFormat = (AiffFileFormat)getAudioFileFormat(fileType, stream);
@@ -120,12 +125,15 @@ public final class AiffFileWriter extends SunFileWriter {
 
             // $$kk: 10.22.99: jan: please either implement this or throw an exception!
             // $$fb: 2001-07-13: done. Fixes Bug 4479981
-            int ssndBlockSize           = (aiffFileFormat.getFormat().getChannels() * aiffFileFormat.getFormat().getSampleSizeInBits());
+            int channels = aiffFileFormat.getFormat().getChannels();
+            int sampleSize = aiffFileFormat.getFormat().getSampleSizeInBits();
+            int ssndBlockSize = channels * ((sampleSize + 7) / 8);
 
             int aiffLength=bytesWritten;
             int ssndChunkSize=aiffLength-aiffFileFormat.getHeaderSize()+16;
             long dataSize=ssndChunkSize-16;
-            int numFrames=(int) (dataSize*8/ssndBlockSize);
+            //TODO possibly incorrect round
+            int numFrames = (int) (dataSize / ssndBlockSize);
 
             RandomAccessFile raf=new RandomAccessFile(out, "rw");
             // skip FORM magic
@@ -153,6 +161,9 @@ public final class AiffFileWriter extends SunFileWriter {
      * Throws IllegalArgumentException if not supported.
      */
     private AudioFileFormat getAudioFileFormat(AudioFileFormat.Type type, AudioInputStream stream) {
+        if (!isFileTypeSupported(type, stream)) {
+            throw new IllegalArgumentException("File type " + type + " not supported.");
+        }
 
         AudioFormat format = null;
         AiffFileFormat fileFormat = null;
@@ -161,18 +172,9 @@ public final class AiffFileWriter extends SunFileWriter {
         AudioFormat streamFormat = stream.getFormat();
         AudioFormat.Encoding streamEncoding = streamFormat.getEncoding();
 
-
-        float sampleRate;
         int sampleSizeInBits;
-        int channels;
-        int frameSize;
-        float frameRate;
         int fileSize;
         boolean convert8to16 = false;
-
-        if( !types[0].equals(type) ) {
-            throw new IllegalArgumentException("File type " + type + " not supported.");
-        }
 
         if( (AudioFormat.Encoding.ALAW.equals(streamEncoding)) ||
             (AudioFormat.Encoding.ULAW.equals(streamEncoding)) ) {
@@ -227,7 +229,6 @@ public final class AiffFileWriter extends SunFileWriter {
         return fileFormat;
     }
 
-
     private int writeAiffFile(InputStream in, AiffFileFormat aiffFileFormat, OutputStream out) throws IOException {
 
         int bytesRead = 0;
@@ -267,25 +268,20 @@ public final class AiffFileWriter extends SunFileWriter {
         AudioFormat.Encoding encoding = null;
 
         //$$fb a little bit nicer handling of constants
-
-        //int headerSize          = 54;
         int headerSize          = aiffFileFormat.getHeaderSize();
-
         //int fverChunkSize       = 0;
         int fverChunkSize       = aiffFileFormat.getFverChunkSize();
-        //int commChunkSize       = 26;
         int commChunkSize       = aiffFileFormat.getCommChunkSize();
         int aiffLength          = -1;
         int ssndChunkSize       = -1;
-        //int ssndOffset                        = headerSize - 16;
         int ssndOffset                  = aiffFileFormat.getSsndChunkOffset();
         short channels = (short) format.getChannels();
         short sampleSize = (short) format.getSampleSizeInBits();
-        int ssndBlockSize               = (channels * sampleSize);
-        int numFrames                   = aiffFileFormat.getFrameLength();
-        long dataSize            = -1;
+        int ssndBlockSize = channels * ((sampleSize + 7) / 8);
+        int numFrames = aiffFileFormat.getFrameLength();
+        long dataSize = -1;
         if( numFrames != AudioSystem.NOT_SPECIFIED) {
-            dataSize = (long) numFrames * ssndBlockSize / 8;
+            dataSize = (long) numFrames * ssndBlockSize;
             ssndChunkSize = (int)dataSize + 16;
             aiffLength = (int)dataSize+headerSize;
         }
@@ -395,9 +391,6 @@ public final class AiffFileWriter extends SunFileWriter {
 
     }
 
-
-
-
     // HELPER METHODS
 
     private static final int DOUBLE_MANTISSA_LENGTH = 52;
@@ -444,6 +437,4 @@ public final class AiffFileWriter extends SunFileWriter {
         dos.writeShort(extendedBits79To64);
         dos.writeLong(extendedBits63To0);
     }
-
-
 }

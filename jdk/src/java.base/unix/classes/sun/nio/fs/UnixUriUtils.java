@@ -49,11 +49,11 @@ class UnixUriUtils {
         String scheme = uri.getScheme();
         if ((scheme == null) || !scheme.equalsIgnoreCase("file"))
             throw new IllegalArgumentException("URI scheme is not \"file\"");
-        if (uri.getAuthority() != null)
+        if (uri.getRawAuthority() != null)
             throw new IllegalArgumentException("URI has an authority component");
-        if (uri.getFragment() != null)
+        if (uri.getRawFragment() != null)
             throw new IllegalArgumentException("URI has a fragment component");
-        if (uri.getQuery() != null)
+        if (uri.getRawQuery() != null)
             throw new IllegalArgumentException("URI has a query component");
 
         // compatibility with java.io.File
@@ -114,12 +114,9 @@ class UnixUriUtils {
 
         // trailing slash if directory
         if (sb.charAt(sb.length()-1) != '/') {
-            try {
-                 if (UnixFileAttributes.get(up, true).isDirectory())
-                     sb.append('/');
-            } catch (UnixException x) {
-                // ignore
-            }
+            int mode = UnixNativeDispatcher.stat(up);
+            if ((mode & UnixConstants.S_IFMT) == UnixConstants.S_IFDIR)
+                sb.append('/');
         }
 
         try {
@@ -242,7 +239,7 @@ class UnixUriUtils {
    private static final long L_PATH = L_PCHAR | lowMask(";/");
    private static final long H_PATH = H_PCHAR | highMask(";/");
 
-   private final static char[] hexDigits = {
+   private static final char[] hexDigits = {
         '0', '1', '2', '3', '4', '5', '6', '7',
         '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'
     };

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -67,7 +67,7 @@ static jmethodID InputStream_availableID;
 JavaVM *jvm;
 
 JNIEXPORT jint JNICALL
-JNI_OnLoad(JavaVM *vm, void *reserved)
+DEF_JNI_OnLoad(JavaVM *vm, void *reserved)
 {
     jvm = vm;
     return JNI_VERSION_1_2;
@@ -180,6 +180,7 @@ struct sun_jpeg_source_mgr {
       int               *ip;
       unsigned char     *bp;
   } outbuf;
+  size_t outbufSize;
   jobject hOutputBuffer;
 };
 
@@ -233,6 +234,7 @@ static int GET_ARRAYS(JNIEnv *env, sun_jpeg_source_ptr src)
     }
     if (src->hOutputBuffer) {
         assert(src->outbuf.ip == 0);
+        src->outbufSize = (*env)->GetArrayLength(env, src->hOutputBuffer);
         src->outbuf.ip = (int *)(*env)->GetPrimitiveArrayCritical
             (env, src->hOutputBuffer, 0);
         if (src->outbuf.ip == 0) {
@@ -356,7 +358,7 @@ sun_jpeg_fill_suspended_buffer(j_decompress_ptr cinfo)
     }
     ret = (*env)->CallIntMethod(env, src->hInputStream, InputStream_readID,
                                 src->hInputBuffer, offset, buflen);
-    if ((ret > 0) && ((unsigned int)ret > buflen)) ret = buflen;
+    if ((ret > 0) && ((unsigned int)ret > buflen)) ret = (int)buflen;
     if ((*env)->ExceptionOccurred(env) || !GET_ARRAYS(env, src)) {
         cinfo->err->error_exit((struct jpeg_common_struct *) cinfo);
     }
@@ -677,8 +679,8 @@ Java_sun_awt_image_JPEGImageDecoder_readImage(JNIEnv *env,
                                               cinfo.output_scanline - 1);
           } else {
               if (hasalpha) {
-                  ip = jsrc.outbuf.ip + cinfo.image_width;
-                  bp = jsrc.outbuf.bp + cinfo.image_width * 4;
+                  ip = jsrc.outbuf.ip + jsrc.outbufSize;
+                  bp = jsrc.outbuf.bp + jsrc.outbufSize * 4;
                   while (ip > jsrc.outbuf.ip) {
                       pixel = (*--bp) << 24;
                       pixel |= (*--bp);
@@ -687,8 +689,8 @@ Java_sun_awt_image_JPEGImageDecoder_readImage(JNIEnv *env,
                       *--ip = pixel;
                   }
               } else {
-                  ip = jsrc.outbuf.ip + cinfo.image_width;
-                  bp = jsrc.outbuf.bp + cinfo.image_width * 3;
+                  ip = jsrc.outbuf.ip + jsrc.outbufSize;
+                  bp = jsrc.outbuf.bp + jsrc.outbufSize * 3;
                   while (ip > jsrc.outbuf.ip) {
                       pixel = (*--bp);
                       pixel |= (*--bp) << 8;

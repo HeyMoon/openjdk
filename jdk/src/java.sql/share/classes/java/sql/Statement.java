@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,9 @@
 
 package java.sql;
 
+import java.util.regex.Pattern;
+import static java.util.stream.Collectors.joining;
+
 /**
  * <P>The object used for executing a static SQL statement
  * and returning the results it produces.
@@ -39,6 +42,7 @@ package java.sql;
  *
  * @see Connection#createStatement
  * @see ResultSet
+ * @since 1.1
  */
 public interface Statement extends Wrapper, AutoCloseable {
 
@@ -682,7 +686,7 @@ public interface Statement extends Wrapper, AutoCloseable {
      *         more results
      * @exception SQLException if a database access error occurs,
      * this method is called on a closed <code>Statement</code> or the argument
-         *         supplied is not one of the following:
+     *         supplied is not one of the following:
      *        <code>Statement.CLOSE_CURRENT_RESULT</code>,
      *        <code>Statement.KEEP_CURRENT_RESULT</code> or
      *        <code>Statement.CLOSE_ALL_RESULTS</code>
@@ -1367,4 +1371,279 @@ public interface Statement extends Wrapper, AutoCloseable {
             throws SQLException {
         throw new SQLFeatureNotSupportedException("executeLargeUpdate not implemented");
     }
+
+    // JDBC 4.3
+
+    /**
+     * Returns a {@code String} enclosed in single quotes. Any occurrence of a
+     * single quote within the string will be replaced by two single quotes.
+     *
+     * <blockquote>
+     * <table class="striped" >
+     * <caption>Examples of the conversion:</caption>
+     * <thead>
+     * <tr><th>Value</th><th>Result</th></tr>
+     * </thead>
+     * <tbody style="text-align:center">
+     * <tr> <td>Hello</td> <td>'Hello'</td> </tr>
+     * <tr> <td>G'Day</td> <td>'G''Day'</td> </tr>
+     * <tr> <td>'G''Day'</td>
+     * <td>'''G''''Day'''</td> </tr>
+     * <tr> <td>I'''M</td> <td>'I''''''M'</td>
+     * </tr>
+     *
+     * </tbody>
+     * </table>
+     * </blockquote>
+     * @implNote
+     * JDBC driver implementations may need to provide their own implementation
+     * of this method in order to meet the requirements of the underlying
+     * datasource.
+     * @param val a character string
+     * @return A string enclosed by single quotes with every single quote
+     * converted to two single quotes
+     * @throws NullPointerException if val is {@code null}
+     * @throws SQLException if a database access error occurs
+     *
+     * @since 9
+     */
+     default String enquoteLiteral(String val)  throws SQLException {
+         return "'" + val.replace("'", "''") +  "'";
+    }
+
+
+     /**
+     * Returns a SQL identifier. If {@code identifier} is a simple SQL identifier:
+     * <ul>
+     * <li>Return the original value if {@code alwaysQuote} is
+     * {@code false}</li>
+     * <li>Return a delimited identifier if {@code alwaysQuote} is
+     * {@code true}</li>
+     * </ul>
+     *
+     * If {@code identifier} is not a simple SQL identifier, {@code identifier} will be
+     * enclosed in double quotes if not already present. If the datasource does
+     * not support double quotes for delimited identifiers, the
+     * identifier should be enclosed by the string returned from
+     * {@link DatabaseMetaData#getIdentifierQuoteString}.  If the datasource
+     * does not support delimited identifiers, a
+     * {@code SQLFeatureNotSupportedException} should be thrown.
+     * <p>
+     * A {@code SQLException} will be thrown if {@code identifier} contains any
+     * characters invalid in a delimited identifier or the identifier length is
+     * invalid for the datasource.
+     *
+     * @implSpec
+     * The default implementation uses the following criteria to
+     * determine a valid simple SQL identifier:
+     * <ul>
+     * <li>The string is not enclosed in double quotes</li>
+     * <li>The first character is an alphabetic character from a through z, or
+     * from A through Z</li>
+     * <li>The name only contains alphanumeric characters or the character "_"</li>
+     * </ul>
+     *
+     * The default implementation will throw a {@code SQLException} if:
+     * <ul>
+     * <li>{@code identifier} contains a {@code null} character or double quote and is not
+     * a simple SQL identifier.</li>
+     * <li>The length of {@code identifier} is less than 1 or greater than 128 characters
+     * </ul>
+     * <blockquote>
+     * <table class="striped" >
+     * <caption>Examples of the conversion:</caption>
+     * <thead>
+     * <tr>
+     * <th>identifier</th>
+     * <th>alwaysQuote</th>
+     * <th>Result</th></tr>
+     * </thead>
+     * <tbody>
+     * <tr>
+     * <td>Hello</td>
+     * <td>false</td>
+     * <td>Hello</td>
+     * </tr>
+     * <tr>
+     * <td>Hello</td>
+     * <td>true</td>
+     * <td>"Hello"</td>
+     * </tr>
+     * <tr>
+     * <td>G'Day</td>
+     * <td>false</td>
+     * <td>"G'Day"</td>
+     * </tr>
+     * <tr>
+     * <td>"Bruce Wayne"</td>
+     * <td>false</td>
+     * <td>"Bruce Wayne"</td>
+     * </tr>
+     * <tr>
+     * <td>"Bruce Wayne"</td>
+     * <td>true</td>
+     * <td>"Bruce Wayne"</td>
+     * </tr>
+     * <tr>
+     * <td>GoodDay$</td>
+     * <td>false</td>
+     * <td>"GoodDay$"</td>
+     * </tr>
+     * <tr>
+     * <td>Hello"World</td>
+     * <td>false</td>
+     * <td>SQLException</td>
+     * </tr>
+     * <tr>
+     * <td>"Hello"World"</td>
+     * <td>false</td>
+     * <td>SQLException</td>
+     * </tr>
+     * </tbody>
+     * </table>
+     * </blockquote>
+     * @implNote
+     * JDBC driver implementations may need to provide their own implementation
+     * of this method in order to meet the requirements of the underlying
+     * datasource.
+     * @param identifier a SQL identifier
+     * @param alwaysQuote indicates if a simple SQL identifier should be
+     * returned as a quoted identifier
+     * @return A simple SQL identifier or a delimited identifier
+     * @throws SQLException if identifier is not a valid identifier
+     * @throws SQLFeatureNotSupportedException if the datasource does not support
+     * delimited identifiers
+     * @throws NullPointerException if identifier is {@code null}
+     *
+     * @since 9
+     */
+    default String enquoteIdentifier(String identifier, boolean alwaysQuote) throws SQLException {
+        int len = identifier.length();
+        if (len < 1 || len > 128) {
+            throw new SQLException("Invalid name");
+        }
+        if (Pattern.compile("[\\p{Alpha}][\\p{Alnum}_]*").matcher(identifier).matches()) {
+            return alwaysQuote ?  "\"" + identifier + "\"" : identifier;
+        }
+        if (identifier.matches("^\".+\"$")) {
+            identifier = identifier.substring(1, len - 1);
+        }
+        if (Pattern.compile("[^\u0000\"]+").matcher(identifier).matches()) {
+            return "\"" + identifier + "\"";
+        } else {
+            throw new SQLException("Invalid name");
+        }
+    }
+
+    /**
+     * Retrieves whether {@code identifier} is a simple SQL identifier.
+     *
+     * @implSpec The default implementation uses the following criteria to
+     * determine a valid simple SQL identifier:
+     * <ul>
+     * <li>The string is not enclosed in double quotes</li>
+     * <li>The first character is an alphabetic character from a through z, or
+     * from A through Z</li>
+     * <li>The string only contains alphanumeric characters or the character
+     * "_"</li>
+     * <li>The string is between 1 and 128 characters in length inclusive</li>
+     * </ul>
+     *
+     * <blockquote>
+     * <table class="striped" >
+     * <caption>Examples of the conversion:</caption>
+     * <thead>
+     * <tr>
+     * <th>identifier</th>
+     * <th>Simple Identifier</th>
+     * </thead>
+     *
+     * <tbody>
+     * <tr>
+     * <td>Hello</td>
+     * <td>true</td>
+     * </tr>
+     * <tr>
+     * <td>G'Day</td>
+     * <td>false</td>
+     * </tr>
+     * <tr>
+     * <td>"Bruce Wayne"</td>
+     * <td>false</td>
+     * </tr>
+     * <tr>
+     * <td>GoodDay$</td>
+     * <td>false</td>
+     * </tr>
+     * <tr>
+     * <td>Hello"World</td>
+     * <td>false</td>
+     * </tr>
+     * <tr>
+     * <td>"Hello"World"</td>
+     * <td>false</td>
+     * </tr>
+     * </tbody>
+     * </table>
+     * </blockquote>
+     * @implNote JDBC driver implementations may need to provide their own
+     * implementation of this method in order to meet the requirements of the
+     * underlying datasource.
+     * @param identifier a SQL identifier
+     * @return  true if  a simple SQL identifier, false otherwise
+     * @throws NullPointerException if identifier is {@code null}
+     * @throws SQLException if a database access error occurs
+     *
+     * @since 9
+     */
+    default boolean isSimpleIdentifier(String identifier) throws SQLException {
+        int len = identifier.length();
+        return len >= 1 && len <= 128
+                && Pattern.compile("[\\p{Alpha}][\\p{Alnum}_]*").matcher(identifier).matches();
+    }
+
+    /**
+    * Returns a {@code String} representing a National Character Set Literal
+    * enclosed in single quotes and prefixed with a upper case letter N.
+    * Any occurrence of a single quote within the string will be replaced
+    * by two single quotes.
+    *
+    * <blockquote>
+    * <table class="striped">
+    * <caption>Examples of the conversion:</caption>
+    * <thead>
+    * <tr>
+    * <th>Value</th>
+    * <th>Result</th>
+    * </tr>
+    * </thead>
+    * <tbody>
+    * <tr> <td>Hello</td> <td>N'Hello'</td> </tr>
+    * <tr> <td>G'Day</td> <td>N'G''Day'</td> </tr>
+    * <tr> <td>'G''Day'</td>
+    * <td>N'''G''''Day'''</td> </tr>
+    * <tr> <td>I'''M</td> <td>N'I''''''M'</td>
+    * <tr> <td>N'Hello'</td> <td>N'N''Hello'''</td> </tr>
+    *
+    * </tbody>
+    * </table>
+    * </blockquote>
+    * @implNote
+    * JDBC driver implementations may need to provide their own implementation
+    * of this method in order to meet the requirements of the underlying
+    * datasource. An implementation of enquoteNCharLiteral may accept a different
+    * set of characters than that accepted by the same drivers implementation of
+    * enquoteLiteral.
+    * @param val a character string
+    * @return the result of replacing every single quote character in the
+    * argument by two single quote characters where this entire result is
+    * then prefixed with 'N'.
+    * @throws NullPointerException if val is {@code null}
+    * @throws SQLException if a database access error occurs
+    *
+    * @since 9
+    */
+    default String enquoteNCharLiteral(String val)  throws SQLException {
+        return "N'" + val.replace("'", "''") +  "'";
+   }
 }

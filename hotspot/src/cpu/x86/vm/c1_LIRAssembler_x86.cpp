@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -312,7 +312,7 @@ void LIR_Assembler::osr_entry() {
   Register OSR_buf = osrBufferPointer()->as_pointer_register();
   { assert(frame::interpreter_frame_monitor_size() == BasicObjectLock::size(), "adjust code below");
     int monitor_offset = BytesPerWord * method()->max_locals() +
-      (2 * BytesPerWord) * (number_of_locks - 1);
+      (BasicObjectLock::size() * BytesPerWord) * (number_of_locks - 1);
     // SharedRuntime::OSR_migration_begin() packs BasicObjectLocks in
     // the OSR buffer using 2 word entries: first the lock and then
     // the oop.
@@ -345,9 +345,7 @@ int LIR_Assembler::check_icache() {
   const bool do_post_padding = VerifyOops || UseCompressedClassPointers;
   if (!do_post_padding) {
     // insert some nops so that the verified entry point is aligned on CodeEntryAlignment
-    while ((__ offset() + ic_cmp_size) % CodeEntryAlignment != 0) {
-      __ nop();
-    }
+    __ align(CodeEntryAlignment, __ offset() + ic_cmp_size);
   }
   int offset = __ offset();
   __ inline_cache_check(receiver, IC_Klass);
@@ -395,7 +393,7 @@ int LIR_Assembler::emit_exception_handler() {
   __ nop();
 
   // generate code for exception handler
-  address handler_base = __ start_a_stub(exception_handler_size);
+  address handler_base = __ start_a_stub(exception_handler_size());
   if (handler_base == NULL) {
     // not enough space left for the handler
     bailout("exception handler overflow");
@@ -414,7 +412,7 @@ int LIR_Assembler::emit_exception_handler() {
   // search an exception handler (rax: exception oop, rdx: throwing pc)
   __ call(RuntimeAddress(Runtime1::entry_for(Runtime1::handle_exception_from_callee_id)));
   __ should_not_reach_here();
-  guarantee(code_offset() - offset <= exception_handler_size, "overflow");
+  guarantee(code_offset() - offset <= exception_handler_size(), "overflow");
   __ end_a_stub();
 
   return offset;
@@ -492,7 +490,7 @@ int LIR_Assembler::emit_deopt_handler() {
   __ nop();
 
   // generate code for exception handler
-  address handler_base = __ start_a_stub(deopt_handler_size);
+  address handler_base = __ start_a_stub(deopt_handler_size());
   if (handler_base == NULL) {
     // not enough space left for the handler
     bailout("deopt handler overflow");
@@ -504,90 +502,10 @@ int LIR_Assembler::emit_deopt_handler() {
 
   __ pushptr(here.addr());
   __ jump(RuntimeAddress(SharedRuntime::deopt_blob()->unpack()));
-  guarantee(code_offset() - offset <= deopt_handler_size, "overflow");
+  guarantee(code_offset() - offset <= deopt_handler_size(), "overflow");
   __ end_a_stub();
 
   return offset;
-}
-
-
-// This is the fast version of java.lang.String.compare; it has not
-// OSR-entry and therefore, we generate a slow version for OSR's
-void LIR_Assembler::emit_string_compare(LIR_Opr arg0, LIR_Opr arg1, LIR_Opr dst, CodeEmitInfo* info) {
-  __ movptr (rbx, rcx); // receiver is in rcx
-  __ movptr (rax, arg1->as_register());
-
-  // Get addresses of first characters from both Strings
-  __ load_heap_oop(rsi, Address(rax, java_lang_String::value_offset_in_bytes()));
-  if (java_lang_String::has_offset_field()) {
-    __ movptr     (rcx, Address(rax, java_lang_String::offset_offset_in_bytes()));
-    __ movl       (rax, Address(rax, java_lang_String::count_offset_in_bytes()));
-    __ lea        (rsi, Address(rsi, rcx, Address::times_2, arrayOopDesc::base_offset_in_bytes(T_CHAR)));
-  } else {
-    __ movl       (rax, Address(rsi, arrayOopDesc::length_offset_in_bytes()));
-    __ lea        (rsi, Address(rsi, arrayOopDesc::base_offset_in_bytes(T_CHAR)));
-  }
-
-  // rbx, may be NULL
-  add_debug_info_for_null_check_here(info);
-  __ load_heap_oop(rdi, Address(rbx, java_lang_String::value_offset_in_bytes()));
-  if (java_lang_String::has_offset_field()) {
-    __ movptr     (rcx, Address(rbx, java_lang_String::offset_offset_in_bytes()));
-    __ movl       (rbx, Address(rbx, java_lang_String::count_offset_in_bytes()));
-    __ lea        (rdi, Address(rdi, rcx, Address::times_2, arrayOopDesc::base_offset_in_bytes(T_CHAR)));
-  } else {
-    __ movl       (rbx, Address(rdi, arrayOopDesc::length_offset_in_bytes()));
-    __ lea        (rdi, Address(rdi, arrayOopDesc::base_offset_in_bytes(T_CHAR)));
-  }
-
-  // compute minimum length (in rax) and difference of lengths (on top of stack)
-  __ mov   (rcx, rbx);
-  __ subptr(rbx, rax); // subtract lengths
-  __ push  (rbx);      // result
-  __ cmov  (Assembler::lessEqual, rax, rcx);
-
-  // is minimum length 0?
-  Label noLoop, haveResult;
-  __ testptr (rax, rax);
-  __ jcc (Assembler::zero, noLoop);
-
-  // compare first characters
-  __ load_unsigned_short(rcx, Address(rdi, 0));
-  __ load_unsigned_short(rbx, Address(rsi, 0));
-  __ subl(rcx, rbx);
-  __ jcc(Assembler::notZero, haveResult);
-  // starting loop
-  __ decrement(rax); // we already tested index: skip one
-  __ jcc(Assembler::zero, noLoop);
-
-  // set rsi.edi to the end of the arrays (arrays have same length)
-  // negate the index
-
-  __ lea(rsi, Address(rsi, rax, Address::times_2, type2aelembytes(T_CHAR)));
-  __ lea(rdi, Address(rdi, rax, Address::times_2, type2aelembytes(T_CHAR)));
-  __ negptr(rax);
-
-  // compare the strings in a loop
-
-  Label loop;
-  __ align(wordSize);
-  __ bind(loop);
-  __ load_unsigned_short(rcx, Address(rdi, rax, Address::times_2, 0));
-  __ load_unsigned_short(rbx, Address(rsi, rax, Address::times_2, 0));
-  __ subl(rcx, rbx);
-  __ jcc(Assembler::notZero, haveResult);
-  __ increment(rax);
-  __ jcc(Assembler::notZero, loop);
-
-  // strings are equal up to min length
-
-  __ bind(noLoop);
-  __ pop(rax);
-  return_op(LIR_OprFact::illegalOpr);
-
-  __ bind(haveResult);
-  // leave instruction is going to discard the TOS value
-  __ mov (rax, rcx); // result of call is in rax,
 }
 
 
@@ -599,6 +517,10 @@ void LIR_Assembler::return_op(LIR_Opr result) {
 
   // Pop the stack before the safepoint code
   __ remove_frame(initial_frame_size_in_bytes());
+
+  if (StackReservedPages > 0 && compilation()->has_reserved_stack_access()) {
+    __ reserved_stack_check();
+  }
 
   bool result_is_oop = result->is_valid() ? result->is_oop() : false;
 
@@ -1423,6 +1345,18 @@ void LIR_Assembler::emit_op3(LIR_Op3* op) {
                       op->result_opr(),
                       op->info());
       break;
+    case lir_fmad:
+      __ fmad(op->result_opr()->as_xmm_double_reg(),
+              op->in_opr1()->as_xmm_double_reg(),
+              op->in_opr2()->as_xmm_double_reg(),
+              op->in_opr3()->as_xmm_double_reg());
+      break;
+    case lir_fmaf:
+      __ fmaf(op->result_opr()->as_xmm_float_reg(),
+              op->in_opr1()->as_xmm_float_reg(),
+              op->in_opr2()->as_xmm_float_reg(),
+              op->in_opr3()->as_xmm_float_reg());
+      break;
     default:      ShouldNotReachHere(); break;
   }
 }
@@ -1669,8 +1603,8 @@ void LIR_Assembler::emit_typecheck_helper(LIR_OpTypeCheck *op, Label* success, L
   Register Rtmp1 = noreg;
 
   // check if it needs to be profiled
-  ciMethodData* md;
-  ciProfileData* data;
+  ciMethodData* md = NULL;
+  ciProfileData* data = NULL;
 
   if (op->should_profile()) {
     ciMethod* method = op->profiled_method();
@@ -1829,8 +1763,8 @@ void LIR_Assembler::emit_opTypeCheck(LIR_OpTypeCheck* op) {
     CodeStub* stub = op->stub();
 
     // check if it needs to be profiled
-    ciMethodData* md;
-    ciProfileData* data;
+    ciMethodData* md = NULL;
+    ciProfileData* data = NULL;
 
     if (op->should_profile()) {
       ciMethod* method = op->profiled_method();
@@ -2007,7 +1941,8 @@ void LIR_Assembler::cmove(LIR_Condition condition, LIR_Opr opr1, LIR_Opr opr2, L
     case lir_cond_greater:      acond = Assembler::greater;      ncond = Assembler::lessEqual;    break;
     case lir_cond_belowEqual:   acond = Assembler::belowEqual;   ncond = Assembler::above;        break;
     case lir_cond_aboveEqual:   acond = Assembler::aboveEqual;   ncond = Assembler::below;        break;
-    default:                    ShouldNotReachHere();
+    default:                    acond = Assembler::equal;        ncond = Assembler::notEqual;
+                                ShouldNotReachHere();
   }
 
   if (opr1->is_cpu_register()) {
@@ -2442,29 +2377,8 @@ void LIR_Assembler::intrinsic_op(LIR_Code code, LIR_Opr value, LIR_Opr unused, L
   } else if (value->is_double_fpu()) {
     assert(value->fpu_regnrLo() == 0 && dest->fpu_regnrLo() == 0, "both must be on TOS");
     switch(code) {
-      case lir_log   : __ flog() ; break;
-      case lir_log10 : __ flog10() ; break;
       case lir_abs   : __ fabs() ; break;
       case lir_sqrt  : __ fsqrt(); break;
-      case lir_sin   :
-        // Should consider not saving rbx, if not necessary
-        __ trigfunc('s', op->as_Op2()->fpu_stack_size());
-        break;
-      case lir_cos :
-        // Should consider not saving rbx, if not necessary
-        assert(op->as_Op2()->fpu_stack_size() <= 6, "sin and cos need two free stack slots");
-        __ trigfunc('c', op->as_Op2()->fpu_stack_size());
-        break;
-      case lir_tan :
-        // Should consider not saving rbx, if not necessary
-        __ trigfunc('t', op->as_Op2()->fpu_stack_size());
-        break;
-      case lir_exp :
-        __ exp_with_fallback(op->as_Op2()->fpu_stack_size());
-        break;
-      case lir_pow :
-        __ pow_with_fallback(op->as_Op2()->fpu_stack_size());
-        break;
       default      : ShouldNotReachHere();
     }
   } else {
@@ -2686,7 +2600,7 @@ void LIR_Assembler::comp_op(LIR_Condition condition, LIR_Opr opr1, LIR_Opr opr2,
 #endif // _LP64
         }
       } else {
-        fatal(err_msg("unexpected type: %s", basictype_to_str(c->type())));
+        fatal("unexpected type: %s", basictype_to_str(c->type()));
       }
       // cpu register - address
     } else if (opr2->is_address()) {
@@ -2861,9 +2775,7 @@ void LIR_Assembler::align_call(LIR_Code code) {
       case lir_virtual_call:  // currently, sparc-specific for niagara
       default: ShouldNotReachHere();
     }
-    while (offset++ % BytesPerWord != 0) {
-      __ nop();
-    }
+    __ align(BytesPerWord, offset);
   }
 }
 
@@ -2893,7 +2805,7 @@ void LIR_Assembler::vtable_call(LIR_OpJavaCall* op) {
 
 void LIR_Assembler::emit_static_call_stub() {
   address call_pc = __ pc();
-  address stub = __ start_a_stub(call_stub_size);
+  address stub = __ start_a_stub(call_stub_size());
   if (stub == NULL) {
     bailout("static call stub overflow");
     return;
@@ -2902,19 +2814,26 @@ void LIR_Assembler::emit_static_call_stub() {
   int start = __ offset();
   if (os::is_MP()) {
     // make sure that the displacement word of the call ends up word aligned
-    int offset = __ offset() + NativeMovConstReg::instruction_size + NativeCall::displacement_offset;
-    while (offset++ % BytesPerWord != 0) {
-      __ nop();
-    }
+    __ align(BytesPerWord, __ offset() + NativeMovConstReg::instruction_size + NativeCall::displacement_offset);
   }
-  __ relocate(static_stub_Relocation::spec(call_pc));
+  __ relocate(static_stub_Relocation::spec(call_pc, false /* is_aot */));
   __ mov_metadata(rbx, (Metadata*)NULL);
   // must be set to -1 at code generation time
   assert(!os::is_MP() || ((__ offset() + 1) % BytesPerWord) == 0, "must be aligned on MP");
   // On 64bit this will die since it will take a movq & jmp, must be only a jmp
   __ jump(RuntimeAddress(__ pc()));
 
-  assert(__ offset() - start <= call_stub_size, "stub too big");
+  if (UseAOT) {
+    // Trampoline to aot code
+    __ relocate(static_stub_Relocation::spec(call_pc, true /* is_aot */));
+#ifdef _LP64
+    __ mov64(rax, CONST64(0));  // address is zapped till fixup time.
+#else
+    __ movl(rax, 0xdeadffff);  // address is zapped till fixup time.
+#endif
+    __ jmp(rax);
+  }
+  assert(__ offset() - start <= call_stub_size(), "stub too big");
   __ end_a_stub();
 }
 
@@ -3061,6 +2980,14 @@ void LIR_Assembler::store_parameter(jobject o,  int offset_from_rsp_in_words) {
 }
 
 
+void LIR_Assembler::store_parameter(Metadata* m,  int offset_from_rsp_in_words) {
+  assert(offset_from_rsp_in_words >= 0, "invalid offset from rsp");
+  int offset_from_rsp_in_bytes = offset_from_rsp_in_words * BytesPerWord;
+  assert(offset_from_rsp_in_bytes < frame_map()->reserved_argument_area_size(), "invalid offset");
+  __ mov_metadata(Address(rsp, offset_from_rsp_in_bytes), m);
+}
+
+
 // This code replaces a call to arraycopy; no exception may
 // be thrown in this code, they must be thrown in the System.arraycopy
 // activation frame; we could save some checks if this would not be the case
@@ -3192,27 +3119,23 @@ void LIR_Assembler::emit_arraycopy(LIR_OpArrayCopy* op) {
   assert(default_type != NULL && default_type->is_array_klass() && default_type->is_loaded(), "must be true at this point");
 
   int elem_size = type2aelembytes(basic_type);
-  int shift_amount;
   Address::ScaleFactor scale;
 
   switch (elem_size) {
     case 1 :
-      shift_amount = 0;
       scale = Address::times_1;
       break;
     case 2 :
-      shift_amount = 1;
       scale = Address::times_2;
       break;
     case 4 :
-      shift_amount = 2;
       scale = Address::times_4;
       break;
     case 8 :
-      shift_amount = 3;
       scale = Address::times_8;
       break;
     default:
+      scale = Address::no_scale;
       ShouldNotReachHere();
   }
 
@@ -3231,6 +3154,23 @@ void LIR_Assembler::emit_arraycopy(LIR_OpArrayCopy* op) {
   if (flags & LIR_OpArrayCopy::dst_null_check) {
     __ testptr(dst, dst);
     __ jcc(Assembler::zero, *stub->entry());
+  }
+
+  // If the compiler was not able to prove that exact type of the source or the destination
+  // of the arraycopy is an array type, check at runtime if the source or the destination is
+  // an instance type.
+  if (flags & LIR_OpArrayCopy::type_check) {
+    if (!(flags & LIR_OpArrayCopy::dst_objarray)) {
+      __ load_klass(tmp, dst);
+      __ cmpl(Address(tmp, in_bytes(Klass::layout_helper_offset())), Klass::_lh_neutral_value);
+      __ jcc(Assembler::greaterEqual, *stub->entry());
+    }
+
+    if (!(flags & LIR_OpArrayCopy::src_objarray)) {
+      __ load_klass(tmp, src);
+      __ cmpl(Address(tmp, in_bytes(Klass::layout_helper_offset())), Klass::_lh_neutral_value);
+      __ jcc(Assembler::greaterEqual, *stub->entry());
+    }
   }
 
   // check if negative
@@ -3257,7 +3197,6 @@ void LIR_Assembler::emit_arraycopy(LIR_OpArrayCopy* op) {
   if (flags & LIR_OpArrayCopy::length_positive_check) {
     __ testl(length, length);
     __ jcc(Assembler::less, *stub->entry());
-    __ jcc(Assembler::zero, *stub->continuation());
   }
 
 #ifdef _LP64
@@ -3805,16 +3744,24 @@ void LIR_Assembler::negate(LIR_Opr left, LIR_Opr dest) {
     if (left->as_xmm_float_reg() != dest->as_xmm_float_reg()) {
       __ movflt(dest->as_xmm_float_reg(), left->as_xmm_float_reg());
     }
-    __ xorps(dest->as_xmm_float_reg(),
-             ExternalAddress((address)float_signflip_pool));
-
+    if (UseAVX > 0) {
+      __ vnegatess(dest->as_xmm_float_reg(), dest->as_xmm_float_reg(),
+                   ExternalAddress((address)float_signflip_pool));
+    } else {
+      __ xorps(dest->as_xmm_float_reg(),
+               ExternalAddress((address)float_signflip_pool));
+    }
   } else if (dest->is_double_xmm()) {
     if (left->as_xmm_double_reg() != dest->as_xmm_double_reg()) {
       __ movdbl(dest->as_xmm_double_reg(), left->as_xmm_double_reg());
     }
-    __ xorpd(dest->as_xmm_double_reg(),
-             ExternalAddress((address)double_signflip_pool));
-
+    if (UseAVX > 0) {
+      __ vnegatesd(dest->as_xmm_double_reg(), dest->as_xmm_double_reg(),
+                   ExternalAddress((address)double_signflip_pool));
+    } else {
+      __ xorpd(dest->as_xmm_double_reg(),
+               ExternalAddress((address)double_signflip_pool));
+    }
   } else if (left->is_single_fpu() || left->is_double_fpu()) {
     assert(left->fpu() == 0, "arg must be on TOS");
     assert(dest->fpu() == 0, "dest must be TOS");
@@ -3970,6 +3917,10 @@ void LIR_Assembler::membar_loadstore() {
 
 void LIR_Assembler::membar_storeload() {
   __ membar(Assembler::Membar_mask_bits(Assembler::StoreLoad));
+}
+
+void LIR_Assembler::on_spin_wait() {
+  __ pause ();
 }
 
 void LIR_Assembler::get_thread(LIR_Opr result_reg) {

@@ -445,13 +445,19 @@ public class StandardGlyphVector extends GlyphVector {
     }
 
     public void setGlyphPosition(int ix, Point2D pos) {
+        if (ix < 0 || ix > glyphs.length) {
+            throw new IndexOutOfBoundsException("ix = " + ix);
+        }
+
         initPositions();
 
         int ix2 = ix << 1;
         positions[ix2] = (float)pos.getX();
         positions[ix2 + 1] = (float)pos.getY();
 
-        clearCaches(ix);
+        if (ix < glyphs.length) {
+            clearCaches(ix);
+        }
         addFlags(FLAG_HAS_POSITION_ADJUSTMENTS);
     }
 
@@ -1124,6 +1130,9 @@ public class StandardGlyphVector extends GlyphVector {
 
     private void initFontData() {
         font2D = FontUtilities.getFont2D(font);
+        if (font2D instanceof FontSubstitution) {
+           font2D = ((FontSubstitution)font2D).getCompositeFont2D();
+        }
         float s = font.getSize2D();
         if (font.isTransformed()) {
             ftx = font.getTransform();
@@ -1252,20 +1261,20 @@ public class StandardGlyphVector extends GlyphVector {
     // internal use only for possible future extension
 
     /**
-     * A flag used with getLayoutFlags that indicates whether this <code>GlyphVector</code> uses
+     * A flag used with getLayoutFlags that indicates whether this {@code GlyphVector} uses
      * a vertical baseline.
      */
     public static final int FLAG_USES_VERTICAL_BASELINE = 128;
 
     /**
-     * A flag used with getLayoutFlags that indicates whether this <code>GlyphVector</code> uses
-     * vertical glyph metrics.  A <code>GlyphVector</code> can use vertical metrics on a
+     * A flag used with getLayoutFlags that indicates whether this {@code GlyphVector} uses
+     * vertical glyph metrics.  A {@code GlyphVector} can use vertical metrics on a
      * horizontal line, or vice versa.
      */
     public static final int FLAG_USES_VERTICAL_METRICS = 256;
 
     /**
-     * A flag used with getLayoutFlags that indicates whether this <code>GlyphVector</code> uses
+     * A flag used with getLayoutFlags that indicates whether this {@code GlyphVector} uses
      * the 'alternate orientation.'  Glyphs have a default orientation given a
      * particular baseline and metrics orientation, this is the orientation appropriate
      * for left-to-right text.  For example, the letter 'A' can have four orientations,
@@ -1742,7 +1751,12 @@ public class StandardGlyphVector extends GlyphVector {
                                                      aa, fm);
             // Get the strike via the handle. Shouldn't matter
             // if we've invalidated the font but its an extra precaution.
-            FontStrike strike = sgv.font2D.handle.font2D.getStrike(desc);  // !!! getStrike(desc, false)
+        // do we want the CompFont from CFont here ?
+        Font2D f2d = sgv.font2D;
+        if (f2d instanceof FontSubstitution) {
+           f2d = ((FontSubstitution)f2d).getCompositeFont2D();
+        }
+            FontStrike strike = f2d.handle.font2D.getStrike(desc);  // !!! getStrike(desc, false)
 
             return new GlyphStrike(sgv, strike, dx, dy);
         }

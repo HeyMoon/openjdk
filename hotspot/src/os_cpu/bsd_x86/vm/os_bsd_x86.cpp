@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,12 +27,12 @@
 #include "classfile/classLoader.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmSymbols.hpp"
+#include "code/codeCache.hpp"
 #include "code/icBuffer.hpp"
 #include "code/vtableStubs.hpp"
 #include "interpreter/interpreter.hpp"
 #include "jvm_bsd.h"
 #include "memory/allocation.inline.hpp"
-#include "mutex_bsd.inline.hpp"
 #include "os_share_bsd.hpp"
 #include "prims/jniFastGetField.hpp"
 #include "prims/jvm.h"
@@ -276,8 +276,6 @@
 # endif
 #endif
 
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
-
 address os::current_stack_pointer() {
 #if defined(__clang__) || defined(__llvm__)
   register void *esp;
@@ -305,7 +303,7 @@ void os::initialize_thread(Thread* thr) {
 // Nothing to do.
 }
 
-address os::Bsd::ucontext_get_pc(ucontext_t * uc) {
+address os::Bsd::ucontext_get_pc(const ucontext_t * uc) {
   return (address)uc->context_pc;
 }
 
@@ -313,11 +311,11 @@ void os::Bsd::ucontext_set_pc(ucontext_t * uc, address pc) {
   uc->context_pc = (intptr_t)pc ;
 }
 
-intptr_t* os::Bsd::ucontext_get_sp(ucontext_t * uc) {
+intptr_t* os::Bsd::ucontext_get_sp(const ucontext_t * uc) {
   return (intptr_t*)uc->context_sp;
 }
 
-intptr_t* os::Bsd::ucontext_get_fp(ucontext_t * uc) {
+intptr_t* os::Bsd::ucontext_get_fp(const ucontext_t * uc) {
   return (intptr_t*)uc->context_fp;
 }
 
@@ -326,8 +324,9 @@ intptr_t* os::Bsd::ucontext_get_fp(ucontext_t * uc) {
 // os::Solaris::fetch_frame_from_ucontext() tries to skip nested signal
 // frames. Currently we don't do that on Bsd, so it's the same as
 // os::fetch_frame_from_context().
+// This method is also used for stack overflow signal handling.
 ExtendedPC os::Bsd::fetch_frame_from_ucontext(Thread* thread,
-  ucontext_t* uc, intptr_t** ret_sp, intptr_t** ret_fp) {
+  const ucontext_t* uc, intptr_t** ret_sp, intptr_t** ret_fp) {
 
   assert(thread != NULL, "just checking");
   assert(ret_sp != NULL, "just checking");
@@ -336,11 +335,11 @@ ExtendedPC os::Bsd::fetch_frame_from_ucontext(Thread* thread,
   return os::fetch_frame_from_context(uc, ret_sp, ret_fp);
 }
 
-ExtendedPC os::fetch_frame_from_context(void* ucVoid,
+ExtendedPC os::fetch_frame_from_context(const void* ucVoid,
                     intptr_t** ret_sp, intptr_t** ret_fp) {
 
   ExtendedPC  epc;
-  ucontext_t* uc = (ucontext_t*)ucVoid;
+  const ucontext_t* uc = (const ucontext_t*)ucVoid;
 
   if (uc != NULL) {
     epc = ExtendedPC(os::Bsd::ucontext_get_pc(uc));
@@ -356,11 +355,55 @@ ExtendedPC os::fetch_frame_from_context(void* ucVoid,
   return epc;
 }
 
-frame os::fetch_frame_from_context(void* ucVoid) {
+frame os::fetch_frame_from_context(const void* ucVoid) {
   intptr_t* sp;
   intptr_t* fp;
   ExtendedPC epc = fetch_frame_from_context(ucVoid, &sp, &fp);
   return frame(sp, fp, epc.pc());
+}
+
+frame os::fetch_frame_from_ucontext(Thread* thread, void* ucVoid) {
+  intptr_t* sp;
+  intptr_t* fp;
+  ExtendedPC epc = os::Bsd::fetch_frame_from_ucontext(thread, (ucontext_t*)ucVoid, &sp, &fp);
+  return frame(sp, fp, epc.pc());
+}
+
+bool os::Bsd::get_frame_at_stack_banging_point(JavaThread* thread, ucontext_t* uc, frame* fr) {
+  address pc = (address) os::Bsd::ucontext_get_pc(uc);
+  if (Interpreter::contains(pc)) {
+    // interpreter performs stack banging after the fixed frame header has
+    // been generated while the compilers perform it before. To maintain
+    // semantic consistency between interpreted and compiled frames, the
+    // method returns the Java sender of the current frame.
+    *fr = os::fetch_frame_from_ucontext(thread, uc);
+    if (!fr->is_first_java_frame()) {
+      // get_frame_at_stack_banging_point() is only called when we
+      // have well defined stacks so java_sender() calls do not need
+      // to assert safe_for_sender() first.
+      *fr = fr->java_sender();
+    }
+  } else {
+    // more complex code with compiled code
+    assert(!Interpreter::contains(pc), "Interpreted methods should have been handled above");
+    CodeBlob* cb = CodeCache::find_blob(pc);
+    if (cb == NULL || !cb->is_nmethod() || cb->is_frame_complete_at(pc)) {
+      // Not sure where the pc points to, fallback to default
+      // stack overflow handling
+      return false;
+    } else {
+      *fr = os::fetch_frame_from_ucontext(thread, uc);
+      // in compiled code, the stack banging is performed just after the return pc
+      // has been pushed on the stack
+      *fr = frame(fr->sp() + 1, fr->fp(), (address)*(fr->sp()));
+      if (!fr->is_java_frame()) {
+        // See java_sender() comment above.
+        *fr = fr->java_sender();
+      }
+    }
+  }
+  assert(fr->is_java_frame(), "Safety check");
+  return true;
 }
 
 // By default, gcc always save frame pointer (%ebp/%rbp) on stack. It may get
@@ -376,7 +419,15 @@ intptr_t* _get_previous_fp() {
 #else
   register intptr_t **ebp __asm__ (SPELL_REG_FP);
 #endif
-  return (intptr_t*) *ebp;   // we want what it points to.
+  // ebp is for this frame (_get_previous_fp). We want the ebp for the
+  // caller of os::current_frame*(), so go up two frames. However, for
+  // optimized builds, _get_previous_fp() will be inlined, so only go
+  // up 1 frame in that case.
+#ifdef _NMT_NOINLINE_
+  return **(intptr_t***)ebp;
+#else
+  return *ebp;
+#endif
 }
 
 
@@ -407,7 +458,7 @@ JVM_handle_bsd_signal(int sig,
                         int abort_if_unrecognized) {
   ucontext_t* uc = (ucontext_t*) ucVoid;
 
-  Thread* t = ThreadLocalStorage::get_thread_slow();
+  Thread* t = Thread::current_or_null_safe();
 
   // Must do this before SignalHandlerMark, if crash protection installed we will longjmp away
   // (no destructors can be run)
@@ -427,11 +478,7 @@ JVM_handle_bsd_signal(int sig,
     if (os::Bsd::chained_handler(sig, info, ucVoid)) {
       return true;
     } else {
-      if (PrintMiscellaneous && (WizardMode || Verbose)) {
-        char buf[64];
-        warning("Ignoring %s - see bugs 4229104 or 646499219",
-                os::exception_name(sig, buf, sizeof(buf)));
-      }
+      // Ignoring SIGPIPE/SIGXFSZ - see bugs 4229104 or 6499219
       return true;
     }
   }
@@ -476,17 +523,34 @@ JVM_handle_bsd_signal(int sig,
       address addr = (address) info->si_addr;
 
       // check if fault address is within thread stack
-      if (addr < thread->stack_base() &&
-          addr >= thread->stack_base() - thread->stack_size()) {
+      if (thread->on_local_stack(addr)) {
         // stack overflow
-        if (thread->in_stack_yellow_zone(addr)) {
-          thread->disable_stack_yellow_zone();
+        if (thread->in_stack_yellow_reserved_zone(addr)) {
           if (thread->thread_state() == _thread_in_Java) {
+            if (thread->in_stack_reserved_zone(addr)) {
+              frame fr;
+              if (os::Bsd::get_frame_at_stack_banging_point(thread, uc, &fr)) {
+                assert(fr.is_java_frame(), "Must be a Java frame");
+                frame activation = SharedRuntime::look_for_reserved_stack_annotated_method(thread, fr);
+                if (activation.sp() != NULL) {
+                  thread->disable_stack_reserved_zone();
+                  if (activation.is_interpreted_frame()) {
+                    thread->set_reserved_stack_activation((address)(
+                      activation.fp() + frame::interpreter_frame_initial_sp_offset));
+                  } else {
+                    thread->set_reserved_stack_activation((address)activation.unextended_sp());
+                  }
+                  return 1;
+                }
+              }
+            }
             // Throw a stack overflow exception.  Guard pages will be reenabled
             // while unwinding the stack.
+            thread->disable_stack_yellow_reserved_zone();
             stub = SharedRuntime::continuation_for_implicit_exception(thread, pc, SharedRuntime::STACK_OVERFLOW);
           } else {
             // Thread was in the vm or native code.  Return and try to finish.
+            thread->disable_stack_yellow_reserved_zone();
             return 1;
           }
         } else if (thread->in_stack_red_zone(addr)) {
@@ -527,9 +591,10 @@ JVM_handle_bsd_signal(int sig,
         // here if the underlying file has been truncated.
         // Do not crash the VM in such a case.
         CodeBlob* cb = CodeCache::find_blob_unsafe(pc);
-        nmethod* nm = (cb != NULL && cb->is_nmethod()) ? (nmethod*)cb : NULL;
+        CompiledMethod* nm = (cb != NULL) ? cb->as_compiled_method_or_null() : NULL;
         if (nm != NULL && nm->has_unsafe_access()) {
-          stub = StubRoutines::handler_for_unsafe_access();
+          address next_pc = Assembler::locate_next_instruction(pc);
+          stub = SharedRuntime::handle_unsafe_access(thread, next_pc);
         }
       }
       else
@@ -600,7 +665,8 @@ JVM_handle_bsd_signal(int sig,
     } else if (thread->thread_state() == _thread_in_vm &&
                sig == SIGBUS && /* info->si_code == BUS_OBJERR && */
                thread->doing_unsafe_access()) {
-        stub = StubRoutines::handler_for_unsafe_access();
+        address next_pc = Assembler::locate_next_instruction(pc);
+        stub = SharedRuntime::handle_unsafe_access(thread, next_pc);
     }
 
     // jni_fast_Get<Primitive>Field can trap at certain pc's if a GC kicks in
@@ -669,14 +735,10 @@ JVM_handle_bsd_signal(int sig,
         bool res = os::protect_memory((char*) page_start, page_size,
                                       os::MEM_PROT_RWX);
 
-        if (PrintMiscellaneous && Verbose) {
-          char buf[256];
-          jio_snprintf(buf, sizeof(buf), "Execution protection violation "
-                       "at " INTPTR_FORMAT
-                       ", unguarding " INTPTR_FORMAT ": %s, errno=%d", addr,
-                       page_start, (res ? "success" : "failed"), errno);
-          tty->print_raw_cr(buf);
-        }
+        log_debug(os)("Execution protection violation "
+                      "at " INTPTR_FORMAT
+                      ", unguarding " INTPTR_FORMAT ": %s, errno=%d", p2i(addr),
+                      p2i(page_start), (res ? "success" : "failed"), errno);
         stub = pc;
 
         // Set last_addr so if we fault again at the same address, we don't end
@@ -731,8 +793,7 @@ JVM_handle_bsd_signal(int sig,
   sigaddset(&newset, sig);
   sigprocmask(SIG_UNBLOCK, &newset, NULL);
 
-  VMError err(t, sig, pc, info, ucVoid);
-  err.report_and_die();
+  VMError::report_and_die(t, sig, pc, info, ucVoid);
 
   ShouldNotReachHere();
   return false;
@@ -778,23 +839,24 @@ bool os::is_allocatable(size_t bytes) {
 ////////////////////////////////////////////////////////////////////////////////
 // thread stack
 
-#ifdef AMD64
-size_t os::Bsd::min_stack_allowed  = 64 * K;
-
-// amd64: pthread on amd64 is always in floating stack mode
-bool os::Bsd::supports_variable_stack_size() {  return true; }
+// Minimum usable stack sizes required to get to user code. Space for
+// HotSpot guard pages is added later.
+size_t os::Posix::_compiler_thread_min_stack_allowed = 48 * K;
+size_t os::Posix::_java_thread_min_stack_allowed = 48 * K;
+#ifdef _LP64
+size_t os::Posix::_vm_internal_thread_min_stack_allowed = 64 * K;
 #else
-size_t os::Bsd::min_stack_allowed  =  (48 DEBUG_ONLY(+4))*K;
+size_t os::Posix::_vm_internal_thread_min_stack_allowed = (48 DEBUG_ONLY(+ 4)) * K;
+#endif // _LP64
 
+#ifndef AMD64
 #ifdef __GNUC__
 #define GET_GS() ({int gs; __asm__ volatile("movw %%gs, %w0":"=q"(gs)); gs&0xffff;})
 #endif
-
-bool os::Bsd::supports_variable_stack_size() { return true; }
 #endif // AMD64
 
 // return default stack size for thr_type
-size_t os::Bsd::default_stack_size(os::ThreadType thr_type) {
+size_t os::Posix::default_stack_size(os::ThreadType thr_type) {
   // default stack size (compiler thread needs larger stack)
 #ifdef AMD64
   size_t s = (thr_type == os::compiler_thread ? 4 * M : 1 * M);
@@ -804,24 +866,19 @@ size_t os::Bsd::default_stack_size(os::ThreadType thr_type) {
   return s;
 }
 
-size_t os::Bsd::default_guard_size(os::ThreadType thr_type) {
-  // Creating guard page is very expensive. Java thread has HotSpot
-  // guard page, only enable glibc guard page for non-Java threads.
-  return (thr_type == java_thread ? 0 : page_size());
-}
 
 // Java thread:
 //
 //   Low memory addresses
 //    +------------------------+
-//    |                        |\  JavaThread created by VM does not have glibc
+//    |                        |\  Java thread created by VM does not have glibc
 //    |    glibc guard page    | - guard, attached Java thread usually has
-//    |                        |/  1 page glibc guard.
+//    |                        |/  1 glibc guard page.
 // P1 +------------------------+ Thread::stack_base() - Thread::stack_size()
 //    |                        |\
-//    |  HotSpot Guard Pages   | - red and yellow pages
+//    |  HotSpot Guard Pages   | - red, yellow and reserved pages
 //    |                        |/
-//    +------------------------+ JavaThread::stack_yellow_zone_base()
+//    +------------------------+ JavaThread::stack_reserved_zone_base()
 //    |                        |\
 //    |      Normal Stack      | -
 //    |                        |/
@@ -869,7 +926,7 @@ static void current_stack_region(address * bottom, size_t * size) {
   int rslt = pthread_stackseg_np(pthread_self(), &ss);
 
   if (rslt != 0)
-    fatal(err_msg("pthread_stackseg_np failed with err = %d", rslt));
+    fatal("pthread_stackseg_np failed with error = %d", rslt);
 
   *bottom = (address)((char *)ss.ss_sp - ss.ss_size);
   *size   = ss.ss_size;
@@ -880,12 +937,12 @@ static void current_stack_region(address * bottom, size_t * size) {
 
   // JVM needs to know exact stack location, abort if it fails
   if (rslt != 0)
-    fatal(err_msg("pthread_attr_init failed with err = %d", rslt));
+    fatal("pthread_attr_init failed with error = %d", rslt);
 
   rslt = pthread_attr_get_np(pthread_self(), &attr);
 
   if (rslt != 0)
-    fatal(err_msg("pthread_attr_get_np failed with err = %d", rslt));
+    fatal("pthread_attr_get_np failed with error = %d", rslt);
 
   if (pthread_attr_getstackaddr(&attr, (void **)bottom) != 0 ||
     pthread_attr_getstacksize(&attr, size) != 0) {
@@ -916,10 +973,10 @@ size_t os::current_stack_size() {
 /////////////////////////////////////////////////////////////////////////////
 // helper functions for fatal error handler
 
-void os::print_context(outputStream *st, void *context) {
+void os::print_context(outputStream *st, const void *context) {
   if (context == NULL) return;
 
-  ucontext_t *uc = (ucontext_t*)context;
+  const ucontext_t *uc = (const ucontext_t*)context;
   st->print_cr("Registers:");
 #ifdef AMD64
   st->print(  "RAX=" INTPTR_FORMAT, uc->context_rax);
@@ -977,10 +1034,10 @@ void os::print_context(outputStream *st, void *context) {
   print_hex_dump(st, pc - 32, pc + 32, sizeof(char));
 }
 
-void os::print_register_info(outputStream *st, void *context) {
+void os::print_register_info(outputStream *st, const void *context) {
   if (context == NULL) return;
 
-  ucontext_t *uc = (ucontext_t*)context;
+  const ucontext_t *uc = (const ucontext_t*)context;
 
   st->print_cr("Register to memory mapping:");
   st->cr();

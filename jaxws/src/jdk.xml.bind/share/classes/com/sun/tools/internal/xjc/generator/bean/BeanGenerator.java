@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,7 +28,6 @@ package com.sun.tools.internal.xjc.generator.bean;
 import static com.sun.tools.internal.xjc.outline.Aspect.EXPOSED;
 
 import java.io.Serializable;
-import java.net.URL;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -108,6 +107,9 @@ import com.sun.tools.internal.xjc.model.CReferencePropertyInfo;
  * Generates fields and accessors.
  */
 public final class BeanGenerator implements Outline {
+
+    /** JAXB module name. JAXB dependency is mandatory in generated Java module. */
+    private static final String JAXB_PACKAGE = "java.xml.bind";
 
     /** Simplifies class/interface creation and collision detection. */
     private final CodeModelClassFactory codeModelClassFactory;
@@ -253,6 +255,10 @@ public final class BeanGenerator implements Outline {
         // create factories for the impl-less elements
         for (CElementInfo ei : model.getAllElements()) {
             getPackageContext(ei._package()).objectFactoryGenerator().populate(ei);
+        }
+
+        if (model.options.getModuleName() != null) {
+            codeModel._prepareModuleInfo(model.options.getModuleName(), JAXB_PACKAGE);
         }
 
         if (model.options.debugMode) {
@@ -809,26 +815,14 @@ public final class BeanGenerator implements Outline {
     }
 
     public JClass generateStaticClass(Class src, JPackage out) {
-        String shortName = getShortName(src.getName());
-
-        // some people didn't like our jars to contain files with .java extension,
-        // so when we build jars, we'' use ".java_". But when we run from the workspace,
-        // we want the original source code to be used, so we check both here.
-        // see bug 6211503.
-        URL res = src.getResource(shortName + ".java");
-        if (res == null) {
-            res = src.getResource(shortName + ".java_");
-        }
-        if (res == null) {
-            throw new InternalError("Unable to load source code of " + src.getName() + " as a resource");
-        }
-
-        JStaticJavaFile sjf = new JStaticJavaFile(out, shortName, res, null);
+        JStaticJavaFile sjf = new JStaticJavaFile(out, getShortName(src), src, null);
         out.addResourceFile(sjf);
         return sjf.getJClass();
     }
 
-    private String getShortName(String name) {
+    private String getShortName(Class src) {
+        String name = src.getName();
         return name.substring(name.lastIndexOf('.') + 1);
     }
+
 }

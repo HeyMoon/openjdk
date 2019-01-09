@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -300,7 +300,7 @@ abstract class AbstractLdapNamingEnumeration<T extends NameClassPair>
         errEx = e;
     }
 
-    protected abstract AbstractLdapNamingEnumeration<T> getReferredResults(
+    protected abstract AbstractLdapNamingEnumeration<? extends NameClassPair> getReferredResults(
             LdapReferralContext refCtx) throws NamingException;
 
     /*
@@ -360,7 +360,7 @@ abstract class AbstractLdapNamingEnumeration<T extends NameClassPair>
      * Merge the entries and/or referrals from the supplied enumeration
      * with those of the current enumeration.
      */
-    protected void update(AbstractLdapNamingEnumeration<T> ne) {
+    protected void update(AbstractLdapNamingEnumeration<? extends NameClassPair> ne) {
         // Cleanup previous context first
         homeCtx.decEnumCount();
 
@@ -382,6 +382,7 @@ abstract class AbstractLdapNamingEnumeration<T extends NameClassPair>
         listArg = ne.listArg;
     }
 
+    @SuppressWarnings("deprecation")
     protected final void finalize() {
         cleanup();
     }

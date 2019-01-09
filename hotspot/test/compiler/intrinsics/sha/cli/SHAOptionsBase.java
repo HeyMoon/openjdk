@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,9 +21,11 @@
  * questions.
  */
 
+package compiler.intrinsics.sha.cli;
+
+import compiler.testlibrary.sha.predicate.IntrinsicPredicates;
 import jdk.test.lib.Platform;
 import jdk.test.lib.cli.CommandLineOptionTest;
-import sha.predicate.IntrinsicPredicates;
 
 import java.util.function.BooleanSupplier;
 
@@ -34,13 +36,18 @@ import java.util.function.BooleanSupplier;
  * from several test cases shared among different tests.
  */
 public class SHAOptionsBase extends CommandLineOptionTest {
-    protected static final String USE_SHA_OPTION = "UseSHA";
-    protected static final String USE_SHA1_INTRINSICS_OPTION
+    public static final String USE_SHA_OPTION = "UseSHA";
+    public static final String USE_SHA1_INTRINSICS_OPTION
             = "UseSHA1Intrinsics";
-    protected static final String USE_SHA256_INTRINSICS_OPTION
+    public static final String USE_SHA256_INTRINSICS_OPTION
             = "UseSHA256Intrinsics";
-    protected static final String USE_SHA512_INTRINSICS_OPTION
+    public static final String USE_SHA512_INTRINSICS_OPTION
             = "UseSHA512Intrinsics";
+
+    // Intrinsics flags are of diagnostic type
+    // and must be preceded by UnlockDiagnosticVMOptions.
+    public static final String UNLOCK_DIAGNOSTIC_VM_OPTIONS
+            = "-XX:+UnlockDiagnosticVMOptions";
 
     // Note that strings below will be passed to
     // CommandLineOptionTest.verifySameJVMStartup and thus are regular
@@ -66,8 +73,8 @@ public class SHAOptionsBase extends CommandLineOptionTest {
      * @return A warning message that will be printed out to VM output if CPU
      *         instructions required by the option are not supported.
      */
-    protected static String getWarningForUnsupportedCPU(String optionName) {
-        if (Platform.isSparc() || Platform.isAArch64() ||
+    public static String getWarningForUnsupportedCPU(String optionName) {
+        if (Platform.isAArch64() || Platform.isS390x() || Platform.isSparc() ||
             Platform.isX64() || Platform.isX86()) {
             switch (optionName) {
             case SHAOptionsBase.USE_SHA_OPTION:
@@ -82,7 +89,7 @@ public class SHAOptionsBase extends CommandLineOptionTest {
                 throw new Error("Unexpected option " + optionName);
             }
         } else {
-            throw new Error("Support for CPUs different fromn X86, SPARC, and AARCH64 "
+            throw new Error("Support for CPUs different fromn AARCH64, S390x, SPARC, and X86 "
                             + "is not implemented");
         }
     }
@@ -96,7 +103,7 @@ public class SHAOptionsBase extends CommandLineOptionTest {
      * @return The predicate on availability of CPU instructions required by the
      *         option.
      */
-    protected static BooleanSupplier getPredicateForOption(String optionName) {
+    public static BooleanSupplier getPredicateForOption(String optionName) {
         switch (optionName) {
             case SHAOptionsBase.USE_SHA_OPTION:
                 return IntrinsicPredicates.ANY_SHA_INSTRUCTION_AVAILABLE;

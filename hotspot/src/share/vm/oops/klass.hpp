@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,14 +52,18 @@
 template <class T> class Array;
 template <class T> class GrowableArray;
 class ClassLoaderData;
+class fieldDescriptor;
+class KlassSizeStats;
 class klassVtable;
+class ModuleEntry;
+class PackageEntry;
 class ParCompactionManager;
 class PSPromotionManager;
-class KlassSizeStats;
-class fieldDescriptor;
+class vtableEntry;
 
 class Klass : public Metadata {
   friend class VMStructs;
+  friend class JVMCIVMStructs;
  protected:
   // note: put frequently-used fields together at start of klass structure
   // for better cache behavior (may not make much of a difference but sure won't hurt)
@@ -130,13 +134,16 @@ class Klass : public Metadata {
   jint        _modifier_flags;  // Processed access flags, for use by Class.getModifiers.
   AccessFlags _access_flags;    // Access flags. The class/interface distinction is stored here.
 
+  TRACE_DEFINE_TRACE_ID_FIELD;
+
   // Biased locking implementation and statistics
   // (the 64-bit chunk goes first, to avoid some fragmentation)
   jlong    _last_biased_lock_bulk_revocation_time;
   markOop  _prototype_header;   // Used when biased locking is both enabled and disabled for this type
   jint     _biased_lock_revocation_count;
 
-  TRACE_DEFINE_KLASS_TRACE_ID;
+  // vtable length
+  int _vtable_len;
 
   // Remembered sets support for the oops in the klasses.
   jbyte _modified_oops;             // Card Table Equivalent (YC/CMS support)
@@ -161,6 +168,7 @@ protected:
   enum DefaultsLookupMode { find_defaults, skip_defaults };
   enum OverpassLookupMode { find_overpass, skip_overpass };
   enum StaticLookupMode   { find_static,   skip_static };
+  enum PrivateLookupMode  { find_private,  skip_private };
 
   bool is_klass() const volatile { return true; }
 
@@ -268,6 +276,9 @@ protected:
     _shared_class_path_index = index;
   };
 
+  // Obtain the module or package for this class
+  virtual ModuleEntry* module() const = 0;
+  virtual PackageEntry* package() const = 0;
 
  protected:                                // internal accessors
   void     set_subklass(Klass* s);
@@ -298,9 +309,10 @@ protected:
     _lh_header_size_mask        = right_n_bits(BitsPerByte),  // shifted mask
     _lh_array_tag_bits          = 2,
     _lh_array_tag_shift         = BitsPerInt - _lh_array_tag_bits,
-    _lh_array_tag_type_value    = ~0x00,  // 0xC0000000 >> 30
     _lh_array_tag_obj_value     = ~0x01   // 0x80000000 >> 30
   };
+
+  static const unsigned int _lh_array_tag_type_value = 0Xffffffff; // ~0x00,  // 0xC0000000 >> 30
 
   static int layout_helper_size_in_bytes(jint lh) {
     assert(lh > (jint)_lh_neutral_value, "must be instance");
@@ -336,11 +348,26 @@ protected:
     assert(btvalue >= T_BOOLEAN && btvalue <= T_OBJECT, "sanity");
     return (BasicType) btvalue;
   }
+
+  // Want a pattern to quickly diff against layout header in register
+  // find something less clever!
+  static int layout_helper_boolean_diffbit() {
+    jint zlh = array_layout_helper(T_BOOLEAN);
+    jint blh = array_layout_helper(T_BYTE);
+    assert(zlh != blh, "array layout helpers must differ");
+    int diffbit = 1;
+    while ((diffbit & (zlh ^ blh)) == 0 && (diffbit & zlh) == 0) {
+      diffbit <<= 1;
+      assert(diffbit != 0, "make sure T_BOOLEAN has a different bit than T_BYTE");
+    }
+    return diffbit;
+  }
+
   static int layout_helper_log2_element_size(jint lh) {
     assert(lh < (jint)_lh_neutral_value, "must be array");
     int l2esz = (lh >> _lh_log2_element_size_shift) & _lh_log2_element_size_mask;
     assert(l2esz <= LogBitsPerLong,
-        err_msg("sanity. l2esz: 0x%x for lh: 0x%x", (uint)l2esz, (uint)lh));
+           "sanity. l2esz: 0x%x for lh: 0x%x", (uint)l2esz, (uint)lh);
     return l2esz;
   }
   static jint array_layout_helper(jint tag, int hsize, BasicType etype, int log2_esize) {
@@ -350,13 +377,13 @@ protected:
       |    (log2_esize << _lh_log2_element_size_shift);
   }
   static jint instance_layout_helper(jint size, bool slow_path_flag) {
-    return (size << LogHeapWordSize)
+    return (size << LogBytesPerWord)
       |    (slow_path_flag ? _lh_instance_slow_path_bit : 0);
   }
   static int layout_helper_to_size_helper(jint lh) {
     assert(lh > (jint)_lh_neutral_value, "must be instance");
     // Note that the following expression discards _lh_instance_slow_path_bit.
-    return lh >> LogHeapWordSize;
+    return lh >> LogBytesPerWord;
   }
   // Out-of-line version computes everything based on the etype:
   static jint array_layout_helper(BasicType etype);
@@ -372,8 +399,8 @@ protected:
 #endif
 
   // vtables
-  virtual klassVtable* vtable() const        { return NULL; }
-  virtual int vtable_length() const          { return 0; }
+  klassVtable* vtable() const;
+  int vtable_length() const { return _vtable_len; }
 
   // subclass check
   bool is_subclass_of(const Klass* k) const;
@@ -409,9 +436,9 @@ protected:
   // lookup operation for MethodLookupCache
   friend class MethodLookupCache;
   virtual Klass* find_field(Symbol* name, Symbol* signature, fieldDescriptor* fd) const;
-  virtual Method* uncached_lookup_method(Symbol* name, Symbol* signature, OverpassLookupMode overpass_mode) const;
+  virtual Method* uncached_lookup_method(const Symbol* name, const Symbol* signature, OverpassLookupMode overpass_mode) const;
  public:
-  Method* lookup_method(Symbol* name, Symbol* signature) const {
+  Method* lookup_method(const Symbol* name, const Symbol* signature) const {
     return uncached_lookup_method(name, signature, find_overpass);
   }
 
@@ -436,7 +463,17 @@ protected:
   virtual Klass* array_klass_impl(bool or_null, int rank, TRAPS);
   virtual Klass* array_klass_impl(bool or_null, TRAPS);
 
+  void set_vtable_length(int len) { _vtable_len= len; }
+
+  vtableEntry* start_of_vtable() const;
  public:
+  Method* method_at_vtable(int index);
+
+  static ByteSize vtable_start_offset();
+  static ByteSize vtable_length_offset() {
+    return byte_offset_of(Klass, _vtable_len);
+  }
+
   // CDS support - remove and restore oops from metadata. Oops are not shared.
   virtual void remove_unshareable_info();
   virtual void restore_unshareable_info(ClassLoaderData* loader_data, Handle protection_domain, TRAPS);
@@ -473,15 +510,14 @@ protected:
   virtual const char* signature_name() const;
 
   // type testing operations
+#ifdef ASSERT
  protected:
-  virtual bool oop_is_instance_slow()       const { return false; }
-  virtual bool oop_is_array_slow()          const { return false; }
-  virtual bool oop_is_objArray_slow()       const { return false; }
-  virtual bool oop_is_typeArray_slow()      const { return false; }
+  virtual bool is_instance_klass_slow()     const { return false; }
+  virtual bool is_array_klass_slow()        const { return false; }
+  virtual bool is_objArray_klass_slow()     const { return false; }
+  virtual bool is_typeArray_klass_slow()    const { return false; }
+#endif // ASSERT
  public:
-  virtual bool oop_is_instanceClassLoader() const { return false; }
-  virtual bool oop_is_instanceMirror()      const { return false; }
-  virtual bool oop_is_instanceRef()         const { return false; }
 
   // Fast non-virtual versions
   #ifndef ASSERT
@@ -494,18 +530,18 @@ protected:
   }
  public:
   #endif
-  inline  bool oop_is_instance()            const { return assert_same_query(
-                                                    layout_helper_is_instance(layout_helper()),
-                                                    oop_is_instance_slow()); }
-  inline  bool oop_is_array()               const { return assert_same_query(
+  inline  bool is_instance_klass()            const { return assert_same_query(
+                                                      layout_helper_is_instance(layout_helper()),
+                                                      is_instance_klass_slow()); }
+  inline  bool is_array_klass()               const { return assert_same_query(
                                                     layout_helper_is_array(layout_helper()),
-                                                    oop_is_array_slow()); }
-  inline  bool oop_is_objArray()            const { return assert_same_query(
+                                                    is_array_klass_slow()); }
+  inline  bool is_objArray_klass()            const { return assert_same_query(
                                                     layout_helper_is_objArray(layout_helper()),
-                                                    oop_is_objArray_slow()); }
-  inline  bool oop_is_typeArray()           const { return assert_same_query(
+                                                    is_objArray_klass_slow()); }
+  inline  bool is_typeArray_klass()           const { return assert_same_query(
                                                     layout_helper_is_typeArray(layout_helper()),
-                                                    oop_is_typeArray_slow()); }
+                                                    is_typeArray_klass_slow()); }
   #undef assert_same_query
 
   // Access flags
@@ -523,12 +559,13 @@ protected:
   bool has_final_method() const         { return _access_flags.has_final_method(); }
   void set_has_finalizer()              { _access_flags.set_has_finalizer(); }
   void set_has_final_method()           { _access_flags.set_has_final_method(); }
-  bool is_cloneable() const             { return _access_flags.is_cloneable(); }
-  void set_is_cloneable()               { _access_flags.set_is_cloneable(); }
   bool has_vanilla_constructor() const  { return _access_flags.has_vanilla_constructor(); }
   void set_has_vanilla_constructor()    { _access_flags.set_has_vanilla_constructor(); }
   bool has_miranda_methods () const     { return access_flags().has_miranda_methods(); }
   void set_has_miranda_methods()        { _access_flags.set_has_miranda_methods(); }
+
+  bool is_cloneable() const;
+  void set_is_cloneable();
 
   // Biased locking support
   // Note: the prototype header is always set up to be at least the
@@ -553,7 +590,7 @@ protected:
   jlong last_biased_lock_bulk_revocation_time() { return _last_biased_lock_bulk_revocation_time; }
   void  set_last_biased_lock_bulk_revocation_time(jlong cur_time) { _last_biased_lock_bulk_revocation_time = cur_time; }
 
-  TRACE_DEFINE_KLASS_METHODS;
+  TRACE_DEFINE_TRACE_ID_METHODS;
 
   // garbage collection support
   void oops_do(OopClosure* cl);
@@ -571,29 +608,28 @@ protected:
   // GC specific object visitors
   //
   // Mark Sweep
-  virtual void oop_ms_follow_contents(oop obj) = 0;
   virtual int  oop_ms_adjust_pointers(oop obj) = 0;
 #if INCLUDE_ALL_GCS
   // Parallel Scavenge
   virtual void oop_ps_push_contents(  oop obj, PSPromotionManager* pm)   = 0;
   // Parallel Compact
   virtual void oop_pc_follow_contents(oop obj, ParCompactionManager* cm) = 0;
-  virtual void oop_pc_update_pointers(oop obj) = 0;
+  virtual void oop_pc_update_pointers(oop obj, ParCompactionManager* cm) = 0;
 #endif
 
   // Iterators specialized to particular subtypes
   // of ExtendedOopClosure, to avoid closure virtual calls.
-#define Klass_OOP_OOP_ITERATE_DECL(OopClosureType, nv_suffix)                                          \
-  virtual int oop_oop_iterate##nv_suffix(oop obj, OopClosureType* closure) = 0;                        \
-  /* Iterates "closure" over all the oops in "obj" (of type "this") within "mr". */                    \
-  virtual int oop_oop_iterate_bounded##nv_suffix(oop obj, OopClosureType* closure, MemRegion mr) = 0;
+#define Klass_OOP_OOP_ITERATE_DECL(OopClosureType, nv_suffix)                                           \
+  virtual void oop_oop_iterate##nv_suffix(oop obj, OopClosureType* closure) = 0;                        \
+  /* Iterates "closure" over all the oops in "obj" (of type "this") within "mr". */                     \
+  virtual void oop_oop_iterate_bounded##nv_suffix(oop obj, OopClosureType* closure, MemRegion mr) = 0;
 
   ALL_OOP_OOP_ITERATE_CLOSURES_1(Klass_OOP_OOP_ITERATE_DECL)
   ALL_OOP_OOP_ITERATE_CLOSURES_2(Klass_OOP_OOP_ITERATE_DECL)
 
 #if INCLUDE_ALL_GCS
-#define Klass_OOP_OOP_ITERATE_DECL_BACKWARDS(OopClosureType, nv_suffix)                    \
-  virtual int oop_oop_iterate_backwards##nv_suffix(oop obj, OopClosureType* closure) = 0;
+#define Klass_OOP_OOP_ITERATE_DECL_BACKWARDS(OopClosureType, nv_suffix)                     \
+  virtual void oop_oop_iterate_backwards##nv_suffix(oop obj, OopClosureType* closure) = 0;
 
   ALL_OOP_OOP_ITERATE_CLOSURES_1(Klass_OOP_OOP_ITERATE_DECL_BACKWARDS)
   ALL_OOP_OOP_ITERATE_CLOSURES_2(Klass_OOP_OOP_ITERATE_DECL_BACKWARDS)
@@ -660,35 +696,35 @@ protected:
 // Used to generate declarations in the *Klass header files.
 
 #define OOP_OOP_ITERATE_DECL(OopClosureType, nv_suffix)                                    \
-  int oop_oop_iterate##nv_suffix(oop obj, OopClosureType* closure);                        \
-  int oop_oop_iterate_bounded##nv_suffix(oop obj, OopClosureType* closure, MemRegion mr);
+  void oop_oop_iterate##nv_suffix(oop obj, OopClosureType* closure);                        \
+  void oop_oop_iterate_bounded##nv_suffix(oop obj, OopClosureType* closure, MemRegion mr);
 
 #if INCLUDE_ALL_GCS
-#define OOP_OOP_ITERATE_DECL_BACKWARDS(OopClosureType, nv_suffix)              \
-  int oop_oop_iterate_backwards##nv_suffix(oop obj, OopClosureType* closure);
+#define OOP_OOP_ITERATE_DECL_BACKWARDS(OopClosureType, nv_suffix)               \
+  void oop_oop_iterate_backwards##nv_suffix(oop obj, OopClosureType* closure);
 #endif // INCLUDE_ALL_GCS
 
 
 // Oop iteration macros for definitions.
 // Used to generate definitions in the *Klass.inline.hpp files.
 
-#define OOP_OOP_ITERATE_DEFN(KlassType, OopClosureType, nv_suffix)             \
-int KlassType::oop_oop_iterate##nv_suffix(oop obj, OopClosureType* closure) {  \
-  return oop_oop_iterate<nvs_to_bool(nv_suffix)>(obj, closure);                \
+#define OOP_OOP_ITERATE_DEFN(KlassType, OopClosureType, nv_suffix)              \
+void KlassType::oop_oop_iterate##nv_suffix(oop obj, OopClosureType* closure) {  \
+  oop_oop_iterate<nvs_to_bool(nv_suffix)>(obj, closure);                        \
 }
 
 #if INCLUDE_ALL_GCS
-#define OOP_OOP_ITERATE_DEFN_BACKWARDS(KlassType, OopClosureType, nv_suffix)             \
-int KlassType::oop_oop_iterate_backwards##nv_suffix(oop obj, OopClosureType* closure) {  \
-  return oop_oop_iterate_reverse<nvs_to_bool(nv_suffix)>(obj, closure);                  \
+#define OOP_OOP_ITERATE_DEFN_BACKWARDS(KlassType, OopClosureType, nv_suffix)              \
+void KlassType::oop_oop_iterate_backwards##nv_suffix(oop obj, OopClosureType* closure) {  \
+  oop_oop_iterate_reverse<nvs_to_bool(nv_suffix)>(obj, closure);                          \
 }
 #else
 #define OOP_OOP_ITERATE_DEFN_BACKWARDS(KlassType, OopClosureType, nv_suffix)
 #endif
 
-#define OOP_OOP_ITERATE_DEFN_BOUNDED(KlassType, OopClosureType, nv_suffix)                           \
-int KlassType::oop_oop_iterate_bounded##nv_suffix(oop obj, OopClosureType* closure, MemRegion mr) {  \
-  return oop_oop_iterate_bounded<nvs_to_bool(nv_suffix)>(obj, closure, mr);                          \
+#define OOP_OOP_ITERATE_DEFN_BOUNDED(KlassType, OopClosureType, nv_suffix)                            \
+void KlassType::oop_oop_iterate_bounded##nv_suffix(oop obj, OopClosureType* closure, MemRegion mr) {  \
+  oop_oop_iterate_bounded<nvs_to_bool(nv_suffix)>(obj, closure, mr);                                  \
 }
 
 #endif // SHARE_VM_OOPS_KLASS_HPP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,22 +22,21 @@
  */
 
 /*
- *  @test
- *  @bug 6175634
- *  @summary Allow early return from methods
+ * @test
+ * @bug 6175634
+ * @summary Allow early return from methods
  *
- *  @bug 6431720
- *  @summary Unexpected InvalidTypeException when call ThreadReference.forceEarlyReturn with VoidValue
+ * @bug 6431720
+ * @summary Unexpected InvalidTypeException when call ThreadReference.forceEarlyReturn with VoidValue
  *
- *  @bug 6432855
- *  @summary Need a way to create JDI VoidValue for use in ThreadReference.forceEarlyReturn
+ * @bug 6432855
+ * @summary Need a way to create JDI VoidValue for use in ThreadReference.forceEarlyReturn
  *
- *  @author Tim Bell (based on MethodExitReturnValuesTest by Jim Holmlund)
+ * @author Tim Bell (based on MethodExitReturnValuesTest by Jim Holmlund)
  *
- *  @modules jdk.jdi
- *  @run build TestScaffold VMConnection TargetListener TargetAdapter
- *  @run compile -g EarlyReturnTest.java
- *  @run driver EarlyReturnTest
+ * @run build TestScaffold VMConnection TargetListener TargetAdapter
+ * @run compile -g EarlyReturnTest.java
+ * @run driver EarlyReturnTest
  */
 import com.sun.jdi.*;
 import com.sun.jdi.event.*;
@@ -565,9 +564,7 @@ public class EarlyReturnTest extends TestScaffold {
         String methodName = origMethodName.substring(2);
         ThreadReference tr = event.thread();
 
-        if (vmm.majorInterfaceVersion() >= 1 &&
-            vmm.minorInterfaceVersion() >= 6 &&
-            vm().canForceEarlyReturn()) {
+        if (vm().canForceEarlyReturn()) {
 
             try {
 
@@ -664,9 +661,7 @@ public class EarlyReturnTest extends TestScaffold {
     // This is the MethodExitEvent handler.
     public void methodExited(MethodExitEvent event) {
         String origMethodName = event.method().name();
-        if (vmm.majorInterfaceVersion() >= 1 &&
-            vmm.minorInterfaceVersion() >= 6 &&
-            vm().canGetMethodReturnValues()) {
+        if (vm().canGetMethodReturnValues()) {
             Value retValue = event.returnValue();
 
             if (!origMethodName.startsWith("s_") &&

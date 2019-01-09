@@ -31,6 +31,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Modifier;
+import java.security.AccessControlContext;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.Collection;
@@ -38,22 +39,24 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.function.Supplier;
 import javax.script.Bindings;
-import jdk.internal.dynalink.CallSiteDescriptor;
-import jdk.internal.dynalink.linker.ConversionComparator;
-import jdk.internal.dynalink.linker.GuardedInvocation;
-import jdk.internal.dynalink.linker.GuardedTypeConversion;
-import jdk.internal.dynalink.linker.GuardingTypeConverterFactory;
-import jdk.internal.dynalink.linker.LinkRequest;
-import jdk.internal.dynalink.linker.LinkerServices;
-import jdk.internal.dynalink.linker.TypeBasedGuardingDynamicLinker;
-import jdk.internal.dynalink.support.Guards;
-import jdk.internal.dynalink.support.LinkerServicesImpl;
-import jdk.internal.dynalink.support.Lookup;
+import jdk.dynalink.CallSiteDescriptor;
+import jdk.dynalink.SecureLookupSupplier;
+import jdk.dynalink.linker.ConversionComparator;
+import jdk.dynalink.linker.GuardedInvocation;
+import jdk.dynalink.linker.GuardingTypeConverterFactory;
+import jdk.dynalink.linker.LinkRequest;
+import jdk.dynalink.linker.LinkerServices;
+import jdk.dynalink.linker.TypeBasedGuardingDynamicLinker;
+import jdk.dynalink.linker.support.Guards;
+import jdk.dynalink.linker.support.Lookup;
 import jdk.nashorn.api.scripting.JSObject;
 import jdk.nashorn.api.scripting.ScriptObjectMirror;
 import jdk.nashorn.api.scripting.ScriptUtils;
+import jdk.nashorn.internal.codegen.CompilerConstants.Call;
 import jdk.nashorn.internal.objects.NativeArray;
+import jdk.nashorn.internal.runtime.AccessControlContextFactory;
 import jdk.nashorn.internal.runtime.JSType;
 import jdk.nashorn.internal.runtime.ListAdapter;
 import jdk.nashorn.internal.runtime.ScriptFunction;
@@ -65,6 +68,9 @@ import jdk.nashorn.internal.runtime.Undefined;
  * includes {@link ScriptFunction} and its subclasses) as well as {@link Undefined}.
  */
 final class NashornLinker implements TypeBasedGuardingDynamicLinker, GuardingTypeConverterFactory, ConversionComparator {
+    private static final AccessControlContext GET_LOOKUP_PERMISSION_CONTEXT =
+            AccessControlContextFactory.createAccessControlContext(SecureLookupSupplier.GET_LOOKUP_PERMISSION_NAME);
+
     private static final ClassValue<MethodHandle> ARRAY_CONVERTERS = new ClassValue<MethodHandle>() {
         @Override
         protected MethodHandle computeValue(final Class<?> type) {
@@ -86,19 +92,13 @@ final class NashornLinker implements TypeBasedGuardingDynamicLinker, GuardingTyp
 
     @Override
     public GuardedInvocation getGuardedInvocation(final LinkRequest request, final LinkerServices linkerServices) throws Exception {
-        final LinkRequest requestWithoutContext = request.withoutRuntimeContext(); // Nashorn has no runtime context
-        final Object self = requestWithoutContext.getReceiver();
-        final CallSiteDescriptor desc = requestWithoutContext.getCallSiteDescriptor();
-
-        if (desc.getNameTokenCount() < 2 || !"dyn".equals(desc.getNameToken(CallSiteDescriptor.SCHEME))) {
-            // We only support standard "dyn:*[:*]" operations
-            return null;
-        }
-
-        return Bootstrap.asTypeSafeReturn(getGuardedInvocation(self,  request, desc), linkerServices, desc);
+        final CallSiteDescriptor desc = request.getCallSiteDescriptor();
+        return Bootstrap.asTypeSafeReturn(getGuardedInvocation(request, desc), linkerServices, desc);
     }
 
-    private static GuardedInvocation getGuardedInvocation(final Object self, final LinkRequest request, final CallSiteDescriptor desc) {
+    private static GuardedInvocation getGuardedInvocation(final LinkRequest request, final CallSiteDescriptor desc) {
+        final Object self = request.getReceiver();
+
         final GuardedInvocation inv;
         if (self instanceof ScriptObject) {
             inv = ((ScriptObject)self).lookup(desc, request);
@@ -112,16 +112,12 @@ final class NashornLinker implements TypeBasedGuardingDynamicLinker, GuardingTyp
     }
 
     @Override
-    public GuardedTypeConversion convertToType(final Class<?> sourceType, final Class<?> targetType) throws Exception {
-        GuardedInvocation gi = convertToTypeNoCast(sourceType, targetType);
-        if(gi != null) {
-            return new GuardedTypeConversion(gi.asType(MH.type(targetType, sourceType)), true);
+    public GuardedInvocation convertToType(final Class<?> sourceType, final Class<?> targetType, final Supplier<MethodHandles.Lookup> lookupSupplier) throws Exception {
+        GuardedInvocation gi = convertToTypeNoCast(sourceType, targetType, lookupSupplier);
+        if(gi == null) {
+            gi = getSamTypeConverter(sourceType, targetType, lookupSupplier);
         }
-        gi = getSamTypeConverter(sourceType, targetType);
-        if(gi != null) {
-            return new GuardedTypeConversion(gi.asType(MH.type(targetType, sourceType)), false);
-        }
-        return null;
+        return gi == null ? null : gi.asType(MH.type(targetType, sourceType));
     }
 
     /**
@@ -134,13 +130,13 @@ final class NashornLinker implements TypeBasedGuardingDynamicLinker, GuardingTyp
      * @return a guarded invocation that converts from the source type to the target type.
      * @throws Exception if something goes wrong
      */
-    private static GuardedInvocation convertToTypeNoCast(final Class<?> sourceType, final Class<?> targetType) throws Exception {
+    private static GuardedInvocation convertToTypeNoCast(final Class<?> sourceType, final Class<?> targetType, final Supplier<MethodHandles.Lookup> lookupSupplier) throws Exception {
         final MethodHandle mh = JavaArgumentConverters.getConverter(targetType);
         if (mh != null) {
             return new GuardedInvocation(mh, canLinkTypeStatic(sourceType) ? null : IS_NASHORN_OR_UNDEFINED_TYPE);
         }
 
-        final GuardedInvocation arrayConverter = getArrayConverter(sourceType, targetType);
+        final GuardedInvocation arrayConverter = getArrayConverter(sourceType, targetType, lookupSupplier);
         if(arrayConverter != null) {
             return arrayConverter;
         }
@@ -159,26 +155,30 @@ final class NashornLinker implements TypeBasedGuardingDynamicLinker, GuardingTyp
      * @throws Exception if something goes wrong; generally, if there's an issue with creation of the SAM proxy type
      * constructor.
      */
-    private static GuardedInvocation getSamTypeConverter(final Class<?> sourceType, final Class<?> targetType) throws Exception {
+    private static GuardedInvocation getSamTypeConverter(final Class<?> sourceType, final Class<?> targetType, final Supplier<MethodHandles.Lookup> lookupSupplier) throws Exception {
         // If source type is more generic than ScriptFunction class, we'll need to use a guard
-        final boolean isSourceTypeGeneric = sourceType.isAssignableFrom(ScriptFunction.class);
+        final boolean isSourceTypeGeneric = sourceType.isAssignableFrom(ScriptObject.class);
 
         if ((isSourceTypeGeneric || ScriptFunction.class.isAssignableFrom(sourceType)) && isAutoConvertibleFromFunction(targetType)) {
-            final MethodHandle ctor = JavaAdapterFactory.getConstructor(ScriptFunction.class, targetType, getCurrentLookup());
+            final Class<?> paramType = isSourceTypeGeneric ? Object.class : ScriptFunction.class;
+            // Using Object.class as constructor source type means we're getting an overloaded constructor handle,
+            // which is safe but slower than a single constructor handle. If the actual argument is a ScriptFunction it
+            // would be nice if we could change the formal parameter to ScriptFunction.class and add a guard for it
+            // in the main invocation.
+            final MethodHandle ctor = JavaAdapterFactory.getConstructor(paramType, targetType, getCurrentLookup(lookupSupplier));
             assert ctor != null; // if isAutoConvertibleFromFunction() returned true, then ctor must exist.
-            return new GuardedInvocation(ctor, isSourceTypeGeneric ? IS_SCRIPT_FUNCTION : null);
+            return new GuardedInvocation(ctor, isSourceTypeGeneric ? IS_FUNCTION : null);
         }
         return null;
     }
 
-    private static java.lang.invoke.MethodHandles.Lookup getCurrentLookup() {
-        final LinkRequest currentRequest = AccessController.doPrivileged(new PrivilegedAction<LinkRequest>() {
+    private static MethodHandles.Lookup getCurrentLookup(final Supplier<MethodHandles.Lookup> lookupSupplier) {
+        return AccessController.doPrivileged(new PrivilegedAction<MethodHandles.Lookup>() {
             @Override
-            public LinkRequest run() {
-                return LinkerServicesImpl.getCurrentLinkRequest();
+            public MethodHandles.Lookup run() {
+                return lookupSupplier.get();
             }
-        });
-        return currentRequest == null ? MethodHandles.publicLookup() : currentRequest.getCallSiteDescriptor().getLookup();
+        }, GET_LOOKUP_PERMISSION_CONTEXT);
     }
 
     /**
@@ -190,7 +190,7 @@ final class NashornLinker implements TypeBasedGuardingDynamicLinker, GuardingTyp
      * either the source type is neither NativeArray, nor a superclass of it, or if the target type is not an array
      * type, List, Queue, Deque, or Collection.
      */
-    private static GuardedInvocation getArrayConverter(final Class<?> sourceType, final Class<?> targetType) {
+    private static GuardedInvocation getArrayConverter(final Class<?> sourceType, final Class<?> targetType, final Supplier<MethodHandles.Lookup> lookupSupplier) {
         final boolean isSourceTypeNativeArray = sourceType == NativeArray.class;
         // If source type is more generic than NativeArray class, we'll need to use a guard
         final boolean isSourceTypeGeneric = !isSourceTypeNativeArray && sourceType.isAssignableFrom(NativeArray.class);
@@ -198,7 +198,25 @@ final class NashornLinker implements TypeBasedGuardingDynamicLinker, GuardingTyp
         if (isSourceTypeNativeArray || isSourceTypeGeneric) {
             final MethodHandle guard = isSourceTypeGeneric ? IS_NATIVE_ARRAY : null;
             if(targetType.isArray()) {
-                return new GuardedInvocation(ARRAY_CONVERTERS.get(targetType), guard);
+                final MethodHandle mh = ARRAY_CONVERTERS.get(targetType);
+                final MethodHandle mhWithLookup;
+                if (mh.type().parameterCount() == 2) {
+                    assert mh.type().parameterType(1) == SecureLookupSupplier.class;
+                    // We enter this branch when the array's ultimate component
+                    // type is a SAM type; we use a handle to JSType.toJavaArrayWithLookup
+                    // for these in the converter MH and must bind it here with
+                    // a secure supplier for the current lookup. By retrieving
+                    // the lookup, we'll also (correctly) inform the type
+                    // converter that this array converter is lookup specific.
+                    // We then need to wrap the returned lookup into a
+                    // new SecureLookupSupplier in order to bind it to the
+                    // JSType.toJavaArrayWithLookup() parameter.
+                    mhWithLookup = MH.insertArguments(mh, 1,
+                            new SecureLookupSupplier(getCurrentLookup(lookupSupplier)));
+                } else {
+                    mhWithLookup = mh;
+                }
+                return new GuardedInvocation(mhWithLookup, guard);
             } else if(targetType == List.class) {
                 return new GuardedInvocation(TO_LIST, guard);
             } else if(targetType == Deque.class) {
@@ -214,8 +232,24 @@ final class NashornLinker implements TypeBasedGuardingDynamicLinker, GuardingTyp
 
     private static MethodHandle createArrayConverter(final Class<?> type) {
         assert type.isArray();
-        final MethodHandle converter = MH.insertArguments(JSType.TO_JAVA_ARRAY.methodHandle(), 1, type.getComponentType());
-        return MH.asType(converter, converter.type().changeReturnType(type));
+
+        final Class<?> componentType = type.getComponentType();
+        final Call converterCall;
+        // Is the ultimate component type of this array a SAM type?
+        if (isComponentTypeAutoConvertibleFromFunction(componentType)) {
+            converterCall = JSType.TO_JAVA_ARRAY_WITH_LOOKUP;
+        } else {
+            converterCall = JSType.TO_JAVA_ARRAY;
+        }
+        final MethodHandle typeBoundConverter = MH.insertArguments(converterCall.methodHandle(), 1, componentType);
+        return MH.asType(typeBoundConverter, typeBoundConverter.type().changeReturnType(type));
+    }
+
+    private static boolean isComponentTypeAutoConvertibleFromFunction(final Class<?> targetType) {
+        if (targetType.isArray()) {
+            return isComponentTypeAutoConvertibleFromFunction(targetType.getComponentType());
+        }
+        return isAutoConvertibleFromFunction(targetType);
     }
 
     private static GuardedInvocation getMirrorConverter(final Class<?> sourceType, final Class<?> targetType) {
@@ -251,15 +285,15 @@ final class NashornLinker implements TypeBasedGuardingDynamicLinker, GuardingTyp
     @Override
     public Comparison compareConversion(final Class<?> sourceType, final Class<?> targetType1, final Class<?> targetType2) {
         if(sourceType == NativeArray.class) {
-            // Prefer lists, as they're less costly to create than arrays.
-            if(isList(targetType1)) {
-                if(!isList(targetType2)) {
+            // Prefer those types we can convert to with just a wrapper (cheaper than Java array creation).
+            if(isArrayPreferredTarget(targetType1)) {
+                if(!isArrayPreferredTarget(targetType2)) {
                     return Comparison.TYPE_1_BETTER;
                 }
-            } else if(isList(targetType2)) {
+            } else if(isArrayPreferredTarget(targetType2)) {
                 return Comparison.TYPE_2_BETTER;
             }
-            // Then prefer arrays
+            // Then prefer Java arrays
             if(targetType1.isArray()) {
                 if(!targetType2.isArray()) {
                     return Comparison.TYPE_1_BETTER;
@@ -281,12 +315,12 @@ final class NashornLinker implements TypeBasedGuardingDynamicLinker, GuardingTyp
         return Comparison.INDETERMINATE;
     }
 
-    private static boolean isList(final Class<?> clazz) {
-        return clazz == List.class || clazz == Deque.class;
+    private static boolean isArrayPreferredTarget(final Class<?> clazz) {
+        return clazz == List.class || clazz == Collection.class || clazz == Queue.class || clazz == Deque.class;
     }
 
     private static final MethodHandle IS_SCRIPT_OBJECT = Guards.isInstance(ScriptObject.class, MH.type(Boolean.TYPE, Object.class));
-    private static final MethodHandle IS_SCRIPT_FUNCTION = Guards.isInstance(ScriptFunction.class, MH.type(Boolean.TYPE, Object.class));
+    private static final MethodHandle IS_FUNCTION = findOwnMH("isFunction", boolean.class, Object.class);
     private static final MethodHandle IS_NATIVE_ARRAY = Guards.isOfClass(NativeArray.class, MH.type(Boolean.TYPE, Object.class));
 
     private static final MethodHandle IS_NASHORN_OR_UNDEFINED_TYPE = findOwnMH("isNashornTypeOrUndefined", Boolean.TYPE, Object.class);
@@ -317,6 +351,11 @@ final class NashornLinker implements TypeBasedGuardingDynamicLinker, GuardingTyp
     @SuppressWarnings("unused")
     private static Object createMirror(final Object obj) {
         return obj instanceof ScriptObject? ScriptUtils.wrap((ScriptObject)obj) : obj;
+    }
+
+    @SuppressWarnings("unused")
+    private static boolean isFunction(final Object obj) {
+        return obj instanceof ScriptFunction || obj instanceof ScriptObjectMirror && ((ScriptObjectMirror) obj).isFunction();
     }
 
     private static MethodHandle findOwnMH(final String name, final Class<?> rtype, final Class<?>... types) {

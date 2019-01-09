@@ -44,12 +44,13 @@ import jdk.nashorn.internal.ir.JumpToInlinedFinally;
 import jdk.nashorn.internal.ir.LexicalContext;
 import jdk.nashorn.internal.ir.LiteralNode;
 import jdk.nashorn.internal.ir.LiteralNode.ArrayLiteralNode;
-import jdk.nashorn.internal.ir.LiteralNode.ArrayLiteralNode.ArrayUnit;
 import jdk.nashorn.internal.ir.Node;
+import jdk.nashorn.internal.ir.ObjectNode;
 import jdk.nashorn.internal.ir.PropertyNode;
 import jdk.nashorn.internal.ir.ReturnNode;
 import jdk.nashorn.internal.ir.RuntimeNode;
 import jdk.nashorn.internal.ir.SplitNode;
+import jdk.nashorn.internal.ir.Splittable;
 import jdk.nashorn.internal.ir.SwitchNode;
 import jdk.nashorn.internal.ir.ThrowNode;
 import jdk.nashorn.internal.ir.TryNode;
@@ -76,6 +77,7 @@ final class WeighNodes extends NodeOperatorVisitor<LexicalContext> {
     static final long CALL_WEIGHT      = 10;
     static final long CATCH_WEIGHT     = 10;
     static final long COMPARE_WEIGHT   =  6;
+    static final long CONST_WEIGHT     =  2;
     static final long CONTINUE_WEIGHT  =  1;
     static final long IF_WEIGHT        =  2;
     static final long LITERAL_WEIGHT   = 10;
@@ -88,6 +90,8 @@ final class WeighNodes extends NodeOperatorVisitor<LexicalContext> {
     static final long THROW_WEIGHT     =  2;
     static final long VAR_WEIGHT       = 40;
     static final long WITH_WEIGHT      =  8;
+    static final long OBJECT_WEIGHT    = 16;
+    static final long SETPROP_WEIGHT   =  5;
 
     /** Accumulated weight. */
     private long weight;
@@ -182,7 +186,7 @@ final class WeighNodes extends NodeOperatorVisitor<LexicalContext> {
 
     @Override
     public Node leaveIdentNode(final IdentNode identNode) {
-        weight += ACCESS_WEIGHT + identNode.getName().length() * 2;
+        weight += ACCESS_WEIGHT;
         return identNode;
     }
 
@@ -207,13 +211,18 @@ final class WeighNodes extends NodeOperatorVisitor<LexicalContext> {
     @SuppressWarnings("rawtypes")
     @Override
     public boolean enterLiteralNode(final LiteralNode literalNode) {
+        if (literalNode instanceof LiteralNode.PrimitiveLiteralNode) {
+            weight += CONST_WEIGHT;
+            return false;
+        }
+
         weight += LITERAL_WEIGHT;
 
         if (literalNode instanceof ArrayLiteralNode) {
             final ArrayLiteralNode arrayLiteralNode = (ArrayLiteralNode)literalNode;
             final Node[]           value            = arrayLiteralNode.getValue();
             final int[]            postsets         = arrayLiteralNode.getPostsets();
-            final List<ArrayUnit>  units            = arrayLiteralNode.getUnits();
+            final List<Splittable.SplitRange>  units            = arrayLiteralNode.getSplitRanges();
 
             if (units == null) {
                 for (final int postset : postsets) {
@@ -230,6 +239,27 @@ final class WeighNodes extends NodeOperatorVisitor<LexicalContext> {
         }
 
         return true;
+    }
+
+    @Override
+    public boolean enterObjectNode(final ObjectNode objectNode) {
+        weight += OBJECT_WEIGHT;
+        final List<PropertyNode> properties = objectNode.getElements();
+        final boolean isSpillObject = properties.size() > CodeGenerator.OBJECT_SPILL_THRESHOLD;
+
+        for (final PropertyNode property : properties) {
+            if (!LiteralNode.isConstant(property.getValue())) {
+                weight += SETPROP_WEIGHT;
+                property.getValue().accept(this);
+            } else if (!isSpillObject) {
+                // constants in spill object are set via preset spill array,
+                // but fields objects need to set constants.
+                weight += SETPROP_WEIGHT;
+            }
+
+        }
+
+        return false;
     }
 
     @Override
@@ -411,7 +441,7 @@ final class WeighNodes extends NodeOperatorVisitor<LexicalContext> {
     }
 
     @Override
-    public Node leaveBIND(final BinaryNode binaryNode) {
+    public Node leaveARROW(final BinaryNode binaryNode) {
         return binaryNodeWeight(binaryNode);
     }
 

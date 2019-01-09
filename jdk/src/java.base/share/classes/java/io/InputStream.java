@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1994, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1994, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -228,7 +228,7 @@ public abstract class InputStream implements Closeable {
      *         allocated. For example, if an array larger than {@code 2GB} would
      *         be required to store the bytes.
      *
-     * @since 1.9
+     * @since 9
      */
     public byte[] readAllBytes() throws IOException {
         byte[] buf = new byte[DEFAULT_BUFFER_SIZE];
@@ -298,7 +298,7 @@ public abstract class InputStream implements Closeable {
      * @throws IndexOutOfBoundsException If {@code off} is negative, {@code len}
      *         is negative, or {@code len} is greater than {@code b.length - off}
      *
-     * @since 1.9
+     * @since 9
      */
     public int readNBytes(byte[] b, int off, int len) throws IOException {
         Objects.requireNonNull(b);
@@ -325,7 +325,7 @@ public abstract class InputStream implements Closeable {
      * returns 0, and no bytes are skipped. Subclasses may handle the negative
      * value differently.
      *
-     * <p> The <code>skip</code> method of this class creates a
+     * <p> The <code>skip</code> method implementation of this class creates a
      * byte array and then repeatedly reads into it until <code>n</code> bytes
      * have been read or the end of the stream has been reached. Subclasses are
      * encouraged to provide a more efficient implementation of this method.
@@ -333,8 +333,7 @@ public abstract class InputStream implements Closeable {
      *
      * @param      n   the number of bytes to be skipped.
      * @return     the actual number of bytes skipped.
-     * @exception  IOException  if the stream does not support seek,
-     *                          or if some other I/O error occurs.
+     * @throws     IOException  if an I/O error occurs.
      */
     public long skip(long n) throws IOException {
 
@@ -514,7 +513,7 @@ public abstract class InputStream implements Closeable {
      * @throws IOException if an I/O error occurs when reading or writing
      * @throws NullPointerException if {@code out} is {@code null}
      *
-     * @since 1.9
+     * @since 9
      */
     public long transferTo(OutputStream out) throws IOException {
         Objects.requireNonNull(out, "out");

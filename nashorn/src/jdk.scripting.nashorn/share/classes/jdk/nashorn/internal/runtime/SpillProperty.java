@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2014, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -158,7 +158,7 @@ public class SpillProperty extends AccessorProperty {
      * @param flags  the property flags
      * @param slot   spill slot
      */
-    public SpillProperty(final String key, final int flags, final int slot) {
+    public SpillProperty(final Object key, final int flags, final int slot) {
         super(key, flags, slot, primitiveGetter(slot, flags), primitiveSetter(slot, flags), objectGetter(slot), objectSetter(slot));
     }
 
@@ -174,7 +174,7 @@ public class SpillProperty extends AccessorProperty {
         setType(hasDualFields() ? initialType : Object.class);
     }
 
-    SpillProperty(final String key, final int flags, final int slot, final ScriptObject owner, final Object initialValue) {
+    SpillProperty(final Object key, final int flags, final int slot, final ScriptObject owner, final Object initialValue) {
         this(key, flags, slot);
         setInitialValue(owner, initialValue);
     }

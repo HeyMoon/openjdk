@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@
 #include "code/debugInfo.hpp"
 #include "code/debugInfoRec.hpp"
 #include "compiler/compileBroker.hpp"
+#include "compiler/compilerDirectives.hpp"
 #include "compiler/oopMap.hpp"
 #include "memory/allocation.inline.hpp"
 #include "opto/ad.hpp"
@@ -89,15 +90,11 @@ void Compile::Output() {
 
   }
 
-
   // Break before main entry point
-  if( (_method && _method->break_at_execute())
-#ifndef PRODUCT
-    ||(OptoBreakpoint && is_method_compilation())
-    ||(OptoBreakpointOSR && is_osr_compilation())
-    ||(OptoBreakpointC2R && !_method)
-#endif
-    ) {
+  if ((_method && C->directive()->BreakAtExecuteOption) ||
+      (OptoBreakpoint && is_method_compilation())       ||
+      (OptoBreakpointOSR && is_osr_compilation())       ||
+      (OptoBreakpointC2R && !_method)                   ) {
     // checking for _method means that OptoBreakpoint does not apply to
     // runtime stubs or frame converters
     _cfg->insert( entry, 1, new MachBreakpointNode() );
@@ -115,12 +112,6 @@ void Compile::Output() {
       }
     }
   }
-
-# ifdef ENABLE_ZAP_DEAD_LOCALS
-  if (ZapDeadCompiledLocals) {
-    Insert_zap_nodes();
-  }
-# endif
 
   uint* blk_starts = NEW_RESOURCE_ARRAY(uint, _cfg->number_of_blocks() + 1);
   blk_starts[0] = 0;
@@ -184,113 +175,6 @@ bool Compile::need_register_stack_bang() const {
   return (stub_function() == NULL && has_java_calls());
 }
 
-# ifdef ENABLE_ZAP_DEAD_LOCALS
-
-
-// In order to catch compiler oop-map bugs, we have implemented
-// a debugging mode called ZapDeadCompilerLocals.
-// This mode causes the compiler to insert a call to a runtime routine,
-// "zap_dead_locals", right before each place in compiled code
-// that could potentially be a gc-point (i.e., a safepoint or oop map point).
-// The runtime routine checks that locations mapped as oops are really
-// oops, that locations mapped as values do not look like oops,
-// and that locations mapped as dead are not used later
-// (by zapping them to an invalid address).
-
-int Compile::_CompiledZap_count = 0;
-
-void Compile::Insert_zap_nodes() {
-  bool skip = false;
-
-
-  // Dink with static counts because code code without the extra
-  // runtime calls is MUCH faster for debugging purposes
-
-       if ( CompileZapFirst  ==  0  ) ; // nothing special
-  else if ( CompileZapFirst  >  CompiledZap_count() )  skip = true;
-  else if ( CompileZapFirst  == CompiledZap_count() )
-    warning("starting zap compilation after skipping");
-
-       if ( CompileZapLast  ==  -1  ) ; // nothing special
-  else if ( CompileZapLast  <   CompiledZap_count() )  skip = true;
-  else if ( CompileZapLast  ==  CompiledZap_count() )
-    warning("about to compile last zap");
-
-  ++_CompiledZap_count; // counts skipped zaps, too
-
-  if ( skip )  return;
-
-
-  if ( _method == NULL )
-    return; // no safepoints/oopmaps emitted for calls in stubs,so we don't care
-
-  // Insert call to zap runtime stub before every node with an oop map
-  for( uint i=0; i<_cfg->number_of_blocks(); i++ ) {
-    Block *b = _cfg->get_block(i);
-    for ( uint j = 0;  j < b->number_of_nodes();  ++j ) {
-      Node *n = b->get_node(j);
-
-      // Determining if we should insert a zap-a-lot node in output.
-      // We do that for all nodes that has oopmap info, except for calls
-      // to allocation.  Calls to allocation passes in the old top-of-eden pointer
-      // and expect the C code to reset it.  Hence, there can be no safepoints between
-      // the inlined-allocation and the call to new_Java, etc.
-      // We also cannot zap monitor calls, as they must hold the microlock
-      // during the call to Zap, which also wants to grab the microlock.
-      bool insert = n->is_MachSafePoint() && (n->as_MachSafePoint()->oop_map() != NULL);
-      if ( insert ) { // it is MachSafePoint
-        if ( !n->is_MachCall() ) {
-          insert = false;
-        } else if ( n->is_MachCall() ) {
-          MachCallNode* call = n->as_MachCall();
-          if (call->entry_point() == OptoRuntime::new_instance_Java() ||
-              call->entry_point() == OptoRuntime::new_array_Java() ||
-              call->entry_point() == OptoRuntime::multianewarray2_Java() ||
-              call->entry_point() == OptoRuntime::multianewarray3_Java() ||
-              call->entry_point() == OptoRuntime::multianewarray4_Java() ||
-              call->entry_point() == OptoRuntime::multianewarray5_Java() ||
-              call->entry_point() == OptoRuntime::slow_arraycopy_Java() ||
-              call->entry_point() == OptoRuntime::complete_monitor_locking_Java()
-              ) {
-            insert = false;
-          }
-        }
-        if (insert) {
-          Node *zap = call_zap_node(n->as_MachSafePoint(), i);
-          b->insert_node(zap, j);
-          _cfg->map_node_to_block(zap, b);
-          ++j;
-        }
-      }
-    }
-  }
-}
-
-
-Node* Compile::call_zap_node(MachSafePointNode* node_to_check, int block_no) {
-  const TypeFunc *tf = OptoRuntime::zap_dead_locals_Type();
-  CallStaticJavaNode* ideal_node =
-    new CallStaticJavaNode( tf,
-         OptoRuntime::zap_dead_locals_stub(_method->flags().is_native()),
-                       "call zap dead locals stub", 0, TypePtr::BOTTOM);
-  // We need to copy the OopMap from the site we're zapping at.
-  // We have to make a copy, because the zap site might not be
-  // a call site, and zap_dead is a call site.
-  OopMap* clone = node_to_check->oop_map()->deep_copy();
-
-  // Add the cloned OopMap to the zap node
-  ideal_node->set_oop_map(clone);
-  return _matcher->match_sfpt(ideal_node);
-}
-
-bool Compile::is_node_getting_a_safepoint( Node* n) {
-  // This code duplicates the logic prior to the call of add_safepoint
-  // below in this file.
-  if( n->is_MachSafePoint() ) return true;
-  return false;
-}
-
-# endif // ENABLE_ZAP_DEAD_LOCALS
 
 // Compute the size of first NumberOfLoopInstrToAlign instructions at the top
 // of a loop. When aligning a loop we need to provide enough instructions
@@ -408,6 +292,10 @@ void Compile::shorten_branches(uint* blk_starts, int& code_size, int& reloc_size
           if (mcall->is_MachCallJava() && mcall->as_MachCallJava()->_method) {
             stub_size  += CompiledStaticCall::to_interp_stub_size();
             reloc_size += CompiledStaticCall::reloc_to_interp_stub();
+#if INCLUDE_AOT
+            stub_size  += CompiledStaticCall::to_aot_stub_size();
+            reloc_size += CompiledStaticCall::reloc_to_aot_stub();
+#endif
           }
         } else if (mach->is_MachSafePoint()) {
           // If call/safepoint are adjacent, account for possible
@@ -834,10 +722,6 @@ void Compile::Process_OopMap_Node(MachNode *mach, int current_offset) {
   MachSafePointNode *sfn   = mach->as_MachSafePoint();
   MachCallNode      *mcall;
 
-#ifdef ENABLE_ZAP_DEAD_LOCALS
-  assert( is_node_getting_a_safepoint(mach),  "logic does not match; false negative");
-#endif
-
   int safepoint_pc_offset = current_offset;
   bool is_method_handle_invoke = false;
   bool return_oop = false;
@@ -973,7 +857,9 @@ void Compile::Process_OopMap_Node(MachNode *mach, int current_offset) {
     assert(jvms->bci() >= InvocationEntryBci && jvms->bci() <= 0x10000, "must be a valid or entry BCI");
     assert(!jvms->should_reexecute() || depth == max_depth, "reexecute allowed only for the youngest");
     // Now we can describe the scope.
-    debug_info()->describe_scope(safepoint_pc_offset, scope_method, jvms->bci(), jvms->should_reexecute(), is_method_handle_invoke, return_oop, locvals, expvals, monvals);
+    methodHandle null_mh;
+    bool rethrow_exception = false;
+    debug_info()->describe_scope(safepoint_pc_offset, null_mh, scope_method, jvms->bci(), jvms->should_reexecute(), rethrow_exception, is_method_handle_invoke, return_oop, locvals, expvals, monvals);
   } // End jvms loop
 
   // Mark the end of the scope set.
@@ -1056,7 +942,8 @@ void NonSafepointEmitter::emit_non_safepoint() {
     JVMState* jvms = youngest_jvms->of_depth(depth);
     ciMethod* method = jvms->has_method() ? jvms->method() : NULL;
     assert(!jvms->should_reexecute() || depth==max_depth, "reexecute allowed only for the youngest");
-    debug_info->describe_scope(pc_offset, method, jvms->bci(), jvms->should_reexecute());
+    methodHandle null_mh;
+    debug_info->describe_scope(pc_offset, null_mh, method, jvms->bci(), jvms->should_reexecute());
   }
 
   // Mark the end of the scope set.
@@ -1069,7 +956,7 @@ CodeBuffer* Compile::init_buffer(uint* blk_starts) {
   // Set the initially allocated size
   int  code_req   = initial_code_capacity;
   int  locs_req   = initial_locs_capacity;
-  int  stub_req   = TraceJumps ? initial_stub_capacity * 10 : initial_stub_capacity;
+  int  stub_req   = initial_stub_capacity;
   int  const_req  = initial_const_capacity;
 
   int  pad_req    = NativeCall::instruction_size;
@@ -1294,10 +1181,6 @@ void Compile::fill_buffer(CodeBuffer* cb, uint* blk_starts) {
       if (Pipeline::requires_bundling() && starts_bundle(n))
         cb->flush_bundle(false);
 
-      // The following logic is duplicated in the code ifdeffed for
-      // ENABLE_ZAP_DEAD_LOCALS which appears above in this file.  It
-      // should be factored out.  Or maybe dispersed to the nodes?
-
       // Special handling for SafePoint/Call Nodes
       bool is_mcall = false;
       if (n->is_Mach()) {
@@ -1327,13 +1210,19 @@ void Compile::fill_buffer(CodeBuffer* cb, uint* blk_starts) {
           padding = nop_size;
         }
 
-        if(padding > 0) {
+        if (padding > 0) {
           assert((padding % nop_size) == 0, "padding is not a multiple of NOP size");
           int nops_cnt = padding / nop_size;
           MachNode *nop = new MachNopNode(nops_cnt);
           block->insert_node(nop, j++);
           last_inst++;
           _cfg->map_node_to_block(nop, block);
+          // Ensure enough space.
+          cb->insts()->maybe_expand_to_ensure_remaining(MAX_inst_size);
+          if ((cb->blob() == NULL) || (!CompileBroker::should_compile_new_jobs())) {
+            C->record_failure("CodeCache is full");
+            return;
+          }
           nop->emit(*cb, _regalloc);
           cb->flush_bundle(true);
           current_offset = cb->insts_size();
@@ -1364,9 +1253,6 @@ void Compile::fill_buffer(CodeBuffer* cb, uint* blk_starts) {
             // !!!!! Stubs only need an oopmap right now, so bail out
             if (sfn->jvms()->method() == NULL) {
               // Write the oopmap directly to the code blob??!!
-#             ifdef ENABLE_ZAP_DEAD_LOCALS
-              assert( !is_node_getting_a_safepoint(sfn),  "logic does not match; false positive");
-#             endif
               continue;
             }
           } // End synchronization
@@ -1504,6 +1390,13 @@ void Compile::fill_buffer(CodeBuffer* cb, uint* blk_starts) {
       n->emit(*cb, _regalloc);
       current_offset  = cb->insts_size();
 
+      // Above we only verified that there is enough space in the instruction section.
+      // However, the instruction may emit stubs that cause code buffer expansion.
+      // Bail out here if expansion failed due to a lack of code cache space.
+      if (failing()) {
+        return;
+      }
+
 #ifdef ASSERT
       if (n->size(_regalloc) < (current_offset-instr_offset)) {
         n->dump();
@@ -1547,9 +1440,6 @@ void Compile::fill_buffer(CodeBuffer* cb, uint* blk_starts) {
           // !!!!! Stubs only need an oopmap right now, so bail out
           if (!mach->is_MachCall() && mach->as_MachSafePoint()->jvms()->method() == NULL) {
             // Write the oopmap directly to the code blob??!!
-#           ifdef ENABLE_ZAP_DEAD_LOCALS
-            assert( !is_node_getting_a_safepoint(mach),  "logic does not match; false positive");
-#           endif
             delay_slot = NULL;
             continue;
           }
@@ -1603,8 +1493,6 @@ void Compile::fill_buffer(CodeBuffer* cb, uint* blk_starts) {
   // Compute the size of the first block
   _first_block_size = blk_labels[1].loc_pos() - blk_labels[0].loc_pos();
 
-  assert(cb->insts_size() < 500000, "method is unreasonably large");
-
 #ifdef ASSERT
   for (uint i = 0; i < nblocks; i++) { // For all blocks
     if (jmp_target[i] != 0) {
@@ -1632,11 +1520,14 @@ void Compile::fill_buffer(CodeBuffer* cb, uint* blk_starts) {
   if (_method) {
     // Emit the exception handler code.
     _code_offsets.set_value(CodeOffsets::Exceptions, HandlerImpl::emit_exception_handler(*cb));
+    if (failing()) {
+      return; // CodeBuffer::expand failed
+    }
     // Emit the deopt handler code.
     _code_offsets.set_value(CodeOffsets::Deopt, HandlerImpl::emit_deopt_handler(*cb));
 
     // Emit the MethodHandle deopt handler code (if required).
-    if (has_method_handle_invokes()) {
+    if (has_method_handle_invokes() && !failing()) {
       // We can use the same code as for the normal deopt handler, we
       // just need a different entry point address.
       _code_offsets.set_value(CodeOffsets::DeoptMH, HandlerImpl::emit_deopt_handler(*cb));
@@ -1667,6 +1558,10 @@ void Compile::fill_buffer(CodeBuffer* cb, uint* blk_starts) {
       }
       dump_asm(node_offsets, node_offset_limit);
       if (xtty != NULL) {
+        // print_metadata and dump_asm above may safepoint which makes us loose the ttylock.
+        // Retake lock too make sure the end tag is coherent, and that xmlStream->pop_tag is done
+        // thread safe
+        ttyLocker ttyl2;
         xtty->tail("opto_assembly");
       }
     }
@@ -2087,6 +1982,7 @@ void Scheduling::AddNodeToAvailableList(Node *n) {
     if( last->is_MachIf() && last->in(1) == n &&
         ( op == Op_CmpI ||
           op == Op_CmpU ||
+          op == Op_CmpUL ||
           op == Op_CmpP ||
           op == Op_CmpF ||
           op == Op_CmpD ||
@@ -2601,7 +2497,7 @@ void Scheduling::verify_do_def( Node *n, OptoReg::Name def, const char *msg ) {
       n->dump();
       tty->print_cr("...");
       prior_use->dump();
-      assert(edge_from_to(prior_use,n),msg);
+      assert(edge_from_to(prior_use,n), "%s", msg);
     }
     _reg_node.map(def,NULL); // Kill live USEs
   }
@@ -2639,11 +2535,11 @@ void Scheduling::verify_good_schedule( Block *b, const char *msg ) {
       OptoReg::Name reg_lo = _regalloc->get_reg_first(def);
       OptoReg::Name reg_hi = _regalloc->get_reg_second(def);
       if( OptoReg::is_valid(reg_lo) ) {
-        assert(!_reg_node[reg_lo] || edge_from_to(_reg_node[reg_lo],def), msg);
+        assert(!_reg_node[reg_lo] || edge_from_to(_reg_node[reg_lo],def), "%s", msg);
         _reg_node.map(reg_lo,n);
       }
       if( OptoReg::is_valid(reg_hi) ) {
-        assert(!_reg_node[reg_hi] || edge_from_to(_reg_node[reg_hi],def), msg);
+        assert(!_reg_node[reg_hi] || edge_from_to(_reg_node[reg_hi],def), "%s", msg);
         _reg_node.map(reg_hi,n);
       }
     }

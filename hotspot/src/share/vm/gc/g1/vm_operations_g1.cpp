@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,11 +25,11 @@
 #include "precompiled.hpp"
 #include "gc/g1/concurrentMarkThread.inline.hpp"
 #include "gc/g1/g1CollectedHeap.inline.hpp"
-#include "gc/g1/g1CollectorPolicy.hpp"
-#include "gc/g1/g1Log.hpp"
+#include "gc/g1/g1Policy.hpp"
+#include "gc/shared/gcId.hpp"
 #include "gc/g1/vm_operations_g1.hpp"
 #include "gc/shared/gcTimer.hpp"
-#include "gc/shared/gcTraceTime.hpp"
+#include "gc/shared/gcTraceTime.inline.hpp"
 #include "gc/shared/isGCActiveMark.hpp"
 #include "runtime/interfaceSupport.hpp"
 
@@ -66,8 +66,8 @@ VM_G1IncCollectionPause::VM_G1IncCollectionPause(uint           gc_count_before,
     _should_retry_gc(false),
     _old_marking_cycles_completed_before(0) {
   guarantee(target_pause_time_ms > 0.0,
-            err_msg("target_pause_time_ms = %1.6lf should be positive",
-                    target_pause_time_ms));
+            "target_pause_time_ms = %1.6lf should be positive",
+            target_pause_time_ms);
   _gc_cause = gc_cause;
 }
 
@@ -94,8 +94,9 @@ void VM_G1IncCollectionPause::doit() {
 
   if (_word_size > 0) {
     // An allocation has been requested. So, try to do that first.
-    _result = g1h->attempt_allocation_at_safepoint(_word_size, allocation_context(),
-                                     false /* expect_null_cur_alloc_region */);
+    _result = g1h->attempt_allocation_at_safepoint(_word_size,
+                                                   allocation_context(),
+                                                   false /* expect_null_cur_alloc_region */);
     if (_result != NULL) {
       // If we can successfully allocate before we actually do the
       // pause then we will consider this pause successful.
@@ -147,8 +148,9 @@ void VM_G1IncCollectionPause::doit() {
     g1h->do_collection_pause_at_safepoint(_target_pause_time_ms);
   if (_pause_succeeded && _word_size > 0) {
     // An allocation had been requested.
-    _result = g1h->attempt_allocation_at_safepoint(_word_size, allocation_context(),
-                                      true /* expect_null_cur_alloc_region */);
+    _result = g1h->attempt_allocation_at_safepoint(_word_size,
+                                                   allocation_context(),
+                                                   true /* expect_null_cur_alloc_region */);
   } else {
     assert(_result == NULL, "invariant");
     if (!_pause_succeeded) {
@@ -202,50 +204,23 @@ void VM_G1IncCollectionPause::doit_epilogue() {
   }
 }
 
-void VM_CGC_Operation::acquire_pending_list_lock() {
-  assert(_needs_pll, "don't call this otherwise");
-  // The caller may block while communicating
-  // with the SLT thread in order to acquire/release the PLL.
-  SurrogateLockerThread* slt = ConcurrentMarkThread::slt();
-  if (slt != NULL) {
-    slt->manipulatePLL(SurrogateLockerThread::acquirePLL);
-  } else {
-    SurrogateLockerThread::report_missing_slt();
-  }
-}
-
-void VM_CGC_Operation::release_and_notify_pending_list_lock() {
-  assert(_needs_pll, "don't call this otherwise");
-  // The caller may block while communicating
-  // with the SLT thread in order to acquire/release the PLL.
-  ConcurrentMarkThread::slt()->
-    manipulatePLL(SurrogateLockerThread::releaseAndNotifyPLL);
-}
-
 void VM_CGC_Operation::doit() {
-  TraceCPUTime tcpu(G1Log::finer(), true, gclog_or_tty);
+  GCIdMark gc_id_mark(_gc_id);
+  GCTraceCPUTime tcpu;
   G1CollectedHeap* g1h = G1CollectedHeap::heap();
-  GCTraceTime t(_printGCMessage, G1Log::fine(), true, g1h->gc_timer_cm(), g1h->concurrent_mark()->concurrent_gc_id());
+  GCTraceTime(Info, gc) t(_printGCMessage, g1h->concurrent_mark()->gc_timer_cm(), GCCause::_no_gc, true);
   IsGCActiveMark x;
   _cl->do_void();
 }
 
 bool VM_CGC_Operation::doit_prologue() {
-  // Note the relative order of the locks must match that in
-  // VM_GC_Operation::doit_prologue() or deadlocks can occur
-  if (_needs_pll) {
-    acquire_pending_list_lock();
-  }
-
   Heap_lock->lock();
   return true;
 }
 
 void VM_CGC_Operation::doit_epilogue() {
-  // Note the relative order of the unlocks must match that in
-  // VM_GC_Operation::doit_epilogue()
-  Heap_lock->unlock();
-  if (_needs_pll) {
-    release_and_notify_pending_list_lock();
+  if (Universe::has_reference_pending_list()) {
+    Heap_lock->notify_all();
   }
+  Heap_lock->unlock();
 }

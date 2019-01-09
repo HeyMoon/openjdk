@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,6 +31,7 @@
 #include "interpreter/bytecodeInterpreterProfiling.hpp"
 #include "interpreter/interpreter.hpp"
 #include "interpreter/interpreterRuntime.hpp"
+#include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/methodCounters.hpp"
 #include "oops/objArrayKlass.hpp"
@@ -38,7 +39,7 @@
 #include "oops/oop.inline.hpp"
 #include "prims/jvmtiExport.hpp"
 #include "prims/jvmtiThreadState.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/biasedLocking.hpp"
 #include "runtime/frame.inline.hpp"
 #include "runtime/handles.inline.hpp"
@@ -137,11 +138,11 @@
     BytecodeHistogram::_counters[(Bytecodes::Code)opcode]++;                                         \
     if (StopInterpreterAt && StopInterpreterAt == BytecodeCounter::_counter_value) os::breakpoint(); \
     if (TraceBytecodes) {                                                                            \
-      CALL_VM((void)SharedRuntime::trace_bytecode(THREAD, 0,               \
-                                   topOfStack[Interpreter::expr_index_at(1)],   \
-                                   topOfStack[Interpreter::expr_index_at(2)]),  \
-                                   handle_exception);                      \
-    }                                                                      \
+      CALL_VM((void)InterpreterRuntime::trace_bytecode(THREAD, 0,                    \
+                                        topOfStack[Interpreter::expr_index_at(1)],   \
+                                        topOfStack[Interpreter::expr_index_at(2)]),  \
+                                        handle_exception);                           \
+    }                                                                                \
 }
 #endif
 
@@ -577,8 +578,9 @@ BytecodeInterpreter::run(interpreterState istate) {
 /* 0xDC */ &&opc_default,     &&opc_default,        &&opc_default,      &&opc_default,
 
 /* 0xE0 */ &&opc_default,     &&opc_default,        &&opc_default,         &&opc_default,
-/* 0xE4 */ &&opc_default,     &&opc_fast_aldc,      &&opc_fast_aldc_w,     &&opc_return_register_finalizer,
-/* 0xE8 */ &&opc_invokehandle,&&opc_default,        &&opc_default,         &&opc_default,
+/* 0xE4 */ &&opc_default,     &&opc_default,        &&opc_fast_aldc,    &&opc_fast_aldc_w,
+/* 0xE8 */ &&opc_return_register_finalizer,
+                              &&opc_invokehandle,   &&opc_default,      &&opc_default,
 /* 0xEC */ &&opc_default,     &&opc_default,        &&opc_default,         &&opc_default,
 
 /* 0xF0 */ &&opc_default,     &&opc_default,        &&opc_default,      &&opc_default,
@@ -631,9 +633,11 @@ BytecodeInterpreter::run(interpreterState istate) {
       if (_compiling) {
         MethodCounters* mcs;
         GET_METHOD_COUNTERS(mcs);
+#if COMPILER2_OR_JVMCI
         if (ProfileInterpreter) {
           METHOD->increment_interpreter_invocation_count(THREAD);
         }
+#endif
         mcs->invocation_counter()->increment();
         if (mcs->invocation_counter()->reached_InvocationLimit(mcs->backedge_counter())) {
           CALL_VM((void)InterpreterRuntime::frequency_counter_overflow(THREAD, NULL), handle_exception);
@@ -1764,8 +1768,19 @@ run:
           ((objArrayOop) arrObj)->obj_at_put(index, rhsObject);
           UPDATE_PC_AND_TOS_AND_CONTINUE(1, -3);
       }
-      CASE(_bastore):
-          ARRAY_STOREFROM32(T_BYTE, jbyte,  "%d",   STACK_INT, 0);
+      CASE(_bastore): {
+          ARRAY_INTRO(-3);
+          int item = STACK_INT(-1);
+          // if it is a T_BOOLEAN array, mask the stored value to 0/1
+          if (arrObj->klass() == Universe::boolArrayKlassObj()) {
+            item &= 1;
+          } else {
+            assert(arrObj->klass() == Universe::byteArrayKlassObj(),
+                   "should be byte array otherwise");
+          }
+          ((typeArrayOop)arrObj)->byte_at_put(index, item);
+          UPDATE_PC_AND_TOS_AND_CONTINUE(1, -3);
+      }
       CASE(_castore):
           ARRAY_STOREFROM32(T_CHAR, jchar,  "%d",   STACK_INT, 0);
       CASE(_sastore):
@@ -1996,7 +2011,7 @@ run:
             } else if (tos_type == ltos) {
               SET_STACK_LONG(obj->long_field_acquire(field_offset), 0);
               MORE_STACK(1);
-            } else if (tos_type == btos) {
+            } else if (tos_type == btos || tos_type == ztos) {
               SET_STACK_INT(obj->byte_field_acquire(field_offset), -1);
             } else if (tos_type == ctos) {
               SET_STACK_INT(obj->char_field_acquire(field_offset), -1);
@@ -2017,7 +2032,7 @@ run:
             } else if (tos_type == ltos) {
               SET_STACK_LONG(obj->long_field(field_offset), 0);
               MORE_STACK(1);
-            } else if (tos_type == btos) {
+            } else if (tos_type == btos || tos_type == ztos) {
               SET_STACK_INT(obj->byte_field(field_offset), -1);
             } else if (tos_type == ctos) {
               SET_STACK_INT(obj->char_field(field_offset), -1);
@@ -2106,6 +2121,9 @@ run:
               obj->release_obj_field_put(field_offset, STACK_OBJECT(-1));
             } else if (tos_type == btos) {
               obj->release_byte_field_put(field_offset, STACK_INT(-1));
+            } else if (tos_type == ztos) {
+              int bool_field = STACK_INT(-1);  // only store LSB
+              obj->release_byte_field_put(field_offset, (bool_field & 1));
             } else if (tos_type == ltos) {
               obj->release_long_field_put(field_offset, STACK_LONG(-1));
             } else if (tos_type == ctos) {
@@ -2126,6 +2144,9 @@ run:
               obj->obj_field_put(field_offset, STACK_OBJECT(-1));
             } else if (tos_type == btos) {
               obj->byte_field_put(field_offset, STACK_INT(-1));
+            } else if (tos_type == ztos) {
+              int bool_field = STACK_INT(-1);  // only store LSB
+              obj->byte_field_put(field_offset, (bool_field & 1));
             } else if (tos_type == ltos) {
               obj->long_field_put(field_offset, STACK_LONG(-1));
             } else if (tos_type == ctos) {
@@ -2148,11 +2169,8 @@ run:
         if (!constants->tag_at(index).is_unresolved_klass()) {
           // Make sure klass is initialized and doesn't have a finalizer
           Klass* entry = constants->slot_at(index).get_klass();
-          assert(entry->is_klass(), "Should be resolved klass");
-          Klass* k_entry = (Klass*) entry;
-          assert(k_entry->oop_is_instance(), "Should be InstanceKlass");
-          InstanceKlass* ik = (InstanceKlass*) k_entry;
-          if ( ik->is_initialized() && ik->can_be_fastpath_allocated() ) {
+          InstanceKlass* ik = InstanceKlass::cast(entry);
+          if (ik->is_initialized() && ik->can_be_fastpath_allocated() ) {
             size_t obj_size = ik->size_helper();
             oop result = NULL;
             // If the TLAB isn't pre-zeroed then we'll have to do it
@@ -2193,7 +2211,7 @@ run:
                 result->set_mark(markOopDesc::prototype());
               }
               result->set_klass_gap(0);
-              result->set_klass(k_entry);
+              result->set_klass(ik);
               // Must prevent reordering of stores for object initialization
               // with stores that publish the new object.
               OrderAccess::storestore();
@@ -2260,10 +2278,8 @@ run:
               // Decrement counter at checkcast.
               BI_PROFILE_SUBTYPECHECK_FAILED(objKlass);
               ResourceMark rm(THREAD);
-              const char* objName = objKlass->external_name();
-              const char* klassName = klassOf->external_name();
               char* message = SharedRuntime::generate_class_cast_message(
-                objName, klassName);
+                objKlass, klassOf);
               VM_JAVA_ERROR(vmSymbols::java_lang_ClassCastException(), message, note_classCheck_trap);
             }
             // Profile checkcast with null_seen and receiver.
@@ -2504,10 +2520,10 @@ run:
             // Same comments as invokevirtual apply here.
             oop rcvr = STACK_OBJECT(-parms);
             VERIFY_OOP(rcvr);
-            InstanceKlass* rcvrKlass = (InstanceKlass*)rcvr->klass();
-            callee = (Method*) rcvrKlass->start_of_vtable()[ cache->f2_as_index()];
+            Klass* rcvrKlass = rcvr->klass();
+            callee = (Method*) rcvrKlass->method_at_vtable(cache->f2_as_index());
             // Profile 'special case of invokeinterface' virtual call.
-            BI_PROFILE_UPDATE_VIRTUALCALL(rcvr->klass());
+            BI_PROFILE_UPDATE_VIRTUALCALL(rcvrKlass);
           }
           istate->set_callee(callee);
           istate->set_callee_entry_point(callee->from_interpreted_entry());
@@ -2596,7 +2612,7 @@ run:
               // but this works
               oop rcvr = STACK_OBJECT(-parms);
               VERIFY_OOP(rcvr);
-              InstanceKlass* rcvrKlass = (InstanceKlass*)rcvr->klass();
+              Klass* rcvrKlass = rcvr->klass();
               /*
                 Executing this code in java.lang.String:
                     public String(char value[]) {
@@ -2609,13 +2625,13 @@ run:
                   - klass: {other class}
 
                   but using InstanceKlass::cast(STACK_OBJECT(-parms)->klass()) causes in assertion failure
-                  because rcvr->klass()->oop_is_instance() == 0
+                  because rcvr->klass()->is_instance_klass() == 0
                   However it seems to have a vtable in the right location. Huh?
-
+                  Because vtables have the same offset for ArrayKlass and InstanceKlass.
               */
-              callee = (Method*) rcvrKlass->start_of_vtable()[ cache->f2_as_index()];
+              callee = (Method*) rcvrKlass->method_at_vtable(cache->f2_as_index());
               // Profile virtual call.
-              BI_PROFILE_UPDATE_VIRTUALCALL(rcvr->klass());
+              BI_PROFILE_UPDATE_VIRTUALCALL(rcvrKlass);
             }
           } else {
             if ((Bytecodes::Code)opcode == Bytecodes::_invokespecial) {
@@ -2734,8 +2750,8 @@ run:
       }
 
       DEFAULT:
-          fatal(err_msg("Unimplemented opcode %d = %s", opcode,
-                        Bytecodes::name((Bytecodes::Code)opcode)));
+          fatal("Unimplemented opcode %d = %s", opcode,
+                Bytecodes::name((Bytecodes::Code)opcode));
           goto finish;
 
       } /* switch(opc) */
@@ -2781,33 +2797,36 @@ run:
       SET_STACK_OBJECT(except_oop(), 0);
       MORE_STACK(1);
       pc = METHOD->code_base() + continuation_bci;
-      if (TraceExceptions) {
-        ttyLocker ttyl;
-        ResourceMark rm;
-        tty->print_cr("Exception <%s> (" INTPTR_FORMAT ")", except_oop->print_value_string(), p2i(except_oop()));
-        tty->print_cr(" thrown in interpreter method <%s>", METHOD->print_value_string());
-        tty->print_cr(" at bci %d, continuing at %d for thread " INTPTR_FORMAT,
-                      (int)(istate->bcp() - METHOD->code_base()),
-                      (int)continuation_bci, p2i(THREAD));
+      if (log_is_enabled(Info, exceptions)) {
+        ResourceMark rm(THREAD);
+        stringStream tempst;
+        tempst.print("interpreter method <%s>\n"
+                     " at bci %d, continuing at %d for thread " INTPTR_FORMAT,
+                     METHOD->print_value_string(),
+                     (int)(istate->bcp() - METHOD->code_base()),
+                     (int)continuation_bci, p2i(THREAD));
+        Exceptions::log_exception(except_oop, tempst);
       }
       // for AbortVMOnException flag
-      NOT_PRODUCT(Exceptions::debug_check_abort(except_oop));
+      Exceptions::debug_check_abort(except_oop);
 
       // Update profiling data.
       BI_PROFILE_ALIGN_TO_CURRENT_BCI();
       goto run;
     }
-    if (TraceExceptions) {
-      ttyLocker ttyl;
+    if (log_is_enabled(Info, exceptions)) {
       ResourceMark rm;
-      tty->print_cr("Exception <%s> (" INTPTR_FORMAT ")", except_oop->print_value_string(), p2i(except_oop()));
-      tty->print_cr(" thrown in interpreter method <%s>", METHOD->print_value_string());
-      tty->print_cr(" at bci %d, unwinding for thread " INTPTR_FORMAT,
-                    (int)(istate->bcp() - METHOD->code_base()),
-                    p2i(THREAD));
+      stringStream tempst;
+      tempst.print("interpreter method <%s>\n"
+             " at bci %d, unwinding for thread " INTPTR_FORMAT,
+             METHOD->print_value_string(),
+             (int)(istate->bcp() - METHOD->code_base()),
+             p2i(THREAD));
+      Exceptions::log_exception(except_oop, tempst);
     }
     // for AbortVMOnException flag
-    NOT_PRODUCT(Exceptions::debug_check_abort(except_oop));
+    Exceptions::debug_check_abort(except_oop);
+
     // No handler in this activation, unwind and try again
     THREAD->set_pending_exception(except_oop(), NULL, 0);
     goto handle_return;

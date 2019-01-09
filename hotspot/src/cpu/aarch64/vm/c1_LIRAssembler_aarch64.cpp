@@ -173,6 +173,7 @@ static jlong as_long(LIR_Opr data) {
     break;
   default:
     ShouldNotReachHere();
+    result = 0;  // unreachable
   }
   return result;
 }
@@ -374,7 +375,7 @@ int LIR_Assembler::emit_exception_handler() {
   __ nop();
 
   // generate code for exception handler
-  address handler_base = __ start_a_stub(exception_handler_size);
+  address handler_base = __ start_a_stub(exception_handler_size());
   if (handler_base == NULL) {
     // not enough space left for the handler
     bailout("exception handler overflow");
@@ -392,7 +393,7 @@ int LIR_Assembler::emit_exception_handler() {
 
   // search an exception handler (r0: exception oop, r3: throwing pc)
   __ far_call(RuntimeAddress(Runtime1::entry_for(Runtime1::handle_exception_from_callee_id)));  __ should_not_reach_here();
-  guarantee(code_offset() - offset <= exception_handler_size, "overflow");
+  guarantee(code_offset() - offset <= exception_handler_size(), "overflow");
   __ end_a_stub();
 
   return offset;
@@ -466,7 +467,7 @@ int LIR_Assembler::emit_deopt_handler() {
   __ nop();
 
   // generate code for exception handler
-  address handler_base = __ start_a_stub(deopt_handler_size);
+  address handler_base = __ start_a_stub(deopt_handler_size());
   if (handler_base == NULL) {
     // not enough space left for the handler
     bailout("deopt handler overflow");
@@ -477,20 +478,11 @@ int LIR_Assembler::emit_deopt_handler() {
 
   __ adr(lr, pc());
   __ far_jump(RuntimeAddress(SharedRuntime::deopt_blob()->unpack()));
-  guarantee(code_offset() - offset <= deopt_handler_size, "overflow");
+  guarantee(code_offset() - offset <= deopt_handler_size(), "overflow");
   __ end_a_stub();
 
   return offset;
 }
-
-
-// This is the fast version of java.lang.String.compare; it has not
-// OSR-entry and therefore, we generate a slow version for OSR's
-void LIR_Assembler::emit_string_compare(LIR_Opr arg0, LIR_Opr arg1, LIR_Opr dst, CodeEmitInfo* info)  {
-  __ mov(r2, (address)__FUNCTION__);
-  __ call_Unimplemented();
-}
-
 
 void LIR_Assembler::add_debug_info_for_branch(address adr, CodeEmitInfo* info) {
   _masm->code_section()->relocate(adr, relocInfo::poll_type);
@@ -540,8 +532,14 @@ void LIR_Assembler::poll_for_safepoint(relocInfo::relocType rtype, CodeEmitInfo*
 
 void LIR_Assembler::return_op(LIR_Opr result) {
   assert(result->is_illegal() || !result->is_single_cpu() || result->as_register() == r0, "word returns are in r0,");
+
   // Pop the stack before the safepoint code
   __ remove_frame(initial_frame_size_in_bytes());
+
+  if (StackReservedPages > 0 && compilation()->has_reserved_stack_access()) {
+    __ reserved_stack_check();
+  }
+
   address polling_page(os::get_polling_page());
   __ read_polling_page(rscratch1, polling_page, relocInfo::poll_return_type);
   __ ret(lr);
@@ -729,6 +727,7 @@ void LIR_Assembler::const2mem(LIR_Opr src, LIR_Opr dest, BasicType type, CodeEmi
     break;
   default:
     ShouldNotReachHere();
+    insn = &Assembler::str;  // unreachable
   }
 
   if (info) add_debug_info_for_null_check_here(info);
@@ -1062,7 +1061,7 @@ int LIR_Assembler::array_element_size(BasicType type) const {
   return exact_log2(elem_size);
 }
 
-void LIR_Assembler::emit_op3(LIR_Op3* op) {
+void LIR_Assembler::arithmetic_idiv(LIR_Op3* op, bool is_irem) {
   Register Rdividend = op->in_opr1()->as_register();
   Register Rdivisor  = op->in_opr2()->as_register();
   Register Rscratch  = op->in_opr3()->as_register();
@@ -1083,12 +1082,31 @@ void LIR_Assembler::emit_op3(LIR_Op3* op) {
     // convert division by a power of two into some shifts and logical operations
   }
 
-  if (op->code() == lir_irem) {
-    __ corrected_idivl(Rresult, Rdividend, Rdivisor, true, rscratch1);
-   } else if (op->code() == lir_idiv) {
-    __ corrected_idivl(Rresult, Rdividend, Rdivisor, false, rscratch1);
-  } else
-    ShouldNotReachHere();
+  __ corrected_idivl(Rresult, Rdividend, Rdivisor, is_irem, rscratch1);
+}
+
+void LIR_Assembler::emit_op3(LIR_Op3* op) {
+  switch (op->code()) {
+  case lir_idiv:
+    arithmetic_idiv(op, false);
+    break;
+  case lir_irem:
+    arithmetic_idiv(op, true);
+    break;
+  case lir_fmad:
+    __ fmaddd(op->result_opr()->as_double_reg(),
+              op->in_opr1()->as_double_reg(),
+              op->in_opr2()->as_double_reg(),
+              op->in_opr3()->as_double_reg());
+    break;
+  case lir_fmaf:
+    __ fmadds(op->result_opr()->as_float_reg(),
+              op->in_opr1()->as_float_reg(),
+              op->in_opr2()->as_float_reg(),
+              op->in_opr3()->as_float_reg());
+    break;
+  default:      ShouldNotReachHere(); break;
+  }
 }
 
 void LIR_Assembler::emit_opBranch(LIR_OpBranch* op) {
@@ -1119,6 +1137,7 @@ void LIR_Assembler::emit_opBranch(LIR_OpBranch* op) {
       case lir_cond_greaterEqual: acond = (is_unordered ? Assembler::HS : Assembler::GE); break;
       case lir_cond_greater:      acond = (is_unordered ? Assembler::HI : Assembler::GT); break;
       default:                    ShouldNotReachHere();
+        acond = Assembler::EQ;  // unreachable
       }
     } else {
       switch (op->cond()) {
@@ -1130,7 +1149,8 @@ void LIR_Assembler::emit_opBranch(LIR_OpBranch* op) {
         case lir_cond_greater:      acond = Assembler::GT; break;
         case lir_cond_belowEqual:   acond = Assembler::LS; break;
         case lir_cond_aboveEqual:   acond = Assembler::HS; break;
-        default:                         ShouldNotReachHere();
+        default:                    ShouldNotReachHere();
+          acond = Assembler::EQ;  // unreachable
       }
     }
     __ br(acond,*(op->label()));
@@ -1322,7 +1342,9 @@ void LIR_Assembler::emit_typecheck_helper(LIR_OpTypeCheck *op, Label* success, L
   ciMethodData* md;
   ciProfileData* data;
 
-  if (op->should_profile()) {
+  const bool should_profile = op->should_profile();
+
+  if (should_profile) {
     ciMethod* method = op->profiled_method();
     assert(method != NULL, "Should have method");
     int bci = op->profiled_bci();
@@ -1333,8 +1355,8 @@ void LIR_Assembler::emit_typecheck_helper(LIR_OpTypeCheck *op, Label* success, L
     assert(data->is_ReceiverTypeData(), "need ReceiverTypeData for type check");
   }
   Label profile_cast_success, profile_cast_failure;
-  Label *success_target = op->should_profile() ? &profile_cast_success : success;
-  Label *failure_target = op->should_profile() ? &profile_cast_failure : failure;
+  Label *success_target = should_profile ? &profile_cast_success : success;
+  Label *failure_target = should_profile ? &profile_cast_failure : failure;
 
   if (obj == k_RInfo) {
     k_RInfo = dst;
@@ -1350,7 +1372,7 @@ void LIR_Assembler::emit_typecheck_helper(LIR_OpTypeCheck *op, Label* success, L
 
   assert_different_registers(obj, k_RInfo, klass_RInfo);
 
-    if (op->should_profile()) {
+    if (should_profile) {
       Label not_null;
       __ cbnz(obj, not_null);
       // Object is null; update MDO and exit
@@ -1422,7 +1444,7 @@ void LIR_Assembler::emit_typecheck_helper(LIR_OpTypeCheck *op, Label* success, L
       // successful cast, fall through to profile or jump
     }
   }
-  if (op->should_profile()) {
+  if (should_profile) {
     Register mdo  = klass_RInfo, recv = k_RInfo;
     __ bind(profile_cast_success);
     __ mov_metadata(mdo, md->constant_encoding());
@@ -1447,6 +1469,8 @@ void LIR_Assembler::emit_typecheck_helper(LIR_OpTypeCheck *op, Label* success, L
 
 
 void LIR_Assembler::emit_opTypeCheck(LIR_OpTypeCheck* op) {
+  const bool should_profile = op->should_profile();
+
   LIR_Code code = op->code();
   if (code == lir_store_check) {
     Register value = op->object()->as_register();
@@ -1461,7 +1485,7 @@ void LIR_Assembler::emit_opTypeCheck(LIR_OpTypeCheck* op) {
     ciMethodData* md;
     ciProfileData* data;
 
-    if (op->should_profile()) {
+    if (should_profile) {
       ciMethod* method = op->profiled_method();
       assert(method != NULL, "Should have method");
       int bci = op->profiled_bci();
@@ -1472,10 +1496,10 @@ void LIR_Assembler::emit_opTypeCheck(LIR_OpTypeCheck* op) {
       assert(data->is_ReceiverTypeData(), "need ReceiverTypeData for type check");
     }
     Label profile_cast_success, profile_cast_failure, done;
-    Label *success_target = op->should_profile() ? &profile_cast_success : &done;
-    Label *failure_target = op->should_profile() ? &profile_cast_failure : stub->entry();
+    Label *success_target = should_profile ? &profile_cast_success : &done;
+    Label *failure_target = should_profile ? &profile_cast_failure : stub->entry();
 
-    if (op->should_profile()) {
+    if (should_profile) {
       Label not_null;
       __ cbnz(value, not_null);
       // Object is null; update MDO and exit
@@ -1511,7 +1535,7 @@ void LIR_Assembler::emit_opTypeCheck(LIR_OpTypeCheck* op) {
     __ cbzw(k_RInfo, *failure_target);
     // fall through to the success case
 
-    if (op->should_profile()) {
+    if (should_profile) {
       Register mdo  = klass_RInfo, recv = k_RInfo;
       __ bind(profile_cast_success);
       __ mov_metadata(mdo, md->constant_encoding());
@@ -1557,38 +1581,14 @@ void LIR_Assembler::emit_opTypeCheck(LIR_OpTypeCheck* op) {
 }
 
 void LIR_Assembler::casw(Register addr, Register newval, Register cmpval) {
-  Label retry_load, nope;
-  // flush and load exclusive from the memory location
-  // and fail if it is not what we expect
-  __ bind(retry_load);
-  __ ldaxrw(rscratch1, addr);
-  __ cmpw(rscratch1, cmpval);
+  __ cmpxchg(addr, cmpval, newval, Assembler::word, /* acquire*/ true, /* release*/ true, /* weak*/ false, rscratch1);
   __ cset(rscratch1, Assembler::NE);
-  __ br(Assembler::NE, nope);
-  // if we store+flush with no intervening write rscratch1 wil be zero
-  __ stlxrw(rscratch1, newval, addr);
-  // retry so we only ever return after a load fails to compare
-  // ensures we don't return a stale value after a failed write.
-  __ cbnzw(rscratch1, retry_load);
-  __ bind(nope);
   __ membar(__ AnyAny);
 }
 
 void LIR_Assembler::casl(Register addr, Register newval, Register cmpval) {
-  Label retry_load, nope;
-  // flush and load exclusive from the memory location
-  // and fail if it is not what we expect
-  __ bind(retry_load);
-  __ ldaxr(rscratch1, addr);
-  __ cmp(rscratch1, cmpval);
+  __ cmpxchg(addr, cmpval, newval, Assembler::xword, /* acquire*/ true, /* release*/ true, /* weak*/ false, rscratch1);
   __ cset(rscratch1, Assembler::NE);
-  __ br(Assembler::NE, nope);
-  // if we store+flush with no intervening write rscratch1 wil be zero
-  __ stlxr(rscratch1, newval, addr);
-  // retry so we only ever return after a load fails to compare
-  // ensures we don't return a stale value after a failed write.
-  __ cbnz(rscratch1, retry_load);
-  __ bind(nope);
   __ membar(__ AnyAny);
 }
 
@@ -1630,9 +1630,10 @@ void LIR_Assembler::cmove(LIR_Condition condition, LIR_Opr opr1, LIR_Opr opr2, L
   case lir_cond_lessEqual:    acond = Assembler::LE; ncond = Assembler::GT; break;
   case lir_cond_greaterEqual: acond = Assembler::GE; ncond = Assembler::LT; break;
   case lir_cond_greater:      acond = Assembler::GT; ncond = Assembler::LE; break;
-  case lir_cond_belowEqual:   Unimplemented(); break;
-  case lir_cond_aboveEqual:   Unimplemented(); break;
+  case lir_cond_belowEqual:
+  case lir_cond_aboveEqual:
   default:                    ShouldNotReachHere();
+    acond = Assembler::EQ; ncond = Assembler::NE;  // unreachable
   }
 
   assert(result->is_single_cpu() || result->is_double_cpu(),
@@ -1733,6 +1734,7 @@ void LIR_Assembler::arith_op(LIR_Code code, LIR_Opr left, LIR_Opr right, LIR_Opr
         break;
       default:
         ShouldNotReachHere();
+        c = 0;  // unreachable
         break;
       }
 
@@ -1920,12 +1922,17 @@ void LIR_Assembler::comp_op(LIR_Condition condition, LIR_Opr opr1, LIR_Opr opr2,
     }
 
     if (opr2->is_constant()) {
+      bool is_32bit = false; // width of register operand
       jlong imm;
+
       switch(opr2->type()) {
+      case T_INT:
+        imm = opr2->as_constant_ptr()->as_jint();
+        is_32bit = true;
+        break;
       case T_LONG:
         imm = opr2->as_constant_ptr()->as_jlong();
         break;
-      case T_INT:
       case T_ADDRESS:
         imm = opr2->as_constant_ptr()->as_jint();
         break;
@@ -1935,18 +1942,19 @@ void LIR_Assembler::comp_op(LIR_Condition condition, LIR_Opr opr1, LIR_Opr opr2,
         break;
       default:
         ShouldNotReachHere();
+        imm = 0;  // unreachable
         break;
       }
 
       if (Assembler::operand_valid_for_add_sub_immediate(imm)) {
-        if (type2aelembytes(opr1->type()) <= 4)
+        if (is_32bit)
           __ cmpw(reg1, imm);
         else
           __ cmp(reg1, imm);
         return;
       } else {
         __ mov(rscratch1, imm);
-        if (type2aelembytes(opr1->type()) <= 4)
+        if (is_32bit)
           __ cmpw(reg1, rscratch1);
         else
           __ cmp(reg1, rscratch1);
@@ -1996,13 +2004,21 @@ void LIR_Assembler::align_call(LIR_Code code) {  }
 
 
 void LIR_Assembler::call(LIR_OpJavaCall* op, relocInfo::relocType rtype) {
-  __ trampoline_call(Address(op->addr(), rtype));
+  address call = __ trampoline_call(Address(op->addr(), rtype));
+  if (call == NULL) {
+    bailout("trampoline stub overflow");
+    return;
+  }
   add_call_info(code_offset(), op->info());
 }
 
 
 void LIR_Assembler::ic_call(LIR_OpJavaCall* op) {
-  __ ic_call(op->addr());
+  address call = __ ic_call(op->addr());
+  if (call == NULL) {
+    bailout("trampoline stub overflow");
+    return;
+  }
   add_call_info(code_offset(), op->info());
 }
 
@@ -2015,7 +2031,7 @@ void LIR_Assembler::vtable_call(LIR_OpJavaCall* op) {
 
 void LIR_Assembler::emit_static_call_stub() {
   address call_pc = __ pc();
-  address stub = __ start_a_stub(call_stub_size);
+  address stub = __ start_a_stub(call_stub_size());
   if (stub == NULL) {
     bailout("static call stub overflow");
     return;
@@ -2028,7 +2044,7 @@ void LIR_Assembler::emit_static_call_stub() {
   __ movptr(rscratch1, 0);
   __ br(rscratch1);
 
-  assert(__ offset() - start <= call_stub_size, "stub too big");
+  assert(__ offset() - start <= call_stub_size(), "stub too big");
   __ end_a_stub();
 }
 
@@ -2263,6 +2279,25 @@ void LIR_Assembler::emit_arraycopy(LIR_OpArrayCopy* op) {
     __ cbz(dst, *stub->entry());
   }
 
+  // If the compiler was not able to prove that exact type of the source or the destination
+  // of the arraycopy is an array type, check at runtime if the source or the destination is
+  // an instance type.
+  if (flags & LIR_OpArrayCopy::type_check) {
+    if (!(flags & LIR_OpArrayCopy::LIR_OpArrayCopy::dst_objarray)) {
+      __ load_klass(tmp, dst);
+      __ ldrw(rscratch1, Address(tmp, in_bytes(Klass::layout_helper_offset())));
+      __ cmpw(rscratch1, Klass::_lh_neutral_value);
+      __ br(Assembler::GE, *stub->entry());
+    }
+
+    if (!(flags & LIR_OpArrayCopy::LIR_OpArrayCopy::src_objarray)) {
+      __ load_klass(tmp, src);
+      __ ldrw(rscratch1, Address(tmp, in_bytes(Klass::layout_helper_offset())));
+      __ cmpw(rscratch1, Klass::_lh_neutral_value);
+      __ br(Assembler::GE, *stub->entry());
+    }
+  }
+
   // check if negative
   if (flags & LIR_OpArrayCopy::src_pos_positive_check) {
     __ cmpw(src_pos, 0);
@@ -2290,14 +2325,6 @@ void LIR_Assembler::emit_arraycopy(LIR_OpArrayCopy* op) {
     __ cmpw(tmp, rscratch1);
     __ br(Assembler::HI, *stub->entry());
   }
-
-  // FIXME: The logic in LIRGenerator::arraycopy_helper clears
-  // length_positive_check if the source of our length operand is an
-  // arraylength.  However, that arraylength might be zero, and the
-  // stub that we're about to call contains an assertion that count !=
-  // 0 .  So we make this check purely in order not to trigger an
-  // assertion failure.
-  __ cbzw(length, *stub->continuation());
 
   if (flags & LIR_OpArrayCopy::type_check) {
     // We don't know the array types are compatible
@@ -2956,6 +2983,10 @@ void LIR_Assembler::membar_loadstore() { __ membar(MacroAssembler::LoadStore); }
 
 void LIR_Assembler::membar_storeload() { __ membar(MacroAssembler::StoreLoad); }
 
+void LIR_Assembler::on_spin_wait() {
+  Unimplemented();
+}
+
 void LIR_Assembler::get_thread(LIR_Opr result_reg) {
   __ mov(result_reg->as_register(), rthread);
 }
@@ -3091,39 +3122,36 @@ void LIR_Assembler::peephole(LIR_List *lir) {
 }
 
 void LIR_Assembler::atomic_op(LIR_Code code, LIR_Opr src, LIR_Opr data, LIR_Opr dest, LIR_Opr tmp_op) {
-  Address addr = as_Address(src->as_address_ptr(), noreg);
+  Address addr = as_Address(src->as_address_ptr());
   BasicType type = src->type();
   bool is_oop = type == T_OBJECT || type == T_ARRAY;
 
-  void (MacroAssembler::* lda)(Register Rd, Register Ra);
-  void (MacroAssembler::* add)(Register Rd, Register Rn, RegisterOrConstant increment);
-  void (MacroAssembler::* stl)(Register Rs, Register Rt, Register Rn);
+  void (MacroAssembler::* add)(Register prev, RegisterOrConstant incr, Register addr);
+  void (MacroAssembler::* xchg)(Register prev, Register newv, Register addr);
 
   switch(type) {
   case T_INT:
-    lda = &MacroAssembler::ldaxrw;
-    add = &MacroAssembler::addw;
-    stl = &MacroAssembler::stlxrw;
+    xchg = &MacroAssembler::atomic_xchgalw;
+    add = &MacroAssembler::atomic_addalw;
     break;
   case T_LONG:
-    lda = &MacroAssembler::ldaxr;
-    add = &MacroAssembler::add;
-    stl = &MacroAssembler::stlxr;
+    xchg = &MacroAssembler::atomic_xchgal;
+    add = &MacroAssembler::atomic_addal;
     break;
   case T_OBJECT:
   case T_ARRAY:
     if (UseCompressedOops) {
-      lda = &MacroAssembler::ldaxrw;
-      add = &MacroAssembler::addw;
-      stl = &MacroAssembler::stlxrw;
+      xchg = &MacroAssembler::atomic_xchgalw;
+      add = &MacroAssembler::atomic_addalw;
     } else {
-      lda = &MacroAssembler::ldaxr;
-      add = &MacroAssembler::add;
-      stl = &MacroAssembler::stlxr;
+      xchg = &MacroAssembler::atomic_xchgal;
+      add = &MacroAssembler::atomic_addal;
     }
     break;
   default:
     ShouldNotReachHere();
+    xchg = &MacroAssembler::atomic_xchgal;
+    add = &MacroAssembler::atomic_addal; // unreachable
   }
 
   switch (code) {
@@ -3141,13 +3169,8 @@ void LIR_Assembler::atomic_op(LIR_Code code, LIR_Opr src, LIR_Opr data, LIR_Opr 
         assert_different_registers(inc.as_register(), dst, addr.base(), tmp,
                                    rscratch1, rscratch2);
       }
-      Label again;
       __ lea(tmp, addr);
-      __ bind(again);
-      (_masm->*lda)(dst, tmp);
-      (_masm->*add)(rscratch1, dst, inc);
-      (_masm->*stl)(rscratch2, rscratch1, tmp);
-      __ cbnzw(rscratch2, again);
+      (_masm->*add)(dst, inc, tmp);
       break;
     }
   case lir_xchg:
@@ -3156,15 +3179,12 @@ void LIR_Assembler::atomic_op(LIR_Code code, LIR_Opr src, LIR_Opr data, LIR_Opr 
       Register obj = as_reg(data);
       Register dst = as_reg(dest);
       if (is_oop && UseCompressedOops) {
-        __ encode_heap_oop(obj);
+        __ encode_heap_oop(rscratch2, obj);
+        obj = rscratch2;
       }
-      assert_different_registers(obj, addr.base(), tmp, rscratch2, dst);
-      Label again;
+      assert_different_registers(obj, addr.base(), tmp, rscratch1, dst);
       __ lea(tmp, addr);
-      __ bind(again);
-      (_masm->*lda)(dst, tmp);
-      (_masm->*stl)(rscratch2, obj, tmp);
-      __ cbnzw(rscratch2, again);
+      (_masm->*xchg)(dst, obj, tmp);
       if (is_oop && UseCompressedOops) {
         __ decode_heap_oop(dst);
       }

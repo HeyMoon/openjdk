@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,7 +28,7 @@
 #include "gc/cms/vmCMSOperations.hpp"
 #include "gc/shared/gcLocker.inline.hpp"
 #include "gc/shared/gcTimer.hpp"
-#include "gc/shared/gcTraceTime.hpp"
+#include "gc/shared/gcTraceTime.inline.hpp"
 #include "gc/shared/isGCActiveMark.hpp"
 #include "runtime/interfaceSupport.hpp"
 #include "runtime/os.hpp"
@@ -37,28 +37,10 @@
 //////////////////////////////////////////////////////////
 // Methods in abstract class VM_CMS_Operation
 //////////////////////////////////////////////////////////
-void VM_CMS_Operation::acquire_pending_list_lock() {
-  // The caller may block while communicating
-  // with the SLT thread in order to acquire/release the PLL.
-  SurrogateLockerThread* slt = ConcurrentMarkSweepThread::slt();
-  if (slt != NULL) {
-    slt->manipulatePLL(SurrogateLockerThread::acquirePLL);
-  } else {
-    SurrogateLockerThread::report_missing_slt();
-  }
-}
-
-void VM_CMS_Operation::release_and_notify_pending_list_lock() {
-  // The caller may block while communicating
-  // with the SLT thread in order to acquire/release the PLL.
-  ConcurrentMarkSweepThread::slt()->
-    manipulatePLL(SurrogateLockerThread::releaseAndNotifyPLL);
-}
-
 void VM_CMS_Operation::verify_before_gc() {
   if (VerifyBeforeGC &&
       GenCollectedHeap::heap()->total_collections() >= VerifyGCStartAt) {
-    GCTraceTime tm("Verify Before", false, false, _collector->_gc_timer_cm, _collector->_gc_tracer_cm->gc_id());
+    GCTraceTime(Info, gc, phases, verify) tm("Verify Before", _collector->_gc_timer_cm);
     HandleMark hm;
     FreelistLocker x(_collector);
     MutexLockerEx  y(_collector->bitMapLock(), Mutex::_no_safepoint_check_flag);
@@ -70,7 +52,7 @@ void VM_CMS_Operation::verify_before_gc() {
 void VM_CMS_Operation::verify_after_gc() {
   if (VerifyAfterGC &&
       GenCollectedHeap::heap()->total_collections() >= VerifyGCStartAt) {
-    GCTraceTime tm("Verify After", false, false, _collector->_gc_timer_cm, _collector->_gc_tracer_cm->gc_id());
+    GCTraceTime(Info, gc, phases, verify) tm("Verify After", _collector->_gc_timer_cm);
     HandleMark hm;
     FreelistLocker x(_collector);
     MutexLockerEx  y(_collector->bitMapLock(), Mutex::_no_safepoint_check_flag);
@@ -95,17 +77,10 @@ bool VM_CMS_Operation::doit_prologue() {
   assert(!ConcurrentMarkSweepThread::cms_thread_has_cms_token(),
          "Possible deadlock");
 
-  if (needs_pll()) {
-    acquire_pending_list_lock();
-  }
-  // Get the Heap_lock after the pending_list_lock.
   Heap_lock->lock();
   if (lost_race()) {
     assert(_prologue_succeeded == false, "Initialized in c'tor");
     Heap_lock->unlock();
-    if (needs_pll()) {
-      release_and_notify_pending_list_lock();
-    }
   } else {
     _prologue_succeeded = true;
   }
@@ -118,11 +93,10 @@ void VM_CMS_Operation::doit_epilogue() {
   assert(!ConcurrentMarkSweepThread::cms_thread_has_cms_token(),
          "Possible deadlock");
 
-  // Release the Heap_lock first.
-  Heap_lock->unlock();
-  if (needs_pll()) {
-    release_and_notify_pending_list_lock();
+  if (Universe::has_reference_pending_list()) {
+    Heap_lock->notify_all();
   }
+  Heap_lock->unlock();
 }
 
 //////////////////////////////////////////////////////////
@@ -134,6 +108,7 @@ void VM_CMS_Initial_Mark::doit() {
     return;
   }
   HS_PRIVATE_CMS_INITMARK_BEGIN();
+  GCIdMark gc_id_mark(_gc_id);
 
   _collector->_gc_timer_cm->register_gc_pause_start("Initial Mark");
 
@@ -161,6 +136,7 @@ void VM_CMS_Final_Remark::doit() {
     return;
   }
   HS_PRIVATE_CMS_REMARK_BEGIN();
+  GCIdMark gc_id_mark(_gc_id);
 
   _collector->_gc_timer_cm->register_gc_pause_start("Final Mark");
 
@@ -201,7 +177,7 @@ void VM_GenCollectFullConcurrent::doit() {
     gch->do_full_collection(gch->must_clear_all_soft_refs(), GenCollectedHeap::YoungGen);
   } // Else no need for a foreground young gc
   assert((_gc_count_before < gch->total_collections()) ||
-         (GC_locker::is_active() /* gc may have been skipped */
+         (GCLocker::is_active() /* gc may have been skipped */
           && (_gc_count_before == gch->total_collections())),
          "total_collections() should be monotonically increasing");
 
@@ -238,9 +214,11 @@ void VM_GenCollectFullConcurrent::doit_epilogue() {
   Thread* thr = Thread::current();
   assert(thr->is_Java_thread(), "just checking");
   JavaThread* jt = (JavaThread*)thr;
-  // Release the Heap_lock first.
+
+  if (Universe::has_reference_pending_list()) {
+    Heap_lock->notify_all();
+  }
   Heap_lock->unlock();
-  release_and_notify_pending_list_lock();
 
   // It is fine to test whether completed collections has
   // exceeded our request count without locking because

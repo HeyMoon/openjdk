@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 #define SHARE_VM_GC_G1_HEAPREGIONREMSET_HPP
 
 #include "gc/g1/g1CodeCacheRemSet.hpp"
+#include "gc/g1/g1FromCardCache.hpp"
 #include "gc/g1/sparsePRT.hpp"
 
 // Remembered set for a heap region.  Represent a set of "cards" that
@@ -33,7 +34,8 @@
 // abstractly, in terms of what the "BlockOffsetTable" in use can parse.
 
 class G1CollectedHeap;
-class G1BlockOffsetSharedArray;
+class G1BlockOffsetTable;
+class G1CardLiveData;
 class HeapRegion;
 class HeapRegionRemSetIterator;
 class PerRegionTable;
@@ -43,54 +45,6 @@ class nmethod;
 // Essentially a wrapper around SparsePRTCleanupTask. See
 // sparsePRT.hpp for more details.
 class HRRSCleanupTask : public SparsePRTCleanupTask {
-};
-
-// The FromCardCache remembers the most recently processed card on the heap on
-// a per-region and per-thread basis.
-class FromCardCache : public AllStatic {
- private:
-  // Array of card indices. Indexed by thread X and heap region to minimize
-  // thread contention.
-  static int** _cache;
-  static uint _max_regions;
-  static size_t _static_mem_size;
-
- public:
-  enum {
-    InvalidCard = -1 // Card value of an invalid card, i.e. a card index not otherwise used.
-  };
-
-  static void clear(uint region_idx);
-
-  // Returns true if the given card is in the cache at the given location, or
-  // replaces the card at that location and returns false.
-  static bool contains_or_replace(uint worker_id, uint region_idx, int card) {
-    int card_in_cache = at(worker_id, region_idx);
-    if (card_in_cache == card) {
-      return true;
-    } else {
-      set(worker_id, region_idx, card);
-      return false;
-    }
-  }
-
-  static int at(uint worker_id, uint region_idx) {
-    return _cache[worker_id][region_idx];
-  }
-
-  static void set(uint worker_id, uint region_idx, int val) {
-    _cache[worker_id][region_idx] = val;
-  }
-
-  static void initialize(uint n_par_rs, uint max_num_regions);
-
-  static void invalidate(uint start_idx, size_t num_regions);
-
-  static void print(outputStream* out = gclog_or_tty) PRODUCT_RETURN;
-
-  static size_t static_mem_size() {
-    return _static_mem_size;
-  }
 };
 
 // The "_coarse_map" is a bitmap with one bit for each region, where set
@@ -125,7 +79,7 @@ class OtherRegionsTable VALUE_OBJ_CLASS_SPEC {
   HeapRegion*      _hr;
 
   // These are protected by "_m".
-  BitMap      _coarse_map;
+  CHeapBitMap _coarse_map;
   size_t      _n_coarse_entries;
   static jint _n_coarsenings;
 
@@ -190,7 +144,7 @@ public:
   // Removes any entries shown by the given bitmaps to contain only dead
   // objects. Not thread safe.
   // Set bits in the bitmaps indicate that the given region or card is live.
-  void scrub(CardTableModRefBS* ctbs, BitMap* region_bm, BitMap* card_bm);
+  void scrub(G1CardLiveData* live_data);
 
   // Returns whether this remembered set (and all sub-sets) does not contain any entry.
   bool is_empty() const;
@@ -220,13 +174,8 @@ class HeapRegionRemSet : public CHeapObj<mtGC> {
   friend class VMStructs;
   friend class HeapRegionRemSetIterator;
 
-public:
-  enum Event {
-    Event_EvacStart, Event_EvacEnd, Event_RSUpdateEnd
-  };
-
 private:
-  G1BlockOffsetSharedArray* _bosa;
+  G1BlockOffsetTable* _bot;
 
   // A set of code blobs (nmethods) whose code contains pointers into
   // the region that owns this RSet.
@@ -236,29 +185,9 @@ private:
 
   OtherRegionsTable _other_regions;
 
-  enum ParIterState { Unclaimed, Claimed, Complete };
-  volatile ParIterState _iter_state;
-  volatile size_t _iter_claimed;
-
-  // Unused unless G1RecordHRRSOops is true.
-
-  static const int MaxRecorded = 1000000;
-  static OopOrNarrowOopStar* _recorded_oops;
-  static HeapWord**          _recorded_cards;
-  static HeapRegion**        _recorded_regions;
-  static int                 _n_recorded;
-
-  static const int MaxRecordedEvents = 1000;
-  static Event*       _recorded_events;
-  static int*         _recorded_event_index;
-  static int          _n_recorded_events;
-
-  static void print_event(outputStream* str, Event evnt);
-
 public:
-  HeapRegionRemSet(G1BlockOffsetSharedArray* bosa, HeapRegion* hr);
+  HeapRegionRemSet(G1BlockOffsetTable* bot, HeapRegion* hr);
 
-  static uint num_par_rem_sets();
   static void setup_remset_size();
 
   bool is_empty() const {
@@ -298,36 +227,14 @@ public:
     _other_regions.add_reference(from, tid);
   }
 
-  // Removes any entries in the remembered set shown by the given bitmaps to
+  // Removes any entries in the remembered set shown by the given card live data to
   // contain only dead objects. Not thread safe.
-  // One bits in the bitmaps indicate that the given region or card is live.
-  void scrub(CardTableModRefBS* ctbs, BitMap* region_bm, BitMap* card_bm);
+  void scrub(G1CardLiveData* live_data);
 
   // The region is being reclaimed; clear its remset, and any mention of
   // entries for this region in other remsets.
   void clear();
   void clear_locked();
-
-  // Attempt to claim the region.  Returns true iff this call caused an
-  // atomic transition from Unclaimed to Claimed.
-  bool claim_iter();
-  // Sets the iteration state to "complete".
-  void set_iter_complete();
-  // Returns "true" iff the region's iteration is complete.
-  bool iter_is_complete();
-
-  // Support for claiming blocks of cards during iteration
-  size_t iter_claimed() const { return _iter_claimed; }
-  // Claim the next block of cards
-  size_t iter_claimed_next(size_t step) {
-    return Atomic::add(step, &_iter_claimed) - step;
-  }
-
-  void reset_for_par_iteration();
-
-  bool verify_ready_for_par_iteration() {
-    return (_iter_state == Unclaimed) && (_iter_claimed == 0);
-  }
 
   // The actual # of bytes this hr_remset takes up.
   // Note also includes the strong code root set.
@@ -383,30 +290,18 @@ public:
   // consumed by the strong code roots.
   size_t strong_code_roots_mem_size();
 
-  void print() PRODUCT_RETURN;
-
   // Called during a stop-world phase to perform any deferred cleanups.
   static void cleanup();
 
-  // Declare the heap size (in # of regions) to the HeapRegionRemSet(s).
-  // (Uses it to initialize from_card_cache).
-  static void init_heap(uint max_regions) {
-    FromCardCache::initialize(num_par_rem_sets(), max_regions);
-  }
-
   static void invalidate_from_card_cache(uint start_idx, size_t num_regions) {
-    FromCardCache::invalidate(start_idx, num_regions);
+    G1FromCardCache::invalidate(start_idx, num_regions);
   }
 
 #ifndef PRODUCT
   static void print_from_card_cache() {
-    FromCardCache::print();
+    G1FromCardCache::print();
   }
 #endif
-
-  static void record(HeapRegion* hr, OopOrNarrowOopStar f);
-  static void print_recorded();
-  static void record_event(Event evnt);
 
   // These are wrappers for the similarly-named methods on
   // SparsePRT. Look at sparsePRT.hpp for more details.
@@ -416,7 +311,6 @@ public:
 
   // Run unit tests.
 #ifndef PRODUCT
-  static void test_prt();
   static void test();
 #endif
 };
@@ -429,7 +323,7 @@ class HeapRegionRemSetIterator : public StackObj {
   // Local caching of HRRS fields.
   const BitMap*             _coarse_map;
 
-  G1BlockOffsetSharedArray* _bosa;
+  G1BlockOffsetTable*       _bot;
   G1CollectedHeap*          _g1h;
 
   // The number of cards yielded since initialization.

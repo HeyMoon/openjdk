@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,24 +21,37 @@
  * questions.
  */
 
-import java.util.function.Function;
-
 /*
  * @test ClearMethodStateTest
  * @bug 8006683 8007288 8022832
- * @library /testlibrary /../../test/lib
- * @modules java.management
- * @build ClearMethodStateTest
- * @run main ClassFileInstaller sun.hotspot.WhiteBox
- *                              sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main/othervm -Xbootclasspath/a:. -Xmixed -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:CompileCommand=compileonly,SimpleTestCase$Helper::* ClearMethodStateTest
  * @summary testing of WB::clearMethodState()
- * @author igor.ignatyev@oracle.com
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ *          java.management
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *                                sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @run main/othervm -Xbootclasspath/a:. -Xmixed -XX:+UnlockDiagnosticVMOptions
+ *                   -XX:+WhiteBoxAPI -XX:+PrintCompilation -XX:-UseCounterDecay
+ *                   compiler.whitebox.ClearMethodStateTest
  */
+
+package compiler.whitebox;
+
 public class ClearMethodStateTest extends CompilerWhiteBoxTest {
 
     public static void main(String[] args) throws Exception {
-        CompilerWhiteBoxTest.main(ClearMethodStateTest::new, args);
+        String directive =
+                "[{ match:\"*SimpleTestCaseHelper.*\", BackgroundCompilation: false }, " +
+                " { match:\"*.*\", inline:\"-*SimpleTestCaseHelper.*\"}]";
+        if (WHITE_BOX.addCompilerDirective(directive) != 2) {
+            throw new RuntimeException("Could not add directive");
+        }
+        try {
+            CompilerWhiteBoxTest.main(ClearMethodStateTest::new, args);
+        } finally {
+            WHITE_BOX.removeCompilerDirective(2);
+        }
     }
 
     private ClearMethodStateTest(TestCase testCase) {
@@ -57,6 +70,7 @@ public class ClearMethodStateTest extends CompilerWhiteBoxTest {
      */
     @Override
     protected void test() throws Exception {
+
         checkNotCompiled();
         compile();
         WHITE_BOX.clearMethodState(method);

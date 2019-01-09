@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2014, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -51,6 +51,11 @@ extern "C" void bad_compiled_vtable_index(JavaThread* thread,
 VtableStub* VtableStubs::create_vtable_stub(int vtable_index) {
   const int aarch64_code_length = VtableStub::pd_code_size_limit(true);
   VtableStub* s = new(aarch64_code_length) VtableStub(true, vtable_index);
+  // Can be NULL if there is no free space in the code cache.
+  if (s == NULL) {
+    return NULL;
+  }
+
   ResourceMark rm;
   CodeBuffer cb(s->entry_point(), aarch64_code_length);
   MacroAssembler* masm = new MacroAssembler(&cb);
@@ -73,7 +78,7 @@ VtableStub* VtableStubs::create_vtable_stub(int vtable_index) {
   if (DebugVtables) {
     Label L;
     // check offset vs vtable length
-    __ ldrw(rscratch1, Address(r19, InstanceKlass::vtable_length_offset() * wordSize));
+    __ ldrw(rscratch1, Address(r19, Klass::vtable_length_offset()));
     __ cmpw(rscratch1, vtable_index * vtableEntry::size());
     __ br(Assembler::GT, L);
     __ enter();

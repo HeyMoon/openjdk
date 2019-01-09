@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -248,7 +248,6 @@ public:
 
 template <class E, MEMFLAGS F, unsigned int N = TASKQUEUE_SIZE>
 class GenericTaskQueue: public TaskQueueSuper<N, F> {
-  ArrayAllocator<E, F> _array_allocator;
 protected:
   typedef typename TaskQueueSuper<N, F>::Age Age;
   typedef typename TaskQueueSuper<N, F>::idx_t idx_t;
@@ -295,8 +294,9 @@ public:
   // Delete any resource associated with the queue.
   ~GenericTaskQueue();
 
-  // apply the closure to all elements in the task queue
-  void oops_do(OopClosure* f);
+  // Apply fn to each element in the task queue.  The queue must not
+  // be modified while iterating.
+  template<typename Fn> void iterate(Fn fn);
 
 private:
   // Element array.
@@ -330,6 +330,8 @@ public:
 
   // Push task t onto the queue or onto the overflow stack.  Return true.
   inline bool push(E t);
+  // Try to push task t onto the queue only. Returns true if successful, false otherwise.
+  inline bool try_push_to_taskqueue(E t);
 
   // Attempt to pop from the overflow stack; return true if anything was popped.
   inline bool pop_overflow(E& t);

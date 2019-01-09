@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,12 +30,10 @@ package com.sun.source.doctree;
  *
  * @since 1.8
  */
-@jdk.Exported
 public interface DocTree {
     /**
      * Enumerates all kinds of trees.
      */
-    @jdk.Exported
     enum Kind {
         /**
          * Used for instances of {@link AttributeTree}
@@ -104,10 +102,22 @@ public interface DocTree {
         EXCEPTION("exception"),
 
         /**
+         * Used for instances of {@link HiddenTree}
+         * representing an @hidden tag.
+         */
+        HIDDEN("hidden"),
+
+        /**
          * Used for instances of {@link IdentifierTree}
          * representing an identifier.
          */
         IDENTIFIER,
+
+        /**
+         * Used for instances of {@link IndexTree}
+         * representing a search term.
+         */
+        INDEX("index"),
 
         /**
          * Used for instances of {@link InheritDocTree}
@@ -138,6 +148,12 @@ public interface DocTree {
          * representing an @param tag.
          */
         PARAM("param"),
+
+        /**
+         * Used for instances of {@link ProvidesTree}
+         * representing an @provides tag.
+         */
+        PROVIDES("provides"),
 
         /**
          * Used for instances of {@link ReferenceTree}
@@ -211,6 +227,12 @@ public interface DocTree {
          * representing an unknown inline tag.
          */
         UNKNOWN_INLINE_TAG,
+
+        /**
+         * Used for instances of {@link UsesTree}
+         * representing an @uses tag.
+         */
+        USES("uses"),
 
         /**
          * Used for instances of {@link ValueTree}

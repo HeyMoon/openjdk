@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,10 +36,11 @@
 // instance of java.lang.Object.
 class ciInstance : public ciObject {
   CI_PACKAGE_ACCESS
+  friend class ciField;
 
 protected:
   ciInstance(instanceHandle h_i) : ciObject(h_i) {
-    assert(h_i()->is_instance(), "wrong type");
+    assert(h_i()->is_instance_noinline(), "wrong type");
   }
 
   ciInstance(ciKlass* klass) : ciObject(klass) {}
@@ -49,6 +50,8 @@ protected:
   const char* type_string() { return "ciInstance"; }
 
   void print_impl(outputStream* st);
+
+  ciConstant field_value_impl(BasicType field_btype, int offset);
 
 public:
   // If this object is a java mirror, return the corresponding type.

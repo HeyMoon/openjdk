@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -63,7 +63,7 @@ class BaseBytecodeStream: StackObj {
   bool            _is_raw;                       // false in 'cooked' BytecodeStream
 
   // Construction
-  BaseBytecodeStream(methodHandle method) : _method(method) {
+  BaseBytecodeStream(const methodHandle& method) : _method(method) {
     set_interval(0, _method->code_size());
     _is_raw = false;
   }
@@ -86,7 +86,7 @@ class BaseBytecodeStream: StackObj {
   bool is_raw() const { return _is_raw; }
 
   // Stream attributes
-  methodHandle    method() const                 { return _method; }
+  const methodHandle& method() const             { return _method; }
 
   int             bci() const                    { return _bci; }
   int             next_bci() const               { return _next_bci; }
@@ -118,7 +118,7 @@ class BaseBytecodeStream: StackObj {
 class RawBytecodeStream: public BaseBytecodeStream {
  public:
   // Construction
-  RawBytecodeStream(methodHandle method) : BaseBytecodeStream(method) {
+  RawBytecodeStream(const methodHandle& method) : BaseBytecodeStream(method) {
     _is_raw = true;
   }
 
@@ -135,12 +135,15 @@ class RawBytecodeStream: public BaseBytecodeStream {
     code        = Bytecodes::code_or_bp_at(bcp);
 
     // set next bytecode position
-    int l = Bytecodes::length_for(code);
-    if (l > 0 && (_bci + l) <= _end_bci) {
+    int len = Bytecodes::length_for(code);
+    if (len > 0 && (_bci <= _end_bci - len)) {
       assert(code != Bytecodes::_wide && code != Bytecodes::_tableswitch
              && code != Bytecodes::_lookupswitch, "can't be special bytecode");
       _is_wide = false;
-      _next_bci += l;
+      _next_bci += len;
+      if (_next_bci <= _bci) { // Check for integer overflow
+        code = Bytecodes::_illegal;
+      }
       _raw_code = code;
       return code;
     } else {
@@ -169,7 +172,7 @@ class BytecodeStream: public BaseBytecodeStream {
 
  public:
   // Construction
-  BytecodeStream(methodHandle method) : BaseBytecodeStream(method) { }
+  BytecodeStream(const methodHandle& method) : BaseBytecodeStream(method) { }
 
   // Iteration
   Bytecodes::Code next() {
@@ -189,19 +192,23 @@ class BytecodeStream: public BaseBytecodeStream {
       // note that we cannot advance before having the
       // tty bytecode otherwise the stepping is wrong!
       // (carefull: length_for(...) must be used first!)
-      int l = Bytecodes::length_for(code);
-      if (l == 0) l = Bytecodes::length_at(_method(), bcp);
-      _next_bci  += l;
-      assert(_bci < _next_bci, "length must be > 0");
-      // set attributes
-      _is_wide      = false;
-      // check for special (uncommon) cases
-      if (code == Bytecodes::_wide) {
-        raw_code = (Bytecodes::Code)bcp[1];
-        code = raw_code;  // wide BCs are always Java-normal
-        _is_wide = true;
+      int len = Bytecodes::length_for(code);
+      if (len == 0) len = Bytecodes::length_at(_method(), bcp);
+      if (len <= 0 || (_bci > _end_bci - len) || (_bci - len >= _next_bci)) {
+        raw_code = code = Bytecodes::_illegal;
+      } else {
+        _next_bci  += len;
+        assert(_bci < _next_bci, "length must be > 0");
+        // set attributes
+        _is_wide      = false;
+        // check for special (uncommon) cases
+        if (code == Bytecodes::_wide) {
+          raw_code = (Bytecodes::Code)bcp[1];
+          code = raw_code;  // wide BCs are always Java-normal
+          _is_wide = true;
+        }
+        assert(Bytecodes::is_java_code(code), "sanity check");
       }
-      assert(Bytecodes::is_java_code(code), "sanity check");
     }
     _raw_code = raw_code;
     _code = code;

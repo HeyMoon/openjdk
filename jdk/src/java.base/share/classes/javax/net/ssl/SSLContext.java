@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 package javax.net.ssl;
 
 import java.security.*;
+import java.util.Objects;
 
 import sun.security.jca.GetInstance;
 
@@ -37,14 +38,16 @@ import sun.security.jca.GetInstance;
  * secure random bytes.
  *
  * <p> Every implementation of the Java platform is required to support the
- * following standard {@code SSLContext} protocol:
+ * following standard {@code SSLContext} protocols:
  * <ul>
- * <li><tt>TLSv1</tt></li>
+ * <li>{@code TLSv1}</li>
+ * <li>{@code TLSv1.1}</li>
+ * <li>{@code TLSv1.2}</li>
  * </ul>
- * This protocol is described in the <a href=
- * "{@docRoot}/../technotes/guides/security/StandardNames.html#SSLContext">
+ * These protocols are described in the <a href=
+ * "{@docRoot}/../specs/security/standard-names.html#sslcontext-algorithms">
  * SSLContext section</a> of the
- * Java Cryptography Architecture Standard Algorithm Name Documentation.
+ * Java Security Standard Algorithm Names Specification.
  * Consult the release documentation for your implementation to see if any
  * other algorithms are supported.
  *
@@ -134,24 +137,33 @@ public class SSLContext {
      * <p> Note that the list of registered providers may be retrieved via
      * the {@link Security#getProviders() Security.getProviders()} method.
      *
+     * @implNote
+     * The JDK Reference Implementation additionally uses the
+     * {@code jdk.security.provider.preferred}
+     * {@link Security#getProperty(String) Security} property to determine
+     * the preferred provider order for the specified algorithm. This
+     * may be different than the order of providers returned by
+     * {@link Security#getProviders() Security.getProviders()}.
+     *
      * @param protocol the standard name of the requested protocol.
      *          See the SSLContext section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#SSLContext">
-     *          Java Cryptography Architecture Standard Algorithm Name
-     *          Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#sslcontext-algorithms">
+     *          Java Security Standard Algorithm Names Specification</a>
      *          for information about standard protocol names.
      *
-     * @return the new {@code SSLContext} object.
+     * @return the new {@code SSLContext} object
      *
-     * @exception NoSuchAlgorithmException if no Provider supports a
-     *          SSLContextSpi implementation for the
-     *          specified protocol.
-     * @exception NullPointerException if protocol is null.
+     * @throws NoSuchAlgorithmException if no {@code Provider} supports a
+     *         {@code SSLContextSpi} implementation for the
+     *         specified protocol
+     *
+     * @throws NullPointerException if {@code protocol} is {@code null}
      *
      * @see java.security.Provider
      */
     public static SSLContext getInstance(String protocol)
             throws NoSuchAlgorithmException {
+        Objects.requireNonNull(protocol, "null protocol name");
         GetInstance.Instance instance = GetInstance.getInstance
                 ("SSLContext", SSLContextSpi.class, protocol);
         return new SSLContext((SSLContextSpi)instance.impl, instance.provider,
@@ -172,29 +184,31 @@ public class SSLContext {
      *
      * @param protocol the standard name of the requested protocol.
      *          See the SSLContext section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#SSLContext">
-     *          Java Cryptography Architecture Standard Algorithm Name
-     *          Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#sslcontext-algorithms">
+     *          Java Security Standard Algorithm Names Specification</a>
      *          for information about standard protocol names.
      *
      * @param provider the name of the provider.
      *
-     * @return the new {@code SSLContext} object.
+     * @return the new {@code SSLContext} object
      *
-     * @throws NoSuchAlgorithmException if a SSLContextSpi
-     *          implementation for the specified protocol is not
-     *          available from the specified provider.
+     * @throws IllegalArgumentException if the provider name is
+     *         {@code null} or empty
+     *
+     * @throws NoSuchAlgorithmException if a {@code SSLContextSpi}
+     *         implementation for the specified protocol is not
+     *         available from the specified provider
      *
      * @throws NoSuchProviderException if the specified provider is not
-     *          registered in the security provider list.
+     *         registered in the security provider list
      *
-     * @throws IllegalArgumentException if the provider name is null or empty.
-     * @throws NullPointerException if protocol is null.
+     * @throws NullPointerException if {@code protocol} is {@code null}
      *
      * @see java.security.Provider
      */
     public static SSLContext getInstance(String protocol, String provider)
             throws NoSuchAlgorithmException, NoSuchProviderException {
+        Objects.requireNonNull(protocol, "null protocol name");
         GetInstance.Instance instance = GetInstance.getInstance
                 ("SSLContext", SSLContextSpi.class, protocol, provider);
         return new SSLContext((SSLContextSpi)instance.impl, instance.provider,
@@ -212,26 +226,27 @@ public class SSLContext {
      *
      * @param protocol the standard name of the requested protocol.
      *          See the SSLContext section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#SSLContext">
-     *          Java Cryptography Architecture Standard Algorithm Name
-     *          Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#sslcontext-algorithms">
+     *          Java Security Standard Algorithm Names Specification</a>
      *          for information about standard protocol names.
      *
      * @param provider an instance of the provider.
      *
-     * @return the new {@code SSLContext} object.
+     * @return the new {@code SSLContext} object
      *
-     * @throws NoSuchAlgorithmException if a SSLContextSpi
-     *          implementation for the specified protocol is not available
-     *          from the specified Provider object.
+     * @throws IllegalArgumentException if the provider is {@code null}
      *
-     * @throws IllegalArgumentException if the provider is null.
-     * @throws NullPointerException if protocol is null.
+     * @throws NoSuchAlgorithmException if a {@code SSLContextSpi}
+     *         implementation for the specified protocol is not available
+     *         from the specified {@code Provider} object
+     *
+     * @throws NullPointerException if {@code protocol} is {@code null}
      *
      * @see java.security.Provider
      */
     public static SSLContext getInstance(String protocol, Provider provider)
             throws NoSuchAlgorithmException {
+        Objects.requireNonNull(protocol, "null protocol name");
         GetInstance.Instance instance = GetInstance.getInstance
                 ("SSLContext", SSLContextSpi.class, protocol, provider);
         return new SSLContext((SSLContextSpi)instance.impl, instance.provider,

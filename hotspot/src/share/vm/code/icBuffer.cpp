@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,8 +38,6 @@
 #include "runtime/mutexLocker.hpp"
 #include "runtime/stubRoutines.hpp"
 
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
-
 DEF_STUB_INTERFACE(ICStub);
 
 StubQueue* InlineCacheBuffer::_buffer    = NULL;
@@ -51,8 +49,8 @@ int InlineCacheBuffer::_pending_count = 0;
 void ICStub::finalize() {
   if (!is_empty()) {
     ResourceMark rm;
-    CompiledIC *ic = CompiledIC_at(CodeCache::find_nmethod(ic_site()), ic_site());
-    assert(CodeCache::find_nmethod(ic->instruction_address()) != NULL, "inline cache in non-nmethod?");
+    CompiledIC *ic = CompiledIC_at(CodeCache::find_compiled(ic_site()), ic_site());
+    assert(CodeCache::find_compiled(ic->instruction_address()) != NULL, "inline cache in non-compiled?");
 
     assert(this == ICStub_from_destination_address(ic->stub_address()), "wrong owner of ic buffer");
     ic->set_ic_destination_and_value(destination(), cached_value());
@@ -97,7 +95,7 @@ void ICStub::verify() {
 }
 
 void ICStub::print() {
-  tty->print_cr("ICStub: site: " INTPTR_FORMAT, _ic_site);
+  tty->print_cr("ICStub: site: " INTPTR_FORMAT, p2i(_ic_site));
 }
 #endif
 
@@ -175,7 +173,7 @@ void InlineCacheBuffer::create_transition_stub(CompiledIC *ic, void* cached_valu
   assert (CompiledIC_lock->is_locked(), "");
   if (TraceICBuffer) {
     tty->print_cr("  create transition stub for " INTPTR_FORMAT " destination " INTPTR_FORMAT " cached value " INTPTR_FORMAT,
-                  ic->instruction_address(), entry, cached_value);
+                  p2i(ic->instruction_address()), p2i(entry), p2i(cached_value));
   }
 
   // If an transition stub is already associate with the inline cache, then we remove the association.
@@ -230,6 +228,6 @@ void InlineCacheBuffer::queue_for_release(CompiledICHolder* icholder) {
   _pending_released = icholder;
   _pending_count++;
   if (TraceICBuffer) {
-    tty->print_cr("enqueueing icholder " INTPTR_FORMAT " to be freed", icholder);
+    tty->print_cr("enqueueing icholder " INTPTR_FORMAT " to be freed", p2i(icholder));
   }
 }

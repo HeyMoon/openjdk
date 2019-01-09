@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -53,6 +53,7 @@ import com.sun.tools.javac.util.StringUtils;
  * @author Robert Field
  * @author Bhavesh Patel (Modified)
  */
+@Deprecated
 public class HtmlDocletWriter extends HtmlDocWriter {
 
     /**
@@ -103,6 +104,8 @@ public class HtmlDocletWriter extends HtmlDocWriter {
      * To check whether the container annotations is documented or not.
      */
     private boolean isContainerDocumented = false;
+
+    HtmlTree fixedNavDiv = new HtmlTree(HtmlTag.DIV);
 
     /**
      * Constructor to construct the HtmlStandardWriter object.
@@ -285,106 +288,6 @@ public class HtmlDocletWriter extends HtmlDocWriter {
     }
 
     /**
-     * Get Profile Package link, with target frame.
-     *
-     * @param pd the packageDoc object
-     * @param target name of the target frame
-     * @param label tag for the link
-     * @param profileName the name of the profile being documented
-     * @return a content for the target profile packages link
-     */
-    public Content getTargetProfilePackageLink(PackageDoc pd, String target,
-            Content label, String profileName) {
-        return getHyperLink(pathString(pd, DocPaths.profilePackageSummary(profileName)),
-                label, "", target);
-    }
-
-    /**
-     * Get Profile link, with target frame.
-     *
-     * @param target name of the target frame
-     * @param label tag for the link
-     * @param profileName the name of the profile being documented
-     * @return a content for the target profile link
-     */
-    public Content getTargetProfileLink(String target, Content label,
-            String profileName) {
-        return getHyperLink(pathToRoot.resolve(
-                DocPaths.profileSummary(profileName)), label, "", target);
-    }
-
-    /**
-     * Get the type name for profile search.
-     *
-     * @param cd the classDoc object for which the type name conversion is needed
-     * @return a type name string for the type
-     */
-    public String getTypeNameForProfile(ClassDoc cd) {
-        StringBuilder typeName =
-                new StringBuilder((cd.containingPackage()).name().replace(".", "/"));
-        typeName.append("/")
-                .append(cd.name().replace(".", "$"));
-        return typeName.toString();
-    }
-
-    /**
-     * Check if a type belongs to a profile.
-     *
-     * @param cd the classDoc object that needs to be checked
-     * @param profileValue the profile in which the type needs to be checked
-     * @return true if the type is in the profile
-     */
-    public boolean isTypeInProfile(ClassDoc cd, int profileValue) {
-        return (configuration.profiles.getProfile(getTypeNameForProfile(cd)) <= profileValue);
-    }
-
-    public void addClassesSummary(ClassDoc[] classes, String label,
-            String tableSummary, String[] tableHeader, Content summaryContentTree,
-            int profileValue) {
-        if(classes.length > 0) {
-            Arrays.sort(classes);
-            Content caption = getTableCaption(new RawHtml(label));
-            Content table = (configuration.isOutputHtml5())
-                    ? HtmlTree.TABLE(HtmlStyle.typeSummary, caption)
-                    : HtmlTree.TABLE(HtmlStyle.typeSummary, tableSummary, caption);
-            table.addContent(getSummaryTableHeader(tableHeader, "col"));
-            Content tbody = new HtmlTree(HtmlTag.TBODY);
-            for (int i = 0; i < classes.length; i++) {
-                if (!isTypeInProfile(classes[i], profileValue)) {
-                    continue;
-                }
-                if (!utils.isCoreClass(classes[i]) ||
-                    !configuration.isGeneratedDoc(classes[i])) {
-                    continue;
-                }
-                Content classContent = getLink(new LinkInfoImpl(
-                        configuration, LinkInfoImpl.Kind.PACKAGE, classes[i]));
-                Content tdClass = HtmlTree.TD(HtmlStyle.colFirst, classContent);
-                HtmlTree tr = HtmlTree.TR(tdClass);
-                if (i%2 == 0)
-                    tr.addStyle(HtmlStyle.altColor);
-                else
-                    tr.addStyle(HtmlStyle.rowColor);
-                HtmlTree tdClassDescription = new HtmlTree(HtmlTag.TD);
-                tdClassDescription.addStyle(HtmlStyle.colLast);
-                if (utils.isDeprecated(classes[i])) {
-                    tdClassDescription.addContent(deprecatedLabel);
-                    if (classes[i].tags("deprecated").length > 0) {
-                        addSummaryDeprecatedComment(classes[i],
-                            classes[i].tags("deprecated")[0], tdClassDescription);
-                    }
-                }
-                else
-                    addSummaryComment(classes[i], tdClassDescription);
-                tr.addContent(tdClassDescription);
-                tbody.addContent(tr);
-            }
-            table.addContent(tbody);
-            summaryContentTree.addContent(table);
-        }
-    }
-
-    /**
      * Generates the HTML document tree and prints it out.
      *
      * @param metakeywords Array of String keywords for META tag. Each element
@@ -420,8 +323,8 @@ public class HtmlDocletWriter extends HtmlDocWriter {
                 head.addContent(meta);
             }
         }
-        head.addContent(getStyleSheetProperties());
-        head.addContent(getScriptProperties());
+        addStyleSheetProperties(head);
+        addScriptProperties(head);
         Content htmlTree = HtmlTree.HTML(configuration.getLocale().getLanguage(),
                 head, body);
         Content htmlDocument = new HtmlDocument(htmlDocType,
@@ -470,7 +373,7 @@ public class HtmlDocletWriter extends HtmlDocWriter {
      */
     public void addTop(Content htmlTree) {
         Content top = new RawHtml(replaceDocRootDir(configuration.top));
-        htmlTree.addContent(top);
+        fixedNavDiv.addContent(top);
     }
 
     /**
@@ -498,9 +401,10 @@ public class HtmlDocletWriter extends HtmlDocWriter {
                     : htmlTree;
             String allClassesId = "allclasses_";
             HtmlTree navDiv = new HtmlTree(HtmlTag.DIV);
+            fixedNavDiv.addStyle(HtmlStyle.fixedNav);
             Content skipNavLinks = configuration.getResource("doclet.Skip_navigation_links");
             if (header) {
-                tree.addContent(HtmlConstants.START_OF_TOP_NAVBAR);
+                fixedNavDiv.addContent(HtmlConstants.START_OF_TOP_NAVBAR);
                 navDiv.addStyle(HtmlStyle.topNav);
                 allClassesId += "navbar_top";
                 Content a = getMarkerAnchor(SectionName.NAVBAR_TOP);
@@ -558,7 +462,11 @@ public class HtmlDocletWriter extends HtmlDocWriter {
             navDiv.addContent(navList);
             Content aboutDiv = HtmlTree.DIV(HtmlStyle.aboutLanguage, getUserHeaderFooter(header));
             navDiv.addContent(aboutDiv);
-            tree.addContent(navDiv);
+            if (header) {
+                fixedNavDiv.addContent(navDiv);
+            } else {
+                tree.addContent(navDiv);
+            }
             Content ulNav = HtmlTree.UL(HtmlStyle.navList, getNavLinkPrevious());
             ulNav.addContent(getNavLinkNext());
             Content subDiv = HtmlTree.DIV(HtmlStyle.subNav, ulNav);
@@ -568,12 +476,26 @@ public class HtmlDocletWriter extends HtmlDocWriter {
             HtmlTree ulAllClasses = HtmlTree.UL(HtmlStyle.navList, getNavLinkClassIndex());
             ulAllClasses.addAttr(HtmlAttr.ID, allClassesId.toString());
             subDiv.addContent(ulAllClasses);
+            if (header && configuration.createindex) {
+                HtmlTree inputText = HtmlTree.INPUT("text", "search");
+                HtmlTree inputReset = HtmlTree.INPUT("reset", "reset");
+                Content searchTxt = configuration.getResource("doclet.search");
+                searchTxt.addContent(getSpace());
+                HtmlTree liInput = HtmlTree.LI(HtmlTree.SPAN(searchTxt));
+                liInput.addContent(inputText);
+                liInput.addContent(inputReset);
+                HtmlTree ulSearch = HtmlTree.UL(HtmlStyle.navListSearch, liInput);
+                subDiv.addContent(ulSearch);
+            }
             subDiv.addContent(getAllClassesLinkScript(allClassesId.toString()));
             addSummaryDetailLinks(subDiv);
             if (header) {
                 subDiv.addContent(getMarkerAnchor(SectionName.SKIP_NAVBAR_TOP));
-                tree.addContent(subDiv);
-                tree.addContent(HtmlConstants.END_OF_TOP_NAVBAR);
+                fixedNavDiv.addContent(subDiv);
+                fixedNavDiv.addContent(HtmlConstants.END_OF_TOP_NAVBAR);
+                tree.addContent(fixedNavDiv);
+                HtmlTree paddingDiv = HtmlTree.DIV(HtmlStyle.navPadding, getSpace());
+                tree.addContent(paddingDiv);
             } else {
                 subDiv.addContent(getMarkerAnchor(SectionName.SKIP_NAVBAR_BOTTOM));
                 tree.addContent(subDiv);
@@ -1783,7 +1705,6 @@ public class HtmlDocletWriter extends HtmlDocWriter {
         if (lessThanPos < 0) {
             return text;
         }
-
         StringBuilder result = new StringBuilder();
     main: while (lessThanPos != -1) {
             int currPos = lessThanPos + 1;
@@ -1801,14 +1722,33 @@ public class HtmlDocletWriter extends HtmlDocWriter {
                     break main;
                 ch = text.charAt(currPos);
             }
-            if (ch == '>' && blockTags.contains(StringUtils.toLowerCase(text.substring(tagPos, currPos)))) {
+            String tagFound = StringUtils.toLowerCase(text.substring(tagPos, currPos));
+            if (blockTags.contains(tagFound)) {
                 result.append(text, startPos, lessThanPos);
-                startPos = currPos + 1;
+                currPos = tagPos + tagFound.length();
+                boolean foundGT = false;
+                Character quoteKind = null;
+                while (!foundGT) {
+                    if (ch == '\"' || ch == '\'') {
+                        if (quoteKind == null) {
+                            quoteKind = ch;
+                        } else if (quoteKind == ch) {
+                            quoteKind = null;
+                        }
+                    }
+                    if (ch == '>' && quoteKind == null) {
+                        foundGT = true;
+                    }
+                    if (++currPos == len) {
+                        break;
+                    }
+                    ch = text.charAt(currPos);
+                }
+                startPos = currPos;
             }
             lessThanPos = text.indexOf('<', currPos);
         }
         result.append(text.substring(startPos));
-
         return result.toString();
     }
 
@@ -1819,11 +1759,11 @@ public class HtmlDocletWriter extends HtmlDocWriter {
     }
 
     /**
-     * Returns a link to the stylesheet file.
+     * Add a link to the stylesheet file.
      *
-     * @return an HtmlTree for the lINK tag which provides the stylesheet location
+     * @param head the content tree to which the files will be added
      */
-    public HtmlTree getStyleSheetProperties() {
+    public void addStyleSheetProperties(Content head) {
         String stylesheetfile = configuration.stylesheetfile;
         DocPath stylesheet;
         if (stylesheetfile.isEmpty()) {
@@ -1835,17 +1775,48 @@ public class HtmlDocletWriter extends HtmlDocWriter {
         HtmlTree link = HtmlTree.LINK("stylesheet", "text/css",
                 pathToRoot.resolve(stylesheet).getPath(),
                 "Style");
-        return link;
+        head.addContent(link);
+        if (configuration.createindex) {
+            HtmlTree jq_link = HtmlTree.LINK("stylesheet", "text/css",
+                    pathToRoot.resolve(DocPaths.JQUERY_FILES.resolve(DocPaths.JQUERY_STYLESHEET_FILE)).getPath(),
+                    "Style");
+            head.addContent(jq_link);
+        }
     }
 
     /**
-     * Returns a link to the JavaScript file.
+     * Add a link to the JavaScript file.
      *
-     * @return an HtmlTree for the Script tag which provides the JavaScript location
+     * @param head the content tree to which the files will be added
      */
-    public HtmlTree getScriptProperties() {
-        HtmlTree script = HtmlTree.SCRIPT(pathToRoot.resolve(DocPaths.JAVASCRIPT).getPath());
-        return script;
+    public void addScriptProperties(Content head) {
+        HtmlTree javascript = HtmlTree.SCRIPT(pathToRoot.resolve(DocPaths.JAVASCRIPT).getPath());
+        head.addContent(javascript);
+        if (configuration.createindex) {
+            if (pathToRoot != null && script != null) {
+                String path = pathToRoot.isEmpty() ? "." : pathToRoot.getPath();
+                script.addContent(new RawHtml("var pathtoroot = \"" + path + "/\";loadScripts(document, \'script\');"));
+            }
+            addJQueryFile(head, DocPaths.JSZIP_MIN);
+            addJQueryFile(head, DocPaths.JSZIPUTILS_MIN);
+            head.addContent(new RawHtml("<!--[if IE]>"));
+            addJQueryFile(head, DocPaths.JSZIPUTILS_IE_MIN);
+            head.addContent(new RawHtml("<![endif]-->"));
+            addJQueryFile(head, DocPaths.JQUERY_JS_1_10);
+            addJQueryFile(head, DocPaths.JQUERY_JS);
+        }
+    }
+
+    /**
+     * Add a link to the JQuery javascript file.
+     *
+     * @param head the content tree to which the files will be added
+     * @param filePath the DocPath of the file that needs to be added
+     */
+    private void addJQueryFile(Content head, DocPath filePath) {
+        HtmlTree jqyeryScriptFile = HtmlTree.SCRIPT(
+                pathToRoot.resolve(DocPaths.JQUERY_FILES.resolve(filePath)).getPath());
+        head.addContent(jqyeryScriptFile);
     }
 
     /**
@@ -1936,7 +1907,9 @@ public class HtmlDocletWriter extends HtmlDocWriter {
         for (Content annotation: annotations) {
             htmltree.addContent(sep);
             htmltree.addContent(annotation);
-            sep = " ";
+            if (!lineBreak) {
+                sep = " ";
+            }
         }
         return true;
     }

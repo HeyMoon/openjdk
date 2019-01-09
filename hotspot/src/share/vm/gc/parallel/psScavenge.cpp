@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,21 +30,23 @@
 #include "gc/parallel/parallelScavengeHeap.hpp"
 #include "gc/parallel/psAdaptiveSizePolicy.hpp"
 #include "gc/parallel/psMarkSweep.hpp"
-#include "gc/parallel/psParallelCompact.hpp"
+#include "gc/parallel/psParallelCompact.inline.hpp"
 #include "gc/parallel/psScavenge.inline.hpp"
 #include "gc/parallel/psTasks.hpp"
 #include "gc/shared/collectorPolicy.hpp"
 #include "gc/shared/gcCause.hpp"
 #include "gc/shared/gcHeapSummary.hpp"
+#include "gc/shared/gcId.hpp"
 #include "gc/shared/gcLocker.inline.hpp"
 #include "gc/shared/gcTimer.hpp"
 #include "gc/shared/gcTrace.hpp"
-#include "gc/shared/gcTraceTime.hpp"
+#include "gc/shared/gcTraceTime.inline.hpp"
 #include "gc/shared/isGCActiveMark.hpp"
 #include "gc/shared/referencePolicy.hpp"
 #include "gc/shared/referenceProcessor.hpp"
 #include "gc/shared/spaceDecorator.hpp"
 #include "memory/resourceArea.hpp"
+#include "logging/log.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/biasedLocking.hpp"
 #include "runtime/fprofiler.hpp"
@@ -66,8 +68,6 @@ uintptr_t                  PSScavenge::_young_generation_boundary_compressed = 0
 elapsedTimer               PSScavenge::_accumulated_time;
 STWGCTimer                 PSScavenge::_gc_timer;
 ParallelScavengeTracer     PSScavenge::_gc_tracer;
-Stack<markOop, mtGC>       PSScavenge::_preserved_mark_stack;
-Stack<oop, mtGC>           PSScavenge::_preserved_oop_stack;
 CollectorCounters*         PSScavenge::_counters = NULL;
 
 // Define before use
@@ -118,14 +118,6 @@ class PSEvacuateFollowersClosure: public VoidClosure {
     _promotion_manager->drain_stacks(true);
     guarantee(_promotion_manager->stacks_empty(),
               "stacks should be empty at this point");
-  }
-};
-
-class PSPromotionFailedClosure : public ObjectClosure {
-  virtual void do_object(oop obj) {
-    if (obj->is_forwarded()) {
-      obj->init_mark();
-    }
   }
 };
 
@@ -255,9 +247,6 @@ bool PSScavenge::invoke_no_policy() {
   assert(SafepointSynchronize::is_at_safepoint(), "should be at safepoint");
   assert(Thread::current() == (Thread*)VMThread::vm_thread(), "should be in vm thread");
 
-  assert(_preserved_mark_stack.is_empty(), "should be empty");
-  assert(_preserved_oop_stack.is_empty(), "should be empty");
-
   _gc_timer.register_gc_start();
 
   TimeStamp scavenge_entry;
@@ -266,7 +255,7 @@ bool PSScavenge::invoke_no_policy() {
 
   scavenge_entry.update();
 
-  if (GC_locker::check_active_before_gc()) {
+  if (GCLocker::check_active_before_gc()) {
     return false;
   }
 
@@ -278,6 +267,7 @@ bool PSScavenge::invoke_no_policy() {
     return false;
   }
 
+  GCIdMark gc_id_mark;
   _gc_tracer.report_gc_start(heap->gc_cause(), _gc_timer.gc_start());
 
   bool promotion_failure_occurred = false;
@@ -288,16 +278,9 @@ bool PSScavenge::invoke_no_policy() {
 
   heap->increment_total_collections();
 
-  AdaptiveSizePolicyOutput(size_policy, heap->total_collections());
-
   if (AdaptiveSizePolicy::should_update_eden_stats(gc_cause)) {
     // Gather the feedback data for eden occupancy.
     young_gen->eden_space()->accumulate_statistics();
-  }
-
-  if (ZapUnusedHeapArea) {
-    // Save information needed to minimize mangling
-    heap->record_gen_tops_before_GC();
   }
 
   heap->print_heap_before_gc();
@@ -306,23 +289,21 @@ bool PSScavenge::invoke_no_policy() {
   assert(!NeverTenure || _tenuring_threshold == markOopDesc::max_age + 1, "Sanity");
   assert(!AlwaysTenure || _tenuring_threshold == 0, "Sanity");
 
-  size_t prev_used = heap->used();
-
   // Fill in TLABs
   heap->accumulate_statistics_all_tlabs();
   heap->ensure_parsability(true);  // retire TLABs
 
   if (VerifyBeforeGC && heap->total_collections() >= VerifyGCStartAt) {
     HandleMark hm;  // Discard invalid handles created during verification
-    Universe::verify(" VerifyBeforeGC:");
+    Universe::verify("Before GC");
   }
 
   {
     ResourceMark rm;
     HandleMark hm;
 
-    TraceCPUTime tcpu(PrintGCDetails, true, gclog_or_tty);
-    GCTraceTime t1(GCCauseString("GC", gc_cause), PrintGC, !PrintGCDetails, NULL, _gc_tracer.gc_id());
+    GCTraceCPUTime tcpu;
+    GCTraceTime(Info, gc) tm("Pause Young", NULL, gc_cause, true);
     TraceCollectorStats tcs(counters());
     TraceMemoryManagerStats tms(false /* not full GC */,gc_cause);
 
@@ -342,26 +323,20 @@ bool PSScavenge::invoke_no_policy() {
       CardTableExtension::verify_all_young_refs_imprecise();
     }
 
-    if (!ScavengeWithObjectsInToSpace) {
-      assert(young_gen->to_space()->is_empty(),
-             "Attempt to scavenge with live objects in to_space");
-      young_gen->to_space()->clear(SpaceDecorator::Mangle);
-    } else if (ZapUnusedHeapArea) {
-      young_gen->to_space()->mangle_unused_area();
-    }
+    assert(young_gen->to_space()->is_empty(),
+           "Attempt to scavenge with live objects in to_space");
+    young_gen->to_space()->clear(SpaceDecorator::Mangle);
+
     save_to_space_top_before_gc();
 
-    COMPILER2_PRESENT(DerivedPointerTable::clear());
+#if defined(COMPILER2) || INCLUDE_JVMCI
+    DerivedPointerTable::clear();
+#endif
 
     reference_processor()->enable_discovery();
     reference_processor()->setup_policy(false);
 
-    // We track how much was promoted to the next generation for
-    // the AdaptiveSizePolicy.
-    size_t old_gen_used_before = old_gen->used_in_bytes();
-
-    // For PrintGCDetails
-    size_t young_gen_used_before = young_gen->used_in_bytes();
+    PreGCValues pre_gc_values(heap);
 
     // Reset our survivor overflow.
     set_survivor_overflow(false);
@@ -387,7 +362,7 @@ bool PSScavenge::invoke_no_policy() {
     // We'll use the promotion manager again later.
     PSPromotionManager* promotion_manager = PSPromotionManager::vm_thread_promotion_manager();
     {
-      GCTraceTime tm("Scavenge", false, false, &_gc_timer, _gc_tracer.gc_id());
+      GCTraceTime(Debug, gc, phases) tm("Scavenge", &_gc_timer);
       ParallelScavengeHeap::ParStrongRootsScope psrs;
 
       GCTaskQueue* q = GCTaskQueue::create();
@@ -416,11 +391,15 @@ bool PSScavenge::invoke_no_policy() {
       ParallelTaskTerminator terminator(
         active_workers,
                   (TaskQueueSetSuper*) promotion_manager->stack_array_depth());
-      if (active_workers > 1) {
-        for (uint j = 0; j < active_workers; j++) {
-          q->enqueue(new StealTask(&terminator));
+        // If active_workers can exceed 1, add a StrealTask.
+        // PSPromotionManager::drain_stacks_depth() does not fully drain its
+        // stacks and expects a StealTask to complete the draining if
+        // ParallelGCThreads is > 1.
+        if (gc_task_manager()->workers() > 1) {
+          for (uint j = 0; j < active_workers; j++) {
+            q->enqueue(new StealTask(&terminator));
+          }
         }
-      }
 
       gc_task_manager()->execute_and_wait(q);
     }
@@ -429,7 +408,7 @@ bool PSScavenge::invoke_no_policy() {
 
     // Process reference objects discovered during scavenge
     {
-      GCTraceTime tm("References", false, false, &_gc_timer, _gc_tracer.gc_id());
+      GCTraceTime(Debug, gc, phases) tm("Reference Processing", &_gc_timer);
 
       reference_processor()->setup_policy(false); // not always_clear
       reference_processor()->set_active_mt_degree(active_workers);
@@ -440,10 +419,10 @@ bool PSScavenge::invoke_no_policy() {
         PSRefProcTaskExecutor task_executor;
         stats = reference_processor()->process_discovered_references(
           &_is_alive_closure, &keep_alive, &evac_followers, &task_executor,
-          &_gc_timer, _gc_tracer.gc_id());
+          &_gc_timer);
       } else {
         stats = reference_processor()->process_discovered_references(
-          &_is_alive_closure, &keep_alive, &evac_followers, NULL, &_gc_timer, _gc_tracer.gc_id());
+          &_is_alive_closure, &keep_alive, &evac_followers, NULL, &_gc_timer);
       }
 
       _gc_tracer.report_gc_reference_stats(stats);
@@ -458,7 +437,7 @@ bool PSScavenge::invoke_no_policy() {
     }
 
     {
-      GCTraceTime tm("StringTable", false, false, &_gc_timer, _gc_tracer.gc_id());
+      GCTraceTime(Debug, gc, phases) tm("Scrub String Table", &_gc_timer);
       // Unlink any dead interned Strings and process the remaining live ones.
       PSScavengeRootsClosure root_closure(promotion_manager);
       StringTable::unlink_or_oops_do(&_is_alive_closure, &root_closure);
@@ -468,10 +447,10 @@ bool PSScavenge::invoke_no_policy() {
     promotion_failure_occurred = PSPromotionManager::post_scavenge(_gc_tracer);
     if (promotion_failure_occurred) {
       clean_up_failed_promotion();
-      if (PrintGC) {
-        gclog_or_tty->print("--");
-      }
+      log_info(gc, promotion)("Promotion failed");
     }
+
+    _gc_tracer.report_tenuring_threshold(tenuring_threshold());
 
     // Let the size policy know we're done.  Note that we count promotion
     // failure cleanup time as part of the collection (otherwise, we're
@@ -485,7 +464,7 @@ bool PSScavenge::invoke_no_policy() {
       young_gen->swap_spaces();
 
       size_t survived = young_gen->from_space()->used_in_bytes();
-      size_t promoted = old_gen->used_in_bytes() - old_gen_used_before;
+      size_t promoted = old_gen->used_in_bytes() - pre_gc_values.old_gen_used();
       size_policy->update_averages(_survivor_overflow, survived, promoted);
 
       // A successful scavenge should restart the GC time limit count which is
@@ -494,19 +473,9 @@ bool PSScavenge::invoke_no_policy() {
       if (UseAdaptiveSizePolicy) {
         // Calculate the new survivor size and tenuring threshold
 
-        if (PrintAdaptiveSizePolicy) {
-          gclog_or_tty->print("AdaptiveSizeStart: ");
-          gclog_or_tty->stamp();
-          gclog_or_tty->print_cr(" collection: %d ",
-                         heap->total_collections());
-
-          if (Verbose) {
-            gclog_or_tty->print("old_gen_capacity: " SIZE_FORMAT
-              " young_gen_capacity: " SIZE_FORMAT,
-              old_gen->capacity_in_bytes(), young_gen->capacity_in_bytes());
-          }
-        }
-
+        log_debug(gc, ergo)("AdaptiveSizeStart:  collection: %d ", heap->total_collections());
+        log_trace(gc, ergo)("old_gen_capacity: " SIZE_FORMAT " young_gen_capacity: " SIZE_FORMAT,
+                            old_gen->capacity_in_bytes(), young_gen->capacity_in_bytes());
 
         if (UsePerfData) {
           PSGCAdaptivePolicyCounters* counters = heap->gc_policy_counters();
@@ -540,13 +509,9 @@ bool PSScavenge::invoke_no_policy() {
                                                            _tenuring_threshold,
                                                            survivor_limit);
 
-       if (PrintTenuringDistribution) {
-         gclog_or_tty->cr();
-         gclog_or_tty->print_cr("Desired survivor size " SIZE_FORMAT " bytes, new threshold %u"
-                                " (max threshold " UINTX_FORMAT ")",
-                                size_policy->calculated_survivor_size_in_bytes(),
-                                _tenuring_threshold, MaxTenuringThreshold);
-       }
+       log_debug(gc, age)("Desired survivor size " SIZE_FORMAT " bytes, new threshold %u (max threshold " UINTX_FORMAT ")",
+                          size_policy->calculated_survivor_size_in_bytes(),
+                          _tenuring_threshold, MaxTenuringThreshold);
 
         if (UsePerfData) {
           PSGCAdaptivePolicyCounters* counters = heap->gc_policy_counters();
@@ -597,17 +562,14 @@ bool PSScavenge::invoke_no_policy() {
         // to allow resizes that may have been inhibited by the
         // relative location of the "to" and "from" spaces.
 
-        // Resizing the old gen at minor collects can cause increases
+        // Resizing the old gen at young collections can cause increases
         // that don't feed back to the generation sizing policy until
-        // a major collection.  Don't resize the old gen here.
+        // a full collection.  Don't resize the old gen here.
 
         heap->resize_young_gen(size_policy->calculated_eden_size_in_bytes(),
                         size_policy->calculated_survivor_size_in_bytes());
 
-        if (PrintAdaptiveSizePolicy) {
-          gclog_or_tty->print_cr("AdaptiveSizeStop: collection: %d ",
-                         heap->total_collections());
-        }
+        log_debug(gc, ergo)("AdaptiveSizeStop: collection: %d ", heap->total_collections());
       }
 
       // Update the structure of the eden. With NUMA-eden CPU hotplugging or offlining can
@@ -623,15 +585,11 @@ bool PSScavenge::invoke_no_policy() {
       assert(young_gen->to_space()->is_empty(), "to space should be empty now");
     }
 
-    COMPILER2_PRESENT(DerivedPointerTable::update_pointers());
+#if defined(COMPILER2) || INCLUDE_JVMCI
+    DerivedPointerTable::update_pointers();
+#endif
 
     NOT_PRODUCT(reference_processor()->verify_no_references_recorded());
-
-    {
-      GCTraceTime tm("Prune Scavenge Root Methods", false, false, &_gc_timer, _gc_tracer.gc_id());
-
-      CodeCache::prune_scavenge_root_nmethods();
-    }
 
     // Re-verify object start arrays
     if (VerifyObjectStartArray &&
@@ -649,14 +607,9 @@ bool PSScavenge::invoke_no_policy() {
 
     if (TraceYoungGenTime) accumulated_time()->stop();
 
-    if (PrintGC) {
-      if (PrintGCDetails) {
-        // Don't print a GC timestamp here.  This is after the GC so
-        // would be confusing.
-        young_gen->print_used_change(young_gen_used_before);
-      }
-      heap->print_heap_change(prev_used);
-    }
+    young_gen->print_used_change(pre_gc_values.young_gen_used());
+    old_gen->print_used_change(pre_gc_values.old_gen_used());
+    MetaspaceAux::print_metaspace_change(pre_gc_values.metadata_used());
 
     // Track memory usage and detect low memory
     MemoryService::track_memory_usage();
@@ -667,32 +620,24 @@ bool PSScavenge::invoke_no_policy() {
 
   if (VerifyAfterGC && heap->total_collections() >= VerifyGCStartAt) {
     HandleMark hm;  // Discard invalid handles created during verification
-    Universe::verify(" VerifyAfterGC:");
+    Universe::verify("After GC");
   }
 
   heap->print_heap_after_gc();
   heap->trace_heap_after_gc(&_gc_tracer);
-  _gc_tracer.report_tenuring_threshold(tenuring_threshold());
-
-  if (ZapUnusedHeapArea) {
-    young_gen->eden_space()->check_mangled_unused_area_complete();
-    young_gen->from_space()->check_mangled_unused_area_complete();
-    young_gen->to_space()->check_mangled_unused_area_complete();
-  }
 
   scavenge_exit.update();
 
-  if (PrintGCTaskTimeStamps) {
-    tty->print_cr("VM-Thread " JLONG_FORMAT " " JLONG_FORMAT " " JLONG_FORMAT,
-                  scavenge_entry.ticks(), scavenge_midpoint.ticks(),
-                  scavenge_exit.ticks());
-    gc_task_manager()->print_task_time_stamps();
-  }
+  log_debug(gc, task, time)("VM-Thread " JLONG_FORMAT " " JLONG_FORMAT " " JLONG_FORMAT,
+                            scavenge_entry.ticks(), scavenge_midpoint.ticks(),
+                            scavenge_exit.ticks());
+  gc_task_manager()->print_task_time_stamps();
 
 #ifdef TRACESPINNING
   ParallelTaskTerminator::print_termination_counts();
 #endif
 
+  AdaptiveSizePolicyOutput::print(size_policy, heap->total_collections());
 
   _gc_timer.register_gc_end();
 
@@ -702,52 +647,18 @@ bool PSScavenge::invoke_no_policy() {
 }
 
 // This method iterates over all objects in the young generation,
-// unforwarding markOops. It then restores any preserved mark oops,
-// and clears the _preserved_mark_stack.
+// removing all forwarding references. It then restores any preserved marks.
 void PSScavenge::clean_up_failed_promotion() {
   ParallelScavengeHeap* heap = ParallelScavengeHeap::heap();
   PSYoungGen* young_gen = heap->young_gen();
 
-  {
-    ResourceMark rm;
+  RemoveForwardedPointerClosure remove_fwd_ptr_closure;
+  young_gen->object_iterate(&remove_fwd_ptr_closure);
 
-    // Unforward all pointers in the young gen.
-    PSPromotionFailedClosure unforward_closure;
-    young_gen->object_iterate(&unforward_closure);
-
-    if (PrintGC && Verbose) {
-      gclog_or_tty->print_cr("Restoring " SIZE_FORMAT " marks", _preserved_oop_stack.size());
-    }
-
-    // Restore any saved marks.
-    while (!_preserved_oop_stack.is_empty()) {
-      oop obj      = _preserved_oop_stack.pop();
-      markOop mark = _preserved_mark_stack.pop();
-      obj->set_mark(mark);
-    }
-
-    // Clear the preserved mark and oop stack caches.
-    _preserved_mark_stack.clear(true);
-    _preserved_oop_stack.clear(true);
-  }
+  PSPromotionManager::restore_preserved_marks();
 
   // Reset the PromotionFailureALot counters.
   NOT_PRODUCT(heap->reset_promotion_should_fail();)
-}
-
-// This method is called whenever an attempt to promote an object
-// fails. Some markOops will need preservation, some will not. Note
-// that the entire eden is traversed after a failed promotion, with
-// all forwarded headers replaced by the default markOop. This means
-// it is not necessary to preserve most markOops.
-void PSScavenge::oop_promotion_failed(oop obj, markOop obj_mark) {
-  if (obj_mark->must_be_preserved_for_promotion_failure(obj)) {
-    // Should use per-worker private stacks here rather than
-    // locking a common pair of stacks.
-    ThreadCritical tc;
-    _preserved_oop_stack.push(obj);
-    _preserved_mark_stack.push(obj_mark);
-  }
 }
 
 bool PSScavenge::should_attempt_scavenge() {
@@ -761,15 +672,13 @@ bool PSScavenge::should_attempt_scavenge() {
   PSYoungGen* young_gen = heap->young_gen();
   PSOldGen* old_gen = heap->old_gen();
 
-  if (!ScavengeWithObjectsInToSpace) {
-    // Do not attempt to promote unless to_space is empty
-    if (!young_gen->to_space()->is_empty()) {
-      _consecutive_skipped_scavenges++;
-      if (UsePerfData) {
-        counters->update_scavenge_skipped(to_space_not_empty);
-      }
-      return false;
+  // Do not attempt to promote unless to_space is empty
+  if (!young_gen->to_space()->is_empty()) {
+    _consecutive_skipped_scavenges++;
+    if (UsePerfData) {
+      counters->update_scavenge_skipped(to_space_not_empty);
     }
+    return false;
   }
 
   // Test to see if the scavenge will likely fail.
@@ -781,19 +690,12 @@ bool PSScavenge::should_attempt_scavenge() {
   size_t promotion_estimate = MIN2(avg_promoted, young_gen->used_in_bytes());
   bool result = promotion_estimate < old_gen->free_in_bytes();
 
-  if (PrintGCDetails && Verbose) {
-    gclog_or_tty->print(result ? "  do scavenge: " : "  skip scavenge: ");
-    gclog_or_tty->print_cr(" average_promoted " SIZE_FORMAT
-      " padded_average_promoted " SIZE_FORMAT
-      " free in old gen " SIZE_FORMAT,
-      (size_t) policy->average_promoted_in_bytes(),
-      (size_t) policy->padded_average_promoted_in_bytes(),
-      old_gen->free_in_bytes());
-    if (young_gen->used_in_bytes() <
-        (size_t) policy->padded_average_promoted_in_bytes()) {
-      gclog_or_tty->print_cr(" padded_promoted_average is greater"
-        " than maximum promotion = " SIZE_FORMAT, young_gen->used_in_bytes());
-    }
+  log_trace(ergo)("%s scavenge: average_promoted " SIZE_FORMAT " padded_average_promoted " SIZE_FORMAT " free in old gen " SIZE_FORMAT,
+                result ? "Do" : "Skip", (size_t) policy->average_promoted_in_bytes(),
+                (size_t) policy->padded_average_promoted_in_bytes(),
+                old_gen->free_in_bytes());
+  if (young_gen->used_in_bytes() < (size_t) policy->padded_average_promoted_in_bytes()) {
+    log_trace(ergo)(" padded_promoted_average is greater than maximum promotion = " SIZE_FORMAT, young_gen->used_in_bytes());
   }
 
   if (result) {
@@ -814,12 +716,21 @@ GCTaskManager* const PSScavenge::gc_task_manager() {
   return ParallelScavengeHeap::gc_task_manager();
 }
 
+// Adaptive size policy support.  When the young generation/old generation
+// boundary moves, _young_generation_boundary must be reset
+void PSScavenge::set_young_generation_boundary(HeapWord* v) {
+  _young_generation_boundary = v;
+  if (UseCompressedOops) {
+    _young_generation_boundary_compressed = (uintptr_t)oopDesc::encode_heap_oop((oop)v);
+  }
+}
+
 void PSScavenge::initialize() {
   // Arguments must have been parsed
 
   if (AlwaysTenure || NeverTenure) {
     assert(MaxTenuringThreshold == 0 || MaxTenuringThreshold == markOopDesc::max_age + 1,
-        err_msg("MaxTenuringThreshold should be 0 or markOopDesc::max_age + 1, but is %d", (int) MaxTenuringThreshold));
+           "MaxTenuringThreshold should be 0 or markOopDesc::max_age + 1, but is %d", (int) MaxTenuringThreshold);
     _tenuring_threshold = MaxTenuringThreshold;
   } else {
     // We want to smooth out our startup times for the AdaptiveSizePolicy

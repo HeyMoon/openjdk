@@ -75,8 +75,8 @@ public class XMenuItemPeer implements MenuItemPeer {
     /*
      * Size constants
      */
-    private final static int SEPARATOR_WIDTH = 20;
-    private final static int SEPARATOR_HEIGHT = 5;
+    private static final int SEPARATOR_WIDTH = 20;
+    private static final int SEPARATOR_HEIGHT = 5;
 
     /************************************************
      *
@@ -323,11 +323,11 @@ public class XMenuItemPeer implements MenuItemPeer {
      * on menu item.
      * @param when the timestamp of action event
      */
-    void action(long when) {
+    void action(long when, int modifiers) {
         if (!isSeparator() && isTargetItemEnabled()) {
             XWindow.postEventStatic(new ActionEvent(target, ActionEvent.ACTION_PERFORMED,
                                                     getTargetActionCommand(), when,
-                                                    0));
+                                                    modifiers));
         }
     }
     /************************************************

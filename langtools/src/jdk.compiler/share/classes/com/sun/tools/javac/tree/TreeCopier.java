@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@
 package com.sun.tools.javac.tree;
 
 import com.sun.source.tree.*;
+import com.sun.source.tree.Tree.Kind;
 import com.sun.tools.javac.tree.JCTree.*;
 import com.sun.tools.javac.util.DefinedBy;
 import com.sun.tools.javac.util.DefinedBy.Api;
@@ -505,6 +506,53 @@ public class TreeCopier<P> implements TreeVisitor<JCTree,P> {
         return M.at(t.pos).Wildcard(kind, inner);
     }
 
+    @Override @DefinedBy(Api.COMPILER_TREE)
+    public JCTree visitModule(ModuleTree node, P p) {
+        JCModuleDecl t = (JCModuleDecl) node;
+        JCModifiers mods = copy(t.mods, p);
+        JCExpression qualId = copy(t.qualId);
+        List<JCDirective> directives = copy(t.directives);
+        return M.at(t.pos).ModuleDef(mods, t.getModuleType(), qualId, directives);
+    }
+
+    @Override @DefinedBy(Api.COMPILER_TREE)
+    public JCExports visitExports(ExportsTree node, P p) {
+        JCExports t = (JCExports) node;
+        JCExpression qualId = copy(t.qualid, p);
+        List<JCExpression> moduleNames = copy(t.moduleNames, p);
+        return M.at(t.pos).Exports(qualId, moduleNames);
+    }
+
+    @Override @DefinedBy(Api.COMPILER_TREE)
+    public JCOpens visitOpens(OpensTree node, P p) {
+        JCOpens t = (JCOpens) node;
+        JCExpression qualId = copy(t.qualid, p);
+        List<JCExpression> moduleNames = copy(t.moduleNames, p);
+        return M.at(t.pos).Opens(qualId, moduleNames);
+    }
+
+    @Override @DefinedBy(Api.COMPILER_TREE)
+    public JCProvides visitProvides(ProvidesTree node, P p) {
+        JCProvides t = (JCProvides) node;
+        JCExpression serviceName = copy(t.serviceName, p);
+        List<JCExpression> implNames = copy(t.implNames, p);
+        return M.at(t.pos).Provides(serviceName, implNames);
+    }
+
+    @Override @DefinedBy(Api.COMPILER_TREE)
+    public JCRequires visitRequires(RequiresTree node, P p) {
+        JCRequires t = (JCRequires) node;
+        JCExpression moduleName = copy(t.moduleName, p);
+        return M.at(t.pos).Requires(t.isTransitive, t.isStaticPhase, moduleName);
+    }
+
+    @Override @DefinedBy(Api.COMPILER_TREE)
+    public JCUses visitUses(UsesTree node, P p) {
+        JCUses t = (JCUses) node;
+        JCExpression serviceName = copy(t.qualid, p);
+        return M.at(t.pos).Uses(serviceName);
+    }
+
     @DefinedBy(Api.COMPILER_TREE)
     public JCTree visitOther(Tree node, P p) {
         JCTree tree = (JCTree) node;
@@ -512,7 +560,7 @@ public class TreeCopier<P> implements TreeVisitor<JCTree,P> {
             case LETEXPR: {
                 LetExpr t = (LetExpr) node;
                 List<JCVariableDecl> defs = copy(t.defs, p);
-                JCTree expr = copy(t.expr, p);
+                JCExpression expr = copy(t.expr, p);
                 return M.at(t.pos).LetExpr(defs, expr);
             }
             default:

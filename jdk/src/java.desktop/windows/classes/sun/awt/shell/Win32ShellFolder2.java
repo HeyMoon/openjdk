@@ -27,7 +27,9 @@ package sun.awt.shell;
 
 import java.awt.Image;
 import java.awt.Toolkit;
+import java.awt.image.AbstractMultiResolutionImage;
 import java.awt.image.BufferedImage;
+import java.awt.image.ImageObserver;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -140,6 +142,9 @@ final class Win32ShellFolder2 extends ShellFolder {
     public static final int SHGDN_INCLUDE_NONFILESYS= 0x2000;
     public static final int SHGDN_FORADDRESSBAR     = 0x4000;
     public static final int SHGDN_FORPARSING        = 0x8000;
+
+    /** The referent to be registered with the Disposer. */
+    private Object disposerReferent = new Object();
 
     // Values for system call LoadIcon()
     public enum SystemIcon {
@@ -297,7 +302,7 @@ final class Win32ShellFolder2 extends ShellFolder {
             }
         }, InterruptedException.class);
 
-        sun.java2d.Disposer.addRecord(this, disposer);
+        sun.java2d.Disposer.addObjectRecord(disposerReferent, disposer);
     }
 
 
@@ -309,7 +314,7 @@ final class Win32ShellFolder2 extends ShellFolder {
         this.isLib = isLib;
         this.disposer.pIShellFolder = pIShellFolder;
         this.disposer.relativePIDL = relativePIDL;
-        sun.java2d.Disposer.addRecord(this, disposer);
+        sun.java2d.Disposer.addObjectRecord(disposerReferent, disposer);
     }
 
 
@@ -347,12 +352,12 @@ final class Win32ShellFolder2 extends ShellFolder {
 
     /**
      * This method is implemented to make sure that no instances
-     * of <code>ShellFolder</code> are ever serialized. If <code>isFileSystem()</code> returns
-     * <code>true</code>, then the object is representable with an instance of
-     * <code>java.io.File</code> instead. If not, then the object depends
+     * of {@code ShellFolder} are ever serialized. If {@code isFileSystem()} returns
+     * {@code true}, then the object is representable with an instance of
+     * {@code java.io.File} instead. If not, then the object depends
      * on native PIDL state and should not be serialized.
      *
-     * @return a <code>java.io.File</code> replacement object. If the folder
+     * @return a {@code java.io.File} replacement object. If the folder
      * is a not a normal directory, then returns the first non-removable
      * drive (normally "C:\").
      */
@@ -715,7 +720,7 @@ final class Win32ShellFolder2 extends ShellFolder {
     /**
      * @return An array of shell folders that are children of this shell folder
      *         object. The array will be empty if the folder is empty.  Returns
-     *         <code>null</code> if this shellfolder does not denote a directory.
+     *         {@code null} if this shellfolder does not denote a directory.
      */
     public File[] listFiles(final boolean includeHiddenFiles) {
         SecurityManager security = System.getSecurityManager();
@@ -979,11 +984,12 @@ final class Win32ShellFolder2 extends ShellFolder {
 
     // Return the bits from an HICON.  This has a side effect of setting
     // the imageHash variable for efficient caching / comparing.
-    private static native int[] getIconBits(long hIcon, int iconSize);
+    private static native int[] getIconBits(long hIcon);
     // Dispose the HICON
     private static native void disposeIcon(long hIcon);
 
-    static native int[] getStandardViewButton0(int iconIndex);
+    // Get buttons from native toolbar implementation.
+    static native int[] getStandardViewButton0(int iconIndex, boolean small);
 
     // Should be called from the COM thread
     private long getIShellIcon() {
@@ -997,12 +1003,17 @@ final class Win32ShellFolder2 extends ShellFolder {
     private static Image makeIcon(long hIcon, boolean getLargeIcon) {
         if (hIcon != 0L && hIcon != -1L) {
             // Get the bits.  This has the side effect of setting the imageHash value for this object.
-            int size = getLargeIcon ? 32 : 16;
-            int[] iconBits = getIconBits(hIcon, size);
+            final int[] iconBits = getIconBits(hIcon);
             if (iconBits != null) {
-                BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
+                // icons are always square
+                final int size = (int) Math.sqrt(iconBits.length);
+                final int baseSize = getLargeIcon ? 32 : 16;
+                final BufferedImage img =
+                        new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
                 img.setRGB(0, 0, size, size, iconBits, 0, size);
-                return img;
+                return size == baseSize
+                        ? img
+                        : new MultiResolutionIconImage(baseSize, img);
             }
         }
         return null;
@@ -1088,7 +1099,7 @@ final class Win32ShellFolder2 extends ShellFolder {
     }
 
     /**
-     * Gets an icon from the Windows system icon list as an <code>Image</code>
+     * Gets an icon from the Windows system icon list as an {@code Image}
      */
     static Image getSystemIcon(SystemIcon iconType) {
         long hIcon = getSystemIcon(iconType.getIconID());
@@ -1098,7 +1109,7 @@ final class Win32ShellFolder2 extends ShellFolder {
     }
 
     /**
-     * Gets an icon from the Windows system icon list as an <code>Image</code>
+     * Gets an icon from the Windows system icon list as an {@code Image}
      */
     static Image getShell32Icon(int iconID, boolean getLargeIcon) {
         boolean useVGAColors = true; // Will be ignored on XP and later
@@ -1295,4 +1306,39 @@ final class Win32ShellFolder2 extends ShellFolder {
         });
     }
 
+    static class MultiResolutionIconImage extends AbstractMultiResolutionImage {
+
+        final int baseSize;
+        final Image resolutionVariant;
+
+        public MultiResolutionIconImage(int baseSize, Image resolutionVariant) {
+            this.baseSize = baseSize;
+            this.resolutionVariant = resolutionVariant;
+        }
+
+        @Override
+        public int getWidth(ImageObserver observer) {
+            return baseSize;
+        }
+
+        @Override
+        public int getHeight(ImageObserver observer) {
+            return baseSize;
+        }
+
+        @Override
+        protected Image getBaseImage() {
+            return resolutionVariant;
+        }
+
+        @Override
+        public Image getResolutionVariant(double width, double height) {
+            return resolutionVariant;
+        }
+
+        @Override
+        public List<Image> getResolutionVariants() {
+            return Arrays.asList(resolutionVariant);
+        }
+    }
 }

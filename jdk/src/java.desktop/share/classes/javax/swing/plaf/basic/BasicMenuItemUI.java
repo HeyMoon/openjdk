@@ -228,6 +228,15 @@ public class BasicMenuItemUI extends MenuItemUI
             arrowIcon instanceof UIResource) {
             arrowIcon = UIManager.getIcon(prefix + ".arrowIcon");
         }
+        updateCheckIcon();
+    }
+
+    /**
+     * Updates check Icon based on column layout
+     */
+    private void updateCheckIcon() {
+        String prefix = getPropertyPrefix();
+
         if (checkIcon == null ||
             checkIcon instanceof UIResource) {
             checkIcon = UIManager.getIcon(prefix + ".checkIcon");
@@ -238,8 +247,8 @@ public class BasicMenuItemUI extends MenuItemUI
                     BasicGraphicsUtils.isLeftToRight(menuItem), menuItem);
             if (isColumnLayout) {
                 MenuItemCheckIconFactory iconFactory =
-                    (MenuItemCheckIconFactory) UIManager.get(prefix
-                        + ".checkIconFactory");
+                        (MenuItemCheckIconFactory) UIManager.get(prefix
+                                + ".checkIconFactory");
                 if (iconFactory != null
                         && MenuItemLayoutHelper.useCheckAndArrow(menuItem)
                         && iconFactory.isCompatible(checkIcon, prefix)) {
@@ -927,6 +936,17 @@ public class BasicMenuItemUI extends MenuItemUI
         }
     }
 
+    boolean doNotCloseOnMouseClick() {
+        if (menuItem instanceof JCheckBoxMenuItem) {
+            String property = "CheckBoxMenuItem.doNotCloseOnMouseClick";
+            return SwingUtilities2.getBoolean(menuItem, property);
+        } else if (menuItem instanceof JRadioButtonMenuItem) {
+            String property = "RadioButtonMenuItem.doNotCloseOnMouseClick";
+            return SwingUtilities2.getBoolean(menuItem, property);
+        }
+        return false;
+    }
+
     /**
      * Call this method when a menu item is to be activated.
      * This method handles some of the details of menu item activation
@@ -949,11 +969,14 @@ public class BasicMenuItemUI extends MenuItemUI
             BasicLookAndFeel.playSound(menuItem, getPropertyPrefix() +
                                        ".commandSound");
         }
-        // Visual feedback
-        if (msm == null) {
-            msm = MenuSelectionManager.defaultManager();
+        if (!doNotCloseOnMouseClick()) {
+            // Visual feedback
+            if (msm == null) {
+                msm = MenuSelectionManager.defaultManager();
+            }
+
+            msm.clearSelectedPath();
         }
-        msm.clearSelectedPath();
         menuItem.doClick(0);
     }
 
@@ -1003,6 +1026,7 @@ public class BasicMenuItemUI extends MenuItemUI
                 manager.processMouseEvent(e);
             }
         }
+        @SuppressWarnings("deprecation")
         public void mouseEntered(MouseEvent e) {
             MenuSelectionManager manager = MenuSelectionManager.defaultManager();
             int modifiers = e.getModifiers();
@@ -1014,6 +1038,7 @@ public class BasicMenuItemUI extends MenuItemUI
             manager.setSelectedPath(getPath());
              }
         }
+        @SuppressWarnings("deprecation")
         public void mouseExited(MouseEvent e) {
             MenuSelectionManager manager = MenuSelectionManager.defaultManager();
 
@@ -1090,6 +1115,8 @@ public class BasicMenuItemUI extends MenuItemUI
                 BasicHTML.updateRenderer(lbl, text);
             } else if (name  == "iconTextGap") {
                 defaultTextIconGap = ((Number)e.getNewValue()).intValue();
+            } else if (name == "horizontalTextPosition") {
+                updateCheckIcon();
             }
         }
     }

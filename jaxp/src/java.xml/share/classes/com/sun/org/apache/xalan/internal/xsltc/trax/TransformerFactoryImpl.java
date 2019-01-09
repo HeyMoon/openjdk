@@ -1,13 +1,13 @@
 /*
- * reserved comment block
- * DO NOT REMOVE OR ALTER!
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright 2001-2004 The Apache Software Foundation.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -17,17 +17,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * $Id: TransformerFactoryImpl.java,v 1.8 2007/04/09 21:30:41 joehw Exp $
- */
 
 package com.sun.org.apache.xalan.internal.xsltc.trax;
 
 import com.sun.org.apache.xalan.internal.XalanConstants;
 import com.sun.org.apache.xalan.internal.utils.FactoryImpl;
-import com.sun.org.apache.xalan.internal.utils.FeatureManager;
 import com.sun.org.apache.xalan.internal.utils.FeaturePropertyBase;
-import com.sun.org.apache.xalan.internal.utils.FeaturePropertyBase.State;
 import com.sun.org.apache.xalan.internal.utils.ObjectFactory;
 import com.sun.org.apache.xalan.internal.utils.SecuritySupport;
 import com.sun.org.apache.xalan.internal.utils.XMLSecurityManager;
@@ -48,14 +43,19 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.Enumeration;
-import java.util.Hashtable;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Vector;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import javax.xml.XMLConstants;
+import javax.xml.catalog.CatalogException;
+import javax.xml.catalog.CatalogFeatures;
+import javax.xml.catalog.CatalogFeatures.Feature;
+import javax.xml.catalog.CatalogManager;
+import javax.xml.catalog.CatalogResolver;
 import javax.xml.parsers.SAXParser;
 import javax.xml.parsers.SAXParserFactory;
 import javax.xml.transform.ErrorListener;
@@ -76,6 +76,8 @@ import javax.xml.transform.sax.TransformerHandler;
 import javax.xml.transform.stax.*;
 import javax.xml.transform.stream.StreamResult;
 import javax.xml.transform.stream.StreamSource;
+import jdk.xml.internal.JdkXmlFeatures;
+import jdk.xml.internal.JdkXmlUtils;
 import org.xml.sax.InputSource;
 import org.xml.sax.XMLFilter;
 import org.xml.sax.XMLReader;
@@ -87,6 +89,7 @@ import org.xml.sax.helpers.XMLReaderFactory;
  * @author Morten Jorgensen
  * @author Santiago Pericas-Geertsen
  */
+@SuppressWarnings("deprecation") //org.xml.sax.helpers.XMLReaderFactory
 public class TransformerFactoryImpl
     extends SAXTransformerFactory implements SourceLoader, ErrorListener
 {
@@ -138,7 +141,8 @@ public class TransformerFactoryImpl
     /**
      * The package name prefix for all generated translet classes
      */
-    private String _packageName = null;
+    private static final String DEFAULT_TRANSLATE_PACKAGE = "die.verwandlung";
+    private String _packageName = DEFAULT_TRANSLATE_PACKAGE;
 
     /**
      * The jar file name which the translet classes are packaged into
@@ -146,13 +150,13 @@ public class TransformerFactoryImpl
     private String _jarFileName = null;
 
     /**
-     * This Hashtable is used to store parameters for locating
+     * This Map is used to store parameters for locating
      * <?xml-stylesheet ...?> processing instructions in XML docs.
      */
-    private Hashtable _piParams = null;
+    private Map<Source, PIParamWrapper> _piParams = null;
 
     /**
-     * The above hashtable stores objects of this class.
+     * The above Map stores objects of this class.
      */
     private static class PIParamWrapper {
         public String _media = null;
@@ -218,7 +222,8 @@ public class TransformerFactoryImpl
     private boolean _useServicesMechanism;
 
     /**
-     * protocols allowed for external references set by the stylesheet processing instruction, Import and Include element.
+     * protocols allowed for external references set by the stylesheet
+     * processing instruction, Import and Include element.
      */
     private String _accessExternalStylesheet = XalanConstants.EXTERNAL_ACCESS_DEFAULT;
      /**
@@ -229,14 +234,25 @@ public class TransformerFactoryImpl
     private XMLSecurityPropertyManager _xmlSecurityPropertyMgr;
     private XMLSecurityManager _xmlSecurityManager;
 
-    private final FeatureManager _featureManager;
+    private final JdkXmlFeatures _xmlFeatures;
 
     private ClassLoader _extensionClassLoader = null;
 
     // Unmodifiable view of external extension function from xslt compiler
     // It will be populated by user-specified extension functions during the
     // type checking
-    private Map<String, Class> _xsltcExtensionFunctions;
+    private Map<String, Class<?>> _xsltcExtensionFunctions;
+
+    CatalogResolver _catalogUriResolver;
+    CatalogFeatures _catalogFeatures;
+    CatalogFeatures.Builder cfBuilder = CatalogFeatures.builder();
+    // Catalog features
+    String _catalogFiles = null;
+    String _catalogDefer = null;
+    String _catalogPrefer = null;
+    String _catalogResolve = null;
+
+    int _cdataChunkSize = JdkXmlUtils.CDATA_CHUNK_SIZE_DEFAULT;
 
     /**
      * javax.xml.transform.sax.TransformerFactory implementation.
@@ -251,15 +267,13 @@ public class TransformerFactoryImpl
 
     private TransformerFactoryImpl(boolean useServicesMechanism) {
         this._useServicesMechanism = useServicesMechanism;
-        _featureManager = new FeatureManager();
 
         if (System.getSecurityManager() != null) {
             _isSecureMode = true;
             _isNotSecureProcessing = false;
-            _featureManager.setValue(FeatureManager.Feature.ORACLE_ENABLE_EXTENSION_FUNCTION,
-                    FeaturePropertyBase.State.FSP, XalanConstants.FEATURE_FALSE);
         }
 
+        _xmlFeatures = new JdkXmlFeatures(!_isNotSecureProcessing);
         _xmlSecurityPropertyMgr = new XMLSecurityPropertyManager();
         _accessExternalDTD = _xmlSecurityPropertyMgr.getValue(
                 Property.ACCESS_EXTERNAL_DTD);
@@ -272,7 +286,7 @@ public class TransformerFactoryImpl
         _xsltcExtensionFunctions = null;
     }
 
-    public Map<String,Class> getExternalExtensionsMap() {
+    public Map<String, Class<?>> getExternalExtensionsMap() {
         return _xsltcExtensionFunctions;
     }
 
@@ -309,6 +323,13 @@ public class TransformerFactoryImpl
     }
 
     /**
+     * Returns the package name.
+     */
+    String getPackageName() {
+        return _packageName;
+    }
+
+    /**
      * javax.xml.transform.sax.TransformerFactory implementation.
      * Returns the value set for a TransformerFactory attribute
      *
@@ -325,10 +346,10 @@ public class TransformerFactoryImpl
             return _transletName;
         }
         else if (name.equals(GENERATE_TRANSLET)) {
-            return new Boolean(_generateTranslet);
+            return _generateTranslet;
         }
         else if (name.equals(AUTO_TRANSLET)) {
-            return new Boolean(_autoTranslet);
+            return _autoTranslet;
         }
         else if (name.equals(ENABLE_INLINING)) {
             if (_enableInlining)
@@ -339,6 +360,18 @@ public class TransformerFactoryImpl
             return _xmlSecurityManager;
         } else if (name.equals(XalanConstants.JDK_EXTENSION_CLASSLOADER)) {
            return _extensionClassLoader;
+        } else if (JdkXmlUtils.CATALOG_FILES.equals(name)) {
+            return _catalogFiles;
+        } else if (JdkXmlUtils.CATALOG_DEFER.equals(name)) {
+            return _catalogDefer;
+        } else if (JdkXmlUtils.CATALOG_PREFER.equals(name)) {
+            return _catalogPrefer;
+        } else if (JdkXmlUtils.CATALOG_RESOLVE.equals(name)) {
+            return _catalogResolve;
+        } else if (JdkXmlFeatures.CATALOG_FEATURES.equals(name)) {
+            return buildCatalogFeatures();
+        } else if (JdkXmlUtils.CDATA_CHUNK_SIZE.equals(name)) {
+            return _cdataChunkSize;
         }
 
         /** Check to see if the property is managed by the security manager **/
@@ -391,7 +424,7 @@ public class TransformerFactoryImpl
         }
         else if (name.equals(GENERATE_TRANSLET)) {
             if (value instanceof Boolean) {
-                _generateTranslet = ((Boolean) value).booleanValue();
+                _generateTranslet = ((Boolean) value);
                 return;
             }
             else if (value instanceof String) {
@@ -401,7 +434,7 @@ public class TransformerFactoryImpl
         }
         else if (name.equals(AUTO_TRANSLET)) {
             if (value instanceof Boolean) {
-                _autoTranslet = ((Boolean) value).booleanValue();
+                _autoTranslet = ((Boolean) value);
                 return;
             }
             else if (value instanceof String) {
@@ -411,7 +444,7 @@ public class TransformerFactoryImpl
         }
         else if (name.equals(USE_CLASSPATH)) {
             if (value instanceof Boolean) {
-                _useClasspath = ((Boolean) value).booleanValue();
+                _useClasspath = ((Boolean) value);
                 return;
             }
             else if (value instanceof String) {
@@ -421,7 +454,7 @@ public class TransformerFactoryImpl
         }
         else if (name.equals(DEBUG)) {
             if (value instanceof Boolean) {
-                _debug = ((Boolean) value).booleanValue();
+                _debug = ((Boolean) value);
                 return;
             }
             else if (value instanceof String) {
@@ -431,7 +464,7 @@ public class TransformerFactoryImpl
         }
         else if (name.equals(ENABLE_INLINING)) {
             if (value instanceof Boolean) {
-                _enableInlining = ((Boolean) value).booleanValue();
+                _enableInlining = ((Boolean) value);
                 return;
             }
             else if (value instanceof String) {
@@ -450,7 +483,7 @@ public class TransformerFactoryImpl
                 }
             }
             else if (value instanceof Integer) {
-                _indentNumber = ((Integer) value).intValue();
+                _indentNumber = ((Integer) value);
                 return;
             }
         }
@@ -463,6 +496,25 @@ public class TransformerFactoryImpl
                     = new ErrorMsg(ErrorMsg.JAXP_INVALID_ATTR_VALUE_ERR, "Extension Functions ClassLoader");
                 throw new IllegalArgumentException(err.toString());
             }
+        } else if (JdkXmlUtils.CATALOG_FILES.equals(name)) {
+            _catalogFiles = (String) value;
+            cfBuilder = CatalogFeatures.builder().with(Feature.FILES, _catalogFiles);
+            return;
+        } else if (JdkXmlUtils.CATALOG_DEFER.equals(name)) {
+            _catalogDefer = (String) value;
+            cfBuilder = CatalogFeatures.builder().with(Feature.DEFER, _catalogDefer);
+            return;
+        } else if (JdkXmlUtils.CATALOG_PREFER.equals(name)) {
+            _catalogPrefer = (String) value;
+            cfBuilder = CatalogFeatures.builder().with(Feature.PREFER, _catalogPrefer);
+            return;
+        } else if (JdkXmlUtils.CATALOG_RESOLVE.equals(name)) {
+            _catalogResolve = (String) value;
+            cfBuilder = CatalogFeatures.builder().with(Feature.RESOLVE, _catalogResolve);
+            return;
+        } else if (JdkXmlUtils.CDATA_CHUNK_SIZE.equals(name)) {
+            _cdataChunkSize = JdkXmlUtils.getValue(value, _cdataChunkSize);
+            return;
         }
 
         if (_xmlSecurityManager != null &&
@@ -525,22 +577,21 @@ public class TransformerFactoryImpl
             _xmlSecurityManager.setSecureProcessing(value);
 
             // set external access restriction when FSP is explicitly set
-            if (value && XalanConstants.IS_JDK8_OR_ABOVE) {
+            if (value) {
                 _xmlSecurityPropertyMgr.setValue(Property.ACCESS_EXTERNAL_DTD,
-                        State.FSP, XalanConstants.EXTERNAL_ACCESS_DEFAULT_FSP);
+                        FeaturePropertyBase.State.FSP, XalanConstants.EXTERNAL_ACCESS_DEFAULT_FSP);
                 _xmlSecurityPropertyMgr.setValue(Property.ACCESS_EXTERNAL_STYLESHEET,
-                        State.FSP, XalanConstants.EXTERNAL_ACCESS_DEFAULT_FSP);
+                        FeaturePropertyBase.State.FSP, XalanConstants.EXTERNAL_ACCESS_DEFAULT_FSP);
                 _accessExternalDTD = _xmlSecurityPropertyMgr.getValue(
                         Property.ACCESS_EXTERNAL_DTD);
                 _accessExternalStylesheet = _xmlSecurityPropertyMgr.getValue(
                         Property.ACCESS_EXTERNAL_STYLESHEET);
             }
 
-            if (value && _featureManager != null) {
-                _featureManager.setValue(FeatureManager.Feature.ORACLE_ENABLE_EXTENSION_FUNCTION,
-                        FeaturePropertyBase.State.FSP, XalanConstants.FEATURE_FALSE);
+            if (value && _xmlFeatures != null) {
+                _xmlFeatures.setFeature(JdkXmlFeatures.XmlFeature.ENABLE_EXTENSION_FUNCTION,
+                        JdkXmlFeatures.State.FSP, false);
             }
-            return;
         }
         else if (name.equals(XalanConstants.ORACLE_FEATURE_SERVICE_MECHANISM)) {
             //in secure mode, let _useServicesMechanism be determined by the constructor
@@ -548,8 +599,8 @@ public class TransformerFactoryImpl
                 _useServicesMechanism = value;
         }
         else {
-            if (_featureManager != null &&
-                    _featureManager.setValue(name, State.APIPROPERTY, value)) {
+            if (_xmlFeatures != null &&
+                    _xmlFeatures.setFeature(name, JdkXmlFeatures.State.APIPROPERTY, value)) {
                 return;
             }
 
@@ -597,16 +648,15 @@ public class TransformerFactoryImpl
                 return true;
             }
         }
-        // secure processing?
+
         if (name.equals(XMLConstants.FEATURE_SECURE_PROCESSING)) {
-                return !_isNotSecureProcessing;
+            return !_isNotSecureProcessing;
         }
 
-        /** Check to see if the property is managed by the security manager **/
-        String propertyValue = (_featureManager != null) ?
-                _featureManager.getValueAsString(name) : null;
-        if (propertyValue != null) {
-            return Boolean.parseBoolean(propertyValue);
+        /** Check to see if the property is managed by the JdkXmlFeatues **/
+        int index = _xmlFeatures.getIndex(name);
+        if (index > -1) {
+            return _xmlFeatures.getFeature(index);
         }
 
         // Feature not supported
@@ -622,8 +672,8 @@ public class TransformerFactoryImpl
      /**
      * @return the feature manager
      */
-    public FeatureManager getFeatureManager() {
-        return _featureManager;
+    public JdkXmlFeatures getJdkXmlFeatures() {
+        return _xmlFeatures;
     }
 
     /**
@@ -730,21 +780,9 @@ public class TransformerFactoryImpl
         } catch (StopParseException e ) {
           // startElement encountered so do not parse further
 
-        } catch (javax.xml.parsers.ParserConfigurationException e) {
-
+        } catch (javax.xml.parsers.ParserConfigurationException | org.xml.sax.SAXException | IOException e) {
              throw new TransformerConfigurationException(
              "getAssociatedStylesheets failed", e);
-
-        } catch (org.xml.sax.SAXException se) {
-
-             throw new TransformerConfigurationException(
-             "getAssociatedStylesheets failed", se);
-
-
-        } catch (IOException ioe ) {
-           throw new TransformerConfigurationException(
-           "getAssociatedStylesheets failed", ioe);
-
         }
 
          return _stylesheetPIHandler.getAssociatedStylesheet();
@@ -762,6 +800,9 @@ public class TransformerFactoryImpl
     public Transformer newTransformer()
         throws TransformerConfigurationException
     {
+        // create CatalogFeatures that is accessible by the Transformer
+        // through the factory instance
+        buildCatalogFeatures();
         TransformerImpl result = new TransformerImpl(new Properties(),
             _indentNumber, this);
         if (_uriResolver != null) {
@@ -799,7 +840,7 @@ public class TransformerFactoryImpl
     /**
      * Pass warning messages from the compiler to the error listener
      */
-    private void passWarningsToListener(Vector messages)
+    private void passWarningsToListener(ArrayList<ErrorMsg> messages)
         throws TransformerException
     {
         if (_errorListener == null || messages == null) {
@@ -808,7 +849,7 @@ public class TransformerFactoryImpl
         // Pass messages to listener, one by one
         final int count = messages.size();
         for (int pos = 0; pos < count; pos++) {
-            ErrorMsg msg = (ErrorMsg)messages.elementAt(pos);
+            ErrorMsg msg = messages.get(pos);
             // Workaround for the TCK failure ErrorListener.errorTests.error001.
             if (msg.isWarningError())
                 _errorListener.error(
@@ -822,7 +863,7 @@ public class TransformerFactoryImpl
     /**
      * Pass error messages from the compiler to the error listener
      */
-    private void passErrorsToListener(Vector messages) {
+    private void passErrorsToListener(ArrayList<ErrorMsg> messages) {
         try {
             if (_errorListener == null || messages == null) {
                 return;
@@ -830,7 +871,7 @@ public class TransformerFactoryImpl
             // Pass messages to listener, one by one
             final int count = messages.size();
             for (int pos = 0; pos < count; pos++) {
-                String message = messages.elementAt(pos).toString();
+                String message = messages.get(pos).toString();
                 _errorListener.error(new TransformerException(message));
             }
         }
@@ -852,6 +893,7 @@ public class TransformerFactoryImpl
     public Templates newTemplates(Source source)
         throws TransformerConfigurationException
     {
+        TemplatesImpl templates;
         // If the _useClasspath attribute is true, try to load the translet from
         // the CLASSPATH and create a template object using the loaded
         // translet.
@@ -862,10 +904,14 @@ public class TransformerFactoryImpl
                 transletName = _packageName + "." + transletName;
 
             try {
-                final Class clazz = ObjectFactory.findProviderClass(transletName, true);
+                final Class<?> clazz = ObjectFactory.findProviderClass(transletName, true);
                 resetTransientAttributes();
 
-                return new TemplatesImpl(new Class[]{clazz}, transletName, null, _indentNumber, this);
+                templates = new TemplatesImpl(new Class<?>[]{clazz}, transletName, null, _indentNumber, this);
+                if (_uriResolver != null) {
+                    templates.setURIResolver(_uriResolver);
+                }
+                return templates;
             }
             catch (ClassNotFoundException cnfe) {
                 ErrorMsg err = new ErrorMsg(ErrorMsg.CLASS_NOT_FOUND_ERR, transletName);
@@ -886,7 +932,7 @@ public class TransformerFactoryImpl
             String transletClassName = getTransletBaseName(source);
 
             if (_packageName != null)
-                transletClassName = _packageName + "." + transletClassName;
+               transletClassName = _packageName + "." + transletClassName;
 
             if (_jarFileName != null)
                 bytecodes = getBytecodesFromJar(source, transletClassName);
@@ -906,12 +952,16 @@ public class TransformerFactoryImpl
                 // Reset the per-session attributes to their default values
                 // after each newTemplates() call.
                 resetTransientAttributes();
-                return new TemplatesImpl(bytecodes, transletClassName, null, _indentNumber, this);
+                templates = new TemplatesImpl(bytecodes, transletClassName, null, _indentNumber, this);
+                if (_uriResolver != null) {
+                    templates.setURIResolver(_uriResolver);
+                }
+                return templates;
             }
         }
 
         // Create and initialize a stylesheet compiler
-        final XSLTC xsltc = new XSLTC(_useServicesMechanism, _featureManager);
+        final XSLTC xsltc = new XSLTC(_useServicesMechanism, _xmlFeatures);
         if (_debug) xsltc.setDebug(true);
         if (_enableInlining)
                 xsltc.setTemplateInlining(true);
@@ -923,11 +973,17 @@ public class TransformerFactoryImpl
         xsltc.setProperty(XMLConstants.ACCESS_EXTERNAL_DTD, _accessExternalDTD);
         xsltc.setProperty(XalanConstants.SECURITY_MANAGER, _xmlSecurityManager);
         xsltc.setProperty(XalanConstants.JDK_EXTENSION_CLASSLOADER, _extensionClassLoader);
+
+        // set Catalog features
+        buildCatalogFeatures();
+        xsltc.setProperty(JdkXmlFeatures.CATALOG_FEATURES, _catalogFeatures);
+
         xsltc.init();
         if (!_isNotSecureProcessing)
             _xsltcExtensionFunctions = xsltc.getExternalExtensionFunctions();
         // Set a document loader (for xsl:include/import) if defined
-        if (_uriResolver != null) {
+        if (_uriResolver != null || ( _catalogFiles != null
+                && _xmlFeatures.getFeature(JdkXmlFeatures.XmlFeature.USE_CATALOG))) {
             xsltc.setSourceLoader(this);
         }
 
@@ -935,7 +991,7 @@ public class TransformerFactoryImpl
         // <?xml-stylesheet ...?> PI in an XML input document
         if ((_piParams != null) && (_piParams.get(source) != null)) {
             // Get the parameters for this Source object
-            PIParamWrapper p = (PIParamWrapper)_piParams.get(source);
+            PIParamWrapper p = _piParams.get(source);
             // Pass them on to the compiler (which will pass then to the parser)
             if (p != null) {
                 xsltc.setPIParameters(p._media, p._title, p._charset);
@@ -1004,43 +1060,47 @@ public class TransformerFactoryImpl
         }
 
         // Check that the transformation went well before returning
-    if (bytecodes == null) {
-        Vector errs = xsltc.getErrors();
-        ErrorMsg err;
-        if (errs != null) {
-            err = (ErrorMsg)errs.elementAt(errs.size()-1);
-        } else {
-            err = new ErrorMsg(ErrorMsg.JAXP_COMPILE_ERR);
-        }
-        Throwable cause = err.getCause();
-        TransformerConfigurationException exc;
-        if (cause != null) {
-            exc =  new TransformerConfigurationException(cause.getMessage(), cause);
-        } else {
-            exc =  new TransformerConfigurationException(err.toString());
-        }
-
-        // Pass compiler errors to the error listener
-        if (_errorListener != null) {
-            passErrorsToListener(xsltc.getErrors());
-
-            // As required by TCK 1.2, send a fatalError to the
-            // error listener because compilation of the stylesheet
-            // failed and no further processing will be possible.
-            try {
-                _errorListener.fatalError(exc);
-            } catch (TransformerException te) {
-                // well, we tried.
+        if (bytecodes == null) {
+            ArrayList<ErrorMsg> errs = xsltc.getErrors();
+            ErrorMsg err;
+            if (errs != null) {
+                err = errs.get(errs.size()-1);
+            } else {
+                err = new ErrorMsg(ErrorMsg.JAXP_COMPILE_ERR);
             }
-        }
-        else {
-            xsltc.printErrors();
-        }
-        throw exc;
-    }
+            Throwable cause = err.getCause();
+            TransformerConfigurationException exc;
+            if (cause != null) {
+                exc =  new TransformerConfigurationException(cause.getMessage(), cause);
+            } else {
+                exc =  new TransformerConfigurationException(err.toString());
+            }
 
-        return new TemplatesImpl(bytecodes, transletName,
-            xsltc.getOutputProperties(), _indentNumber, this);
+            // Pass compiler errors to the error listener
+            if (_errorListener != null) {
+                passErrorsToListener(xsltc.getErrors());
+
+                // As required by TCK 1.2, send a fatalError to the
+                // error listener because compilation of the stylesheet
+                // failed and no further processing will be possible.
+                try {
+                    _errorListener.fatalError(exc);
+                } catch (TransformerException te) {
+                    // well, we tried.
+                }
+            }
+            else {
+                xsltc.printErrors();
+            }
+            throw exc;
+        }
+
+        templates = new TemplatesImpl(bytecodes, transletName, xsltc.getOutputProperties(),
+                _indentNumber, this);
+        if (_uriResolver != null) {
+            templates.setURIResolver(_uriResolver);
+        }
+        return templates;
     }
 
     /**
@@ -1055,6 +1115,9 @@ public class TransformerFactoryImpl
     public TemplatesHandler newTemplatesHandler()
         throws TransformerConfigurationException
     {
+        // create CatalogFeatures that is accessible by the Handler
+        // through the factory instance
+        buildCatalogFeatures();
         final TemplatesHandlerImpl handler =
             new TemplatesHandlerImpl(_indentNumber, this);
         if (_uriResolver != null) {
@@ -1266,11 +1329,19 @@ public class TransformerFactoryImpl
     @Override
     public InputSource loadSource(String href, String context, XSLTC xsltc) {
         try {
+            Source source = null;
             if (_uriResolver != null) {
-                final Source source = _uriResolver.resolve(href, context);
-                if (source != null) {
-                    return Util.getInputSource(xsltc, source);
+                source = _uriResolver.resolve(href, context);
+            }
+            if (source == null && _catalogFiles != null &&
+                    _xmlFeatures.getFeature(JdkXmlFeatures.XmlFeature.USE_CATALOG)) {
+                if (_catalogUriResolver == null) {
+                    _catalogUriResolver = CatalogManager.catalogResolver(_catalogFeatures);
                 }
+                source = _catalogUriResolver.resolve(href, context);
+            }
+            if (source != null) {
+                return Util.getInputSource(xsltc, source);
             }
         }
         catch (TransformerException e) {
@@ -1278,8 +1349,32 @@ public class TransformerFactoryImpl
             final ErrorMsg msg = new ErrorMsg(ErrorMsg.INVALID_URI_ERR, href + "\n" + e.getMessage(), this);
             xsltc.getParser().reportError(Constants.FATAL, msg);
         }
+        catch (CatalogException e) {
+            final ErrorMsg msg = new ErrorMsg(ErrorMsg.CATALOG_EXCEPTION, href + "\n" + e.getMessage(), this);
+            xsltc.getParser().reportError(Constants.FATAL, msg);
+        }
 
         return null;
+    }
+
+    /**
+     * Build the CatalogFeatures object when a newTemplates or newTransformer is
+     * created. This will read any System Properties for the CatalogFeatures that
+     * may have been set.
+     */
+    private CatalogFeatures buildCatalogFeatures() {
+        // build will cause the CatalogFeatures to read SPs for those not set through the API
+        if (_catalogFeatures == null) {
+            _catalogFeatures = cfBuilder.build();
+        }
+
+        // update fields
+        _catalogFiles = _catalogFeatures.get(Feature.FILES);
+        _catalogDefer = _catalogFeatures.get(Feature.DEFER);
+        _catalogPrefer = _catalogFeatures.get(Feature.PREFER);
+        _catalogResolve = _catalogFeatures.get(Feature.RESOLVE);
+
+        return _catalogFeatures;
     }
 
     /**
@@ -1288,7 +1383,7 @@ public class TransformerFactoryImpl
     private void resetTransientAttributes() {
         _transletName = DEFAULT_TRANSLET_NAME;
         _destinationDirectory = null;
-        _packageName = null;
+        _packageName = DEFAULT_TRANSLATE_PACKAGE;
         _jarFileName = null;
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,21 +24,22 @@
 /*
  * @test
  * @summary Verify incremental changes in gensrc are handled as expected
- * @ignore Requires dependency code to deal with in-method dependencies.
  * @bug 8054689
  * @author Fredrik O
  * @author sogoel (rewrite)
  * @library /tools/lib
  * @modules jdk.compiler/com.sun.tools.javac.api
- *          jdk.compiler/com.sun.tools.javac.file
  *          jdk.compiler/com.sun.tools.javac.main
  *          jdk.compiler/com.sun.tools.sjavac
- * @build Wrapper ToolBox
+ * @ignore Requires dependency code to deal with in-method dependencies.
+ * @build Wrapper toolbox.ToolBox
  * @run main Wrapper IncCompileWithChanges
  */
 
 import java.util.*;
 import java.nio.file.*;
+
+import toolbox.ToolBox;
 
 public class IncCompileWithChanges extends SJavacTester {
     public static void main(String... args) throws Exception {
@@ -49,7 +50,6 @@ public class IncCompileWithChanges extends SJavacTester {
     // Remember the previous bin and headers state here.
     Map<String,Long> previous_bin_state;
     Map<String,Long> previous_headers_state;
-    ToolBox tb = new ToolBox();
 
     void test() throws Exception {
         clean(TEST_ROOT);
@@ -78,9 +78,9 @@ public class IncCompileWithChanges extends SJavacTester {
 
         compile(GENSRC.toString(),
                 "-d", BIN.toString(),
+                "--state-dir=" + BIN,
                 "-h", HEADERS.toString(),
                 "-j", "1",
-                SERVER_ARG,
                 "--log=debug");
         Map<String,Long> new_bin_state = collectState(BIN);
 

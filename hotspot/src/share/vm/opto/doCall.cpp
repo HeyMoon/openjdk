@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,11 +45,11 @@ void trace_type_profile(Compile* C, ciMethod *method, int depth, int bci, ciMeth
   if (TraceTypeProfile || C->print_inlining()) {
     outputStream* out = tty;
     if (!C->print_inlining()) {
-      if (NOT_PRODUCT(!PrintOpto &&) !PrintCompilation) {
+      if (!PrintOpto && !PrintCompilation) {
         method->print_short_name();
         tty->cr();
       }
-      CompileTask::print_inlining(prof_method, depth, bci);
+      CompileTask::print_inlining_tty(prof_method, depth, bci);
     } else {
       out = C->print_inlining_stream();
     }
@@ -209,16 +209,22 @@ CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool 
 
       int morphism = profile.morphism();
       if (speculative_receiver_type != NULL) {
-        // We have a speculative type, we should be able to resolve
-        // the call. We do that before looking at the profiling at
-        // this invoke because it may lead to bimorphic inlining which
-        // a speculative type should help us avoid.
-        receiver_method = callee->resolve_invoke(jvms->method()->holder(),
-                                                 speculative_receiver_type);
-        if (receiver_method == NULL) {
-          speculative_receiver_type = NULL;
+        if (!too_many_traps(caller, bci, Deoptimization::Reason_speculate_class_check)) {
+          // We have a speculative type, we should be able to resolve
+          // the call. We do that before looking at the profiling at
+          // this invoke because it may lead to bimorphic inlining which
+          // a speculative type should help us avoid.
+          receiver_method = callee->resolve_invoke(jvms->method()->holder(),
+                                                   speculative_receiver_type);
+          if (receiver_method == NULL) {
+            speculative_receiver_type = NULL;
+          } else {
+            morphism = 1;
+          }
         } else {
-          morphism = 1;
+          // speculation failed before. Use profiling at the call
+          // (could allow bimorphic inlining for instance).
+          speculative_receiver_type = NULL;
         }
       }
       if (receiver_method == NULL &&
@@ -255,7 +261,7 @@ CallGenerator* Compile::call_generator(ciMethod* callee, int vtable_index, bool 
           Deoptimization::DeoptReason reason = morphism == 2 ?
             Deoptimization::Reason_bimorphic : Deoptimization::reason_class_check(speculative_receiver_type != NULL);
           if ((morphism == 1 || (morphism == 2 && next_hit_cg != NULL)) &&
-              !too_many_traps(jvms->method(), jvms->bci(), reason)
+              !too_many_traps(caller, bci, reason)
              ) {
             // Generate uncommon trap for class check failure path
             // in case of monomorphic or bimorphic virtual call site.
@@ -393,6 +399,22 @@ bool Parse::can_not_compile_call_site(ciMethod *dest_method, ciInstanceKlass* kl
   return false;
 }
 
+#ifdef ASSERT
+static bool check_call_consistency(JVMState* jvms, CallGenerator* cg) {
+  ciMethod* symbolic_info = jvms->method()->get_method_at_bci(jvms->bci());
+  ciMethod* resolved_method = cg->method();
+  if (!ciMethod::is_consistent_info(symbolic_info, resolved_method)) {
+    tty->print_cr("JVMS:");
+    jvms->dump();
+    tty->print_cr("Bytecode info:");
+    jvms->method()->get_method_at_bci(jvms->bci())->print(); tty->cr();
+    tty->print_cr("Resolved method:");
+    cg->method()->print(); tty->cr();
+    return false;
+  }
+  return true;
+}
+#endif // ASSERT
 
 //------------------------------do_call----------------------------------------
 // Handle your basic call.  Inline if we can & want to, else just setup call.
@@ -426,12 +448,10 @@ void Parse::do_call() {
   // uncommon-trap when callee is unloaded, uninitialized or will not link
   // bailout when too many arguments for register representation
   if (!will_link || can_not_compile_call_site(orig_callee, klass)) {
-#ifndef PRODUCT
     if (PrintOpto && (Verbose || WizardMode)) {
       method()->print_name(); tty->print_cr(" can not compile call at bci %d to:", bci());
       orig_callee->print_name(); tty->cr();
     }
-#endif
     return;
   }
   assert(holder_klass->is_loaded(), "");
@@ -483,6 +503,30 @@ void Parse::do_call() {
                                       receiver_type, is_virtual,
                                       call_does_dispatch, vtable_index);  // out-parameters
     speculative_receiver_type = receiver_type != NULL ? receiver_type->speculative_type() : NULL;
+  }
+
+  // invoke-super-special
+  if (iter().cur_bc_raw() == Bytecodes::_invokespecial && !orig_callee->is_object_initializer()) {
+    ciInstanceKlass* calling_klass = method()->holder();
+    ciInstanceKlass* sender_klass =
+        calling_klass->is_anonymous() ? calling_klass->host_klass() :
+                                        calling_klass;
+    if (sender_klass->is_interface()) {
+      Node* receiver_node = stack(sp() - nargs);
+      Node* cls_node = makecon(TypeKlassPtr::make(sender_klass));
+      Node* bad_type_ctrl = NULL;
+      Node* casted_receiver = gen_checkcast(receiver_node, cls_node, &bad_type_ctrl);
+      if (bad_type_ctrl != NULL) {
+        PreserveJVMState pjvms(this);
+        set_control(bad_type_ctrl);
+        uncommon_trap(Deoptimization::Reason_class_check,
+                      Deoptimization::Action_none);
+      }
+      if (stopped()) {
+        return; // MUST uncommon-trap?
+      }
+      set_stack(sp() - nargs, casted_receiver);
+    }
   }
 
   // Note:  It's OK to try to inline a virtual call.
@@ -573,6 +617,8 @@ void Parse::do_call() {
     set_jvms(new_jvms);
   }
 
+  assert(check_call_consistency(jvms, cg), "inconsistent info");
+
   if (!stopped()) {
     // This was some sort of virtual call, which did a null check for us.
     // Now we can assert receiver-not-null, on the normal return path.
@@ -599,9 +645,9 @@ void Parse::do_call() {
           pop_node(rt);  // whatever it was, pop it
         } else if (rt == T_INT || is_subword_type(rt)) {
           // Nothing.  These cases are handled in lambda form bytecode.
-          assert(ct == T_INT || is_subword_type(ct), err_msg_res("must match: rt=%s, ct=%s", type2name(rt), type2name(ct)));
+          assert(ct == T_INT || is_subword_type(ct), "must match: rt=%s, ct=%s", type2name(rt), type2name(ct));
         } else if (rt == T_OBJECT || rt == T_ARRAY) {
-          assert(ct == T_OBJECT || ct == T_ARRAY, err_msg_res("rt=%s, ct=%s", type2name(rt), type2name(ct)));
+          assert(ct == T_OBJECT || ct == T_ARRAY, "rt=%s, ct=%s", type2name(rt), type2name(ct));
           if (ctype->is_loaded()) {
             const TypeOopPtr* arg_type = TypeOopPtr::make_from_klass(rtype->as_klass());
             const Type*       sig_type = TypeOopPtr::make_from_klass(ctype->as_klass());
@@ -612,7 +658,7 @@ void Parse::do_call() {
             }
           }
         } else {
-          assert(rt == ct, err_msg_res("unexpected mismatch: rt=%s, ct=%s", type2name(rt), type2name(ct)));
+          assert(rt == ct, "unexpected mismatch: rt=%s, ct=%s", type2name(rt), type2name(ct));
           // push a zero; it's better than getting an oop/int mismatch
           pop_node(rt);
           Node* retnode = zerocon(ct);
@@ -628,18 +674,16 @@ void Parse::do_call() {
       // can appear to be "loaded" by different loaders (depending on
       // the accessing class).
       assert(!rtype->is_loaded() || !ctype->is_loaded() || rtype == ctype,
-             err_msg_res("mismatched return types: rtype=%s, ctype=%s", rtype->name(), ctype->name()));
+             "mismatched return types: rtype=%s, ctype=%s", rtype->name(), ctype->name());
     }
 
     // If the return type of the method is not loaded, assert that the
     // value we got is a null.  Otherwise, we need to recompile.
     if (!rtype->is_loaded()) {
-#ifndef PRODUCT
       if (PrintOpto && (Verbose || WizardMode)) {
         method()->print_name(); tty->print_cr(" asserting nullness of result at bci: %d", bci());
         cg->method()->print_name(); tty->cr();
       }
-#endif
       if (C->log() != NULL) {
         C->log()->elem("assert_null reason='return' klass='%d'",
                        C->log()->identify(rtype));
@@ -851,11 +895,9 @@ void Parse::catch_inline_exceptions(SafePointNode* ex_map) {
 
     if (remaining == 1) {
       push_ex_oop(ex_node);        // Push exception oop for handler
-#ifndef PRODUCT
       if (PrintOpto && WizardMode) {
         tty->print_cr("  Catching every inline exception bci:%d -> handler_bci:%d", bci(), handler_bci);
       }
-#endif
       merge_exception(handler_bci); // jump to handler
       return;                   // No more handling to be done here!
     }
@@ -882,13 +924,11 @@ void Parse::catch_inline_exceptions(SafePointNode* ex_map) {
       assert(klass->has_subklass() || tinst->klass_is_exact(), "lost exactness");
       Node* ex_oop = _gvn.transform(new CheckCastPPNode(control(), ex_node, tinst));
       push_ex_oop(ex_oop);      // Push exception oop for handler
-#ifndef PRODUCT
       if (PrintOpto && WizardMode) {
         tty->print("  Catching inline exception bci:%d -> handler_bci:%d -- ", bci(), handler_bci);
         klass->print_name();
         tty->cr();
       }
-#endif
       merge_exception(handler_bci);
     }
     set_control(not_subtype_ctrl);
@@ -1067,13 +1107,11 @@ ciMethod* Compile::optimize_inlining(ciMethod* caller, int bci, ciInstanceKlass*
     // such method can be changed when its class is redefined.
     ciMethod* exact_method = callee->resolve_invoke(calling_klass, actual_receiver);
     if (exact_method != NULL) {
-#ifndef PRODUCT
       if (PrintOpto) {
         tty->print("  Calling method via exact type @%d --- ", bci);
         exact_method->print_name();
         tty->cr();
       }
-#endif
       return exact_method;
     }
   }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,16 +52,16 @@ public class XMenuWindow extends XBaseMenuWindow {
     /*
      * dimension constants
      */
-    private final static int WINDOW_SPACING_LEFT = 2;
-    private final static int WINDOW_SPACING_RIGHT = 2;
-    private final static int WINDOW_SPACING_TOP = 2;
-    private final static int WINDOW_SPACING_BOTTOM = 2;
-    private final static int WINDOW_ITEM_INDENT = 15;
-    private final static int WINDOW_ITEM_MARGIN_LEFT = 2;
-    private final static int WINDOW_ITEM_MARGIN_RIGHT = 2;
-    private final static int WINDOW_ITEM_MARGIN_TOP = 2;
-    private final static int WINDOW_ITEM_MARGIN_BOTTOM = 2;
-    private final static int WINDOW_SHORTCUT_SPACING = 10;
+    private static final int WINDOW_SPACING_LEFT = 2;
+    private static final int WINDOW_SPACING_RIGHT = 2;
+    private static final int WINDOW_SPACING_TOP = 2;
+    private static final int WINDOW_SPACING_BOTTOM = 2;
+    private static final int WINDOW_ITEM_INDENT = 15;
+    private static final int WINDOW_ITEM_MARGIN_LEFT = 2;
+    private static final int WINDOW_ITEM_MARGIN_RIGHT = 2;
+    private static final int WINDOW_ITEM_MARGIN_TOP = 2;
+    private static final int WINDOW_ITEM_MARGIN_BOTTOM = 2;
+    private static final int WINDOW_SHORTCUT_SPACING = 10;
 
     /*
      * Checkmark
@@ -278,25 +278,25 @@ public class XMenuWindow extends XBaseMenuWindow {
      */
     protected Rectangle getSubmenuBounds(Rectangle itemBounds, Dimension windowSize) {
         Rectangle globalBounds = toGlobal(itemBounds);
-        Dimension screenSize = Toolkit.getDefaultToolkit().getScreenSize();
+        Rectangle screenBounds = getCurrentGraphicsConfiguration().getBounds();
         Rectangle res;
-        res = fitWindowRight(globalBounds, windowSize, screenSize);
+        res = fitWindowRight(globalBounds, windowSize, screenBounds);
         if (res != null) {
             return res;
         }
-        res = fitWindowBelow(globalBounds, windowSize, screenSize);
+        res = fitWindowBelow(globalBounds, windowSize, screenBounds);
         if (res != null) {
             return res;
         }
-        res = fitWindowAbove(globalBounds, windowSize, screenSize);
+        res = fitWindowAbove(globalBounds, windowSize, screenBounds);
         if (res != null) {
             return res;
         }
-        res = fitWindowLeft(globalBounds, windowSize, screenSize);
+        res = fitWindowLeft(globalBounds, windowSize, screenBounds);
         if (res != null) {
             return res;
         }
-        return fitWindowToScreen(windowSize, screenSize);
+        return fitWindowToScreen(windowSize, screenBounds);
    }
 
     /**

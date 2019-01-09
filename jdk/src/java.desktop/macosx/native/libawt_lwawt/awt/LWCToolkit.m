@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,15 +28,10 @@
 #import <objc/runtime.h>
 #import <Cocoa/Cocoa.h>
 #import <Security/AuthSession.h>
-#import <JavaNativeFoundation/JavaNativeFoundation.h>
-#import <JavaRuntimeSupport/JavaRuntimeSupport.h>
 
 #include "jni_util.h"
-#import "CMenuBar.h"
-#import "InitIDs.h"
 #import "LWCToolkit.h"
 #import "ThreadUtilities.h"
-#import "AWT_debug.h"
 #import "CSystemColors.h"
 #import  "NSApplicationAWT.h"
 #import "PropertiesUtilities.h"
@@ -45,6 +40,15 @@
 #import "sun_lwawt_macosx_LWCToolkit.h"
 
 #import "sizecalc.h"
+
+#import <JavaRuntimeSupport/JavaRuntimeSupport.h>
+
+// SCROLL PHASE STATE
+#define SCROLL_PHASE_UNSUPPORTED 1
+#define SCROLL_PHASE_BEGAN 2
+#define SCROLL_PHASE_CONTINUED 3
+#define SCROLL_PHASE_MOMENTUM_BEGAN 4
+#define SCROLL_PHASE_ENDED 5
 
 int gNumberOfButtons;
 jint* gButtonDownMasks;
@@ -71,10 +75,44 @@ static long eventCount;
     return eventCount;
 }
 
-+ (void) eventCountPlusPlus{    
++ (void) eventCountPlusPlus{
     eventCount++;
 }
 
++ (jint) scrollStateWithEvent: (NSEvent*) event {
+
+    if ([event type] != NSScrollWheel) {
+        return 0;
+    }
+    
+    if ([event phase]) {
+        // process a phase of manual scrolling
+        switch ([event phase]) {
+            case NSEventPhaseBegan: return SCROLL_PHASE_BEGAN;
+            case NSEventPhaseCancelled: return SCROLL_PHASE_ENDED;
+            case NSEventPhaseEnded: return SCROLL_PHASE_ENDED;
+            default: return SCROLL_PHASE_CONTINUED;
+        }
+    }
+
+    if ([event momentumPhase]) {
+        // process a phase of automatic scrolling
+        switch ([event momentumPhase]) {
+            case NSEventPhaseBegan: return SCROLL_PHASE_MOMENTUM_BEGAN;
+            case NSEventPhaseCancelled: return SCROLL_PHASE_ENDED;
+            case NSEventPhaseEnded: return SCROLL_PHASE_ENDED;
+            default: return SCROLL_PHASE_CONTINUED;
+        }
+    }
+    // phase and momentum phase both are not set
+    return SCROLL_PHASE_UNSUPPORTED;
+}
+
++ (BOOL) hasPreciseScrollingDeltas: (NSEvent*) event {
+    return [event type] == NSScrollWheel
+        && [event respondsToSelector:@selector(hasPreciseScrollingDeltas)]
+        && [event hasPreciseScrollingDeltas];
+}
 @end
 
 
@@ -120,7 +158,7 @@ static long eventCount;
 }
 
 - (void)dealloc {
-    JNIEnv *env = [ThreadUtilities getJNIEnv];
+    JNIEnv *env = [ThreadUtilities getJNIEnvUncached];
     if (self.runnable) {
         (*env)->DeleteGlobalRef(env, self.runnable);
     }
@@ -128,7 +166,7 @@ static long eventCount;
 }
 
 - (void)perform {
-    JNIEnv* env = [ThreadUtilities getJNIEnv];
+    JNIEnv* env = [ThreadUtilities getJNIEnvUncached];
     static JNF_CLASS_CACHE(sjc_Runnable, "java/lang/Runnable");
     static JNF_MEMBER_CACHE(jm_Runnable_run, sjc_Runnable, "run", "()V");
     JNFCallVoidMethod(env, self.runnable, jm_Runnable_run);
@@ -167,7 +205,7 @@ static void setUpAWTAppKit(BOOL installObservers)
                                                ^(CFRunLoopObserverRef observer, CFRunLoopActivity activity) {
                                                    setBusy(YES);
                                                });
-        
+
         CFRunLoopObserverRef notBusyObserver = CFRunLoopObserverCreateWithHandler(
                                                 NULL,                        // CFAllocator
                                                 kCFRunLoopBeforeWaiting,     // CFOptionFlags
@@ -176,14 +214,14 @@ static void setUpAWTAppKit(BOOL installObservers)
                                                 ^(CFRunLoopObserverRef observer, CFRunLoopActivity activity) {
                                                     setBusy(NO);
                                                 });
-        
+
         CFRunLoopRef runLoop = [[NSRunLoop currentRunLoop] getCFRunLoop];
         CFRunLoopAddObserver(runLoop, busyObserver, kCFRunLoopDefaultMode);
         CFRunLoopAddObserver(runLoop, notBusyObserver, kCFRunLoopDefaultMode);
-        
+
         CFRelease(busyObserver);
         CFRelease(notBusyObserver);
-        
+
         setBusy(YES);
     }
 
@@ -344,19 +382,19 @@ static void AWT_NSUncaughtExceptionHandler(NSException *exception) {
         // We're either embedded, or showing a splash screen
         if (isEmbedded) {
             AWT_STARTUP_LOG(@"running embedded");
-            
+
             // We don't track if the runloop is busy, so set it free to let AWT finish when it needs
             setBusy(NO);
         } else {
             AWT_STARTUP_LOG(@"running after showing a splash screen");
         }
-        
+
         // Signal so that JNI_OnLoad can proceed.
         if (!wasOnMainThread) [AWTStarter appKitIsRunning:nil];
-        
+
         // Proceed to exit this call as there is no reason to run the NSApplication event loop.
     }
-    
+
     [pool drain];
 }
 
@@ -370,24 +408,34 @@ static void AWT_NSUncaughtExceptionHandler(NSException *exception) {
 JNIEXPORT jboolean JNICALL Java_sun_lwawt_macosx_LWCToolkit_nativeSyncQueue
 (JNIEnv *env, jobject self, jlong timeout)
 {
-    int currentEventNum = [AWTToolkit getEventCount];
+    long currentEventNum = [AWTToolkit getEventCount];
 
     NSApplication* sharedApp = [NSApplication sharedApplication];
     if ([sharedApp isKindOfClass:[NSApplicationAWT class]]) {
         NSApplicationAWT* theApp = (NSApplicationAWT*)sharedApp;
-        [theApp postDummyEvent];
-        [theApp waitForDummyEvent:timeout];
+        // We use two different API to post events to the application,
+        //  - [NSApplication postEvent]
+        //  - CGEventPost(), see CRobot.m
+        // It was found that if we post an event via CGEventPost in robot and
+        // immediately after this we will post the second event via
+        // [NSApp postEvent] then sometimes the second event will be handled
+        // first. The opposite isn't proved, but we use both here to be safer.
+        [theApp postDummyEvent:false];
+        [theApp waitForDummyEvent:timeout / 2.0];
+        [theApp postDummyEvent:true];
+        [theApp waitForDummyEvent:timeout / 2.0];
+
     } else {
         // could happen if we are embedded inside SWT application,
-        // in this case just spin a single empty block through 
+        // in this case just spin a single empty block through
         // the event loop to give it a chance to process pending events
         [JNFRunLoop performOnMainThreadWaiting:YES withBlock:^(){}];
     }
-    
+
     if (([AWTToolkit getEventCount] - currentEventNum) != 0) {
         return JNI_TRUE;
     }
-        
+
     return JNI_FALSE;
 }
 
@@ -516,10 +564,10 @@ JNF_COCOA_ENTER(env);
                                              beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.010]];
         if (processEvents) {
             //We do not spin a runloop here as date is nil, so does not matter which mode to use
-            // Processing all events excluding NSApplicationDefined which need to be processed 
+            // Processing all events excluding NSApplicationDefined which need to be processed
             // on the main loop only (those events are intended for disposing resources)
             NSEvent *event;
-            if ((event = [NSApp nextEventMatchingMask:(NSAnyEventMask & ~NSApplicationDefined)
+            if ((event = [NSApp nextEventMatchingMask:(NSAnyEventMask & ~NSApplicationDefinedMask)
                                            untilDate:nil
                                               inMode:NSDefaultRunLoopMode
                                              dequeue:YES]) != nil) {
@@ -733,12 +781,13 @@ Java_sun_lwawt_macosx_LWCToolkit_initAppkit
     JNF_COCOA_EXIT(env)
 }
 
-JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
+JNIEXPORT jint JNICALL DEF_JNI_OnLoad(JavaVM *vm, void *reserved) {
     OSXAPP_SetJavaVM(vm);
 
-    // We need to let Foundation know that this is a multithreaded application, if it isn't already.
+    // We need to let Foundation know that this is a multithreaded application,
+    // if it isn't already.
     if (![NSThread isMultiThreaded]) {
-        [NSThread detachNewThreadSelector:nil toTarget:nil withObject:nil];
+        [[[[NSThread alloc] init] autorelease] start];
     }
 
     return JNI_VERSION_1_4;

@@ -74,7 +74,7 @@ import sun.print.SunPageSelection;
 import java.awt.event.KeyEvent;
 import java.net.URISyntaxException;
 import java.lang.reflect.Field;
-
+import java.net.MalformedURLException;
 
 /**
  * A class which implements a cross-platform print dialog.
@@ -87,17 +87,17 @@ public class ServiceDialog extends JDialog implements ActionListener {
     /**
      * Waiting print status (user response pending).
      */
-    public final static int WAITING = 0;
+    public static final int WAITING = 0;
 
     /**
      * Approve print status (user activated "Print" or "OK").
      */
-    public final static int APPROVE = 1;
+    public static final int APPROVE = 1;
 
     /**
      * Cancel print status (user activated "Cancel");
      */
-    public final static int CANCEL = 2;
+    public static final int CANCEL = 2;
 
     private static final String strBundle = "sun.print.resources.serviceui";
     private static final Insets panelInsets = new Insets(6, 6, 6, 6);
@@ -184,6 +184,9 @@ public class ServiceDialog extends JDialog implements ActionListener {
             isAWT = true;
         }
 
+        if (attributes.get(DialogOnTop.class) != null) {
+            setAlwaysOnTop(true);
+        }
         Container c = getContentPane();
         c.setLayout(new BorderLayout());
 
@@ -274,6 +277,10 @@ public class ServiceDialog extends JDialog implements ActionListener {
         this.docFlavor = flavor;
         this.asOriginal = attributes;
         this.asCurrent = new HashPrintRequestAttributeSet(attributes);
+
+        if (attributes.get(DialogOnTop.class) != null) {
+            setAlwaysOnTop(true);
+        }
 
         Container c = getContentPane();
         c.setLayout(new BorderLayout());
@@ -932,12 +939,22 @@ public class ServiceDialog extends JDialog implements ActionListener {
                 allowedToPrintToFile() : false;
 
             // setup Destination (print-to-file) widgets
-            if (psCurrent.isAttributeCategorySupported(dstCategory)) {
-                dstSupported = true;
-            }
             Destination dst = (Destination)asCurrent.get(dstCategory);
             if (dst != null) {
-                dstSelected = true;
+                try {
+                     dst.getURI().toURL();
+                     if (psCurrent.isAttributeValueSupported(dst, docFlavor,
+                                                             asCurrent)) {
+                         dstSupported = true;
+                         dstSelected = true;
+                     }
+                 } catch (MalformedURLException ex) {
+                     dstSupported = true;
+                 }
+            } else {
+                if (psCurrent.isAttributeCategorySupported(dstCategory)) {
+                    dstSupported = true;
+                }
             }
             cbPrintToFile.setEnabled(dstSupported && dstAllowed);
             cbPrintToFile.setSelected(dstSelected && dstAllowed
@@ -971,6 +988,7 @@ public class ServiceDialog extends JDialog implements ActionListener {
         private JFormattedTextField tfRangeFrom, tfRangeTo;
         private JLabel lblRangeTo;
         private boolean prSupported;
+        private boolean prPgRngSupported;
 
         public PrintRangePanel() {
             super();
@@ -1084,7 +1102,7 @@ public class ServiceDialog extends JDialog implements ActionListener {
         public void focusGained(FocusEvent e) {}
 
         private void setupRangeWidgets() {
-            boolean rangeEnabled = (rbPages.isSelected() && prSupported);
+            boolean rangeEnabled = (rbPages.isSelected() && prPgRngSupported);
             tfRangeFrom.setEnabled(rangeEnabled);
             tfRangeTo.setEnabled(rangeEnabled);
             lblRangeTo.setEnabled(rangeEnabled);
@@ -1130,6 +1148,9 @@ public class ServiceDialog extends JDialog implements ActionListener {
             if (psCurrent.isAttributeCategorySupported(prCategory) ||
                    isAWT) {
                 prSupported = true;
+                prPgRngSupported = psCurrent.isAttributeValueSupported(prAll,
+                                                                     docFlavor,
+                                                                     asCurrent);
             }
 
             SunPageSelection select = SunPageSelection.ALL;
@@ -1169,7 +1190,7 @@ public class ServiceDialog extends JDialog implements ActionListener {
             tfRangeFrom.setValue(min);
             tfRangeTo.setValue(max);
             rbAll.setEnabled(prSupported);
-            rbPages.setEnabled(prSupported);
+            rbPages.setEnabled(prPgRngSupported);
             setupRangeWidgets();
         }
     }
@@ -1294,8 +1315,16 @@ public class ServiceDialog extends JDialog implements ActionListener {
                 if (sc == null) {
                     sc = SheetCollate.UNCOLLATED;
                 }
+                if (sc != null &&
+                    !psCurrent.isAttributeValueSupported(sc, docFlavor, asCurrent)) {
+                    scSupported = false;
+                }
+            } else {
+                if (!psCurrent.isAttributeValueSupported(sc, docFlavor, asCurrent)) {
+                    scSupported = false;
+                }
             }
-            cbCollate.setSelected(sc == SheetCollate.COLLATED);
+            cbCollate.setSelected(sc == SheetCollate.COLLATED && scSupported);
             updateCollateCB();
         }
     }
@@ -1402,8 +1431,8 @@ public class ServiceDialog extends JDialog implements ActionListener {
             format.setParseIntegerOnly(false);
             format.setDecimalSeparatorAlwaysShown(true);
             NumberFormatter nf = new NumberFormatter(format);
-            nf.setMinimum(new Float(0.0f));
-            nf.setMaximum(new Float(999.0f));
+            nf.setMinimum(Float.valueOf(0.0f));
+            nf.setMaximum(Float.valueOf(999.0f));
             nf.setAllowsInvalid(true);
             nf.setCommitsOnValidEdit(true);
 
@@ -1422,13 +1451,13 @@ public class ServiceDialog extends JDialog implements ActionListener {
             topMargin.addActionListener(this);
             topMargin.getAccessibleContext().setAccessibleName(
                                               getMsg("label.topmargin"));
-            topMargin = new JFormattedTextField(nf);
+
             bottomMargin = new JFormattedTextField(nf);
             bottomMargin.addFocusListener(this);
             bottomMargin.addActionListener(this);
             bottomMargin.getAccessibleContext().setAccessibleName(
                                               getMsg("label.bottommargin"));
-            topMargin = new JFormattedTextField(nf);
+
             c.gridwidth = GridBagConstraints.RELATIVE;
             lblLeft = new JLabel(getMsg("label.leftmargin") + " " + unitsMsg,
                                  JLabel.LEADING);
@@ -1632,10 +1661,13 @@ public class ServiceDialog extends JDialog implements ActionListener {
             float hgt = mediaSize.getY(units);
             float pax = lm;
             float pay = tm;
+            float par = rm;
+            float pab = bm;
             float paw = wid - lm - rm;
             float pah = hgt - tm - bm;
 
             if (paw <= 0f || pah <= 0f || pax < 0f || pay < 0f ||
+                par <= 0f || pab <= 0f ||
                 pax < mpaMax.getX(units) || paw > mpaMax.getWidth(units) ||
                 pay < mpaMax.getY(units) || pah > mpaMax.getHeight(units)) {
                 return null;
@@ -1836,10 +1868,10 @@ public class ServiceDialog extends JDialog implements ActionListener {
             rmVal = mediaSize.getX(units) - pax - paw;
             bmVal = mediaSize.getY(units) - pay - pah;
 
-            lmObj = new Float(lmVal);
-            rmObj = new Float(rmVal);
-            tmObj = new Float(tmVal);
-            bmObj = new Float(bmVal);
+            lmObj = lmVal;
+            rmObj = rmVal;
+            tmObj = tmVal;
+            bmObj = bmVal;
 
             /* Now we know the values to use, we need to assign them
              * to the fields appropriate for the orientation.
@@ -2742,10 +2774,10 @@ public class ServiceDialog extends JDialog implements ActionListener {
             if (js == null) {
                 js = (JobSheets)psCurrent.getDefaultAttributeValue(jsCategory);
                 if (js == null) {
-                    js = JobSheets.NONE;
+                    js = JobSheets.STANDARD;
                 }
             }
-            cbJobSheets.setSelected(js != JobSheets.NONE);
+            cbJobSheets.setSelected(js != JobSheets.NONE && jsSupported);
             cbJobSheets.setEnabled(jsSupported);
 
             // setup JobPriority spinner

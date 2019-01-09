@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -50,6 +50,7 @@ import java.util.spi.CurrencyNameProvider;
 import java.util.spi.LocaleNameProvider;
 import java.util.spi.LocaleServiceProvider;
 import java.util.spi.TimeZoneNameProvider;
+import sun.text.spi.JavaTimeDateTimePatternProvider;
 import sun.util.resources.LocaleData;
 import sun.util.spi.CalendarProvider;
 
@@ -109,25 +110,28 @@ public class JRELocaleProviderAdapter extends LocaleProviderAdapter implements R
             return (P) getCalendarNameProvider();
         case "CalendarProvider":
             return (P) getCalendarProvider();
+        case "JavaTimeDateTimePatternProvider":
+            return (P) getJavaTimeDateTimePatternProvider();
         default:
             throw new InternalError("should not come down here");
         }
     }
 
-    private volatile BreakIteratorProvider breakIteratorProvider = null;
-    private volatile CollatorProvider collatorProvider = null;
-    private volatile DateFormatProvider dateFormatProvider = null;
-    private volatile DateFormatSymbolsProvider dateFormatSymbolsProvider = null;
-    private volatile DecimalFormatSymbolsProvider decimalFormatSymbolsProvider = null;
-    private volatile NumberFormatProvider numberFormatProvider = null;
+    private volatile BreakIteratorProvider breakIteratorProvider;
+    private volatile CollatorProvider collatorProvider;
+    private volatile DateFormatProvider dateFormatProvider;
+    private volatile DateFormatSymbolsProvider dateFormatSymbolsProvider;
+    private volatile DecimalFormatSymbolsProvider decimalFormatSymbolsProvider;
+    private volatile NumberFormatProvider numberFormatProvider;
 
-    private volatile CurrencyNameProvider currencyNameProvider = null;
-    private volatile LocaleNameProvider localeNameProvider = null;
-    private volatile TimeZoneNameProvider timeZoneNameProvider = null;
-    private volatile CalendarDataProvider calendarDataProvider = null;
-    private volatile CalendarNameProvider calendarNameProvider = null;
+    private volatile CurrencyNameProvider currencyNameProvider;
+    private volatile LocaleNameProvider localeNameProvider;
+    private volatile TimeZoneNameProvider timeZoneNameProvider;
+    private volatile CalendarDataProvider calendarDataProvider;
+    private volatile CalendarNameProvider calendarNameProvider;
 
-    private volatile CalendarProvider calendarProvider = null;
+    private volatile CalendarProvider calendarProvider;
+    private volatile JavaTimeDateTimePatternProvider javaTimeDateTimePatternProvider;
 
     /*
      * Getter methods for java.text.spi.* providers
@@ -354,6 +358,27 @@ public class JRELocaleProviderAdapter extends LocaleProviderAdapter implements R
         return calendarProvider;
     }
 
+    /**
+     * Getter methods for sun.text.spi.JavaTimeDateTimePatternProvider provider
+     */
+    @Override
+    public JavaTimeDateTimePatternProvider getJavaTimeDateTimePatternProvider() {
+        if (javaTimeDateTimePatternProvider == null) {
+            JavaTimeDateTimePatternProvider provider = AccessController.doPrivileged(
+                    (PrivilegedAction<JavaTimeDateTimePatternProvider>) ()
+                    -> new JavaTimeDateTimePatternImpl(
+                            getAdapterType(),
+                            getLanguageTagSet("FormatData")));
+
+            synchronized (this) {
+                if (javaTimeDateTimePatternProvider == null) {
+                    javaTimeDateTimePatternProvider = provider;
+                }
+            }
+        }
+        return javaTimeDateTimePatternProvider;
+    }
+
     @Override
     public LocaleResources getLocaleResources(Locale locale) {
         LocaleResources lr = localeResourcesMap.get(locale);
@@ -431,25 +456,21 @@ public class JRELocaleProviderAdapter extends LocaleProviderAdapter implements R
 
         // Use ServiceLoader to dynamically acquire installed locales' tags.
         try {
-            String nonBaseTags = AccessController.doPrivileged(new PrivilegedExceptionAction<String>() {
-                @Override
-                public String run() {
-                    String tags = null;
-                    for (LocaleDataMetaInfo ldmi :
-                         ServiceLoader.loadInstalled(LocaleDataMetaInfo.class)) {
-                        if (ldmi.getType() == LocaleProviderAdapter.Type.JRE) {
-                            String t = ldmi.availableLanguageTags(category);
-                            if (t != null) {
-                                if (tags == null) {
-                                    tags = t;
-                                } else {
-                                    tags += " " + t;
-                                }
+            String nonBaseTags = AccessController.doPrivileged((PrivilegedExceptionAction<String>) () -> {
+                StringBuilder tags = new StringBuilder();
+                for (LocaleDataMetaInfo ldmi :
+                        ServiceLoader.loadInstalled(LocaleDataMetaInfo.class)) {
+                    if (ldmi.getType() == LocaleProviderAdapter.Type.JRE) {
+                        String t = ldmi.availableLanguageTags(category);
+                        if (t != null) {
+                            if (tags.length() > 0) {
+                                tags.append(' ');
                             }
+                            tags.append(t);
                         }
                     }
-                    return tags;
                 }
+                return tags.toString();
             });
 
             if (nonBaseTags != null) {

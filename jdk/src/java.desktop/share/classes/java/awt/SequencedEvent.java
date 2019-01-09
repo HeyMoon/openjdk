@@ -63,6 +63,10 @@ class SequencedEvent extends AWTEvent implements ActiveEvent {
             public boolean isSequencedEvent(AWTEvent event) {
                 return event instanceof SequencedEvent;
             }
+
+            public AWTEvent create(AWTEvent event) {
+                return new SequencedEvent(event);
+            }
         });
     }
 
@@ -135,7 +139,7 @@ class SequencedEvent extends AWTEvent implements ActiveEvent {
     /**
      * true only if event exists and nested source appContext is disposed.
      */
-    private final static boolean isOwnerAppContextDisposed(SequencedEvent se) {
+    private static final boolean isOwnerAppContextDisposed(SequencedEvent se) {
         if (se != null) {
             Object target = se.nested.getSource();
             if (target instanceof Component) {
@@ -159,14 +163,14 @@ class SequencedEvent extends AWTEvent implements ActiveEvent {
         return this == getFirstWithContext() || disposed;
     }
 
-    private final synchronized static SequencedEvent getFirst() {
+    private static final synchronized SequencedEvent getFirst() {
         return list.getFirst();
     }
 
     /* Disposes all events from disposed AppContext
      * return first valid event
      */
-    private final static SequencedEvent getFirstWithContext() {
+    private static final SequencedEvent getFirstWithContext() {
         SequencedEvent first = getFirst();
         while(isOwnerAppContextDisposed(first)) {
             first.dispose();

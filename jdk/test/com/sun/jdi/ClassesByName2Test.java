@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,17 +22,17 @@
  */
 
 /**
- *  @test
- *  @bug 4406439 4925740
- *  @summary ClassesByName2 verifies that all the classes in the loaded class list can be found with classesByName..
+ * @test
+ * @bug 4406439 4925740
+ * @summary ClassesByName2 verifies that all the classes in the loaded class list can be found with classesByName..
+ * @author Tim Bell (based on ClassesByName by Robert Field)
  *
- *  @author Tim Bell (based on ClassesByName by Robert Field)
+ * @modules jdk.jdi
+ *          java.desktop
  *
- *  @modules java.corba
- *           jdk.jdi
- *  @run build TestScaffold VMConnection TargetListener TargetAdapter
- *  @run compile -g ClassesByName2Test.java
- *  @run driver ClassesByName2Test
+ * @run build TestScaffold VMConnection TargetListener TargetAdapter
+ * @run compile -g ClassesByName2Test.java
+ * @run driver ClassesByName2Test
  */
 import com.sun.jdi.*;
 import com.sun.jdi.event.*;
@@ -70,10 +70,14 @@ class ClassesByName2Targ {
                 };
 
             Thread two = new Thread ("TWO") {
-                    public void run () {
-                        javax.rmi.CORBA.Util.getCodebase(this.getClass());
+                public void run () {
+                    try {
+                        String s = String.format("%02x", 0xff);
+                    } catch (Exception e) {
+                        e.printStackTrace();
                     }
-                };
+                }
+            };
 
             two.start();
             one.start();

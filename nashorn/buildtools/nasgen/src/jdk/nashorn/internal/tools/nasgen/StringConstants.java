@@ -31,24 +31,22 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import jdk.internal.org.objectweb.asm.Type;
-import jdk.nashorn.internal.objects.PrototypeObject;
-import jdk.nashorn.internal.objects.ScriptFunctionImpl;
-import jdk.nashorn.internal.runtime.AccessorProperty;
-import jdk.nashorn.internal.runtime.PropertyMap;
-import jdk.nashorn.internal.runtime.ScriptFunction;
-import jdk.nashorn.internal.runtime.ScriptObject;
-import jdk.nashorn.internal.runtime.Specialization;
 
 /**
  * String constants used for code generation/instrumentation.
  */
 @SuppressWarnings("javadoc")
 public interface StringConstants {
+    static final String NASHORN_INTERNAL = "jdk/nashorn/internal/";
+    static final String OBJ_PKG = NASHORN_INTERNAL + "objects/";
+    static final String OBJ_ANNO_PKG = OBJ_PKG + "annotations/";
+    static final String RUNTIME_PKG = NASHORN_INTERNAL + "runtime/";
+    static final String SCRIPTS_PKG = NASHORN_INTERNAL + "scripts/";
+
     // standard jdk types, methods
     static final Type TYPE_METHODHANDLE         = Type.getType(MethodHandle.class);
-    static final Type TYPE_METHODHANDLE_ARRAY   = Type.getType(MethodHandle[].class);
-    static final Type TYPE_SPECIALIZATION       = Type.getType(Specialization.class);
-    static final Type TYPE_SPECIALIZATION_ARRAY = Type.getType(Specialization[].class);
+    static final Type TYPE_SPECIALIZATION       = Type.getType("L" + RUNTIME_PKG + "Specialization;");
+    static final Type TYPE_SPECIALIZATION_ARRAY = Type.getType("[L" + RUNTIME_PKG + "Specialization;");
     static final Type TYPE_OBJECT               = Type.getType(Object.class);
     static final Type TYPE_STRING               = Type.getType(String.class);
     static final Type TYPE_CLASS                = Type.getType(Class.class);
@@ -61,13 +59,11 @@ public interface StringConstants {
     static final String INIT = "<init>";
     static final String DEFAULT_INIT_DESC = Type.getMethodDescriptor(Type.VOID_TYPE);
 
-    static final String METHODHANDLE_TYPE = TYPE_METHODHANDLE.getInternalName();
     static final String SPECIALIZATION_TYPE = TYPE_SPECIALIZATION.getInternalName();
-    static final String SPECIALIZATION_INIT2 = Type.getMethodDescriptor(Type.VOID_TYPE, TYPE_METHODHANDLE, Type.getType(boolean.class));
-    static final String SPECIALIZATION_INIT3 = Type.getMethodDescriptor(Type.VOID_TYPE, TYPE_METHODHANDLE, TYPE_CLASS, Type.getType(boolean.class));
+    static final String SPECIALIZATION_INIT2 = Type.getMethodDescriptor(Type.VOID_TYPE, TYPE_METHODHANDLE, Type.BOOLEAN_TYPE, Type.BOOLEAN_TYPE);
+    static final String SPECIALIZATION_INIT3 = Type.getMethodDescriptor(Type.VOID_TYPE, TYPE_METHODHANDLE, TYPE_CLASS, Type.BOOLEAN_TYPE, Type.BOOLEAN_TYPE);
     static final String OBJECT_TYPE = TYPE_OBJECT.getInternalName();
     static final String OBJECT_DESC = TYPE_OBJECT.getDescriptor();
-    static final String STRING_TYPE = TYPE_STRING.getInternalName();
     static final String STRING_DESC = TYPE_STRING.getDescriptor();
     static final String OBJECT_ARRAY_DESC = Type.getDescriptor(Object[].class);
     static final String ARRAYLIST_TYPE = TYPE_ARRAYLIST.getInternalName();
@@ -84,12 +80,13 @@ public interface StringConstants {
     static final String LIST_DESC = TYPE_LIST.getDescriptor();
 
     // Nashorn types, methods
-    static final Type TYPE_ACCESSORPROPERTY   = Type.getType(AccessorProperty.class);
-    static final Type TYPE_PROPERTYMAP        = Type.getType(PropertyMap.class);
-    static final Type TYPE_PROTOTYPEOBJECT    = Type.getType(PrototypeObject.class);
-    static final Type TYPE_SCRIPTFUNCTION     = Type.getType(ScriptFunction.class);
-    static final Type TYPE_SCRIPTFUNCTIONIMPL = Type.getType(ScriptFunctionImpl.class);
-    static final Type TYPE_SCRIPTOBJECT       = Type.getType(ScriptObject.class);
+    static final Type TYPE_ACCESSORPROPERTY   = Type.getType("L" + RUNTIME_PKG + "AccessorProperty;");
+    static final Type TYPE_PROPERTYMAP        = Type.getType("L" + RUNTIME_PKG + "PropertyMap;");
+    static final Type TYPE_PROTOTYPEOBJECT    = Type.getType("L" + RUNTIME_PKG + "PrototypeObject;");
+    static final Type TYPE_SCRIPTFUNCTION     = Type.getType("L" + RUNTIME_PKG + "ScriptFunction;");
+    static final Type TYPE_SCRIPTOBJECT       = Type.getType("L" + RUNTIME_PKG + "ScriptObject;");
+    static final Type TYPE_NATIVESYMBOL       = Type.getType("L" + OBJ_PKG + "NativeSymbol;");
+    static final Type TYPE_SYMBOL             = Type.getType("L" + RUNTIME_PKG + "Symbol;");
 
     static final String PROTOTYPE_SUFFIX = "$Prototype";
     static final String CONSTRUCTOR_SUFFIX = "$Constructor";
@@ -103,7 +100,7 @@ public interface StringConstants {
     static final String ACCESSORPROPERTY_TYPE = TYPE_ACCESSORPROPERTY.getInternalName();
     static final String ACCESSORPROPERTY_CREATE = "create";
     static final String ACCESSORPROPERTY_CREATE_DESC =
-        Type.getMethodDescriptor(TYPE_ACCESSORPROPERTY, TYPE_STRING, Type.INT_TYPE, TYPE_METHODHANDLE, TYPE_METHODHANDLE);
+        Type.getMethodDescriptor(TYPE_ACCESSORPROPERTY, TYPE_OBJECT, Type.INT_TYPE, TYPE_METHODHANDLE, TYPE_METHODHANDLE);
 
     // PropertyMap
     static final String PROPERTYMAP_TYPE = TYPE_PROPERTYMAP.getInternalName();
@@ -120,19 +117,18 @@ public interface StringConstants {
     static final String SCRIPTFUNCTION_TYPE = TYPE_SCRIPTFUNCTION.getInternalName();
     static final String SCRIPTFUNCTION_SETARITY = "setArity";
     static final String SCRIPTFUNCTION_SETARITY_DESC = Type.getMethodDescriptor(Type.VOID_TYPE, Type.INT_TYPE);
+    static final String SCRIPTFUNCTION_SETDOCUMENTATIONKEY = "setDocumentationKey";
+    static final String SCRIPTFUNCTION_SETDOCUMENTATIONKEY_DESC = Type.getMethodDescriptor(Type.VOID_TYPE, TYPE_STRING);
     static final String SCRIPTFUNCTION_SETPROTOTYPE = "setPrototype";
     static final String SCRIPTFUNCTION_SETPROTOTYPE_DESC = Type.getMethodDescriptor(Type.VOID_TYPE, TYPE_OBJECT);
-
-    // ScriptFunctionImpl
-    static final String SCRIPTFUNCTIONIMPL_TYPE = TYPE_SCRIPTFUNCTIONIMPL.getInternalName();
-    static final String SCRIPTFUNCTIONIMPL_MAKEFUNCTION = "makeFunction";
-    static final String SCRIPTFUNCTIONIMPL_MAKEFUNCTION_DESC =
+    static final String SCRIPTFUNCTION_CREATEBUILTIN = "createBuiltin";
+    static final String SCRIPTFUNCTION_CREATEBUILTIN_DESC =
         Type.getMethodDescriptor(TYPE_SCRIPTFUNCTION, TYPE_STRING, TYPE_METHODHANDLE);
-    static final String SCRIPTFUNCTIONIMPL_MAKEFUNCTION_SPECS_DESC =
+    static final String SCRIPTFUNCTION_CREATEBUILTIN_SPECS_DESC =
         Type.getMethodDescriptor(TYPE_SCRIPTFUNCTION, TYPE_STRING, TYPE_METHODHANDLE, TYPE_SPECIALIZATION_ARRAY);
-    static final String SCRIPTFUNCTIONIMPL_INIT_DESC3 =
+    static final String SCRIPTFUNCTION_INIT_DESC3 =
         Type.getMethodDescriptor(Type.VOID_TYPE, TYPE_STRING, TYPE_METHODHANDLE, TYPE_SPECIALIZATION_ARRAY);
-    static final String SCRIPTFUNCTIONIMPL_INIT_DESC4 =
+    static final String SCRIPTFUNCTION_INIT_DESC4 =
         Type.getMethodDescriptor(Type.VOID_TYPE, TYPE_STRING, TYPE_METHODHANDLE, TYPE_PROPERTYMAP, TYPE_SPECIALIZATION_ARRAY);
 
     // ScriptObject
@@ -146,4 +142,9 @@ public interface StringConstants {
     // ScriptObject.getClassName() method.
     static final String GET_CLASS_NAME = "getClassName";
     static final String GET_CLASS_NAME_DESC = Type.getMethodDescriptor(TYPE_STRING);
+
+    // NativeSymbol
+    static final String NATIVESYMBOL_TYPE = TYPE_NATIVESYMBOL.getInternalName();
+    static final String SYMBOL_DESC = TYPE_SYMBOL.getDescriptor();
+    static final String SYMBOL_PREFIX = "@@";
 }

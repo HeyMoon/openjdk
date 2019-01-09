@@ -500,7 +500,16 @@ public final class Options {
                 throw new IllegalOptionException(parg.template);
             }
 
-            set(parg.template.getKey(), createOption(parg.template, parg.value));
+            if (parg.template.isRepeated()) {
+                assert parg.template.getType().equals("string");
+
+                final String key = key(parg.template.getKey());
+                final String value = options.containsKey(key)?
+                    (options.get(key).getValue() + "," + parg.value) : Objects.toString(parg.value);
+                options.put(key, new Option<>(value));
+            } else {
+                set(parg.template.getKey(), createOption(parg.template, parg.value));
+            }
 
             // Arg may have a dependency to set other args, e.g.
             // scripting->anon.functions
@@ -520,9 +529,25 @@ public final class Options {
         }
     }
 
-    private static OptionTemplate getOptionTemplate(final String key) {
+    /**
+     * Retrieves an option template identified by key.
+     * @param shortKey the short (that is without the e.g. "nashorn.option." part) key
+     * @return the option template identified by the key
+     * @throws IllegalArgumentException if the key doesn't specify an existing template
+     */
+    public OptionTemplate getOptionTemplateByKey(final String shortKey) {
+        final String fullKey = key(shortKey);
+        for(final OptionTemplate t: validOptions) {
+            if(t.getKey().equals(fullKey)) {
+                return t;
+            }
+        }
+        throw new IllegalArgumentException(shortKey);
+    }
+
+    private static OptionTemplate getOptionTemplateByName(final String name) {
         for (final OptionTemplate t : Options.validOptions) {
-            if (t.matches(key)) {
+            if (t.nameMatches(name)) {
                 return t;
             }
         }
@@ -682,7 +707,7 @@ public final class Options {
             }
 
             final String token = st.nextToken();
-            this.template = Options.getOptionTemplate(token);
+            this.template = getOptionTemplateByName(token);
             if (this.template == null) {
                 throw new IllegalArgumentException(argument);
             }

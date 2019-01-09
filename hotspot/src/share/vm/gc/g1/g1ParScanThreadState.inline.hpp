@@ -40,23 +40,22 @@ template <class T> void G1ParScanThreadState::do_oop_evac(T* p, HeapRegion* from
   // processed multiple times. So redo this check.
   const InCSetState in_cset_state = _g1h->in_cset_state(obj);
   if (in_cset_state.is_in_cset()) {
-    oop forwardee;
     markOop m = obj->mark();
     if (m->is_marked()) {
-      forwardee = (oop) m->decode_pointer();
+      obj = (oop) m->decode_pointer();
     } else {
-      forwardee = copy_to_survivor_space(in_cset_state, obj, m);
+      obj = copy_to_survivor_space(in_cset_state, obj, m);
     }
-    oopDesc::encode_store_heap_oop(p, forwardee);
+    oopDesc::encode_store_heap_oop(p, obj);
   } else if (in_cset_state.is_humongous()) {
     _g1h->set_humongous_is_live(obj);
   } else {
-    assert(!in_cset_state.is_in_cset_or_humongous(),
-           err_msg("In_cset_state must be NotInCSet here, but is " CSETSTATE_FORMAT, in_cset_state.value()));
+    assert(in_cset_state.is_default() || in_cset_state.is_ext(),
+           "In_cset_state must be NotInCSet or Ext here, but is " CSETSTATE_FORMAT, in_cset_state.value());
   }
 
   assert(obj != NULL, "Must be");
-  update_rs(from, p, queue_num());
+  update_rs(from, p, obj);
 }
 
 template <class T> inline void G1ParScanThreadState::push_on_queue(T* ref) {
@@ -82,7 +81,7 @@ inline void G1ParScanThreadState::do_oop_partial_array(oop* p) {
   // to-space object.
   int next_index             = to_obj_array->length();
   assert(0 <= next_index && next_index < length,
-         err_msg("invariant, next index: %d, length: %d", next_index, length));
+         "invariant, next index: %d, length: %d", next_index, length);
 
   int start                  = next_index;
   int end                    = length;
@@ -101,7 +100,7 @@ inline void G1ParScanThreadState::do_oop_partial_array(oop* p) {
     // so that the heap remains parsable in case of evacuation failure.
     to_obj_array->set_length(end);
   }
-  _scanner.set_region(_g1h->heap_region_containing_raw(to_obj));
+  _scanner.set_region(_g1h->heap_region_containing(to_obj));
   // Process indexes [start,end). It will also process the header
   // along with the first chunk (i.e., the chunk with start == 0).
   // Note that at this point the length field of to_obj_array is not
@@ -115,10 +114,7 @@ inline void G1ParScanThreadState::do_oop_partial_array(oop* p) {
 
 template <class T> inline void G1ParScanThreadState::deal_with_reference(T* ref_to_scan) {
   if (!has_partial_array_mask(ref_to_scan)) {
-    // Note: we can use "raw" versions of "region_containing" because
-    // "obj_to_scan" is definitely in the heap, and is not in a
-    // humongous region.
-    HeapRegion* r = _g1h->heap_region_containing_raw(ref_to_scan);
+    HeapRegion* r = _g1h->heap_region_containing(ref_to_scan);
     do_oop_evac(ref_to_scan, r);
   } else {
     do_oop_partial_array((oop*)ref_to_scan);
@@ -136,7 +132,7 @@ inline void G1ParScanThreadState::dispatch_reference(StarTask ref) {
 
 void G1ParScanThreadState::steal_and_trim_queue(RefToScanQueueSet *task_queues) {
   StarTask stolen_task;
-  while (task_queues->steal(queue_num(), hash_seed(), stolen_task)) {
+  while (task_queues->steal(_worker_id, &_hash_seed, stolen_task)) {
     assert(verify_task(stolen_task), "sanity");
     dispatch_reference(stolen_task);
 
@@ -147,5 +143,5 @@ void G1ParScanThreadState::steal_and_trim_queue(RefToScanQueueSet *task_queues) 
   }
 }
 
-#endif /* SHARE_VM_GC_G1_G1PARSCANTHREADSTATE_INLINE_HPP */
+#endif // SHARE_VM_GC_G1_G1PARSCANTHREADSTATE_INLINE_HPP
 

@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2001, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, SAP SE and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -50,6 +51,8 @@
    ...
 */
 
+#include <assert.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -86,10 +89,35 @@ typedef struct {
 static int sigWakeup = (SIGRTMAX - 1);
 
 /*
- * The fd table and the number of file descriptors
+ * fdTable holds one entry per file descriptor, up to a certain
+ * maximum.
+ * Theoretically, the number of possible file descriptors can get
+ * large, though usually it does not. Entries for small value file
+ * descriptors are kept in a simple table, which covers most scenarios.
+ * Entries for large value file descriptors are kept in an overflow
+ * table, which is organized as a sparse two dimensional array whose
+ * slabs are allocated on demand. This covers all corner cases while
+ * keeping memory consumption reasonable.
  */
-static fdEntry_t *fdTable = NULL;
-static int fdCount = 0;
+
+/* Base table for low value file descriptors */
+static fdEntry_t* fdTable = NULL;
+/* Maximum size of base table (in number of entries). */
+static const int fdTableMaxSize = 0x1000; /* 4K */
+/* Actual size of base table (in number of entries) */
+static int fdTableLen = 0;
+/* Max. theoretical number of file descriptors on system. */
+static int fdLimit = 0;
+
+/* Overflow table, should base table not be large enough. Organized as
+ *   an array of n slabs, each holding 64k entries.
+ */
+static fdEntry_t** fdOverflowTable = NULL;
+/* Number of slabs in the overflow table */
+static int fdOverflowTableLen = 0;
+/* Number of entries in one slab */
+static const int fdOverflowTableSlabSize = 0x10000; /* 64k */
+pthread_mutex_t fdOverflowTableLock = PTHREAD_MUTEX_INITIALIZER;
 
 /*
  * Null signal handler
@@ -108,42 +136,42 @@ void aix_close_init() {
     struct rlimit nbr_files;
     sigset_t sigset;
     struct sigaction sa;
+    int i = 0;
 
-    /* Check already initialized */
-    if (fdCount > 0 && fdTable != NULL) {
-        return;
-    }
-
-    /*
-     * Allocate table based on the maximum number of
-     * file descriptors.
-     */
+    /* Determine the maximum number of possible file descriptors. */
     if (-1 == getrlimit(RLIMIT_NOFILE, &nbr_files)) {
         fprintf(stderr, "library initialization failed - "
                 "unable to get max # of allocated fds\n");
         abort();
     }
-    fdCount = nbr_files.rlim_max;
-    /*
-     * We have a conceptual problem here, when the number of files is
-     * unlimited. As a kind of workaround, we ensure the table is big
-     * enough for handle even a large number of files. Since SAP itself
-     * recommends a limit of 32000 files, we just use 64000 as 'infinity'.
-     */
-    if (nbr_files.rlim_max == RLIM_INFINITY) {
-        fdCount = 64000;
+    if (nbr_files.rlim_max != RLIM_INFINITY) {
+        fdLimit = nbr_files.rlim_max;
+    } else {
+        /* We just do not know. */
+        fdLimit = INT_MAX;
     }
-    fdTable = (fdEntry_t *)calloc(fdCount, sizeof(fdEntry_t));
+
+    /* Allocate table for low value file descriptors. */
+    fdTableLen = fdLimit < fdTableMaxSize ? fdLimit : fdTableMaxSize;
+    fdTable = (fdEntry_t*) calloc(fdTableLen, sizeof(fdEntry_t));
     if (fdTable == NULL) {
         fprintf(stderr, "library initialization failed - "
                 "unable to allocate file descriptor table - out of memory");
         abort();
+    } else {
+        for (i = 0; i < fdTableLen; i ++) {
+            pthread_mutex_init(&fdTable[i].lock, NULL);
+        }
     }
 
-    {
-        int i;
-        for (i=0; i < fdCount; i++) {
-            pthread_mutex_init(&fdTable[i].lock, NULL);
+    /* Allocate overflow table, if needed */
+    if (fdLimit > fdTableMaxSize) {
+        fdOverflowTableLen = ((fdLimit - fdTableMaxSize) / fdOverflowTableSlabSize) + 1;
+        fdOverflowTable = (fdEntry_t**) calloc(fdOverflowTableLen, sizeof(fdEntry_t*));
+        if (fdOverflowTable == NULL) {
+            fprintf(stderr, "library initialization failed - "
+                    "unable to allocate file descriptor overflow table - out of memory");
+            abort();
         }
     }
 
@@ -161,16 +189,59 @@ void aix_close_init() {
 }
 
 /*
- * Return the fd table for this fd or NULL is fd out
- * of range.
+ * Return the fd table for this fd.
  */
 static inline fdEntry_t *getFdEntry(int fd)
 {
-    if (fd < 0 || fd >= fdCount) {
+    fdEntry_t* result = NULL;
+
+    if (fd < 0) {
         return NULL;
     }
-    return &fdTable[fd];
+
+    /* This should not happen. If it does, our assumption about
+     * max. fd value was wrong. */
+    assert(fd < fdLimit);
+
+    if (fd < fdTableMaxSize) {
+        /* fd is in base table. */
+        assert(fd < fdTableLen);
+        result = &fdTable[fd];
+    } else {
+        /* fd is in overflow table. */
+        const int indexInOverflowTable = fd - fdTableMaxSize;
+        const int rootindex = indexInOverflowTable / fdOverflowTableSlabSize;
+        const int slabindex = indexInOverflowTable % fdOverflowTableSlabSize;
+        fdEntry_t* slab = NULL;
+        assert(rootindex < fdOverflowTableLen);
+        assert(slabindex < fdOverflowTableSlabSize);
+        pthread_mutex_lock(&fdOverflowTableLock);
+        /* Allocate new slab in overflow table if needed */
+        if (fdOverflowTable[rootindex] == NULL) {
+            fdEntry_t* const newSlab =
+                (fdEntry_t*)calloc(fdOverflowTableSlabSize, sizeof(fdEntry_t));
+            if (newSlab == NULL) {
+                fprintf(stderr, "Unable to allocate file descriptor overflow"
+                        " table slab - out of memory");
+                pthread_mutex_unlock(&fdOverflowTableLock);
+                abort();
+            } else {
+                int i;
+                for (i = 0; i < fdOverflowTableSlabSize; i ++) {
+                    pthread_mutex_init(&newSlab[i].lock, NULL);
+                }
+                fdOverflowTable[rootindex] = newSlab;
+            }
+        }
+        pthread_mutex_unlock(&fdOverflowTableLock);
+        slab = fdOverflowTable[rootindex];
+        result = &slab[slabindex];
+    }
+
+    return result;
+
 }
+
 
 /*
  * Start a blocking operation :-
@@ -339,15 +410,17 @@ int NET_Read(int s, void* buf, size_t len) {
     BLOCKING_IO_RETURN_INT( s, recv(s, buf, len, 0) );
 }
 
+int NET_NonBlockingRead(int s, void* buf, size_t len) {
+    BLOCKING_IO_RETURN_INT(s, recv(s, buf, len, MSG_NONBLOCK));
+}
+
 int NET_ReadV(int s, const struct iovec * vector, int count) {
     BLOCKING_IO_RETURN_INT( s, readv(s, vector, count) );
 }
 
 int NET_RecvFrom(int s, void *buf, int len, unsigned int flags,
-       struct sockaddr *from, int *fromlen) {
-    socklen_t socklen = *fromlen;
-    BLOCKING_IO_RETURN_INT( s, recvfrom(s, buf, len, flags, from, &socklen) );
-    *fromlen = socklen;
+       struct sockaddr *from, socklen_t *fromlen) {
+    BLOCKING_IO_RETURN_INT( s, recvfrom(s, buf, len, flags, from, fromlen) );
 }
 
 int NET_Send(int s, void *msg, int len, unsigned int flags) {
@@ -363,10 +436,8 @@ int NET_SendTo(int s, const void *msg, int len,  unsigned  int
     BLOCKING_IO_RETURN_INT( s, sendto(s, msg, len, flags, to, tolen) );
 }
 
-int NET_Accept(int s, struct sockaddr *addr, int *addrlen) {
-    socklen_t socklen = *addrlen;
-    BLOCKING_IO_RETURN_INT( s, accept(s, addr, &socklen) );
-    *addrlen = socklen;
+int NET_Accept(int s, struct sockaddr *addr, socklen_t *addrlen) {
+    BLOCKING_IO_RETURN_INT( s, accept(s, addr, addrlen) );
 }
 
 int NET_Connect(int s, struct sockaddr *addr, int addrlen) {
@@ -432,8 +503,8 @@ int NET_Poll(struct pollfd *ufds, unsigned int nfds, int timeout) {
  * Auto restarts with adjusted timeout if interrupted by
  * signal other than our wakeup signal.
  */
-int NET_Timeout(int s, long timeout) {
-    long prevtime = 0, newtime;
+int NET_Timeout0(int s, long timeout, long currentTime) {
+    long prevtime = currentTime, newtime;
     struct timeval t;
     fdEntry_t *fdEntry = getFdEntry(s);
 
@@ -443,14 +514,6 @@ int NET_Timeout(int s, long timeout) {
     if (fdEntry == NULL) {
         errno = EBADF;
         return -1;
-    }
-
-    /*
-     * Pick up current time as may need to adjust timeout
-     */
-    if (timeout > 0) {
-        gettimeofday(&t, NULL);
-        prevtime = t.tv_sec * 1000  +  t.tv_usec / 1000;
     }
 
     for(;;) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -171,8 +171,6 @@ struct NSAppArgs {
  * Main
  */
 
-#define GetArch() GetArchPath(CURRENT_DATA_MODEL)
-
 /* Store the name of the executable once computed */
 static char *execname = NULL;
 
@@ -183,16 +181,6 @@ const char *
 GetExecName() {
     return execname;
 }
-
-const char *
-GetArchPath(int nbits)
-{
-    switch(nbits) {
-        default:
-            return LIBARCHNAME;
-    }
-}
-
 
 /*
  * Exports the JNI interface from libjli
@@ -211,7 +199,7 @@ static InvocationFunctions *GetExportedJNIFunctions() {
     if (sExportedJNIFunctions != NULL) return sExportedJNIFunctions;
 
     char jrePath[PATH_MAX];
-    jboolean gotJREPath = GetJREPath(jrePath, sizeof(jrePath), GetArch(), JNI_FALSE);
+    jboolean gotJREPath = GetJREPath(jrePath, sizeof(jrePath), JNI_FALSE);
     if (!gotJREPath) {
         JLI_ReportErrorMessage("Failed to GetJREPath()");
         return NULL;
@@ -229,7 +217,7 @@ static InvocationFunctions *GetExportedJNIFunctions() {
     }
 
     char jvmPath[PATH_MAX];
-    jboolean gotJVMPath = GetJVMPath(jrePath, preferredJVM, jvmPath, sizeof(jvmPath), GetArch(), CURRENT_DATA_MODEL);
+    jboolean gotJVMPath = GetJVMPath(jrePath, preferredJVM, jvmPath, sizeof(jvmPath), CURRENT_DATA_MODEL);
     if (!gotJVMPath) {
         JLI_ReportErrorMessage("Failed to GetJVMPath()");
         return NULL;
@@ -244,6 +232,8 @@ static InvocationFunctions *GetExportedJNIFunctions() {
 
     return sExportedJNIFunctions = fxns;
 }
+
+#ifndef STATIC_BUILD
 
 JNIEXPORT jint JNICALL
 JNI_GetDefaultJavaVMInitArgs(void *args) {
@@ -265,6 +255,7 @@ JNI_GetCreatedJavaVMs(JavaVM **vmBuf, jsize bufLen, jsize *nVMs) {
     if (ifn == NULL) return JNI_ERR;
     return ifn->GetCreatedJavaVMs(vmBuf, bufLen, nVMs);
 }
+#endif
 
 /*
  * Allow JLI-aware launchers to specify a client/server preference
@@ -303,7 +294,12 @@ static void *apple_main (void *arg)
     objc_registerThreadWithCollector();
 
     if (main_fptr == NULL) {
+#ifdef STATIC_BUILD
+        extern int main(int argc, char **argv);
+        main_fptr = &main;
+#else
         main_fptr = (int (*)())dlsym(RTLD_DEFAULT, "main");
+#endif
         if (main_fptr == NULL) {
             JLI_ReportErrorMessageSys("error locating main entrypoint\n");
             exit(1);
@@ -382,7 +378,6 @@ CreateExecutionEnvironment(int *pargc, char ***pargv,
 
     /* Check data model flags, and exec process, if needed */
     {
-      char *arch        = (char *)GetArch(); /* like sparc or sparcv9 */
       char * jvmtype    = NULL;
       int  argc         = *pargc;
       char **argv       = *pargv;
@@ -454,7 +449,7 @@ CreateExecutionEnvironment(int *pargc, char ***pargv,
          jvmpath does not exist */
       if (wanted == running) {
         /* Find out where the JRE is that we will be using. */
-        if (!GetJREPath(jrepath, so_jrepath, arch, JNI_FALSE) ) {
+        if (!GetJREPath(jrepath, so_jrepath, JNI_FALSE) ) {
           JLI_ReportErrorMessage(JRE_ERROR1);
           exit(2);
         }
@@ -473,7 +468,7 @@ CreateExecutionEnvironment(int *pargc, char ***pargv,
             exit(4);
         }
 
-        if (!GetJVMPath(jrepath, jvmtype, jvmpath, so_jvmpath, arch, wanted)) {
+        if (!GetJVMPath(jrepath, jvmtype, jvmpath, so_jvmpath, wanted)) {
           JLI_ReportErrorMessage(CFG_ERROR8, jvmtype, jvmpath);
           exit(4);
         }
@@ -494,7 +489,7 @@ CreateExecutionEnvironment(int *pargc, char ***pargv,
 #if defined(DUAL_MODE)
         if (running != wanted) {
           /* Find out where the JRE is that we will be using. */
-          if (!GetJREPath(jrepath, so_jrepath, GetArchPath(wanted), JNI_TRUE)) {
+          if (!GetJREPath(jrepath, so_jrepath, JNI_TRUE)) {
             /* give up and let other code report error message */
             JLI_ReportErrorMessage(JRE_ERROR2, wanted);
             exit(1);
@@ -518,7 +513,7 @@ CreateExecutionEnvironment(int *pargc, char ***pargv,
           }
 
           /* exec child can do error checking on the existence of the path */
-          jvmpathExists = GetJVMPath(jrepath, jvmtype, jvmpath, so_jvmpath, GetArchPath(wanted), wanted);
+          jvmpathExists = GetJVMPath(jrepath, jvmtype, jvmpath, so_jvmpath, wanted);
         }
 #else /* ! DUAL_MODE */
         JLI_ReportErrorMessage(JRE_ERROR2, wanted);
@@ -571,7 +566,7 @@ CreateExecutionEnvironment(int *pargc, char ***pargv,
  */
 static jboolean
 GetJVMPath(const char *jrepath, const char *jvmtype,
-           char *jvmpath, jint jvmpathsize, const char * arch, int bitsWanted)
+           char *jvmpath, jint jvmpathsize, int bitsWanted)
 {
     struct stat s;
 
@@ -588,6 +583,9 @@ GetJVMPath(const char *jrepath, const char *jvmtype,
 
     JLI_TraceLauncher("Does `%s' exist ... ", jvmpath);
 
+#ifdef STATIC_BUILD
+    return JNI_TRUE;
+#else
     if (stat(jvmpath, &s) == 0) {
         JLI_TraceLauncher("yes.\n");
         return JNI_TRUE;
@@ -595,22 +593,31 @@ GetJVMPath(const char *jrepath, const char *jvmtype,
         JLI_TraceLauncher("no.\n");
         return JNI_FALSE;
     }
+#endif
 }
 
 /*
  * Find path to JRE based on .exe's location or registry settings.
  */
 static jboolean
-GetJREPath(char *path, jint pathsize, const char * arch, jboolean speculative)
+GetJREPath(char *path, jint pathsize, jboolean speculative)
 {
     char libjava[MAXPATHLEN];
 
     if (GetApplicationHome(path, pathsize)) {
         /* Is JRE co-located with the application? */
+#ifdef STATIC_BUILD
+        char jvm_cfg[MAXPATHLEN];
+        JLI_Snprintf(jvm_cfg, sizeof(jvm_cfg), "%s/lib/jvm.cfg", path);
+        if (access(jvm_cfg, F_OK) == 0) {
+            return JNI_TRUE;
+        }
+#else
         JLI_Snprintf(libjava, sizeof(libjava), "%s/lib/" JAVA_DLL, path);
         if (access(libjava, F_OK) == 0) {
             return JNI_TRUE;
         }
+#endif
         /* ensure storage for path + /jre + NULL */
         if ((JLI_StrLen(path) + 4 + 1) > (size_t) pathsize) {
             JLI_TraceLauncher("Insufficient space to store JRE path\n");
@@ -628,6 +635,24 @@ GetJREPath(char *path, jint pathsize, const char * arch, jboolean speculative)
     /* try to find ourselves instead */
     Dl_info selfInfo;
     dladdr(&GetJREPath, &selfInfo);
+
+#ifdef STATIC_BUILD
+    char jvm_cfg[MAXPATHLEN];
+    char *p = NULL;
+    strncpy(jvm_cfg, selfInfo.dli_fname, MAXPATHLEN);
+    p = strrchr(jvm_cfg, '/'); *p = '\0';
+    p = strrchr(jvm_cfg, '/');
+    if (strcmp(p, "/.") == 0) {
+      *p = '\0';
+      p = strrchr(jvm_cfg, '/'); *p = '\0';
+    }
+    else *p = '\0';
+    strncpy(path, jvm_cfg, pathsize);
+    strncat(jvm_cfg, "/lib/jvm.cfg", MAXPATHLEN);
+    if (access(jvm_cfg, F_OK) == 0) {
+      return JNI_TRUE;
+    }
+#endif
 
     char *realPathToSelf = realpath(selfInfo.dli_fname, path);
     if (realPathToSelf != path) {
@@ -664,7 +689,11 @@ LoadJavaVM(const char *jvmpath, InvocationFunctions *ifn)
 
     JLI_TraceLauncher("JVM path is %s\n", jvmpath);
 
+#ifndef STATIC_BUILD
     libjvm = dlopen(jvmpath, RTLD_NOW + RTLD_GLOBAL);
+#else
+    libjvm = dlopen(NULL, RTLD_FIRST);
+#endif
     if (libjvm == NULL) {
         JLI_ReportErrorMessage(DLL_ERROR1, __LINE__);
         JLI_ReportErrorMessage(DLL_ERROR2, jvmpath, dlerror());
@@ -714,9 +743,14 @@ SetExecname(char **argv)
     char* exec_path = NULL;
     {
         Dl_info dlinfo;
-        int (*fptr)();
 
+#ifdef STATIC_BUILD
+        void *fptr;
+        fptr = (void *)&SetExecname;
+#else
+        int (*fptr)();
         fptr = (int (*)())dlsym(RTLD_DEFAULT, "main");
+#endif
         if (fptr == NULL) {
             JLI_ReportErrorMessage(DLL_ERROR3, dlerror());
             return JNI_FALSE;
@@ -794,7 +828,7 @@ static void* hSplashLib = NULL;
 void* SplashProcAddress(const char* name) {
     if (!hSplashLib) {
         char jrePath[PATH_MAX];
-        if (!GetJREPath(jrePath, sizeof(jrePath), GetArch(), JNI_FALSE)) {
+        if (!GetJREPath(jrePath, sizeof(jrePath), JNI_FALSE)) {
             JLI_ReportErrorMessage(JRE_ERROR1);
             return NULL;
         }
@@ -873,11 +907,6 @@ ContinueInNewThread0(int (JNICALL *continuation)(void *), jlong stack_size, void
 
 void SetJavaLauncherPlatformProps() {
    /* Linux only */
-}
-
-jboolean
-ServerClassMachine(void) {
-    return JNI_TRUE;
 }
 
 static JavaVM* jvmInstance = NULL;
@@ -1006,32 +1035,6 @@ SetXStartOnFirstThreadArg()
     setenv(envVar, "1", 1);
 }
 
-/* This class is made for performSelectorOnMainThread when java main
- * should be launched on main thread.
- * We cannot use dispatch_sync here, because it blocks the main dispatch queue
- * which is used inside Cocoa
- */
-@interface JavaLaunchHelper : NSObject {
-    int _returnValue;
-}
-- (void) launchJava:(NSValue*)argsValue;
-- (int) getReturnValue;
-@end
-
-@implementation JavaLaunchHelper
-
-- (void) launchJava:(NSValue*)argsValue
-{
-    _returnValue = JavaMain([argsValue pointerValue]);
-}
-
-- (int) getReturnValue
-{
-    return _returnValue;
-}
-
-@end
-
 // MacOSX we may continue in the same thread
 int
 JVMInit(InvocationFunctions* ifn, jlong threadStackSize,
@@ -1041,20 +1044,26 @@ JVMInit(InvocationFunctions* ifn, jlong threadStackSize,
         JLI_TraceLauncher("In same thread\n");
         // need to block this thread against the main thread
         // so signals get caught correctly
-        JavaMainArgs args;
-        args.argc = argc;
-        args.argv = argv;
-        args.mode = mode;
-        args.what = what;
-        args.ifn  = *ifn;
-        int rslt;
+        __block int rslt = 0;
         NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
         {
-            JavaLaunchHelper* launcher = [[[JavaLaunchHelper alloc] init] autorelease];
-            [launcher performSelectorOnMainThread:@selector(launchJava:)
-                                       withObject:[NSValue valueWithPointer:(void*)&args]
-                                    waitUntilDone:YES];
-            rslt = [launcher getReturnValue];
+            NSBlockOperation *op = [NSBlockOperation blockOperationWithBlock: ^{
+                JavaMainArgs args;
+                args.argc = argc;
+                args.argv = argv;
+                args.mode = mode;
+                args.what = what;
+                args.ifn  = *ifn;
+                rslt = JavaMain(&args);
+            }];
+
+            /*
+             * We cannot use dispatch_sync here, because it blocks the main dispatch queue.
+             * Using the main NSRunLoop allows the dispatch queue to run properly once
+             * SWT (or whatever toolkit this is needed for) kicks off it's own NSRunLoop
+             * and starts running.
+             */
+            [op performSelectorOnMainThread:@selector(start) withObject:nil waitUntilDone:YES];
         }
         [pool drain];
         return rslt;

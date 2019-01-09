@@ -30,6 +30,7 @@ import java.security.AccessController;
 import java.security.PrivilegedAction;
 import sun.security.action.GetPropertyAction;
 import sun.security.action.GetIntegerAction;
+import jdk.internal.misc.InnocuousThread;
 
 /**
  * Encapsulates a thread pool associated with a channel group.
@@ -81,7 +82,7 @@ public class ThreadPool {
         } else {
             return (Runnable r) -> {
                 PrivilegedAction<Thread> action = () -> {
-                    Thread t = new sun.misc.InnocuousThread(r);
+                    Thread t = InnocuousThread.newThread(r);
                     t.setDaemon(true);
                     return t;
                };
@@ -91,7 +92,7 @@ public class ThreadPool {
     }
 
     private static class DefaultThreadPoolHolder {
-        final static ThreadPool defaultThreadPool = createDefault();
+        static final ThreadPool defaultThreadPool = createDefault();
     }
 
     // return the default (system-wide) thread pool
@@ -164,14 +165,11 @@ public class ThreadPool {
             GetPropertyAction(DEFAULT_THREAD_POOL_THREAD_FACTORY));
         if (propValue != null) {
             try {
-                Class<?> c = Class
-                    .forName(propValue, true, ClassLoader.getSystemClassLoader());
-                return ((ThreadFactory)c.newInstance());
-            } catch (ClassNotFoundException x) {
-                throw new Error(x);
-            } catch (InstantiationException x) {
-                throw new Error(x);
-            } catch (IllegalAccessException x) {
+                @SuppressWarnings("deprecation")
+                Object tmp = Class
+                    .forName(propValue, true, ClassLoader.getSystemClassLoader()).newInstance();
+                return (ThreadFactory)tmp;
+            } catch (ClassNotFoundException | InstantiationException | IllegalAccessException x) {
                 throw new Error(x);
             }
         }

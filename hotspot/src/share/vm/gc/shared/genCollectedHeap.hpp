@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,9 +30,9 @@
 #include "gc/shared/collectorPolicy.hpp"
 #include "gc/shared/generation.hpp"
 
-class FlexibleWorkGang;
 class StrongRootsScope;
 class SubTasksDone;
+class WorkGang;
 
 // A "GenCollectedHeap" is a CollectedHeap that uses generational
 // collection.  It has two generations, young and old.
@@ -64,8 +64,8 @@ private:
   Generation* _young_gen;
   Generation* _old_gen;
 
-  // The singleton Gen Remembered Set.
-  GenRemSet* _rem_set;
+  // The singleton CardTable Remembered Set.
+  CardTableRS* _rem_set;
 
   // The generational collector policy.
   GenCollectorPolicy* _gen_policy;
@@ -90,7 +90,7 @@ private:
   // In block contents verification, the number of header words to skip
   NOT_PRODUCT(static size_t _skip_header_HeapWords;)
 
-  FlexibleWorkGang* _workers;
+  WorkGang* _workers;
 
 protected:
   // Helper functions for allocation
@@ -124,9 +124,7 @@ protected:
 public:
   GenCollectedHeap(GenCollectorPolicy *policy);
 
-  FlexibleWorkGang* workers() const { return _workers; }
-
-  GCStats* gc_stats(Generation* generation) const;
+  WorkGang* workers() const { return _workers; }
 
   // Returns JNI_OK on success
   virtual jint initialize();
@@ -144,6 +142,14 @@ public:
     return CollectedHeap::GenCollectedHeap;
   }
 
+  virtual const char* name() const {
+    if (UseConcMarkSweepGC) {
+      return "Concurrent Mark Sweep";
+    } else {
+      return "Serial";
+    }
+  }
+
   Generation* young_gen() const { return _young_gen; }
   Generation* old_gen()   const { return _old_gen; }
 
@@ -153,7 +159,7 @@ public:
   // The generational collector policy.
   GenCollectorPolicy* gen_policy() const { return _gen_policy; }
 
-  virtual CollectorPolicy* collector_policy() const { return (CollectorPolicy*) gen_policy(); }
+  virtual CollectorPolicy* collector_policy() const { return gen_policy(); }
 
   // Adaptive size policy
   virtual AdaptiveSizePolicy* size_policy() {
@@ -173,13 +179,12 @@ public:
 
   size_t max_capacity() const;
 
-  HeapWord* mem_allocate(size_t size,
-                         bool*  gc_overhead_limit_was_exceeded);
+  HeapWord* mem_allocate(size_t size, bool*  gc_overhead_limit_was_exceeded);
 
   // We may support a shared contiguous allocation area, if the youngest
   // generation does.
   bool supports_inline_contig_alloc() const;
-  HeapWord** top_addr() const;
+  HeapWord* volatile* top_addr() const;
   HeapWord** end_addr() const;
 
   // Perform a full collection of the heap; intended for use in implementing
@@ -332,7 +337,7 @@ public:
   void prepare_for_verify();
 
   // Override.
-  void verify(bool silent, VerifyOption option);
+  void verify(VerifyOption option);
 
   // Override.
   virtual void print_on(outputStream* st) const;
@@ -341,8 +346,7 @@ public:
   virtual void print_tracing_info() const;
   virtual void print_on_error(outputStream* st) const;
 
-  // PrintGC, PrintGCDetails support
-  void print_heap_change(size_t prev_used) const;
+  void print_heap_change(size_t young_prev_used, size_t old_prev_used) const;
 
   // The functions below are helper functions that a subclass of
   // "CollectedHeap" can use in the implementation of its virtual
@@ -362,24 +366,15 @@ public:
   // collection.
   virtual bool is_maximal_no_gc() const;
 
-  // This function returns the "GenRemSet" object that allows us to scan
+  // This function returns the CardTableRS object that allows us to scan
   // generations in a fully generational heap.
-  GenRemSet* rem_set() { return _rem_set; }
+  CardTableRS* rem_set() { return _rem_set; }
 
   // Convenience function to be used in situations where the heap type can be
   // asserted to be this type.
   static GenCollectedHeap* heap();
 
-  // Invoke the "do_oop" method of one of the closures "not_older_gens"
-  // or "older_gens" on root locations for the generations depending on
-  // the type.  (The "older_gens" closure is used for scanning references
-  // from older generations; "not_older_gens" is used everywhere else.)
-  // If "younger_gens_as_roots" is false, younger generations are
-  // not scanned as roots; in this case, the caller must be arranging to
-  // scan the younger generations itself.  (For example, a generation might
-  // explicitly mark reachable objects in younger generations, to avoid
-  // excess storage retention.)
-  // The "so" argument determines which of the roots
+  // The ScanningOption determines which of the roots
   // the closure is applied to:
   // "SO_None" does none;
   enum ScanningOption {
@@ -395,20 +390,35 @@ public:
                      OopClosure* weak_roots,
                      CLDClosure* strong_cld_closure,
                      CLDClosure* weak_cld_closure,
-                     CodeBlobClosure* code_roots);
+                     CodeBlobToOopClosure* code_roots);
+
+  void process_string_table_roots(StrongRootsScope* scope,
+                                  OopClosure* root_closure);
 
  public:
-  static const bool StrongAndWeakRoots = false;
-  static const bool StrongRootsOnly    = true;
+  void young_process_roots(StrongRootsScope* scope,
+                           OopsInGenClosure* root_closure,
+                           OopsInGenClosure* old_gen_closure,
+                           CLDClosure* cld_closure);
 
-  void gen_process_roots(StrongRootsScope* scope,
-                         GenerationType type,
-                         bool younger_gens_as_roots,
+  // If "young_gen_as_roots" is false, younger generations are
+  // not scanned as roots; in this case, the caller must be arranging to
+  // scan the younger generations itself.  (For example, a generation might
+  // explicitly mark reachable objects in younger generations, to avoid
+  // excess storage retention.)
+  void cms_process_roots(StrongRootsScope* scope,
+                         bool young_gen_as_roots,
                          ScanningOption so,
                          bool only_strong_roots,
-                         OopsInGenClosure* not_older_gens,
-                         OopsInGenClosure* older_gens,
+                         OopsInGenClosure* root_closure,
                          CLDClosure* cld_closure);
+
+  void full_process_roots(StrongRootsScope* scope,
+                          bool is_adjust_phase,
+                          ScanningOption so,
+                          bool only_strong_roots,
+                          OopsInGenClosure* root_closure,
+                          CLDClosure* cld_closure);
 
   // Apply "root_closure" to all the weak roots of the system.
   // These include JNI weak roots, string table,
@@ -436,7 +446,7 @@ public:
 
   // Returns "true" iff no allocations have occurred since the last
   // call to "save_marks".
-  bool no_allocs_since_save_marks(bool include_young);
+  bool no_allocs_since_save_marks();
 
   // Returns true if an incremental collection is likely to fail.
   // We optionally consult the young gen, if asked to do so;
@@ -502,6 +512,9 @@ private:
 protected:
   void gc_prologue(bool full);
   void gc_epilogue(bool full);
+
+public:
+  void stop();
 };
 
 #endif // SHARE_VM_GC_SHARED_GENCOLLECTEDHEAP_HPP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -125,7 +125,7 @@ class ChangeSwitchPad : public ChangeItem {
 //-----------------------------------------------------------------------------------------------------------
 // Relocator code
 
-Relocator::Relocator(methodHandle m, RelocatorListener* listener) {
+Relocator::Relocator(const methodHandle& m, RelocatorListener* listener) {
   set_method(m);
   set_code_length(method()->code_size());
   set_code_array(NULL);
@@ -612,8 +612,8 @@ bool Relocator::relocate_code(int bci, int ilen, int delta) {
   // In case we have shrunken a tableswitch/lookupswitch statement, we store the last
   // bytes that get overwritten. We have to copy the bytes after the change_jumps method
   // has been called, since it is likely to update last offset in a tableswitch/lookupswitch
-  if (delta < 0) {
-    assert(delta>=-3, "we cannot overwrite more than 3 bytes");
+  assert(delta >= -3, "We cannot overwrite more than 3 bytes.");
+  if (delta < 0 && delta >= -3) {
     memcpy(_overwrite, addr_at(bci + ilen + delta), -delta);
   }
 

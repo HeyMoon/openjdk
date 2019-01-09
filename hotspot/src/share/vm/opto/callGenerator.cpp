@@ -46,6 +46,11 @@ const TypeFunc* CallGenerator::tf() const {
   return TypeFunc::make(method());
 }
 
+bool CallGenerator::is_inlined_method_handle_intrinsic(JVMState* jvms, ciMethod* callee) {
+  ciMethod* symbolic_info = jvms->method()->get_method_at_bci(jvms->bci());
+  return symbolic_info->is_method_handle_intrinsic() && !callee->is_method_handle_intrinsic();
+}
+
 //-----------------------------ParseGenerator---------------------------------
 // Internal class which handles all direct bytecode traversal.
 class ParseGenerator : public InlineCallGenerator {
@@ -137,6 +142,13 @@ JVMState* DirectCallGenerator::generate(JVMState* jvms) {
   }
 
   CallStaticJavaNode *call = new CallStaticJavaNode(kit.C, tf(), target, method(), kit.bci());
+  if (is_inlined_method_handle_intrinsic(jvms, method())) {
+    // To be able to issue a direct call and skip a call to MH.linkTo*/invokeBasic adapter,
+    // additional information about the method being invoked should be attached
+    // to the call site to make resolution logic work
+    // (see SharedRuntime::resolve_static_call_C).
+    call->set_override_symbolic_info(true);
+  }
   _call_node = call;  // Save the call node in case we need it later
   if (!is_static) {
     // Make an explicit receiver null_check as part of this call.
@@ -192,7 +204,10 @@ JVMState* VirtualCallGenerator::generate(JVMState* jvms) {
   // the call instruction will have a seemingly deficient out-count.
   // (The bailout says something misleading about an "infinite loop".)
   if (kit.gvn().type(receiver)->higher_equal(TypePtr::NULL_PTR)) {
-    kit.inc_sp(method()->arg_size());  // restore arguments
+    assert(Bytecodes::is_invoke(kit.java_bc()), "%d: %s", kit.java_bc(), Bytecodes::name(kit.java_bc()));
+    ciMethod* declared_method = kit.method()->get_method_at_bci(kit.bci());
+    int arg_size = declared_method->signature()->arg_size_for_bc(kit.java_bc());
+    kit.inc_sp(arg_size);  // restore arguments
     kit.uncommon_trap(Deoptimization::Reason_null_check,
                       Deoptimization::Action_none,
                       NULL, "null receiver");
@@ -226,6 +241,13 @@ JVMState* VirtualCallGenerator::generate(JVMState* jvms) {
   address target = SharedRuntime::get_resolve_virtual_call_stub();
   // Normal inline cache used for call
   CallDynamicJavaNode *call = new CallDynamicJavaNode(tf(), target, method(), _vtable_index, kit.bci());
+  if (is_inlined_method_handle_intrinsic(jvms, method())) {
+    // To be able to issue a direct call (optimized virtual or virtual)
+    // and skip a call to MH.linkTo*/invokeBasic adapter, additional information
+    // about the method being invoked should be attached to the call site to
+    // make resolution logic work (see SharedRuntime::resolve_{virtual,opt_virtual}_call_C).
+    call->set_override_symbolic_info(true);
+  }
   kit.set_arguments_for_java_call(call);
   kit.set_edges_for_java_call(call);
   Node* ret = kit.set_results_for_java_call(call);
@@ -463,8 +485,8 @@ bool LateInlineMHCallGenerator::do_late_inline_check(JVMState* jvms) {
     _attempt++;
   }
 
-  if (cg != NULL) {
-    assert(!cg->is_late_inline() && cg->is_inline(), "we're doing late inlining");
+  if (cg != NULL && cg->is_inline()) {
+    assert(!cg->is_late_inline(), "we're doing late inlining");
     _inline_cg = cg;
     Compile::current()->dec_number_of_mh_late_inlines();
     return true;
@@ -671,7 +693,7 @@ JVMState* PredictedCallGenerator::generate(JVMState* jvms) {
                                            &exact_receiver);
 
   SafePointNode* slow_map = NULL;
-  JVMState* slow_jvms;
+  JVMState* slow_jvms = NULL;
   { PreserveJVMState pjvms(&kit);
     kit.set_control(slow_ctl);
     if (!kit.stopped()) {
@@ -763,8 +785,7 @@ JVMState* PredictedCallGenerator::generate(JVMState* jvms) {
 
 
 CallGenerator* CallGenerator::for_method_handle_call(JVMState* jvms, ciMethod* caller, ciMethod* callee, bool delayed_forbidden) {
-  assert(callee->is_method_handle_intrinsic() ||
-         callee->is_compiled_lambda_form(), "for_method_handle_call mismatch");
+  assert(callee->is_method_handle_intrinsic(), "for_method_handle_call mismatch");
   bool input_not_const;
   CallGenerator* cg = CallGenerator::for_method_handle_inline(jvms, caller, callee, input_not_const);
   Compile* C = Compile::current();
@@ -803,16 +824,23 @@ CallGenerator* CallGenerator::for_method_handle_inline(JVMState* jvms, ciMethod*
         input_not_const = false;
         const TypeOopPtr* oop_ptr = receiver->bottom_type()->is_oopptr();
         ciMethod* target = oop_ptr->const_oop()->as_method_handle()->get_vmtarget();
-        guarantee(!target->is_method_handle_intrinsic(), "should not happen");  // XXX remove
         const int vtable_index = Method::invalid_vtable_index;
-        CallGenerator* cg = C->call_generator(target, vtable_index, false, jvms, true, PROB_ALWAYS, NULL, true, true);
-        assert(cg == NULL || !cg->is_late_inline() || cg->is_mh_late_inline(), "no late inline here");
-        if (cg != NULL && cg->is_inline())
-          return cg;
+
+        if (!ciMethod::is_consistent_info(callee, target)) {
+          print_inlining_failure(C, callee, jvms->depth() - 1, jvms->bci(),
+                                 "signatures mismatch");
+          return NULL;
+        }
+
+        CallGenerator* cg = C->call_generator(target, vtable_index,
+                                              false /* call_does_dispatch */,
+                                              jvms,
+                                              true /* allow_inline */,
+                                              PROB_ALWAYS);
+        return cg;
       } else {
-        const char* msg = "receiver not constant";
-        if (PrintInlining)  C->print_inlining(callee, jvms->depth() - 1, jvms->bci(), msg);
-        C->log_inline_failure(msg);
+        print_inlining_failure(C, callee, jvms->depth() - 1, jvms->bci(),
+                               "receiver not constant");
       }
     }
     break;
@@ -829,7 +857,13 @@ CallGenerator* CallGenerator::for_method_handle_inline(JVMState* jvms, ciMethod*
         const TypeOopPtr* oop_ptr = member_name->bottom_type()->is_oopptr();
         ciMethod* target = oop_ptr->const_oop()->as_member_name()->get_vmtarget();
 
-        // In lamda forms we erase signature types to avoid resolving issues
+        if (!ciMethod::is_consistent_info(callee, target)) {
+          print_inlining_failure(C, callee, jvms->depth() - 1, jvms->bci(),
+                                 "signatures mismatch");
+          return NULL;
+        }
+
+        // In lambda forms we erase signature types to avoid resolving issues
         // involving class loaders.  When we optimize a method handle invoke
         // to a direct call we must cast the receiver and arguments to its
         // actual types.
@@ -846,17 +880,18 @@ CallGenerator* CallGenerator::for_method_handle_inline(JVMState* jvms, ciMethod*
           }
         }
         // Cast reference arguments to its type.
-        for (int i = 0; i < signature->count(); i++) {
+        for (int i = 0, j = 0; i < signature->count(); i++) {
           ciType* t = signature->type_at(i);
           if (t->is_klass()) {
-            Node* arg = kit.argument(receiver_skip + i);
+            Node* arg = kit.argument(receiver_skip + j);
             const TypeOopPtr* arg_type = arg->bottom_type()->isa_oopptr();
             const Type*       sig_type = TypeOopPtr::make_from_klass(t->as_klass());
             if (arg_type != NULL && !arg_type->higher_equal(sig_type)) {
               Node* cast_obj = gvn.transform(new CheckCastPPNode(kit.control(), arg, sig_type));
-              kit.set_argument(receiver_skip + i, cast_obj);
+              kit.set_argument(receiver_skip + j, cast_obj);
             }
           }
+          j += t->size();  // long and double take two slots
         }
 
         // Try to get the most accurate receiver type
@@ -877,25 +912,25 @@ CallGenerator* CallGenerator::for_method_handle_inline(JVMState* jvms, ciMethod*
           target = C->optimize_virtual_call(caller, jvms->bci(), klass, klass,
                                             target, receiver_type, is_virtual,
                                             call_does_dispatch, vtable_index, // out-parameters
-                                            /*check_access=*/false);
+                                            false /* check_access */);
           // We lack profiling at this call but type speculation may
           // provide us with a type
           speculative_receiver_type = (receiver_type != NULL) ? receiver_type->speculative_type() : NULL;
         }
-        CallGenerator* cg = C->call_generator(target, vtable_index, call_does_dispatch, jvms, true, PROB_ALWAYS, speculative_receiver_type, true, true);
-        assert(cg == NULL || !cg->is_late_inline() || cg->is_mh_late_inline(), "no late inline here");
-        if (cg != NULL && cg->is_inline())
-          return cg;
+        CallGenerator* cg = C->call_generator(target, vtable_index, call_does_dispatch, jvms,
+                                              true /* allow_inline */,
+                                              PROB_ALWAYS,
+                                              speculative_receiver_type);
+        return cg;
       } else {
-        const char* msg = "member_name not constant";
-        if (PrintInlining)  C->print_inlining(callee, jvms->depth() - 1, jvms->bci(), msg);
-        C->log_inline_failure(msg);
+        print_inlining_failure(C, callee, jvms->depth() - 1, jvms->bci(),
+                               "member_name not constant");
       }
     }
     break;
 
   default:
-    fatal(err_msg_res("unexpected intrinsic %d: %s", iid, vmIntrinsics::name_at(iid)));
+    fatal("unexpected intrinsic %d: %s", iid, vmIntrinsics::name_at(iid));
     break;
   }
   return NULL;
@@ -1139,7 +1174,10 @@ JVMState* UncommonTrapCallGenerator::generate(JVMState* jvms) {
   GraphKit kit(jvms);
   kit.C->print_inlining_update(this);
   // Take the trap with arguments pushed on the stack.  (Cf. null_check_receiver).
-  int nargs = method()->arg_size();
+  // Callsite signature can be different from actual method being called (i.e _linkTo* sites).
+  // Use callsite signature always.
+  ciMethod* declared_method = kit.method()->get_method_at_bci(kit.bci());
+  int nargs = declared_method->arg_size();
   kit.inc_sp(nargs);
   assert(nargs <= kit.sp() && kit.sp() <= jvms->stk_size(), "sane sp w/ args pushed");
   if (_reason == Deoptimization::Reason_class_check &&

@@ -24,12 +24,11 @@
 #
 # @test
 # @bug     6528083
+# @key intermittent
 # @summary Test RMI Bootstrap
 #
 # @library /lib/testlibrary
-# @modules java.management/sun.management
-#          java.management/sun.management.jmxremote
-#          java.management
+#
 # @build jdk.testlibrary.* TestLogger Utils RmiBootstrapTest
 # @run shell/timeout=300  RmiBootstrapTest.sh
 
@@ -44,20 +43,24 @@ generatePropertyPasswordFiles `ls ${TESTSRC}/*_test*.in`
 
 rm -rf ${TESTCLASSES}/ssl
 mkdir -p ${TESTCLASSES}/ssl
-cp -rf ${TESTSRC}/ssl/*store ${TESTCLASSES}/ssl 
+cp -rf ${TESTSRC}/ssl/*store ${TESTCLASSES}/ssl
 chmod -R 777 ${TESTCLASSES}/ssl
 
 DEBUGOPTIONS=""
 export DEBUGOPTIONS
 
+EXTRAOPTIONS="--add-exports jdk.management.agent/jdk.internal.agent=ALL-UNNAMED \
+ --add-exports jdk.management.agent/sun.management.jmxremote=ALL-UNNAMED"
+export EXTRAOPTIONS
+
 # Call the common generic test
 #
-# No need to since bug 4267864 is now fixed. 
+# No need to since bug 4267864 is now fixed.
 #
 echo -------------------------------------------------------------
 echo Launching test for `basename $0 .sh`
 echo -------------------------------------------------------------
-sh ${TESTSRC}/../RunTest.sh ${DEBUGOPTIONS} ${TESTCLASS}
+sh ${TESTSRC}/../RunTest.sh ${DEBUGOPTIONS} ${EXTRAOPTIONS} ${TESTCLASS}
 result=$?
 restoreFilePermissions `ls ${TESTSRC}/*_test*.in`
 exit $result

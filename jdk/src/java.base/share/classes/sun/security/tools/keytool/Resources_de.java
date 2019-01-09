@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,7 @@
 package sun.security.tools.keytool;
 
 /**
- * This class represents the <code>ResourceBundle</code>
+ * <p> This class represents the <code>ResourceBundle</code>
  * for the keytool.
  *
  */
@@ -48,7 +48,7 @@ public class Resources_de extends java.util.ListResourceBundle {
                  "Schl\u00FCssel- und Zertifikatsverwaltungstool"},
         {"Commands.", "Befehle:"},
         {"Use.keytool.command.name.help.for.usage.of.command.name",
-                "\"keytool -command_name -help\" f\u00FCr Verwendung von command_name verwenden"},
+                "Verwenden Sie \"keytool -command_name -help\" f\u00FCr die Verwendung von command_name.\nVerwenden Sie die Option -conf <url>, um eine vorkonfigurierte Optionsdatei anzugeben."},
         // keytool: help: commands
         {"Generates.a.certificate.request",
                 "Generiert eine Zertifikatanforderung"}, //-certreq
@@ -72,7 +72,7 @@ public class Resources_de extends java.util.ListResourceBundle {
         {"Imports.entries.from.a.JDK.1.1.x.style.identity.database",
                 "Importiert Eintr\u00E4ge aus einer Identity-Datenbank im JDK 1.1.x-Stil"}, //-identitydb
         {"Imports.a.certificate.or.a.certificate.chain",
-                "Importiert ein Zertifikat oder eine Zertifikatkette"}, //-importcert
+                "Importiert ein Zertifikat oder eine Zertifikatskette"}, //-importcert
         {"Imports.a.password",
                 "Importiert ein Kennwort"}, //-importpass
         {"Imports.one.or.all.entries.from.another.keystore",
@@ -126,16 +126,24 @@ public class Resources_de extends java.util.ListResourceBundle {
                 "Schl\u00FCsselbitgr\u00F6\u00DFe"}, //-keysize
         {"keystore.name",
                 "Keystore-Name"}, //-keystore
+        {"access.the.cacerts.keystore",
+                "Zugriff auf den cacerts Keystore"}, // -cacerts
+        {"warning.cacerts.option",
+                "Warnung: Verwenden Sie die Option -cacerts f\u00FCr den Zugriff auf den cacerts Keystore"},
         {"new.password",
                 "Neues Kennwort"}, //-new
         {"do.not.prompt",
                 "Kein Prompt"}, //-noprompt
         {"password.through.protected.mechanism",
                 "Kennwort \u00FCber gesch\u00FCtzten Mechanismus"}, //-protected
-        {"provider.argument",
-                "Providerargument"}, //-providerarg
-        {"provider.class.name",
-                "Providerklassenname"}, //-providerclass
+
+        // The following 2 values should span 2 lines, the first for the
+        // option itself, the second for its -providerArg value.
+        {"addprovider.option",
+                "Sicherheitsprovider nach Name hinzuf\u00FCgen (z.B. SunPKCS11)\nArgument f\u00FCr -addprovider konfigurieren"}, //-addprovider
+        {"provider.class.option",
+                "Sicherheitsprovider nach vollst\u00E4ndig angegebenem Klassennamen hinzuf\u00FCgen\nArgument f\u00FCr -providerclass konfigurieren"}, //-providerclass
+
         {"provider.name",
                 "Providername"}, //-providername
         {"provider.classpath",
@@ -187,6 +195,8 @@ public class Resources_de extends java.util.ListResourceBundle {
         {"Command.option.flag.needs.an.argument.", "Befehlsoption {0} ben\u00F6tigt ein Argument."},
         {"Warning.Different.store.and.key.passwords.not.supported.for.PKCS12.KeyStores.Ignoring.user.specified.command.value.",
                 "Warnung: Keine Unterst\u00FCtzung f\u00FCr unterschiedliche Speicher- und Schl\u00FCsselkennw\u00F6rter bei PKCS12 KeyStores. Der benutzerdefinierte Wert {0} wird ignoriert."},
+        {"the.keystore.or.storetype.option.cannot.be.used.with.the.cacerts.option",
+            "Die Option -keystore oder -storetype kann nicht mit der Option -cacerts verwendet werden"},
         {".keystore.must.be.NONE.if.storetype.is.{0}",
                 "-keystore muss NONE sein, wenn -storetype {0} ist"},
         {"Too.many.retries.program.terminated",
@@ -208,7 +218,9 @@ public class Resources_de extends java.util.ListResourceBundle {
         {"Illegal.startdate.value", "Ung\u00FCltiger Wert f\u00FCr Anfangsdatum"},
         {"Validity.must.be.greater.than.zero",
                 "G\u00FCltigkeit muss gr\u00F6\u00DFer als null sein"},
-        {"provName.not.a.provider", "{0} kein Provider"},
+        {"provclass.not.a.provider", "%s kein Provider"},
+        {"provider.name.not.found", "Provider namens \"%s\" nicht gefunden"},
+        {"provider.class.not.found", "Provider \"%s\" nicht gefunden"},
         {"Usage.error.no.command.provided", "Verwendungsfehler: Kein Befehl angegeben"},
         {"Source.keystore.file.exists.but.is.empty.", "Quell-Keystore-Datei ist zwar vorhanden, ist aber leer: "},
         {"Please.specify.srckeystore", "Geben Sie -srckeystore an"},
@@ -304,9 +316,9 @@ public class Resources_de extends java.util.ListResourceBundle {
                 "{0}, {1,date}, "},
         {"alias.", "{0}, "},
         {"Entry.type.type.", "Eintragstyp: {0}"},
-        {"Certificate.chain.length.", "Zertifikatkettenl\u00E4nge: "},
+        {"Certificate.chain.length.", "Zertifikatskettenl\u00E4nge: "},
         {"Certificate.i.1.", "Zertifikat[{0,number,integer}]:"},
-        {"Certificate.fingerprint.SHA1.", "Zertifikat-Fingerprint (SHA1): "},
+        {"Certificate.fingerprint.SHA.256.", "Zertifikat-Fingerprint (SHA-256): "},
         {"Keystore.type.", "Keystore-Typ: "},
         {"Keystore.provider.", "Keystore-Provider: "},
         {"Your.keystore.contains.keyStore.size.entry",
@@ -345,8 +357,6 @@ public class Resources_de extends java.util.ListResourceBundle {
         {"Enter.alias.name.", "Aliasnamen eingeben:  "},
         {".RETURN.if.same.as.for.otherAlias.",
                 "\t(RETURN, wenn identisch mit <{0}>)"},
-        {".PATTERN.printX509Cert",
-                "Eigent\u00FCmer: {0}\nAussteller: {1}\nSeriennummer: {2}\nG\u00FCltig von: {3} bis: {4}\nZertifikat-Fingerprints:\n\t MD5:  {5}\n\t SHA1: {6}\n\t SHA256: {7}\n\t Signaturalgorithmusname: {8}\n\t Version: {9}"},
         {"What.is.your.first.and.last.name.",
                 "Wie lautet Ihr Vor- und Nachname?"},
         {"What.is.the.name.of.your.organizational.unit.",
@@ -367,7 +377,7 @@ public class Resources_de extends java.util.ListResourceBundle {
         {"Alias.alias.has.no.key",
                 "Alias <{0}> verf\u00FCgt \u00FCber keinen Schl\u00FCssel"},
         {"Alias.alias.references.an.entry.type.that.is.not.a.private.key.entry.The.keyclone.command.only.supports.cloning.of.private.key",
-                 "Alias <{0}> verweist auf einen Eintragstyp, der kein Private Key-Eintrag ist. Der Befehl -keyclone unterst\u00FCtzt nur das Clonen von Private Key-Eintr\u00E4gen"},
+                 "Alias <{0}> verweist auf einen Eintragstyp, der kein Private Key-Eintrag ist. Der Befehl -keyclone unterst\u00FCtzt nur das Klonen von Private Key-Eintr\u00E4gen"},
 
         {".WARNING.WARNING.WARNING.",
             "*****************  WARNING WARNING WARNING  *****************"},
@@ -388,9 +398,9 @@ public class Resources_de extends java.util.ListResourceBundle {
         {"Certificate.reply.does.not.contain.public.key.for.alias.",
                 "Zertifikatantwort enth\u00E4lt keinen Public Key f\u00FCr <{0}>"},
         {"Incomplete.certificate.chain.in.reply",
-                "Unvollst\u00E4ndige Zertifikatkette in Antwort"},
+                "Unvollst\u00E4ndige Zertifikatskette in Antwort"},
         {"Certificate.chain.in.reply.does.not.verify.",
-                "Zertifikatkette in Antwort verifiziert nicht: "},
+                "Zertifikatskette in Antwort verifiziert nicht: "},
         {"Top.level.certificate.in.reply.",
                 "Zertifikat der obersten Ebene in Antwort:\n"},
         {".is.not.trusted.", "... ist nicht vertrauensw\u00FCrdig. "},
@@ -409,15 +419,12 @@ public class Resources_de extends java.util.ListResourceBundle {
         {"Please.provide.keysize.for.secret.key.generation",
                 "Geben Sie -keysize zum Erstellen eines Secret Keys an"},
 
-        {"verified.by.s.in.s", "Gepr\u00FCft von %s in %s"},
         {"warning.not.verified.make.sure.keystore.is.correct",
             "WARNUNG: Nicht gepr\u00FCft. Stellen Sie sicher, dass -keystore korrekt ist."},
 
         {"Extensions.", "Erweiterungen: "},
         {".Empty.value.", "(Leerer Wert)"},
         {"Extension.Request.", "Erweiterungsanforderung:"},
-        {"PKCS.10.Certificate.Request.Version.1.0.Subject.s.Public.Key.s.format.s.key.",
-                "PKCS #10-Zertifikatanforderung (Version 1.0)\nSubjekt: %s\nPublic Key: %s Format %s Schl\u00FCssel\n"},
         {"Unknown.keyUsage.type.", "Unbekannter keyUsage-Typ: "},
         {"Unknown.extendedkeyUsage.type.", "Unbekannter extendedkeyUsage-Typ: "},
         {"Unknown.AccessDescription.type.", "Unbekannter AccessDescription-Typ: "},
@@ -426,12 +433,40 @@ public class Resources_de extends java.util.ListResourceBundle {
                  "Erweiterung kann nicht als \"Kritisch\" markiert werden. "},
         {"Odd.number.of.hex.digits.found.", "Ungerade Anzahl hexadezimaler Ziffern gefunden: "},
         {"Unknown.extension.type.", "Unbekannter Erweiterungstyp: "},
-        {"command.{0}.is.ambiguous.", "Befehl {0} ist mehrdeutig:"}
+        {"command.{0}.is.ambiguous.", "Befehl {0} ist mehrdeutig:"},
+
+        // 8171319: keytool should print out warnings when reading or
+        // generating cert/cert req using weak algorithms
+        {"the.certificate.request", "Die Zertifikatsanforderung"},
+        {"the.issuer", "Der Aussteller"},
+        {"the.generated.certificate", "Das generierte Zertifikat"},
+        {"the.generated.crl", "Die generierte CRL"},
+        {"the.generated.certificate.request", "Die generierte Zertifikatsanforderung"},
+        {"the.certificate", "Das Zertifikat"},
+        {"the.crl", "Die CRL"},
+        {"the.tsa.certificate", "Das TSA-Zertifikat"},
+        {"the.input", "Die Eingabe"},
+        {"reply", "Antwort"},
+        {"one.in.many", "%s #%d von %d"},
+        {"alias.in.cacerts", "Aussteller <%s> in cacerts"},
+        {"alias.in.keystore", "Aussteller <%s>"},
+        {"with.weak", "%s (schwach)"},
+        {"key.bit", "%d-Bit-%s-Schl\u00FCssel"},
+        {"key.bit.weak", "%d-Bit-%s-Schl\u00FCssel (schwach)"},
+        {".PATTERN.printX509Cert.with.weak",
+                "Eigent\u00FCmer: {0}\nAussteller: {1}\nSeriennummer: {2}\nG\u00FCltig von: {3} bis: {4}\nZertifikatsfingerprints:\n\t SHA1: {5}\n\t SHA256: {6}\nSignaturalgorithmusname: {7}\nPublic Key-Algorithmus von Subject: {8}\nVersion: {9}"},
+        {"PKCS.10.with.weak",
+                "PKCS #10-Zertifikatsanforderung (Version 1.0)\nSubject: %s\nFormat: %s\nPublic Key: %s\nSignaturalgorithmus: %s\n"},
+        {"verified.by.s.in.s.weak", "Von %s in %s mit %s verifiziert"},
+        {"whose.sigalg.risk", "%s verwendet den Signaturalgorithmus %s. Dies gilt als Sicherheitsrisiko."},
+        {"whose.key.risk", "%s verwendet %s. Dies gilt als Sicherheitsrisiko."},
     };
 
 
     /**
      * Returns the contents of this <code>ResourceBundle</code>.
+     *
+     * <p>
      *
      * @return the contents of this <code>ResourceBundle</code>.
      */

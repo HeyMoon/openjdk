@@ -22,7 +22,6 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.apple.laf;
 
 import java.awt.*;
@@ -45,36 +44,45 @@ import com.apple.laf.AquaUtils.RecyclableSingleton;
 import com.apple.laf.AquaUtils.RecyclableSingletonFromDefaultConstructor;
 
 /**
- * This is originally derived from BasicSpinnerUI, but they made everything private
- * so we can't subclass!
+ * This is originally derived from BasicSpinnerUI, but they made everything
+ * private so we can't subclass!
  */
 public class AquaSpinnerUI extends SpinnerUI {
-    private static final RecyclableSingleton<? extends PropertyChangeListener> propertyChangeListener = new RecyclableSingletonFromDefaultConstructor<PropertyChangeHandler>(PropertyChangeHandler.class);
+
+    private static final RecyclableSingleton<? extends PropertyChangeListener> propertyChangeListener
+            = new RecyclableSingletonFromDefaultConstructor<>(PropertyChangeHandler.class);
+
     static PropertyChangeListener getPropertyChangeListener() {
         return propertyChangeListener.get();
     }
 
-    private static final RecyclableSingleton<ArrowButtonHandler> nextButtonHandler = new RecyclableSingleton<ArrowButtonHandler>() {
-        @Override
-        protected ArrowButtonHandler getInstance() {
-            return new ArrowButtonHandler("increment", true);
-        }
-    };
+    private static final RecyclableSingleton<ArrowButtonHandler> nextButtonHandler
+            = new RecyclableSingleton<ArrowButtonHandler>() {
+                @Override
+                protected ArrowButtonHandler getInstance() {
+                    return new ArrowButtonHandler("increment", true);
+                }
+            };
+
     static ArrowButtonHandler getNextButtonHandler() {
         return nextButtonHandler.get();
     }
-    private static final RecyclableSingleton<ArrowButtonHandler> previousButtonHandler = new RecyclableSingleton<ArrowButtonHandler>() {
-        @Override
-        protected ArrowButtonHandler getInstance() {
-            return new ArrowButtonHandler("decrement", false);
-        }
-    };
+    private static final RecyclableSingleton<ArrowButtonHandler> previousButtonHandler
+            = new RecyclableSingleton<ArrowButtonHandler>() {
+                @Override
+                protected ArrowButtonHandler getInstance() {
+                    return new ArrowButtonHandler("decrement", false);
+                }
+            };
+
     static ArrowButtonHandler getPreviousButtonHandler() {
         return previousButtonHandler.get();
     }
 
-    JSpinner spinner;
-    SpinPainter spinPainter;
+    private JSpinner spinner;
+    private SpinPainter spinPainter;
+    private TransparentButton next;
+    private TransparentButton prev;
 
     public static ComponentUI createUI(final JComponent c) {
         return new AquaSpinnerUI();
@@ -87,12 +95,14 @@ public class AquaSpinnerUI extends SpinnerUI {
     }
 
     boolean wasOpaque;
+
+    @Override
     public void installUI(final JComponent c) {
-        this.spinner = (JSpinner)c;
+        this.spinner = (JSpinner) c;
         installDefaults();
         installListeners();
-        final TransparentButton next = createNextButton();
-        final TransparentButton prev = createPreviousButton();
+        next = createNextButton();
+        prev = createPreviousButton();
         spinPainter = new SpinPainter(next, prev);
 
         maybeAdd(next, "Next");
@@ -104,18 +114,27 @@ public class AquaSpinnerUI extends SpinnerUI {
         installKeyboardActions();
 
         // this doesn't work because JSpinner calls setOpaque(true) directly in it's constructor
-    //    LookAndFeel.installProperty(spinner, "opaque", Boolean.FALSE);
-
+        //    LookAndFeel.installProperty(spinner, "opaque", Boolean.FALSE);
         // ...so we have to handle the is/was opaque ourselves
         wasOpaque = spinner.isOpaque();
         spinner.setOpaque(false);
     }
 
+    @Override
     public void uninstallUI(final JComponent c) {
         uninstallDefaults();
         uninstallListeners();
         spinner.setOpaque(wasOpaque);
+        spinPainter = null;
         spinner = null;
+        // AquaButtonUI install some listeners to all parents, which means that
+        // we need to uninstall UI here to remove those listeners, because after
+        // we remove them from spinner we lost the latest reference to them,
+        // and our standard uninstallUI machinery will not call them.
+        next.getUI().uninstallUI(next);
+        prev.getUI().uninstallUI(prev);
+        next = null;
+        prev = null;
         c.removeAll();
     }
 
@@ -164,6 +183,7 @@ public class AquaSpinnerUI extends SpinnerUI {
     /**
      * {@inheritDoc}
      */
+    @Override
     public int getBaseline(JComponent c, int width, int height) {
         super.getBaseline(c, width, height);
         JComponent editor = spinner.getEditor();
@@ -182,6 +202,7 @@ public class AquaSpinnerUI extends SpinnerUI {
     /**
      * {@inheritDoc}
      */
+    @Override
     public Component.BaselineResizeBehavior getBaselineResizeBehavior(
             JComponent c) {
         super.getBaselineResizeBehavior(c);
@@ -190,6 +211,7 @@ public class AquaSpinnerUI extends SpinnerUI {
 
     @SuppressWarnings("serial") // Superclass is not serializable across versions
     class TransparentButton extends JButton implements SwingConstants {
+
         boolean interceptRepaints = false;
 
         public TransparentButton() {
@@ -200,13 +222,18 @@ public class AquaSpinnerUI extends SpinnerUI {
             interceptRepaints = true;
         }
 
-        public void paint(final Graphics g) {}
+        @Override
+        public void paint(final Graphics g) {
+        }
 
+        @Override
         public void repaint() {
             // only intercept repaints if we are after this has been initialized
             // otherwise we can't talk to our containing class
             if (interceptRepaints) {
-                if (spinPainter == null) return;
+                if (spinPainter == null) {
+                    return;
+                }
                 spinPainter.repaint();
             }
             super.repaint();
@@ -226,7 +253,9 @@ public class AquaSpinnerUI extends SpinnerUI {
     }
 
     protected void fixupEditor(final JComponent editor) {
-        if (!(editor instanceof DefaultEditor)) return;
+        if (!(editor instanceof DefaultEditor)) {
+            return;
+        }
 
         editor.setOpaque(false);
         editor.setInheritsPopupMenu(true);
@@ -235,7 +264,7 @@ public class AquaSpinnerUI extends SpinnerUI {
             editor.setFont(new FontUIResource(spinner.getFont()));
         }
 
-        final JFormattedTextField editorTextField = ((DefaultEditor)editor).getTextField();
+        final JFormattedTextField editorTextField = ((DefaultEditor) editor).getTextField();
         if (editorTextField.getFont() instanceof UIResource) {
             editorTextField.setFont(new FontUIResource(spinner.getFont()));
         }
@@ -257,7 +286,7 @@ public class AquaSpinnerUI extends SpinnerUI {
 
             child.setEnabled(enabled);
             if (child instanceof Container) {
-                updateEnabledState((Container)child, enabled);
+                updateEnabledState((Container) child, enabled);
             }
         }
     }
@@ -270,13 +299,13 @@ public class AquaSpinnerUI extends SpinnerUI {
 
     private InputMap getInputMap(final int condition) {
         if (condition == JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT) {
-            return (InputMap)UIManager.get("Spinner.ancestorInputMap");
+            return (InputMap) UIManager.get("Spinner.ancestorInputMap");
         }
         return null;
     }
 
     private ActionMap getActionMap() {
-        ActionMap map = (ActionMap)UIManager.get("Spinner.actionMap");
+        ActionMap map = (ActionMap) UIManager.get("Spinner.actionMap");
 
         if (map == null) {
             map = createActionMap();
@@ -296,6 +325,7 @@ public class AquaSpinnerUI extends SpinnerUI {
 
     @SuppressWarnings("serial") // Superclass is not serializable across versions
     private static class ArrowButtonHandler extends AbstractAction implements MouseListener {
+
         final javax.swing.Timer autoRepeatTimer;
         final boolean isNext;
         JSpinner spinner = null;
@@ -310,24 +340,27 @@ public class AquaSpinnerUI extends SpinnerUI {
         private JSpinner eventToSpinner(final AWTEvent e) {
             Object src = e.getSource();
             while ((src instanceof Component) && !(src instanceof JSpinner)) {
-                src = ((Component)src).getParent();
+                src = ((Component) src).getParent();
             }
-            return (src instanceof JSpinner) ? (JSpinner)src : null;
+            return (src instanceof JSpinner) ? (JSpinner) src : null;
         }
 
+        @Override
         public void actionPerformed(final ActionEvent e) {
             if (!(e.getSource() instanceof javax.swing.Timer)) {
                 // Most likely resulting from being in ActionMap.
                 spinner = eventToSpinner(e);
             }
 
-            if (spinner == null) return;
+            if (spinner == null) {
+                return;
+            }
 
             try {
                 final int calendarField = getCalendarField(spinner);
                 spinner.commitEdit();
                 if (calendarField != -1) {
-                    ((SpinnerDateModel)spinner.getModel()).setCalendarField(calendarField);
+                    ((SpinnerDateModel) spinner.getModel()).setCalendarField(calendarField);
                 }
                 final Object value = (isNext) ? spinner.getNextValue() : spinner.getPreviousValue();
                 if (value != null) {
@@ -347,37 +380,46 @@ public class AquaSpinnerUI extends SpinnerUI {
          */
         private void select(final JSpinner spinnerComponent) {
             final JComponent editor = spinnerComponent.getEditor();
-            if (!(editor instanceof JSpinner.DateEditor)) return;
+            if (!(editor instanceof JSpinner.DateEditor)) {
+                return;
+            }
 
-            final JSpinner.DateEditor dateEditor = (JSpinner.DateEditor)editor;
+            final JSpinner.DateEditor dateEditor = (JSpinner.DateEditor) editor;
             final JFormattedTextField ftf = dateEditor.getTextField();
             final Format format = dateEditor.getFormat();
             Object value;
-            if (format == null || (value = spinnerComponent.getValue()) == null) return;
+            if (format == null || (value = spinnerComponent.getValue()) == null) {
+                return;
+            }
 
             final SpinnerDateModel model = dateEditor.getModel();
             final DateFormat.Field field = DateFormat.Field.ofCalendarField(model.getCalendarField());
-            if (field == null) return;
+            if (field == null) {
+                return;
+            }
 
             try {
                 final AttributedCharacterIterator iterator = format.formatToCharacterIterator(value);
                 if (!select(ftf, iterator, field) && field == DateFormat.Field.HOUR0) {
                     select(ftf, iterator, DateFormat.Field.HOUR1);
                 }
-            } catch (final IllegalArgumentException iae) {}
+            } catch (final IllegalArgumentException iae) {
+            }
         }
 
         /**
-         * Selects the passed in field, returning true if it is found,
-         * false otherwise.
+         * Selects the passed in field, returning true if it is found, false
+         * otherwise.
          */
         private boolean select(final JFormattedTextField ftf, final AttributedCharacterIterator iterator, final DateFormat.Field field) {
             final int max = ftf.getDocument().getLength();
 
             iterator.first();
             do {
-                final Map<Attribute,Object> attrs = iterator.getAttributes();
-                if (attrs == null || !attrs.containsKey(field)) continue;
+                final Map<Attribute, Object> attrs = iterator.getAttributes();
+                if (attrs == null || !attrs.containsKey(field)) {
+                    continue;
+                }
 
                 final int start = iterator.getRunStart(field);
                 final int end = iterator.getRunLimit(field);
@@ -391,29 +433,35 @@ public class AquaSpinnerUI extends SpinnerUI {
         }
 
         /**
-         * Returns the calendarField under the start of the selection, or
-         * -1 if there is no valid calendar field under the selection (or
-         * the spinner isn't editing dates.
+         * Returns the calendarField under the start of the selection, or -1 if
+         * there is no valid calendar field under the selection (or the spinner
+         * isn't editing dates.
          */
         private int getCalendarField(final JSpinner spinnerComponent) {
             final JComponent editor = spinnerComponent.getEditor();
-            if (!(editor instanceof JSpinner.DateEditor)) return -1;
+            if (!(editor instanceof JSpinner.DateEditor)) {
+                return -1;
+            }
 
-            final JSpinner.DateEditor dateEditor = (JSpinner.DateEditor)editor;
+            final JSpinner.DateEditor dateEditor = (JSpinner.DateEditor) editor;
             final JFormattedTextField ftf = dateEditor.getTextField();
             final int start = ftf.getSelectionStart();
             final JFormattedTextField.AbstractFormatter formatter = ftf.getFormatter();
-            if (!(formatter instanceof InternationalFormatter)) return -1;
+            if (!(formatter instanceof InternationalFormatter)) {
+                return -1;
+            }
 
-            final Format.Field[] fields = ((InternationalFormatter)formatter).getFields(start);
+            final Format.Field[] fields = ((InternationalFormatter) formatter).getFields(start);
             for (final Field element : fields) {
-                if (!(element instanceof DateFormat.Field)) continue;
+                if (!(element instanceof DateFormat.Field)) {
+                    continue;
+                }
                 int calendarField;
 
                 if (element == DateFormat.Field.HOUR1) {
                     calendarField = Calendar.HOUR;
                 } else {
-                    calendarField = ((DateFormat.Field)element).getCalendarField();
+                    calendarField = ((DateFormat.Field) element).getCalendarField();
                 }
 
                 if (calendarField != -1) {
@@ -423,37 +471,53 @@ public class AquaSpinnerUI extends SpinnerUI {
             return -1;
         }
 
+        @Override
         public void mousePressed(final MouseEvent e) {
-            if (!SwingUtilities.isLeftMouseButton(e) || !e.getComponent().isEnabled()) return;
+            if (!SwingUtilities.isLeftMouseButton(e) || !e.getComponent().isEnabled()) {
+                return;
+            }
             spinner = eventToSpinner(e);
             autoRepeatTimer.start();
 
             focusSpinnerIfNecessary();
         }
 
+        @Override
         public void mouseReleased(final MouseEvent e) {
             autoRepeatTimer.stop();
             spinner = null;
         }
 
-        public void mouseClicked(final MouseEvent e) {}
-        public void mouseEntered(final MouseEvent e) {}
-        public void mouseExited(final MouseEvent e) {}
+        @Override
+        public void mouseClicked(final MouseEvent e) {
+        }
+
+        @Override
+        public void mouseEntered(final MouseEvent e) {
+        }
+
+        @Override
+        public void mouseExited(final MouseEvent e) {
+        }
 
         /**
-         * Requests focus on a child of the spinner if the spinner doesn't
-         * have focus.
+         * Requests focus on a child of the spinner if the spinner doesn't have
+         * focus.
          */
         private void focusSpinnerIfNecessary() {
             final Component fo = KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner();
-            if (!spinner.isRequestFocusEnabled() || (fo != null && (SwingUtilities.isDescendingFrom(fo, spinner)))) return;
+            if (!spinner.isRequestFocusEnabled() || (fo != null && (SwingUtilities.isDescendingFrom(fo, spinner)))) {
+                return;
+            }
             Container root = spinner;
 
             if (!root.isFocusCycleRoot()) {
                 root = root.getFocusCycleRootAncestor();
             }
 
-            if (root == null) return;
+            if (root == null) {
+                return;
+            }
             final FocusTraversalPolicy ftp = root.getFocusTraversalPolicy();
             final Component child = ftp.getComponentAfter(root, spinner);
 
@@ -465,6 +529,7 @@ public class AquaSpinnerUI extends SpinnerUI {
 
     @SuppressWarnings("serial") // Superclass is not serializable across versions
     class SpinPainter extends JComponent {
+
         final AquaPainter<JRSUIState> painter = AquaPainter.create(JRSUIStateFactory.getSpinnerArrows());
 
         ButtonModel fTopModel;
@@ -485,6 +550,7 @@ public class AquaSpinnerUI extends SpinnerUI {
             }
         }
 
+        @Override
         public void paint(final Graphics g) {
             if (spinner.isOpaque()) {
                 g.setColor(spinner.getBackground());
@@ -511,6 +577,7 @@ public class AquaSpinnerUI extends SpinnerUI {
             painter.paint(g, spinner, 0, 0, bounds.width, bounds.height);
         }
 
+        @Override
         public Dimension getPreferredSize() {
             final Size size = AquaUtilControlSize.getUserSizeFrom(this);
 
@@ -523,16 +590,18 @@ public class AquaSpinnerUI extends SpinnerUI {
     }
 
     /**
-     * A simple layout manager for the editor and the next/previous buttons.
-     * See the AquaSpinnerUI javadoc for more information about exactly
-     * how the components are arranged.
+     * A simple layout manager for the editor and the next/previous buttons. See
+     * the AquaSpinnerUI javadoc for more information about exactly how the
+     * components are arranged.
      */
     static class SpinnerLayout implements LayoutManager {
+
         private Component nextButton = null;
         private Component previousButton = null;
         private Component editor = null;
         private Component painter = null;
 
+        @Override
         public void addLayoutComponent(final String name, final Component c) {
             if ("Next".equals(name)) {
                 nextButton = c;
@@ -545,6 +614,7 @@ public class AquaSpinnerUI extends SpinnerUI {
             }
         }
 
+        @Override
         public void removeLayoutComponent(Component c) {
             if (c == nextButton) {
                 c = null;
@@ -561,6 +631,7 @@ public class AquaSpinnerUI extends SpinnerUI {
             return (c == null) ? new Dimension(0, 0) : c.getPreferredSize();
         }
 
+        @Override
         public Dimension preferredLayoutSize(final Container parent) {
 //            Dimension nextD = preferredSize(nextButton);
 //            Dimension previousD = preferredSize(previousButton);
@@ -579,6 +650,7 @@ public class AquaSpinnerUI extends SpinnerUI {
             return size;
         }
 
+        @Override
         public Dimension minimumLayoutSize(final Container parent) {
             return preferredLayoutSize(parent);
         }
@@ -589,6 +661,7 @@ public class AquaSpinnerUI extends SpinnerUI {
             }
         }
 
+        @Override
         public void layoutContainer(final Container parent) {
             final Insets insets = parent.getInsets();
             final int availWidth = parent.getWidth() - (insets.left + insets.right);
@@ -623,25 +696,38 @@ public class AquaSpinnerUI extends SpinnerUI {
     }
 
     /**
-     * Detect JSpinner property changes we're interested in and delegate.  Subclasses
-     * shouldn't need to replace the default propertyChangeListener (although they
-     * can by overriding createPropertyChangeListener) since all of the interesting
-     * property changes are delegated to protected methods.
+     * Detect JSpinner property changes we're interested in and delegate.
+     * Subclasses shouldn't need to replace the default propertyChangeListener
+     * (although they can by overriding createPropertyChangeListener) since all
+     * of the interesting property changes are delegated to protected methods.
      */
     static class PropertyChangeHandler implements PropertyChangeListener {
+
+        @Override
         public void propertyChange(final PropertyChangeEvent e) {
             final String propertyName = e.getPropertyName();
-            final JSpinner spinner = (JSpinner)(e.getSource());
+            final JSpinner spinner = (JSpinner) (e.getSource());
             final SpinnerUI spinnerUI = spinner.getUI();
 
             if (spinnerUI instanceof AquaSpinnerUI) {
-                final AquaSpinnerUI ui = (AquaSpinnerUI)spinnerUI;
+                final AquaSpinnerUI ui = (AquaSpinnerUI) spinnerUI;
 
                 if ("editor".equals(propertyName)) {
-                    final JComponent oldEditor = (JComponent)e.getOldValue();
-                    final JComponent newEditor = (JComponent)e.getNewValue();
+                    final JComponent oldEditor = (JComponent) e.getOldValue();
+                    final JComponent newEditor = (JComponent) e.getNewValue();
                     ui.replaceEditor(oldEditor, newEditor);
                     ui.updateEnabledState();
+                } else if ("componentOrientation".equals(propertyName)) {
+                    ComponentOrientation o
+                            = (ComponentOrientation) e.getNewValue();
+                    if (o != e.getOldValue()) {
+                        JComponent editor = spinner.getEditor();
+                        if (editor != null) {
+                            editor.applyComponentOrientation(o);
+                        }
+                        spinner.revalidate();
+                        spinner.repaint();
+                    }
                 } else if ("enabled".equals(propertyName)) {
                     ui.updateEnabledState();
                 } else if (JComponent.TOOL_TIP_TEXT_KEY.equals(propertyName)) {
@@ -649,8 +735,8 @@ public class AquaSpinnerUI extends SpinnerUI {
                 } else if ("font".equals(propertyName)) {
                     JComponent editor = spinner.getEditor();
                     if (editor instanceof JSpinner.DefaultEditor) {
-                        JTextField tf =
-                                ((JSpinner.DefaultEditor) editor).getTextField();
+                        JTextField tf
+                                = ((JSpinner.DefaultEditor) editor).getTextField();
                         if (tf != null) {
                             if (tf.getFont() instanceof UIResource) {
                                 tf.setFont(new FontUIResource(spinner.getFont()));
@@ -669,12 +755,12 @@ public class AquaSpinnerUI extends SpinnerUI {
         final Component[] children = spinnerComponent.getComponents();
         for (final Component element : children) {
             if (element instanceof JSpinner.DefaultEditor) {
-                final JTextField tf = ((JSpinner.DefaultEditor)element).getTextField();
+                final JTextField tf = ((JSpinner.DefaultEditor) element).getTextField();
                 if (tf != null) {
                     tf.setToolTipText(toolTipText);
                 }
             } else if (element instanceof JComponent) {
-                ((JComponent)element).setToolTipText(toolTipText);
+                ((JComponent) element).setToolTipText(toolTipText);
             }
         }
     }

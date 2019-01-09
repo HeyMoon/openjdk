@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,51 +27,93 @@
 #include "gc/g1/g1CollectedHeap.inline.hpp"
 #include "gc/g1/heapRegionRemSet.hpp"
 #include "gc/shared/workgroup.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "runtime/safepoint.hpp"
 #include "runtime/thread.inline.hpp"
 
-bool DirtyCardQueue::apply_closure(CardTableEntryClosure* cl,
-                                   bool consume,
-                                   uint worker_i) {
-  bool res = true;
-  if (_buf != NULL) {
-    res = apply_closure_to_buffer(cl, _buf, _index, _sz,
-                                  consume,
-                                  worker_i);
-    if (res && consume) _index = _sz;
+// Represents a set of free small integer ids.
+class FreeIdSet : public CHeapObj<mtGC> {
+  enum {
+    end_of_list = UINT_MAX,
+    claimed = UINT_MAX - 1
+  };
+
+  uint _size;
+  Monitor* _mon;
+
+  uint* _ids;
+  uint _hd;
+  uint _waiters;
+  uint _claimed;
+
+public:
+  FreeIdSet(uint size, Monitor* mon);
+  ~FreeIdSet();
+
+  // Returns an unclaimed parallel id (waiting for one to be released if
+  // necessary).
+  uint claim_par_id();
+
+  void release_par_id(uint id);
+};
+
+FreeIdSet::FreeIdSet(uint size, Monitor* mon) :
+  _size(size), _mon(mon), _hd(0), _waiters(0), _claimed(0)
+{
+  guarantee(size != 0, "must be");
+  _ids = NEW_C_HEAP_ARRAY(uint, size, mtGC);
+  for (uint i = 0; i < size - 1; i++) {
+    _ids[i] = i+1;
   }
+  _ids[size-1] = end_of_list; // end of list.
+}
+
+FreeIdSet::~FreeIdSet() {
+  FREE_C_HEAP_ARRAY(uint, _ids);
+}
+
+uint FreeIdSet::claim_par_id() {
+  MutexLockerEx x(_mon, Mutex::_no_safepoint_check_flag);
+  while (_hd == end_of_list) {
+    _waiters++;
+    _mon->wait(Mutex::_no_safepoint_check_flag);
+    _waiters--;
+  }
+  uint res = _hd;
+  _hd = _ids[res];
+  _ids[res] = claimed;  // For debugging.
+  _claimed++;
   return res;
 }
 
-bool DirtyCardQueue::apply_closure_to_buffer(CardTableEntryClosure* cl,
-                                             void** buf,
-                                             size_t index, size_t sz,
-                                             bool consume,
-                                             uint worker_i) {
-  if (cl == NULL) return true;
-  for (size_t i = index; i < sz; i += oopSize) {
-    int ind = byte_index_to_index((int)i);
-    jbyte* card_ptr = (jbyte*)buf[ind];
-    if (card_ptr != NULL) {
-      // Set the entry to null, so we don't do it again (via the test
-      // above) if we reconsider this buffer.
-      if (consume) buf[ind] = NULL;
-      if (!cl->do_card_ptr(card_ptr, worker_i)) return false;
-    }
+void FreeIdSet::release_par_id(uint id) {
+  MutexLockerEx x(_mon, Mutex::_no_safepoint_check_flag);
+  assert(_ids[id] == claimed, "Precondition.");
+  _ids[id] = _hd;
+  _hd = id;
+  _claimed--;
+  if (_waiters > 0) {
+    _mon->notify_all();
   }
-  return true;
 }
 
-#ifdef _MSC_VER // the use of 'this' below gets a warning, make it go away
-#pragma warning( disable:4355 ) // 'this' : used in base member initializer list
-#endif // _MSC_VER
+DirtyCardQueue::DirtyCardQueue(DirtyCardQueueSet* qset, bool permanent) :
+  // Dirty card queues are always active, so we create them with their
+  // active field set to true.
+  PtrQueue(qset, permanent, true /* active */)
+{ }
+
+DirtyCardQueue::~DirtyCardQueue() {
+  if (!is_permanent()) {
+    flush();
+  }
+}
 
 DirtyCardQueueSet::DirtyCardQueueSet(bool notify_when_complete) :
   PtrQueueSet(notify_when_complete),
   _mut_process_closure(NULL),
-  _shared_dirty_card_queue(this, true /*perm*/),
+  _shared_dirty_card_queue(this, true /* permanent */),
   _free_ids(NULL),
   _processed_buffers_mut(0), _processed_buffers_rs_thread(0)
 {
@@ -80,168 +122,145 @@ DirtyCardQueueSet::DirtyCardQueueSet(bool notify_when_complete) :
 
 // Determines how many mutator threads can process the buffers in parallel.
 uint DirtyCardQueueSet::num_par_ids() {
-  return (uint)os::processor_count();
+  return (uint)os::initial_active_processor_count();
 }
 
-void DirtyCardQueueSet::initialize(CardTableEntryClosure* cl, Monitor* cbl_mon, Mutex* fl_lock,
+void DirtyCardQueueSet::initialize(CardTableEntryClosure* cl,
+                                   Monitor* cbl_mon,
+                                   Mutex* fl_lock,
                                    int process_completed_threshold,
                                    int max_completed_queue,
-                                   Mutex* lock, PtrQueueSet* fl_owner) {
+                                   Mutex* lock,
+                                   DirtyCardQueueSet* fl_owner,
+                                   bool init_free_ids) {
   _mut_process_closure = cl;
-  PtrQueueSet::initialize(cbl_mon, fl_lock, process_completed_threshold,
-                          max_completed_queue, fl_owner);
+  PtrQueueSet::initialize(cbl_mon,
+                          fl_lock,
+                          process_completed_threshold,
+                          max_completed_queue,
+                          fl_owner);
   set_buffer_size(G1UpdateBufferSize);
   _shared_dirty_card_queue.set_lock(lock);
-  _free_ids = new FreeIdSet((int) num_par_ids(), _cbl_mon);
+  if (init_free_ids) {
+    _free_ids = new FreeIdSet(num_par_ids(), _cbl_mon);
+  }
 }
 
 void DirtyCardQueueSet::handle_zero_index_for_thread(JavaThread* t) {
   t->dirty_card_queue().handle_zero_index();
 }
 
-void DirtyCardQueueSet::iterate_closure_all_threads(CardTableEntryClosure* cl,
-                                                    bool consume,
-                                                    uint worker_i) {
-  assert(SafepointSynchronize::is_at_safepoint(), "Must be at safepoint.");
-  for(JavaThread* t = Threads::first(); t; t = t->next()) {
-    bool b = t->dirty_card_queue().apply_closure(cl, consume);
-    guarantee(b, "Should not be interrupted.");
-  }
-  bool b = shared_dirty_card_queue()->apply_closure(cl,
-                                                    consume,
-                                                    worker_i);
-  guarantee(b, "Should not be interrupted.");
-}
-
-bool DirtyCardQueueSet::mut_process_buffer(void** buf) {
-
-  // Used to determine if we had already claimed a par_id
-  // before entering this method.
-  bool already_claimed = false;
-
-  // We grab the current JavaThread.
-  JavaThread* thread = JavaThread::current();
-
-  // We get the the number of any par_id that this thread
-  // might have already claimed.
-  uint worker_i = thread->get_claimed_par_id();
-
-  // If worker_i is not UINT_MAX then the thread has already claimed
-  // a par_id. We make note of it using the already_claimed value
-  if (worker_i != UINT_MAX) {
-    already_claimed = true;
-  } else {
-
-    // Otherwise we need to claim a par id
-    worker_i = _free_ids->claim_par_id();
-
-    // And store the par_id value in the thread
-    thread->set_claimed_par_id(worker_i);
-  }
-
-  bool b = false;
-  if (worker_i != UINT_MAX) {
-    b = DirtyCardQueue::apply_closure_to_buffer(_mut_process_closure, buf, 0,
-                                                _sz, true, worker_i);
-    if (b) Atomic::inc(&_processed_buffers_mut);
-
-    // If we had not claimed an id before entering the method
-    // then we must release the id.
-    if (!already_claimed) {
-
-      // we release the id
-      _free_ids->release_par_id(worker_i);
-
-      // and set the claimed_id in the thread to UINT_MAX
-      thread->set_claimed_par_id(UINT_MAX);
+bool DirtyCardQueueSet::apply_closure_to_buffer(CardTableEntryClosure* cl,
+                                                BufferNode* node,
+                                                bool consume,
+                                                uint worker_i) {
+  if (cl == NULL) return true;
+  bool result = true;
+  void** buf = BufferNode::make_buffer_from_node(node);
+  size_t limit = DirtyCardQueue::byte_index_to_index(buffer_size());
+  size_t i = DirtyCardQueue::byte_index_to_index(node->index());
+  for ( ; i < limit; ++i) {
+    jbyte* card_ptr = static_cast<jbyte*>(buf[i]);
+    assert(card_ptr != NULL, "invariant");
+    if (!cl->do_card_ptr(card_ptr, worker_i)) {
+      result = false;           // Incomplete processing.
+      break;
     }
   }
-  return b;
+  if (consume) {
+    size_t new_index = DirtyCardQueue::index_to_byte_index(i);
+    assert(new_index <= buffer_size(), "invariant");
+    node->set_index(new_index);
+  }
+  return result;
+}
+
+#ifndef ASSERT
+#define assert_fully_consumed(node, buffer_size)
+#else
+#define assert_fully_consumed(node, buffer_size)                \
+  do {                                                          \
+    size_t _afc_index = (node)->index();                        \
+    size_t _afc_size = (buffer_size);                           \
+    assert(_afc_index == _afc_size,                             \
+           "Buffer was not fully consumed as claimed: index: "  \
+           SIZE_FORMAT ", size: " SIZE_FORMAT,                  \
+            _afc_index, _afc_size);                             \
+  } while (0)
+#endif // ASSERT
+
+bool DirtyCardQueueSet::mut_process_buffer(BufferNode* node) {
+  guarantee(_free_ids != NULL, "must be");
+
+  uint worker_i = _free_ids->claim_par_id(); // temporarily claim an id
+  bool result = apply_closure_to_buffer(_mut_process_closure, node, true, worker_i);
+  _free_ids->release_par_id(worker_i); // release the id
+
+  if (result) {
+    assert_fully_consumed(node, buffer_size());
+    Atomic::inc(&_processed_buffers_mut);
+  }
+  return result;
 }
 
 
-BufferNode*
-DirtyCardQueueSet::get_completed_buffer(int stop_at) {
+BufferNode* DirtyCardQueueSet::get_completed_buffer(size_t stop_at) {
   BufferNode* nd = NULL;
   MutexLockerEx x(_cbl_mon, Mutex::_no_safepoint_check_flag);
 
-  if ((int)_n_completed_buffers <= stop_at) {
+  if (_n_completed_buffers <= stop_at) {
     _process_completed = false;
     return NULL;
   }
 
   if (_completed_buffers_head != NULL) {
     nd = _completed_buffers_head;
+    assert(_n_completed_buffers > 0, "Invariant");
     _completed_buffers_head = nd->next();
-    if (_completed_buffers_head == NULL)
-      _completed_buffers_tail = NULL;
     _n_completed_buffers--;
-    assert(_n_completed_buffers >= 0, "Invariant");
-  }
-  debug_only(assert_completed_buffer_list_len_correct_locked());
-  return nd;
-}
-
-bool DirtyCardQueueSet::
-apply_closure_to_completed_buffer_helper(CardTableEntryClosure* cl,
-                                         uint worker_i,
-                                         BufferNode* nd) {
-  if (nd != NULL) {
-    void **buf = BufferNode::make_buffer_from_node(nd);
-    size_t index = nd->index();
-    bool b =
-      DirtyCardQueue::apply_closure_to_buffer(cl, buf,
-                                              index, _sz,
-                                              true, worker_i);
-    if (b) {
-      deallocate_buffer(buf);
-      return true;  // In normal case, go on to next buffer.
-    } else {
-      enqueue_complete_buffer(buf, index);
-      return false;
+    if (_completed_buffers_head == NULL) {
+      assert(_n_completed_buffers == 0, "Invariant");
+      _completed_buffers_tail = NULL;
     }
-  } else {
-    return false;
   }
+  DEBUG_ONLY(assert_completed_buffer_list_len_correct_locked());
+  return nd;
 }
 
 bool DirtyCardQueueSet::apply_closure_to_completed_buffer(CardTableEntryClosure* cl,
                                                           uint worker_i,
-                                                          int stop_at,
+                                                          size_t stop_at,
                                                           bool during_pause) {
   assert(!during_pause || stop_at == 0, "Should not leave any completed buffers during a pause");
   BufferNode* nd = get_completed_buffer(stop_at);
-  bool res = apply_closure_to_completed_buffer_helper(cl, worker_i, nd);
-  if (res) Atomic::inc(&_processed_buffers_rs_thread);
-  return res;
-}
-
-void DirtyCardQueueSet::apply_closure_to_all_completed_buffers(CardTableEntryClosure* cl) {
-  BufferNode* nd = _completed_buffers_head;
-  while (nd != NULL) {
-    bool b =
-      DirtyCardQueue::apply_closure_to_buffer(cl,
-                                              BufferNode::make_buffer_from_node(nd),
-                                              0, _sz, false);
-    guarantee(b, "Should not stop early.");
-    nd = nd->next();
+  if (nd == NULL) {
+    return false;
+  } else {
+    if (apply_closure_to_buffer(cl, nd, true, worker_i)) {
+      assert_fully_consumed(nd, buffer_size());
+      // Done with fully processed buffer.
+      deallocate_buffer(nd);
+      Atomic::inc(&_processed_buffers_rs_thread);
+    } else {
+      // Return partially processed buffer to the queue.
+      guarantee(!during_pause, "Should never stop early");
+      enqueue_complete_buffer(nd);
+    }
+    return true;
   }
 }
 
 void DirtyCardQueueSet::par_apply_closure_to_all_completed_buffers(CardTableEntryClosure* cl) {
   BufferNode* nd = _cur_par_buffer_node;
   while (nd != NULL) {
-    BufferNode* next = (BufferNode*)nd->next();
-    BufferNode* actual = (BufferNode*)Atomic::cmpxchg_ptr((void*)next, (volatile void*)&_cur_par_buffer_node, (void*)nd);
+    BufferNode* next = nd->next();
+    void* actual = Atomic::cmpxchg_ptr(next, &_cur_par_buffer_node, nd);
     if (actual == nd) {
-      bool b =
-        DirtyCardQueue::apply_closure_to_buffer(cl,
-                                                BufferNode::make_buffer_from_node(actual),
-                                                0, _sz, false);
+      bool b = apply_closure_to_buffer(cl, nd, false);
       guarantee(b, "Should not stop early.");
       nd = next;
     } else {
-      nd = actual;
+      nd = static_cast<BufferNode*>(actual);
     }
   }
 }
@@ -259,12 +278,12 @@ void DirtyCardQueueSet::clear() {
     }
     _n_completed_buffers = 0;
     _completed_buffers_tail = NULL;
-    debug_only(assert_completed_buffer_list_len_correct_locked());
+    DEBUG_ONLY(assert_completed_buffer_list_len_correct_locked());
   }
   while (buffers_to_delete != NULL) {
     BufferNode* nd = buffers_to_delete;
     buffers_to_delete = nd->next();
-    deallocate_buffer(BufferNode::make_buffer_from_node(nd));
+    deallocate_buffer(nd);
   }
 
 }
@@ -280,6 +299,13 @@ void DirtyCardQueueSet::abandon_logs() {
   shared_dirty_card_queue()->reset();
 }
 
+void DirtyCardQueueSet::concatenate_log(DirtyCardQueue& dcq) {
+  if (!dcq.is_empty()) {
+    enqueue_complete_buffer(
+      BufferNode::make_node_from_buffer(dcq.get_buf(), dcq.get_index()));
+    dcq.reinitialize();
+  }
+}
 
 void DirtyCardQueueSet::concatenate_logs() {
   // Iterate over all the threads, if we find a partial log add it to
@@ -289,22 +315,9 @@ void DirtyCardQueueSet::concatenate_logs() {
   _max_completed_queue = max_jint;
   assert(SafepointSynchronize::is_at_safepoint(), "Must be at safepoint.");
   for (JavaThread* t = Threads::first(); t; t = t->next()) {
-    DirtyCardQueue& dcq = t->dirty_card_queue();
-    if (dcq.size() != 0) {
-      void **buf = t->dirty_card_queue().get_buf();
-      // We must NULL out the unused entries, then enqueue.
-      for (size_t i = 0; i < t->dirty_card_queue().get_index(); i += oopSize) {
-        buf[PtrQueue::byte_index_to_index((int)i)] = NULL;
-      }
-      enqueue_complete_buffer(dcq.get_buf(), dcq.get_index());
-      dcq.reinitialize();
-    }
+    concatenate_log(t->dirty_card_queue());
   }
-  if (_shared_dirty_card_queue.size() != 0) {
-    enqueue_complete_buffer(_shared_dirty_card_queue.get_buf(),
-                            _shared_dirty_card_queue.get_index());
-    _shared_dirty_card_queue.reinitialize();
-  }
+  concatenate_log(_shared_dirty_card_queue);
   // Restore the completed buffer queue limit.
   _max_completed_queue = save_max_completed_queue;
 }

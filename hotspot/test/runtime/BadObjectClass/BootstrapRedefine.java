@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,20 +25,32 @@
  * @test
  * @bug 6583051
  * @summary Give error if java.lang.Object has been incompatibly overridden on the bootpath
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
- * @compile Object.java
  * @run main BootstrapRedefine
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.compiler.InMemoryJavaCompiler;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
 
 public class BootstrapRedefine {
 
     public static void main(String[] args) throws Exception {
-        String testClasses = System.getProperty("test.classes", ".");
-        ProcessBuilder pb = ProcessTools.createJavaProcessBuilder("-Xbootclasspath/p:" + testClasses, "-version");
+        String source = "package java.lang;" +
+                        "public class Object {" +
+                        "    void dummy1() { return; }" +
+                        "    void dummy2() { return; }" +
+                        "    void dummy3() { return; }" +
+                        "}";
+
+        ClassFileInstaller.writeClassToDisk("java/lang/Object",
+                                        InMemoryJavaCompiler.compile("java.lang.Object", source,
+                                        "-Xmodule:java.base"),
+                                        "mods/java.base");
+
+        ProcessBuilder pb = ProcessTools.createJavaProcessBuilder("--patch-module=java.base=mods/java.base", "-version");
         new OutputAnalyzer(pb.start())
             .shouldContain("Incompatible definition of java.lang.Object")
             .shouldHaveExitValue(1);

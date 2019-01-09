@@ -35,7 +35,7 @@ import java.util.Map;
 
 import sun.util.logging.PlatformLogger;
 
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 /**
  * XDragSourceProtocol implementation for XDnD protocol.
@@ -55,7 +55,7 @@ class XDnDDragSourceProtocol extends XDragSourceProtocol {
     /**
      * Creates an instance associated with the specified listener.
      *
-     * @throws NullPointerException if listener is <code>null</code>.
+     * @throws NullPointerException if listener is {@code null}.
      */
     static XDragSourceProtocol createInstance(XDragSourceProtocolListener listener) {
         return new XDnDDragSourceProtocol(listener);
@@ -68,7 +68,7 @@ class XDnDDragSourceProtocol extends XDragSourceProtocol {
     /**
      * Performs protocol-specific drag initialization.
      *
-     * @returns true if the initialized successfully.
+     * @return true if the initialized successfully.
      */
     protected void initializeDragImpl(int actions, Transferable contents,
                                       Map<Long, DataFlavor> formatMap, long[] formats)

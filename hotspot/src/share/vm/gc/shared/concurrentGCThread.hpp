@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,25 +31,8 @@
 class ConcurrentGCThread: public NamedThread {
   friend class VMStructs;
 
-protected:
-  bool _should_terminate;
+  bool volatile _should_terminate;
   bool _has_terminated;
-
-  enum CGC_flag_type {
-    CGC_nil           = 0x0,
-    CGC_dont_suspend  = 0x1,
-    CGC_CGC_safepoint = 0x2,
-    CGC_VM_safepoint  = 0x4
-  };
-
-  static int _CGC_flag;
-
-  static bool CGC_flag_is_set(int b)       { return (_CGC_flag & b) != 0; }
-  static int set_CGC_flag(int b)           { return _CGC_flag |= b; }
-  static int reset_CGC_flag(int b)         { return _CGC_flag &= ~b; }
-
-  // Create and start the thread (setting it's priority high.)
-  void create_and_start();
 
   // Do initialization steps in the thread: record stack base and size,
   // init thread local storage, set JNI handle block.
@@ -62,47 +45,29 @@ protected:
   // concurrent work.
   void terminate();
 
-public:
-  // Constructor
+protected:
+  // Create and start the thread (setting it's priority.)
+  void create_and_start(ThreadPriority prio = NearMaxPriority);
 
+  // Do the specific GC work. Called by run() after initialization complete.
+  virtual void run_service() = 0;
+
+  // Shut down the specific GC work. Called by stop() as part of termination protocol.
+  virtual void stop_service()  = 0;
+
+public:
   ConcurrentGCThread();
-  ~ConcurrentGCThread() {} // Exists to call NamedThread destructor.
 
   // Tester
-  bool is_ConcurrentGC_thread() const          { return true;       }
-};
+  bool is_ConcurrentGC_thread() const { return true; }
 
-// The SurrogateLockerThread is used by concurrent GC threads for
-// manipulating Java monitors, in particular, currently for
-// manipulating the pending_list_lock. XXX
-class SurrogateLockerThread: public JavaThread {
-  friend class VMStructs;
- public:
-  enum SLT_msg_type {
-    empty = 0,           // no message
-    acquirePLL,          // acquire pending list lock
-    releaseAndNotifyPLL  // notify and release pending list lock
-  };
- private:
-  // the following are shared with the CMSThread
-  SLT_msg_type  _buffer;  // communication buffer
-  Monitor       _monitor; // monitor controlling buffer
-  BasicLock     _basicLock; // used for PLL locking
+  virtual void run();
 
- public:
-  static SurrogateLockerThread* make(TRAPS);
+  // shutdown following termination protocol
+  virtual void stop();
 
-  // Terminate VM with error message that SLT needed but not yet created.
-  static void report_missing_slt();
-
-  SurrogateLockerThread();
-
-  bool is_hidden_from_external_view() const     { return true; }
-
-  void loop(); // main method
-
-  void manipulatePLL(SLT_msg_type msg);
-
+  bool should_terminate() { return _should_terminate; }
+  bool has_terminated()   { return _has_terminated; }
 };
 
 #endif // SHARE_VM_GC_SHARED_CONCURRENTGCTHREAD_HPP

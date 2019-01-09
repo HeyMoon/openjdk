@@ -22,6 +22,7 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package com.sun.media.sound;
 
 /**
@@ -31,15 +32,15 @@ package com.sun.media.sound;
  */
 public final class SoftEnvelopeGenerator implements SoftProcess {
 
-    public final static int EG_OFF = 0;
-    public final static int EG_DELAY = 1;
-    public final static int EG_ATTACK = 2;
-    public final static int EG_HOLD = 3;
-    public final static int EG_DECAY = 4;
-    public final static int EG_SUSTAIN = 5;
-    public final static int EG_RELEASE = 6;
-    public final static int EG_SHUTDOWN = 7;
-    public final static int EG_END = 8;
+    public static final int EG_OFF = 0;
+    public static final int EG_DELAY = 1;
+    public static final int EG_ATTACK = 2;
+    public static final int EG_HOLD = 3;
+    public static final int EG_DECAY = 4;
+    public static final int EG_SUSTAIN = 5;
+    public static final int EG_RELEASE = 6;
+    public static final int EG_SHUTDOWN = 7;
+    public static final int EG_END = 8;
     int max_count = 10;
     int used_count = 0;
     private final int[] stage = new int[max_count];
@@ -61,6 +62,7 @@ public final class SoftEnvelopeGenerator implements SoftProcess {
     private final double[][] decay2 = new double[max_count][1];
     private double control_time = 0;
 
+    @Override
     public void reset() {
         for (int i = 0; i < used_count; i++) {
             stage[i] = 0;
@@ -80,11 +82,13 @@ public final class SoftEnvelopeGenerator implements SoftProcess {
         used_count = 0;
     }
 
+    @Override
     public void init(SoftSynthesizer synth) {
         control_time = 1.0 / synth.getControlRate();
         processControlLogic();
     }
 
+    @Override
     public double[] get(int instance, String name) {
         if (instance >= used_count)
             used_count = instance + 1;
@@ -118,6 +122,7 @@ public final class SoftEnvelopeGenerator implements SoftProcess {
         return null;
     }
 
+    @Override
     @SuppressWarnings("fallthrough")
     public void processControlLogic() {
         for (int i = 0; i < used_count; i++) {
@@ -295,6 +300,5 @@ public final class SoftEnvelopeGenerator implements SoftProcess {
                 break;
             }
         }
-
     }
 }

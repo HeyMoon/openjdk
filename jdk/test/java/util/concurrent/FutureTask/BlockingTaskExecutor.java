@@ -28,8 +28,13 @@
  * @author Martin Buchholz
  */
 
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Adapted from Doug Lea, which was...
@@ -50,8 +55,7 @@ public class BlockingTaskExecutor {
         final NotificationReceiver notifiee1 = new NotificationReceiver();
         final NotificationReceiver notifiee2 = new NotificationReceiver();
 
-        final Collection<Callable<Object>> tasks =
-            new ArrayList<Callable<Object>>();
+        final Collection<Callable<Object>> tasks = new ArrayList<>();
         tasks.add(new BlockingTask(notifiee1));
         tasks.add(new BlockingTask(notifiee2));
         tasks.add(new NonBlockingTask());
@@ -71,7 +75,7 @@ public class BlockingTaskExecutor {
         // are blocked.  This should cause the tasks to be
         // interrupted.
         executor.shutdownNow();
-        if (! executor.awaitTermination(5, TimeUnit.SECONDS))
+        if (! executor.awaitTermination(5L, TimeUnit.SECONDS))
             throw new Error("Executor stuck");
 
         // Wait for the invocation thread to complete.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -84,11 +84,17 @@ class klassVtable : public ResourceObj {
   bool is_initialized();
 
   // computes vtable length (in words) and the number of miranda methods
-  static void compute_vtable_size_and_num_mirandas(
-      int* vtable_length, int* num_new_mirandas,
-      GrowableArray<Method*>* all_mirandas, Klass* super,
-      Array<Method*>* methods, AccessFlags class_flags, Handle classloader,
-      Symbol* classname, Array<Klass*>* local_interfaces, TRAPS);
+  static void compute_vtable_size_and_num_mirandas(int* vtable_length,
+                                                   int* num_new_mirandas,
+                                                   GrowableArray<Method*>* all_mirandas,
+                                                   const Klass* super,
+                                                   Array<Method*>* methods,
+                                                   AccessFlags class_flags,
+                                                   u2 major_version,
+                                                   Handle classloader,
+                                                   Symbol* classname,
+                                                   Array<Klass*>* local_interfaces,
+                                                   TRAPS);
 
 #if INCLUDE_JVMTI
   // RedefineClasses() API support:
@@ -110,13 +116,25 @@ class klassVtable : public ResourceObj {
 
  protected:
   friend class vtableEntry;
- private:
+
+ public:
+  // Transitive overridng rules for class files < JDK1_7 use the older JVMS rules.
+  // Overriding is determined as we create the vtable, so we use the class file version
+  // of the class whose vtable we are calculating.
   enum { VTABLE_TRANSITIVE_OVERRIDE_VERSION = 51 } ;
+
+ private:
   void copy_vtable_to(vtableEntry* start);
   int  initialize_from_super(KlassHandle super);
   int  index_of(Method* m, int len) const; // same as index_of, but search only up to len
   void put_method_at(Method* m, int index);
-  static bool needs_new_vtable_entry(methodHandle m, Klass* super, Handle classloader, Symbol* classname, AccessFlags access_flags, TRAPS);
+  static bool needs_new_vtable_entry(methodHandle m,
+                                     const Klass* super,
+                                     Handle classloader,
+                                     Symbol* classname,
+                                     AccessFlags access_flags,
+                                     u2 major_version,
+                                     TRAPS);
 
   bool update_inherited_vtable(InstanceKlass* klass, methodHandle target_method, int super_vtable_len, int default_index, bool checkconstraints, TRAPS);
  InstanceKlass* find_transitive_override(InstanceKlass* initialsuper, methodHandle target_method, int vtable_index,
@@ -126,22 +144,36 @@ class klassVtable : public ResourceObj {
   bool is_miranda_entry_at(int i);
   int fill_in_mirandas(int initialized);
   static bool is_miranda(Method* m, Array<Method*>* class_methods,
-                         Array<Method*>* default_methods, Klass* super);
+                         Array<Method*>* default_methods, const Klass* super);
   static void add_new_mirandas_to_lists(
       GrowableArray<Method*>* new_mirandas,
       GrowableArray<Method*>* all_mirandas,
       Array<Method*>* current_interface_methods,
       Array<Method*>* class_methods,
       Array<Method*>* default_methods,
-      Klass* super);
+      const Klass* super);
   static void get_mirandas(
       GrowableArray<Method*>* new_mirandas,
-      GrowableArray<Method*>* all_mirandas, Klass* super,
+      GrowableArray<Method*>* all_mirandas,
+      const Klass* super,
       Array<Method*>* class_methods,
       Array<Method*>* default_methods,
       Array<Klass*>* local_interfaces);
   void verify_against(outputStream* st, klassVtable* vt, int index);
   inline InstanceKlass* ik() const;
+  // When loading a class from CDS archive at run time, and no class redefintion
+  // has happened, it is expected that the class's itable/vtables are
+  // laid out exactly the same way as they had been during dump time.
+  // Therefore, in klassVtable::initialize_[iv]table, we do not layout the
+  // tables again. Instead, we only rerun the process to create/check
+  // the class loader constraints. In non-product builds, we add asserts to
+  // guarantee that the table's layout would be the same as at dump time.
+  //
+  // If JVMTI redefines any class, the read-only shared memory are remapped
+  // as read-write. A shared class' vtable/itable are re-initialized and
+  // might have different layout due to class redefinition of the shared class
+  // or its super types.
+  bool is_preinitialized_vtable();
 };
 
 
@@ -155,12 +187,13 @@ class klassVtable : public ResourceObj {
 //      from_interpreter_entry_point   -> i2cadapter
 class vtableEntry VALUE_OBJ_CLASS_SPEC {
   friend class VMStructs;
+  friend class JVMCIVMStructs;
 
  public:
   // size in words
-  static int size() {
-    return sizeof(vtableEntry) / sizeof(HeapWord);
-  }
+  static int size()          { return sizeof(vtableEntry) / wordSize; }
+  static int size_in_bytes() { return sizeof(vtableEntry); }
+
   static int method_offset_in_bytes() { return offset_of(vtableEntry, _method); }
   Method* method() const    { return _method; }
 
@@ -211,7 +244,7 @@ class itableOffsetEntry VALUE_OBJ_CLASS_SPEC {
   void initialize(Klass* interf, int offset) { _interface = interf; _offset = offset; }
 
   // Static size and offset accessors
-  static int size()                       { return sizeof(itableOffsetEntry) / HeapWordSize; }    // size in words
+  static int size()                       { return sizeof(itableOffsetEntry) / wordSize; }    // size in words
   static int interface_offset_in_bytes()  { return offset_of(itableOffsetEntry, _interface); }
   static int offset_offset_in_bytes()     { return offset_of(itableOffsetEntry, _offset); }
 
@@ -231,7 +264,7 @@ class itableMethodEntry VALUE_OBJ_CLASS_SPEC {
   void initialize(Method* method);
 
   // Static size and offset accessors
-  static int size()                         { return sizeof(itableMethodEntry) / HeapWordSize; }  // size in words
+  static int size()                         { return sizeof(itableMethodEntry) / wordSize; }  // size in words
   static int method_offset_in_bytes()       { return offset_of(itableMethodEntry, _method); }
 
   friend class klassItable;

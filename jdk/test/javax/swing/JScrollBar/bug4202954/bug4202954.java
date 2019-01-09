@@ -20,14 +20,16 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-/* @test
+/*
+   @test
+   @key headful
    @bug 4202954
    @library ../../../../lib/testlibrary
    @library ../../regtesthelpers
    @build Util jdk.testlibrary.OSInfo
    @author Michael C. Albers
    @run main bug4202954
-*/
+ */
 
 import java.awt.*;
 import java.awt.event.InputEvent;
@@ -53,8 +55,8 @@ public class bug4202954 {
 
         if (rightScrollButton == null || bottomScrollButton == null) {
             String errMessage = "Test can't be executed: ";
-            errMessage = errMessage + rightScrollButton == null ? "can't find right button for horizontal scroll bar; " : ""
-                    + bottomScrollButton == null ? "can't find bottom scroll button for vertical scroll bar" : "";
+            errMessage = errMessage + (rightScrollButton == null ? "can't find right button for horizontal scroll bar; " : ""
+                    + (bottomScrollButton == null ? "can't find bottom scroll button for vertical scroll bar" : ""));
             throw new RuntimeException(errMessage);
         }
 
@@ -105,15 +107,25 @@ public class bug4202954 {
         JButton button = Util.invokeOnEDT(new java.util.concurrent.Callable<JButton>() {
             @Override
             public JButton call() throws Exception {
-                for (Component c: scrollBar.getComponents()) {
-                    if (c instanceof JButton) {
-                        Point p = c.getLocationOnScreen();
-                        if (p.x > minX && p.y > minY) {
-                            return (JButton) c;
-                        }
-                    }
-                }
-                return null;
+                int currentXorY = 0;
+                JButton scrollButton = null;
+                 for (Component c: scrollBar.getComponents()) {
+                     if (c instanceof JButton) {
+                         Point p = c.getLocationOnScreen();
+                         if (scrollBar.getOrientation() == Adjustable.VERTICAL){
+                             if (currentXorY <= p.y){
+                                 currentXorY = p.y;
+                                 scrollButton = (JButton)c;
+                             }
+                         }else  if (scrollBar.getOrientation() == Adjustable.HORIZONTAL){
+                             if (currentXorY <= p.x){
+                                 currentXorY = p.x;
+                                 scrollButton = (JButton)c;
+                             }
+                         }
+                     }
+                 }
+                return scrollButton;
             }
         });
         return button;

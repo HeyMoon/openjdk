@@ -28,11 +28,24 @@
  * @author Martin Buchholz
  */
 
-import java.security.*;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
+import java.security.Permission;
+import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Hashtable;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 
 public class ThrowingTasks {
     static final Random rnd = new Random();
@@ -127,7 +140,7 @@ public class ThrowingTasks {
         public void run() { execute.run(); }
     }
 
-    static final List<Flaky> flakes = new ArrayList<Flaky>();
+    static final List<Flaky> flakes = new ArrayList<>();
     static {
         for (Thrower x : throwers)
             for (Thrower y : throwers)
@@ -151,8 +164,24 @@ public class ThrowingTasks {
             equal(tpe.getActiveCount(), 0);
             equal(tpe.getPoolSize(), 0);
             equal(tpe.getTaskCount(), tpe.getCompletedTaskCount());
-            check(tpe.awaitTermination(0, TimeUnit.SECONDS));
+            check(tpe.awaitTermination(0L, TimeUnit.SECONDS));
         } catch (Throwable t) { unexpected(t); }
+    }
+
+    /**
+     * Waits for condition to become true, first spin-polling, then sleep-polling.
+     */
+    static void spinAwait(Supplier<Boolean> waitingForGodot) {
+        for (int spins = 0; !waitingForGodot.get(); ) {
+            if ((spins = (spins + 1) & 3) > 0) {
+                Thread.yield();
+            } else {
+                try { Thread.sleep(4); }
+                catch (InterruptedException unexpected) {
+                    throw new AssertionError(unexpected);
+                }
+            }
+        }
     }
 
     static class CheckingExecutor extends ThreadPoolExecutor {
@@ -226,10 +255,7 @@ public class ThrowingTasks {
         //System.out.printf("thread count = %d%n", tg.activeCount());
         uncaughtExceptionsLatch.await();
 
-        while (tg.activeCount() != tpe.getCorePoolSize() ||
-               tg.activeCount() != tpe.getCorePoolSize())
-            Thread.sleep(10);
-        equal(tg.activeCount(), tpe.getCorePoolSize());
+        spinAwait(() -> tg.activeCount() == tpe.getCorePoolSize());
 
         tpe.shutdown();
 
@@ -238,8 +264,7 @@ public class ThrowingTasks {
 
         //while (tg.activeCount() > 0) Thread.sleep(10);
         //System.out.println(uncaughtExceptions);
-        List<Map<Class<?>, Integer>> maps
-            = new ArrayList<Map<Class<?>, Integer>>();
+        List<Map<Class<?>, Integer>> maps = new ArrayList<>();
         maps.add(uncaughtExceptions);
         maps.add(uncaughtExceptionsTable);
         for (Map<Class<?>, Integer> map : maps) {
@@ -278,8 +303,8 @@ public class ThrowingTasks {
         try {realMain(args);} catch (Throwable t) {unexpected(t);}
         System.out.printf("%nPassed = %d, failed = %d%n%n", passed, failed);
         if (failed > 0) throw new AssertionError("Some tests failed");}
-    @SuppressWarnings("unchecked") static <T extends Throwable>
-        void uncheckedThrow(Throwable t) throws T {
+    @SuppressWarnings("unchecked")
+    static <T extends Throwable> void uncheckedThrow(Throwable t) throws T {
         throw (T)t; // rely on vacuous cast
     }
 }

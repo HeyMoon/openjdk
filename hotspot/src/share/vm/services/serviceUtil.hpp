@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 
 #include "classfile/systemDictionary.hpp"
 #include "oops/objArrayOop.hpp"
+#include "oops/oop.inline.hpp"
 
 //
 // Serviceability utility functions.
@@ -57,13 +58,13 @@ class ServiceUtil : public AllStatic {
       if (k->is_klass()) {
         // if it's a class for an object, an object array, or
         // primitive (type) array then it's visible.
-        if (k->oop_is_instance()) {
+        if (k->is_instance_klass()) {
           return true;
         }
-        if (k->oop_is_objArray()) {
+        if (k->is_objArray_klass()) {
           return true;
         }
-        if (k->oop_is_typeArray()) {
+        if (k->is_typeArray_klass()) {
           return true;
         }
       }

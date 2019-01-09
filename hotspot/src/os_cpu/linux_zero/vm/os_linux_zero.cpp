@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2016, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2007, 2008, 2009, 2010 Red Hat, Inc.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -33,7 +33,6 @@
 #include "interpreter/interpreter.hpp"
 #include "jvm_linux.h"
 #include "memory/allocation.inline.hpp"
-#include "mutex_linux.inline.hpp"
 #include "nativeInst_zero.hpp"
 #include "os_share_linux.hpp"
 #include "prims/jniFastGetField.hpp"
@@ -65,6 +64,7 @@ address os::current_stack_pointer() {
 
 frame os::get_sender_for_C_frame(frame* fr) {
   ShouldNotCallThis();
+  return frame(NULL, NULL); // silence compile warning.
 }
 
 frame os::current_frame() {
@@ -100,22 +100,25 @@ void os::initialize_thread(Thread * thr){
   // Nothing to do.
 }
 
-address os::Linux::ucontext_get_pc(ucontext_t* uc) {
+address os::Linux::ucontext_get_pc(const ucontext_t* uc) {
   ShouldNotCallThis();
+  return NULL; // silence compile warnings
 }
 
 void os::Linux::ucontext_set_pc(ucontext_t * uc, address pc) {
   ShouldNotCallThis();
 }
 
-ExtendedPC os::fetch_frame_from_context(void* ucVoid,
+ExtendedPC os::fetch_frame_from_context(const void* ucVoid,
                                         intptr_t** ret_sp,
                                         intptr_t** ret_fp) {
   ShouldNotCallThis();
+  return NULL; // silence compile warnings
 }
 
-frame os::fetch_frame_from_context(void* ucVoid) {
+frame os::fetch_frame_from_context(const void* ucVoid) {
   ShouldNotCallThis();
+  return frame(NULL, NULL); // silence compile warnings
 }
 
 extern "C" JNIEXPORT int
@@ -125,7 +128,7 @@ JVM_handle_linux_signal(int sig,
                         int abort_if_unrecognized) {
   ucontext_t* uc = (ucontext_t*) ucVoid;
 
-  Thread* t = ThreadLocalStorage::get_thread_slow();
+  Thread* t = Thread::current_or_null_safe();
 
   SignalHandlerMark shm(t);
 
@@ -150,11 +153,7 @@ JVM_handle_linux_signal(int sig,
     if (os::Linux::chained_handler(sig, info, ucVoid)) {
       return true;
     } else {
-      if (PrintMiscellaneous && (WizardMode || Verbose)) {
-        char buf[64];
-        warning("Ignoring %s - see bugs 4229104 or 646499219",
-                os::exception_name(sig, buf, sizeof(buf)));
-      }
+      // Ignoring SIGPIPE/SIGXFSZ - see bugs 4229104 or 6499219
       return true;
     }
   }
@@ -178,11 +177,10 @@ JVM_handle_linux_signal(int sig,
       address addr = (address) info->si_addr;
 
       // check if fault address is within thread stack
-      if (addr < thread->stack_base() &&
-          addr >= thread->stack_base() - thread->stack_size()) {
+      if (thread->on_local_stack(addr)) {
         // stack overflow
-        if (thread->in_stack_yellow_zone(addr)) {
-          thread->disable_stack_yellow_zone();
+        if (thread->in_stack_yellow_reserved_zone(addr)) {
+          thread->disable_stack_yellow_reserved_zone();
           ShouldNotCallThis();
         }
         else if (thread->in_stack_red_zone(addr)) {
@@ -263,11 +261,16 @@ JVM_handle_linux_signal(int sig,
   }
 #endif // !PRODUCT
 
-  const char *fmt = "caught unhandled signal %d";
   char buf[64];
 
-  sprintf(buf, fmt, sig);
+  sprintf(buf, "caught unhandled signal %d", sig);
+
+// Silence -Wformat-security warning for fatal()
+PRAGMA_DIAG_PUSH
+PRAGMA_FORMAT_NONLITERAL_IGNORED
   fatal(buf);
+PRAGMA_DIAG_POP
+  return true; // silence compiler warnings
 }
 
 void os::Linux::init_thread_fpu_state(void) {
@@ -276,6 +279,7 @@ void os::Linux::init_thread_fpu_state(void) {
 
 int os::Linux::get_fpu_control_word() {
   ShouldNotCallThis();
+  return -1; // silence compile warnings
 }
 
 void os::Linux::set_fpu_control_word(int fpu) {
@@ -303,25 +307,17 @@ bool os::is_allocatable(size_t bytes) {
 ///////////////////////////////////////////////////////////////////////////////
 // thread stack
 
-size_t os::Linux::min_stack_allowed = 64 * K;
+size_t os::Posix::_compiler_thread_min_stack_allowed = 64 * K;
+size_t os::Posix::_java_thread_min_stack_allowed = 64 * K;
+size_t os::Posix::_vm_internal_thread_min_stack_allowed = 64 * K;
 
-bool os::Linux::supports_variable_stack_size() {
-  return true;
-}
-
-size_t os::Linux::default_stack_size(os::ThreadType thr_type) {
+size_t os::Posix::default_stack_size(os::ThreadType thr_type) {
 #ifdef _LP64
   size_t s = (thr_type == os::compiler_thread ? 4 * M : 1 * M);
 #else
   size_t s = (thr_type == os::compiler_thread ? 2 * M : 512 * K);
 #endif // _LP64
   return s;
-}
-
-size_t os::Linux::default_guard_size(os::ThreadType thr_type) {
-  // Only enable glibc guard pages for non-Java threads
-  // (Java threads have HotSpot guard pages)
-  return (thr_type == java_thread ? 0 : page_size());
 }
 
 static void current_stack_region(address *bottom, size_t *size) {
@@ -332,7 +328,7 @@ static void current_stack_region(address *bottom, size_t *size) {
       vm_exit_out_of_memory(0, OOM_MMAP_ERROR, "pthread_getattr_np");
     }
     else {
-      fatal(err_msg("pthread_getattr_np failed with errno = %d", res));
+      fatal("pthread_getattr_np failed with error = %d", res);
     }
   }
 
@@ -340,7 +336,7 @@ static void current_stack_region(address *bottom, size_t *size) {
   size_t stack_bytes;
   res = pthread_attr_getstack(&attr, (void **) &stack_bottom, &stack_bytes);
   if (res != 0) {
-    fatal(err_msg("pthread_attr_getstack failed with errno = %d", res));
+    fatal("pthread_attr_getstack failed with error = %d", res);
   }
   address stack_top = stack_bottom + stack_bytes;
 
@@ -352,7 +348,7 @@ static void current_stack_region(address *bottom, size_t *size) {
   size_t guard_bytes;
   res = pthread_attr_getguardsize(&attr, &guard_bytes);
   if (res != 0) {
-    fatal(err_msg("pthread_attr_getguardsize failed with errno = %d", res));
+    fatal("pthread_attr_getguardsize failed with errno = %d", res);
   }
   int guard_pages = align_size_up(guard_bytes, page_bytes) / page_bytes;
   assert(guard_bytes == guard_pages * page_bytes, "unaligned guard");
@@ -410,11 +406,11 @@ size_t os::current_stack_size() {
 /////////////////////////////////////////////////////////////////////////////
 // helper functions for fatal error handler
 
-void os::print_context(outputStream* st, void* context) {
+void os::print_context(outputStream* st, const void* context) {
   ShouldNotCallThis();
 }
 
-void os::print_register_info(outputStream *st, void *context) {
+void os::print_register_info(outputStream *st, const void *context) {
   ShouldNotCallThis();
 }
 
@@ -424,6 +420,7 @@ void os::print_register_info(outputStream *st, void *context) {
 
 extern "C" {
   int SpinPause() {
+      return -1; // silence compile warnings
   }
 
 

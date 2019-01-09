@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,7 +36,6 @@
 
 class ciMethodBlocks;
 class MethodLiveness;
-class BitMap;
 class Arena;
 class BCEscapeAnalyzer;
 class InlineTree;
@@ -81,6 +80,7 @@ class ciMethod : public ciMetadata {
   bool _is_c1_compilable;
   bool _is_c2_compilable;
   bool _can_be_statically_bound;
+  bool _has_reserved_stack_access;
 
   // Lazy fields, filled in on demand
   address              _code;
@@ -104,8 +104,6 @@ class ciMethod : public ciMetadata {
 
   void load_code();
 
-  void check_is_loaded() const                   { assert(is_loaded(), "not loaded"); }
-
   bool ensure_method_data(methodHandle h_m);
 
   void code_at_put(int bci, Bytecodes::Code code) {
@@ -120,6 +118,8 @@ class ciMethod : public ciMetadata {
   void assert_call_type_ok(int bci);
 
  public:
+  void check_is_loaded() const                   { assert(is_loaded(), "not loaded"); }
+
   // Basic method information.
   ciFlags flags() const                          { check_is_loaded(); return _flags; }
   ciSymbol* name() const                         { return _name; }
@@ -136,15 +136,19 @@ class ciMethod : public ciMetadata {
     check_is_loaded();
     return _signature->size() + (_flags.is_static() ? 0 : 1);
   }
-  // Report the number of elements on stack when invoking this method.
-  // This is different than the regular arg_size because invokedynamic
-  // has an implicit receiver.
+  // Report the number of elements on stack when invoking the current method.
+  // If the method is loaded, arg_size() gives precise information about the
+  // number of stack elements (using the method's signature and its flags).
+  // However, if the method is not loaded, the number of stack elements must
+  // be determined differently, as the method's flags are not yet available.
+  // The invoke_arg_size() method assumes in that case that all bytecodes except
+  // invokestatic and invokedynamic have a receiver that is also pushed onto the
+  // stack by the caller of the current method.
   int invoke_arg_size(Bytecodes::Code code) const {
     if (is_loaded()) {
       return arg_size();
     } else {
       int arg_size = _signature->size();
-      // Add a receiver argument, maybe:
       if (code != Bytecodes::_invokestatic &&
           code != Bytecodes::_invokedynamic) {
         arg_size++;
@@ -232,10 +236,10 @@ class ciMethod : public ciMetadata {
   // used when gc'ing an interpreter frame we need to use its viewpoint
   // during OSR when loading the locals.
 
-  BitMap  live_local_oops_at_bci(int bci);
+  ResourceBitMap live_local_oops_at_bci(int bci);
 
 #ifdef COMPILER1
-  const BitMap  bci_block_start();
+  const BitMap& bci_block_start();
 #endif
 
   ciTypeFlow*   get_flow_analysis();
@@ -250,6 +254,20 @@ class ciMethod : public ciMetadata {
 
   ciField*      get_field_at_bci( int bci, bool &will_link);
   ciMethod*     get_method_at_bci(int bci, bool &will_link, ciSignature* *declared_signature);
+  ciMethod*     get_method_at_bci(int bci) {
+    bool ignored_will_link;
+    ciSignature* ignored_declared_signature;
+    return get_method_at_bci(bci, ignored_will_link, &ignored_declared_signature);
+  }
+
+  ciSignature*  get_declared_signature_at_bci(int bci) {
+    bool ignored_will_link;
+    ciSignature* declared_signature;
+    get_method_at_bci(bci, ignored_will_link, &declared_signature);
+    assert(declared_signature != NULL, "cannot be null");
+    return declared_signature;
+  }
+
   // Given a certain calling environment, find the monomorphic target
   // for the call.  Return NULL if the call is not monomorphic in
   // its calling environment.
@@ -265,15 +283,8 @@ class ciMethod : public ciMetadata {
   // Find the proper vtable index to invoke this method.
   int resolve_vtable_index(ciKlass* caller, ciKlass* receiver);
 
-  // Compilation directives
-  bool should_exclude();
-  bool should_inline();
-  bool should_not_inline();
-  bool should_print_assembly();
-  bool break_at_execute();
   bool has_option(const char *option);
-  template<typename T>
-  bool has_option_value(const char* option, T& value);
+  bool has_option_value(const char* option, double& value);
   bool can_be_compiled();
   bool can_be_osr_compiled(int entry_bci);
   void set_not_compilable(const char* reason = NULL);
@@ -318,11 +329,15 @@ class ciMethod : public ciMetadata {
   bool is_final_method() const                   { return is_final() || holder()->is_final(); }
   bool has_loops      () const;
   bool has_jsrs       () const;
+  bool is_getter      () const;
+  bool is_setter      () const;
   bool is_accessor    () const;
   bool is_initializer () const;
   bool can_be_statically_bound() const           { return _can_be_statically_bound; }
+  bool has_reserved_stack_access() const         { return _has_reserved_stack_access; }
   bool is_boxing_method() const;
   bool is_unboxing_method() const;
+  bool is_object_initializer() const;
 
   // Replay data methods
   void dump_name_as_ascii(outputStream* st);
@@ -339,8 +354,10 @@ class ciMethod : public ciMetadata {
   void print_name(outputStream* st = tty);
   void print_short_name(outputStream* st = tty);
 
+  static bool is_consistent_info(ciMethod* declared_method, ciMethod* resolved_method);
+
 #if INCLUDE_TRACE
-  TraceStructCiMethod to_trace_struct() const;
+  TraceStructCalleeMethod to_trace_struct() const;
 #endif
 };
 

@@ -19,17 +19,19 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
- *
  */
 
 /**
  * @test
  * @bug 8078426
  * @summary split if finds predicates on several incoming paths when unswitched's loops are optimized out
- * @run main/othervm -XX:+IgnoreUnrecognizedVMOptions -XX:-UseOnStackReplacement -XX:-BackgroundCompilation -XX:-UseCompressedOops TestSplitIfUnswitchedLoopsEliminated
  *
+ * @run main/othervm -XX:+IgnoreUnrecognizedVMOptions -XX:-UseOnStackReplacement
+ *                   -XX:-BackgroundCompilation -XX:-UseCompressedOops
+ *                   compiler.loopopts.TestSplitIfUnswitchedLoopsEliminated
  */
 
+package compiler.loopopts;
 
 public class TestSplitIfUnswitchedLoopsEliminated {
 

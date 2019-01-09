@@ -1,4 +1,4 @@
-#  Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+#  Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
 #  DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 #  This code is free software; you can redistribute it and/or modify it
@@ -28,21 +28,32 @@
 tier1 = \
     :jdk_lang \
     :jdk_util \
-    :jdk_math
+    sun/nio/cs/ISO8859x.java \
+    java/nio/Buffer \
+    com/sun/crypto/provider/Cipher \
+    :jdk_math \
+    tools/pack200
 
 tier2 = \
     :jdk_io \
     :jdk_nio \
+    -sun/nio/cs/ISO8859x.java \
+    -java/nio/Buffer \
     :jdk_net \
     :jdk_time \
     :jdk_security \
+    -com/sun/crypto/provider/Cipher \
     :jdk_text \
     :core_tools \
-    :jdk_other \
-    :jdk_svc
+    -tools/pack200 \
+    :jdk_other
 
 tier3 = \
-    :jdk_rmi
+    :jdk_rmi \
+    :jdk_beans \
+    :jdk_imageio \
+    :jdk_sound \
+    :jdk_client_sanity
 
 ###############################################################################
 #
@@ -57,7 +68,14 @@ jdk_lang = \
     sun/invoke \
     sun/misc \
     sun/reflect \
+    jdk/internal/reflect \
     jdk/lambda \
+    jdk/internal/loader \
+    jdk/internal/misc \
+    jdk/internal/ref \
+    jdk/internal/jimage \
+    jdk/internal/math \
+    jdk/modules \
     vm
 
 # All of the java.util package
@@ -71,20 +89,24 @@ jdk_util = \
 jdk_util_other = \
     java/util \
     sun/util \
+    jdk/internal/util \
     -:jdk_collections \
     -:jdk_concurrent \
     -:jdk_stream
 
-# java.util.concurrent (JSR-166)
-# Maintained by JSR-166 EG (Doug Lea et al)
-# Deque and PriorityQueue are also generally maintained by JSR-166
-jdk_concurrent = \
-    java/util/concurrent \
-    java/util/Deque \
-    java/util/PriorityQueue
-
-# Java Collections Framework
+# All collections, core and concurrent
 jdk_collections = \
+    :jdk_collections_core \
+    :jdk_concurrent
+
+# java.util.concurrent
+# Includes concurrent collections plus other stuff
+# Maintained by JSR-166 EG (Doug Lea et al)
+jdk_concurrent = \
+    java/util/concurrent
+
+# Java Collections Framework core classes
+jdk_collections_core = \
     java/util/AbstractCollection \
     java/util/AbstractList \
     java/util/AbstractMap \
@@ -94,19 +116,22 @@ jdk_collections = \
     java/util/BitSet \
     java/util/Collection \
     java/util/Collections \
+    java/util/Comparator \
+    java/util/Deque \
     java/util/EnumMap \
     java/util/EnumSet \
-    java/util/Comparator \
-    java/util/Iterator \
     java/util/HashMap \
+    java/util/HashSet \
     java/util/Hashtable \
     java/util/IdentityHashMap \
-    java/util/List \
+    java/util/Iterator \
     java/util/LinkedHashMap \
     java/util/LinkedHashSet \
     java/util/LinkedList \
+    java/util/List \
     java/util/Map \
     java/util/NavigableMap \
+    java/util/PriorityQueue \
     java/util/TimSort \
     java/util/TreeMap \
     java/util/Vector \
@@ -154,14 +179,15 @@ jdk_security2 = \
 jdk_security3 = \
     javax/security  \
     -javax/security/auth/kerberos \
+    com/sun/jarsigner \
     com/sun/security \
     -com/sun/security/jgss \
     com/sun/org/apache/xml/internal/security \
+    jdk/security \
     sun/security \
     -sun/security/krb5 \
     -sun/security/jgss \
     javax/net \
-    sun/net/www/protocol/https \
     com/sun/net/ssl \
     lib/security
 
@@ -184,7 +210,8 @@ jdk_text = \
 jdk_management = \
     java/lang/management \
     com/sun/management \
-    sun/management
+    sun/management \
+    jdk/internal/agent
 
 jdk_instrument = \
     java/lang/instrument
@@ -201,19 +228,18 @@ jdk_native_sanity = \
 
 # java launcher specific tests, Note: do not include this group into any groups
 # that potentially could be included into a jprt test rule, as the complementary
-# closed  group includes awt SplashScreen and these tests may not run 
-# satisfacotorily on all platforms and  profiles thus this group must always 
+# closed  group includes awt SplashScreen and these tests may not run
+# satisfactorily on all platforms and  profiles thus this group must always
 # be a stand-alone group
 jdk_launcher = \
     tools/launcher \
     sun/tools
-    
+
 #
 # Tool (and tool API) tests are split into core and svc groups
 #
 core_tools = \
     tools \
-    jdk/internal/jimage \
     jdk/internal/jrtfs \
     sun/tools/java \
     sun/tools/jrunscript
@@ -223,8 +249,7 @@ svc_tools = \
     sun/tools \
     -sun/tools/java \
     -sun/tools/jrunscript \
-    sun/jvmstat \
-    demo/jvmti
+    sun/jvmstat
 
 jdk_tools = \
     :core_tools \
@@ -240,14 +265,14 @@ jdk_other = \
     javax/naming \
     javax/script \
     javax/smartcardio \
+    javax/transaction \
     javax/xml \
     -javax/xml/crypto \
-    jdk/asm \
     jdk/internal/jline \
     com/sun/jndi \
     com/sun/corba \
-    lib/testlibrary \
-    sample
+    org/omg/CORBA \
+    lib/testlibrary
 
 #
 # SCTP is its own group as it is highly sensitive to kernel/network config
@@ -321,6 +346,10 @@ jdk_desktop = \
     :jdk_swing \
     :jdk_sound \
     :jdk_imageio
+
+# SwingSet3 tests.
+jdk_client_sanity = \
+    sanity/client/SwingSet
 
 ###############################################################################
 #
@@ -435,7 +464,7 @@ jdk = \
 needs_jdk = \
   :jdk_jdi \
   com/sun/tools \
-  demo \
+  jdk/security/jarsigner \
   sun/security/tools/jarsigner \
   sun/security/tools/policytool \
   sun/rmi/rmic \
@@ -460,11 +489,12 @@ needs_jdk = \
   sun/management/jmxremote/bootstrap/CustomLauncherTest.java \
   sun/misc/JarIndex/metaInfFilenames/Basic.java \
   sun/misc/JarIndex/JarIndexMergeForClassLoaderTest.java \
-  sun/reflect/CallerSensitive/CallerSensitiveFinder.java \
-  sun/reflect/CallerSensitive/MissingCallerSensitive.java \
+  jdk/internal/reflect/CallerSensitive/CallerSensitiveFinder.java \
+  jdk/internal/reflect/CallerSensitive/MissingCallerSensitive.java \
   sun/security/util/Resources/NewNamesFormat.java \
   vm/verifier/defaultMethods/DefaultMethodRegressionTestsRun.java \
-  javax/xml/ws/clientjar/TestWsImport.java 
+  javax/xml/ws/clientjar/TestWsImport.java \
+  javax/xml/bind/xjc/8145039/JaxbMarshallTest.java
 
 # JRE adds further tests to compact3
 #
@@ -491,10 +521,13 @@ needs_jre = \
   java/net/URLConnection/HandleContentTypeWithAttrs.java \
   java/security/Security/ClassLoaderDeadlock/ClassLoaderDeadlock.sh \
   java/security/Security/ClassLoaderDeadlock/Deadlock.sh \
+  java/text/AttributedCharacterIterator/Attribute/ReadResolve.java \
+  java/text/AttributedString/TestAttributedStringCtor.java \
+  java/text/AttributedString/getRunStartLimitTest.java \
   java/util/jar/Manifest/CreateManifest.java \
   java/util/logging/TestMainAppContext.java \
   java/util/logging/TestLoggingWithMainAppContext.java \
-  java/util/ResourceBundle/Control/Bug6530694.java \
+  java/util/TimeZone/DefaultTimeZoneTest.java \
   java/text/Bidi/BidiConformance.java \
   java/text/Bidi/BidiEmbeddingTest.java \
   java/text/Bidi/Bug7042148.java \
@@ -678,7 +711,7 @@ needs_compact2 = \
   java/security/BasicPermission/Wildcard.java \
   java/util/Arrays/ParallelPrefix.java  \
   java/util/Arrays/SetAllTest.java  \
-  java/util/BitSet/BitSetStreamTest.java  \
+  java/util/BitSet/stream/BitSetStreamTest.java  \
   java/util/Collection/CollectionDefaults.java  \
   java/util/Collections/CheckedIdentityMap.java  \
   java/util/Collections/CheckedMapBash.java  \
@@ -689,6 +722,7 @@ needs_compact2 = \
   java/util/Collections/UnmodifiableMapEntrySet.java  \
   java/util/Comparator/BasicTest.java  \
   java/util/Comparator/TypeTest.java  \
+  java/util/Date/TimestampTest.java \
   java/util/Iterator/IteratorDefaults.java  \
   java/util/Iterator/PrimitiveIteratorDefaults.java  \
   java/util/List/ListDefaults.java  \
@@ -703,7 +737,8 @@ needs_compact2 = \
   java/util/ResourceBundle/Bug6359330.java  \
   java/util/Spliterator/SpliteratorCharacteristics.java  \
   java/util/Spliterator/SpliteratorCollisions.java  \
-  java/util/Spliterator/SpliteratorLateBindingFailFastTest.java  \
+  java/util/Spliterator/SpliteratorLateBindingTest.java  \
+  java/util/Spliterator/SpliteratorFailFastTest.java  \
   java/util/Spliterator/SpliteratorTraversingAndSplittingTest.java  \
   java/util/StringJoiner/MergeTest.java  \
   java/util/StringJoiner/StringJoinerTest.java  \
@@ -738,7 +773,6 @@ compact1_minimal = \
   javax \
   jdk \
   lib \
-  sample \
   sun \
   vm \
  -:needs_full_vm_compact1 \

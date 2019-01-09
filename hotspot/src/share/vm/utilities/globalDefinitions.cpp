@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,7 +25,6 @@
 #include "precompiled.hpp"
 #include "runtime/os.hpp"
 #include "utilities/globalDefinitions.hpp"
-#include "utilities/top.hpp"
 
 // Basic error support
 
@@ -50,7 +49,7 @@ int LogMinObjAlignmentInBytes  = -1;
 uint64_t OopEncodingHeapMax = 0;
 
 void basic_fatal(const char* msg) {
-  fatal(msg);
+  fatal("%s", msg);
 }
 
 // Something to help porters sleep at night
@@ -85,6 +84,8 @@ void basic_types_init() {
   assert( 1 == sizeof( u1),        "wrong size for basic type");
   assert( 2 == sizeof( u2),        "wrong size for basic type");
   assert( 4 == sizeof( u4),        "wrong size for basic type");
+  assert(wordSize == BytesPerWord, "should be the same since they're used interchangeably");
+  assert(wordSize == HeapWordSize, "should be the same since they're also used interchangeably");
 
   int num_type_chars = 0;
   for (int i = 0; i < 99; i++) {
@@ -212,7 +213,6 @@ BasicType name2type(const char* name) {
   }
   return T_ILLEGAL;
 }
-
 
 // Map BasicType to size in words
 int type2size[T_CONFLICT+1]={ -1, 0, 0, 0, 1, 1, 1, 2, 1, 1, 1, 2, 1, 1, 0, 1, 1, 1, 1, -1};
@@ -356,32 +356,15 @@ size_t lcm(size_t a, size_t b) {
     return size_t(result);
 }
 
-#ifndef PRODUCT
 
-void GlobalDefinitions::test_globals() {
-  intptr_t page_sizes[] = { os::vm_page_size(), 4096, 8192, 65536, 2*1024*1024 };
-  const int num_page_sizes = sizeof(page_sizes) / sizeof(page_sizes[0]);
+// Test that nth_bit macro and friends behave as
+// expected, even with low-precedence operators.
 
-  for (int i = 0; i < num_page_sizes; i++) {
-    intptr_t page_size = page_sizes[i];
+STATIC_ASSERT(nth_bit(3)   == 0x8);
+STATIC_ASSERT(nth_bit(1|2) == 0x8);
 
-    address a_page = (address)(10*page_size);
+STATIC_ASSERT(right_n_bits(3)   == 0x7);
+STATIC_ASSERT(right_n_bits(1|2) == 0x7);
 
-    // Check that address within page is returned as is
-    assert(clamp_address_in_page(a_page, a_page, page_size) == a_page, "incorrect");
-    assert(clamp_address_in_page(a_page + 128, a_page, page_size) == a_page + 128, "incorrect");
-    assert(clamp_address_in_page(a_page + page_size - 1, a_page, page_size) == a_page + page_size - 1, "incorrect");
-
-    // Check that address above page returns start of next page
-    assert(clamp_address_in_page(a_page + page_size, a_page, page_size) == a_page + page_size, "incorrect");
-    assert(clamp_address_in_page(a_page + page_size + 1, a_page, page_size) == a_page + page_size, "incorrect");
-    assert(clamp_address_in_page(a_page + page_size*5 + 1, a_page, page_size) == a_page + page_size, "incorrect");
-
-    // Check that address below page returns start of page
-    assert(clamp_address_in_page(a_page - 1, a_page, page_size) == a_page, "incorrect");
-    assert(clamp_address_in_page(a_page - 2*page_size - 1, a_page, page_size) == a_page, "incorrect");
-    assert(clamp_address_in_page(a_page - 5*page_size - 1, a_page, page_size) == a_page, "incorrect");
-  }
-}
-
-#endif // PRODUCT
+STATIC_ASSERT(left_n_bits(3)   == (intptr_t) LP64_ONLY(0xE000000000000000) NOT_LP64(0xE0000000));
+STATIC_ASSERT(left_n_bits(1|2) == (intptr_t) LP64_ONLY(0xE000000000000000) NOT_LP64(0xE0000000));

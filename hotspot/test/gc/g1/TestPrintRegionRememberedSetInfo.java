@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,14 +26,16 @@
  * @key gc
  * @bug 8014240
  * @summary Test output of G1PrintRegionRememberedSetInfo
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @requires vm.gc.G1
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  * @run main TestPrintRegionRememberedSetInfo
  * @author thomas.schatzl@oracle.com
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
 import java.lang.Thread;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -57,7 +59,6 @@ public class TestPrintRegionRememberedSetInfo {
             "-Xmx10m",
             "-XX:+ExplicitGCInvokesConcurrent",
             "-XX:+UnlockDiagnosticVMOptions",
-            "-XX:+G1PrintRegionLivenessInfo",
             "-XX:G1HeapRegionSize=1M",
             "-XX:InitiatingHeapOccupancyPercent=0",
         };
@@ -79,13 +80,13 @@ public class TestPrintRegionRememberedSetInfo {
     public static void main(String[] args) throws Exception {
         String result;
 
-        result = runTest("-XX:+G1PrintRegionLivenessInfo");
+        result = runTest("-Xlog:gc+liveness=trace");
         // check that we got region statistics output
         if (result.indexOf("PHASE") == -1) {
             throw new RuntimeException("Unexpected output from -XX:+PrintRegionLivenessInfo found.");
         }
 
-        result = runTest("-XX:-G1PrintRegionLivenessInfo");
+        result = runTest("-Xlog:gc+liveness");
         if (result.indexOf("remset") != -1) {
             throw new RuntimeException("Should find remembered set information in output.");
         }

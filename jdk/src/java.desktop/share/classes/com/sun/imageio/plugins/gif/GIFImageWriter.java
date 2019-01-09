@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -70,7 +70,7 @@ public class GIFImageWriter extends ImageWriter {
     GIFWritableImageMetadata.NATIVE_FORMAT_NAME;
 
     /**
-     * The <code>output</code> case to an <code>ImageOutputStream</code>.
+     * The {@code output} case to an {@code ImageOutputStream}.
      */
     private ImageOutputStream stream = null;
 
@@ -272,7 +272,7 @@ public class GIFImageWriter extends ImageWriter {
     }
 
     /**
-     * Merges <code>inData</code> into <code>outData</code>. The supplied
+     * Merges {@code inData} into {@code outData}. The supplied
      * metadata format name is attempted first and failing that the standard
      * metadata format name is attempted.
      */
@@ -554,8 +554,8 @@ public class GIFImageWriter extends ImageWriter {
      *
      * @param writeHeader Whether to write the header.
      * @param writeTrailer Whether to write the trailer.
-     * @param sm The stream metadata or <code>null</code> if
-     * <code>writeHeader</code> is <code>false</code>.
+     * @param sm The stream metadata or {@code null} if
+     * {@code writeHeader} is {@code false}.
      * @param iioimage The image and image metadata.
      * @param p The write parameters.
      *
@@ -564,17 +564,16 @@ public class GIFImageWriter extends ImageWriter {
      * greater than 8.
      * @throws IllegalArgumentException if the color component size is
      * greater than 8.
-     * @throws IllegalArgumentException if <code>writeHeader</code> is
-     * <code>true</code> and <code>sm</code> is <code>null</code>.
-     * @throws IllegalArgumentException if <code>writeHeader</code> is
-     * <code>false</code> and a sequence is not being written.
+     * @throws IllegalArgumentException if {@code writeHeader} is
+     * {@code true} and {@code sm} is {@code null}.
+     * @throws IllegalArgumentException if {@code writeHeader} is
+     * {@code false} and a sequence is not being written.
      */
     private void write(boolean writeHeader,
                        boolean writeTrailer,
                        IIOMetadata sm,
                        IIOImage iioimage,
                        ImageWriteParam p) throws IOException {
-        clearAbortRequest();
 
         RenderedImage image = iioimage.getRenderedImage();
 
@@ -730,7 +729,8 @@ public class GIFImageWriter extends ImageWriter {
     /**
      * Writes any extension blocks, the Image Descriptor, and the image data
      *
-     * @param iioimage The image and image metadata.
+     * @param image The image.
+     * @param imageMetadata The image metadata.
      * @param param The write parameters.
      * @param globalColorTable The Global Color Table.
      * @param sourceBounds The source region.
@@ -829,11 +829,11 @@ public class GIFImageWriter extends ImageWriter {
             image.getTile(0, 0) : image.getData();
         for (int y = dy; y < dh; y += ddy) {
             if (numRowsWritten % progressReportRowPeriod == 0) {
+                processImageProgress((numRowsWritten*100.0F)/dh);
                 if (abortRequested()) {
                     processWriteAborted();
                     return;
                 }
-                processImageProgress((numRowsWritten*100.0F)/dh);
             }
 
             raster.getSamples(sx, sy, sw, 1, 0, sbuf);
@@ -857,11 +857,11 @@ public class GIFImageWriter extends ImageWriter {
         lineStride *= ddy;
         for (int y = dy; y < dh; y += ddy) {
             if (numRowsWritten % progressReportRowPeriod == 0) {
+                processImageProgress((numRowsWritten*100.0F)/dh);
                 if (abortRequested()) {
                     processWriteAborted();
                     return;
                 }
-                processImageProgress((numRowsWritten*100.0F)/dh);
             }
 
             compressor.compress(data, offset, dw);
@@ -924,7 +924,12 @@ public class GIFImageWriter extends ImageWriter {
 
         int progressReportRowPeriod = Math.max(destHeight/20, 1);
 
+        clearAbortRequest();
         processImageStarted(imageIndex);
+        if (abortRequested()) {
+            processWriteAborted();
+            return;
+        }
 
         if (interlaceFlag) {
             if (DEBUG) System.out.println("Writing interlaced");
@@ -973,6 +978,9 @@ public class GIFImageWriter extends ImageWriter {
                 writeRowsOpt(data, offset, lineStride, compressor,
                              1, 2, destWidth, destHeight,
                              numRowsWritten, progressReportRowPeriod);
+                if (abortRequested()) {
+                    return;
+                }
             } else {
                 writeRows(image, compressor,
                           sourceXOffset, periodX,
@@ -1016,6 +1024,9 @@ public class GIFImageWriter extends ImageWriter {
                           sourceWidth,
                           1, 2, destWidth, destHeight,
                           numRowsWritten, progressReportRowPeriod);
+                if (abortRequested()) {
+                    return;
+                }
             }
         } else {
             if (DEBUG) System.out.println("Writing non-interlaced");
@@ -1031,6 +1042,9 @@ public class GIFImageWriter extends ImageWriter {
                 writeRowsOpt(data, offset, lineStride, compressor,
                              0, 1, destWidth, destHeight,
                              numRowsWritten, progressReportRowPeriod);
+                if (abortRequested()) {
+                    return;
+                }
             } else {
                 writeRows(image, compressor,
                           sourceXOffset, periodX,
@@ -1038,14 +1052,11 @@ public class GIFImageWriter extends ImageWriter {
                           sourceWidth,
                           0, 1, destWidth, destHeight,
                           numRowsWritten, progressReportRowPeriod);
+                if (abortRequested()) {
+                    return;
+                }
             }
         }
-
-        if (abortRequested()) {
-            return;
-        }
-
-        processImageProgress(100.0F);
 
         compressor.flush();
 
@@ -1304,7 +1315,7 @@ class GIFImageWriteParam extends ImageWriteParam {
         super(locale);
         this.canWriteCompressed = true;
         this.canWriteProgressive = true;
-        this.compressionTypes = new String[] {"LZW", "lzw"};
+        this.compressionTypes = new String[] {"LZW"};
         this.compressionType = compressionTypes[0];
     }
 

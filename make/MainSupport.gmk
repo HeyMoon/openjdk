@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -30,12 +30,24 @@
 ifndef _MAINSUPPORT_GMK
 _MAINSUPPORT_GMK := 1
 
-# Run the tests specified by $1.
+# Run the tests specified by $1, with PRODUCT_HOME specified by $2
+# JT_JAVA is picked up by the jtreg launcher and used to run Jtreg itself.
 define RunTests
 	($(CD) $(SRC_ROOT)/test && $(MAKE) $(MAKE_ARGS) -j1 -k MAKEFLAGS= \
-	    JT_HOME=$(JT_HOME) PRODUCT_HOME=$(JDK_IMAGE_DIR) \
+	    JT_HOME=$(JT_HOME) PRODUCT_HOME=$(strip $2) \
 	    TEST_IMAGE_DIR=$(TEST_IMAGE_DIR) \
-	    ALT_OUTPUTDIR=$(OUTPUT_ROOT) CONCURRENCY=$(JOBS) $1) || true
+	    ALT_OUTPUTDIR=$(OUTPUT_ROOT) TEST_JOBS=$(TEST_JOBS) \
+	    JT_JAVA=$(BOOT_JDK) \
+	    JOBS=$(JOBS) $1) || true
+endef
+
+define CleanDocs
+	@$(PRINTF) "Cleaning docs ..."
+	@$(PRINTF) "\n" $(LOG_DEBUG)
+	$(RM) -r $(SUPPORT_OUTPUTDIR)/docs
+	$(RM) -r $(SUPPORT_OUTPUTDIR)/javadoc
+	$(RM) -r $(IMAGES_OUTPUTDIR)/docs
+	@$(PRINTF) " done\n"
 endef
 
 # Cleans the dir given as $1
@@ -46,10 +58,19 @@ define CleanDir
 	@$(PRINTF) " done\n"
 endef
 
+define CleanSupportDir
+	@$(PRINTF) "Cleaning $(strip $1) build artifacts ..."
+	@$(PRINTF) "\n" $(LOG_DEBUG)
+	$(RM) -r $(SUPPORT_OUTPUTDIR)/$(strip $1)
+	@$(PRINTF) " done\n"
+endef
+
 define CleanTest
 	@$(PRINTF) "Cleaning test $(strip $1) ..."
 	@$(PRINTF) "\n" $(LOG_DEBUG)
 	$(RM) -r $(SUPPORT_OUTPUTDIR)/test/$(strip $(subst -,/,$1))
+        # Remove as much of the test directory structure as is empty
+	$(RMDIR) -p $(dir $(SUPPORT_OUTPUTDIR)/test/$(strip $(subst -,/,$1))) 2> /dev/null || true
 	@$(PRINTF) " done\n"
 endef
 
@@ -57,7 +78,6 @@ define Clean-gensrc
 	@$(PRINTF) "Cleaning gensrc $(if $1,for $(strip $1) )..."
 	@$(PRINTF) "\n" $(LOG_DEBUG)
 	$(RM) -r $(SUPPORT_OUTPUTDIR)/gensrc/$(strip $1)
-	$(RM) -r $(SUPPORT_OUTPUTDIR)/gensrc_no_docs/$(strip $1)
 	@$(PRINTF) " done\n"
 endef
 
@@ -77,9 +97,7 @@ define Clean-native
 	@$(PRINTF) "\n" $(LOG_DEBUG)
 	$(RM) -r $(SUPPORT_OUTPUTDIR)/native/$(strip $1)
 	$(RM) -r $(SUPPORT_OUTPUTDIR)/modules_libs/$(strip $1)
-	$(RM) -r $(SUPPORT_OUTPUTDIR)/modules_libs-stripped/$(strip $1)
 	$(RM) -r $(SUPPORT_OUTPUTDIR)/modules_cmds/$(strip $1)
-	$(RM) -r $(SUPPORT_OUTPUTDIR)/modules_cmds-stripped/$(strip $1)
 	@$(PRINTF) " done\n"
 endef
 
@@ -87,14 +105,6 @@ define Clean-include
 	@$(PRINTF) "Cleaning include $(if $1,for $(strip $1) )..."
 	@$(PRINTF) "\n" $(LOG_DEBUG)
 	$(RM) -r $(SUPPORT_OUTPUTDIR)/modules_include/$(strip $1)
-	@$(PRINTF) " done\n"
-endef
-
-define Clean-docs
-	@$(PRINTF) "Cleaning docs ..."
-	@$(PRINTF) "\n" $(LOG_DEBUG)
-	$(RM) -r $(SUPPORT_OUTPUTDIR)/docs
-	$(RM) -r $(IMAGES_OUTPUTDIR)/docs
 	@$(PRINTF) " done\n"
 endef
 
@@ -108,7 +118,8 @@ endef
 
 ################################################################################
 
-MAKE_TOPDIR_LIST := $(JDK_TOPDIR) $(CORBA_TOPDIR) $(LANGTOOLS_TOPDIR)
+MAKE_TOPDIR_LIST := $(JDK_TOPDIR) $(CORBA_TOPDIR) $(LANGTOOLS_TOPDIR) \
+    $(HOTSPOT_TOPDIR)
 MAKE_MAKEDIR_LIST := make
 
 # Helper macro for DeclareRecipesForPhase
@@ -124,13 +135,11 @@ MAKE_MAKEDIR_LIST := make
 define DeclareRecipeForModuleMakefile
   ifeq ($$($1_MULTIPLE_MAKEFILES), true)
     $2-$$($1_TARGET_SUFFIX): $2-$$($1_TARGET_SUFFIX)-$$(notdir $3)
-    $1 += $2-$$($1_TARGET_SUFFIX)-$$(notdir $3)
 
     $2-$$($1_TARGET_SUFFIX)-$$(notdir $3):
   else
     $2-$$($1_TARGET_SUFFIX):
   endif
-	$(ECHO) $(LOG_INFO) "Building $$@"
         ifeq ($$($1_USE_WRAPPER), true)
 	  +($(CD) $(SRC_ROOT)/make && $(MAKE) $(MAKE_ARGS) \
 	      -f ModuleWrapper.gmk \
@@ -161,6 +170,12 @@ define DeclareRecipesForPhaseAndModule
 
   # Only declare recipes if there are makefiles to call
   ifneq ($$($1_$2_TOPDIRS), )
+    # Add the top dir specific target to target list regardless of if recipe
+    # generation is disabled.
+    ifeq ($$($1_MULTIPLE_MAKEFILES), true)
+      $$(foreach d, $$($1_$2_TOPDIRS), \
+        $$(eval $1 += $2-$$($1_TARGET_SUFFIX)-$$(notdir $$d)))
+    endif
     ifeq ($(NO_RECIPES),)
       $$(foreach d, $$($1_$2_TOPDIRS), \
           $$(eval $$(call DeclareRecipeForModuleMakefile,$1,$2,$$d)))
@@ -179,7 +194,7 @@ endef
 # FILE_PREFIX : File prefix for this build phase
 # USE_WRAPPER : Set to true to use ModuleWrapper.gmk
 # CHECK_MODULES : List of modules to try
-# MULTIPLE_MAKEFILES : Set to true to handle makefils for the same module in
+# MULTIPLE_MAKEFILES : Set to true to handle makefiles for the same module and
 #                      phase in multiple repos
 # Exported variables:
 # $1_MODULES : All modules that had rules generated

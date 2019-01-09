@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -63,7 +63,7 @@ public enum Option {
                 helper.sourceRoots(paths);
         }
     },
-    SOURCEPATH("-sourcepath", "Specify search path for sources.") {
+    SOURCE_PATH("--source-path", "Specify search path for sources.") {
         @Override
         protected void processMatching(ArgumentIterator iter, OptionHelper helper) {
             List<Path> paths = getFileListArg(iter, helper);
@@ -71,7 +71,13 @@ public enum Option {
                 helper.sourcepath(paths);
         }
     },
-    MODULEPATH("-modulepath", "Specify search path for modules.") {
+    SOURCEPATH("-sourcepath", "An alias for -sourcepath") {
+        @Override
+        protected void processMatching(ArgumentIterator iter, OptionHelper helper) {
+            SOURCE_PATH.processMatching(iter, helper);
+        }
+    },
+    MODULE_PATH("--module-path", "Specify search path for modules.") {
         @Override
         protected void processMatching(ArgumentIterator iter, OptionHelper helper) {
             List<Path> paths = getFileListArg(iter, helper);
@@ -79,7 +85,13 @@ public enum Option {
                 helper.modulepath(paths);
         }
     },
-    CLASSPATH("-classpath", "Specify search path for classes.") {
+    P("-p", "An alias for --module-path") {
+        @Override
+        protected void processMatching(ArgumentIterator iter, OptionHelper helper) {
+            MODULE_PATH.processMatching(iter, helper);
+        }
+    },
+    CLASS_PATH("--class-path", "Specify search path for classes.") {
         @Override
         protected void processMatching(ArgumentIterator iter, OptionHelper helper) {
             List<Path> paths = getFileListArg(iter, helper);
@@ -87,13 +99,19 @@ public enum Option {
                 helper.classpath(paths);
         }
     },
+    CLASSPATH("-classpath", "An alias for -classpath.") {
+        @Override
+        protected void processMatching(ArgumentIterator iter, OptionHelper helper) {
+            CLASS_PATH.processMatching(iter, helper);
+        }
+    },
     CP("-cp", "An alias for -classpath") {
         @Override
         protected void processMatching(ArgumentIterator iter, OptionHelper helper) {
-            CLASSPATH.processMatching(iter, helper);
+            CLASS_PATH.processMatching(iter, helper);
         }
     },
-    X("-x", "Exclude directory from the subsequent source directory") {
+    X("-x", "Exclude files matching the given pattern") {
         @Override
         protected void processMatching(ArgumentIterator iter, OptionHelper helper) {
             String pattern = getFilePatternArg(iter, helper);
@@ -101,28 +119,12 @@ public enum Option {
                 helper.exclude(pattern);
         }
     },
-    I("-i", "Include only the given directory from the subsequent source directory") {
+    I("-i", "Include only files matching the given pattern") {
         @Override
         protected void processMatching(ArgumentIterator iter, OptionHelper helper) {
             String pattern = getFilePatternArg(iter, helper);
             if (pattern != null)
                 helper.include(pattern);
-        }
-    },
-    XF("-xf", "Exclude a given file") {
-        @Override
-        protected void processMatching(ArgumentIterator iter, OptionHelper helper) {
-            String pattern = getFilePatternArg(iter, helper);
-            if (pattern != null)
-                helper.excludeFile(pattern);
-        }
-    },
-    IF("-if", "Include only the given file") {
-        @Override
-        protected void processMatching(ArgumentIterator iter, OptionHelper helper) {
-            String pattern = getFilePatternArg(iter, helper);
-            if (pattern != null)
-                helper.includeFile(pattern);
         }
     },
     TR("-tr", "Translate resources") {
@@ -167,7 +169,8 @@ public enum Option {
             // Construct transformer
             try {
                 Class<?> trCls = Class.forName(classname);
-                Transformer transformer = (Transformer) trCls.newInstance();
+                Transformer transformer =
+                    (Transformer) trCls.getConstructor().newInstance();
                 transformer.setExtra(extra);
                 helper.addTransformer(suffix, transformer);
             } catch (Exception e) {
@@ -338,7 +341,7 @@ public enum Option {
     String getFilePatternArg(ArgumentIterator iter, OptionHelper helper) {
 
         if (!iter.hasNext()) {
-            helper.reportError(arg + " must be followed by a file or directory pattern.");
+            helper.reportError(arg + " must be followed by a glob pattern.");
             return null;
         }
 

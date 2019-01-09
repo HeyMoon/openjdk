@@ -32,7 +32,7 @@ import java.util.*;
 import java.io.*;
 
 public class ReverseOrder2 {
-    final static int N = 100;
+    static final int N = 100;
 
     static void realMain(String[] args) throws Throwable {
         check(Collections.reverseOrder()
@@ -67,7 +67,7 @@ public class ReverseOrder2 {
         equal(list, golden);
     }
 
-    private static Comparator<String> cmp = new Comparator<String> () {
+    private static Comparator<String> cmp = new Comparator<>() {
         public int compare(String s1, String s2) {
             int i1 = Integer.parseInt(s1);
             int i2 = Integer.parseInt(s2);
@@ -75,7 +75,7 @@ public class ReverseOrder2 {
         }
     };
 
-    private final static List<String> golden = new ArrayList<String>(N);
+    private static final List<String> golden = new ArrayList<>(N);
     static {
         for (int i = N-1; i >= 0; i--)
             golden.add(String.valueOf(i));
@@ -89,7 +89,7 @@ public class ReverseOrder2 {
         equal(list, golden2);
     }
 
-    private final static List<Integer> golden2 = new ArrayList<Integer>(N);
+    private static final List<Integer> golden2 = new ArrayList<>(N);
     static {
         for (int i = N-1; i >= 0; i--)
             golden2.add(i);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -392,6 +392,17 @@ public class JPEGImageReader extends ImageReader {
         }
     }
 
+    private void skipPastImage(int imageIndex) {
+        cbLock.lock();
+        try {
+            gotoImage(imageIndex);
+            skipImage();
+        } catch (IOException | IndexOutOfBoundsException e) {
+        } finally {
+            cbLock.unlock();
+        }
+    }
+
     @SuppressWarnings("fallthrough")
     private int getNumImagesOnThread(boolean allowSearch)
       throws IOException {
@@ -519,32 +530,134 @@ public class JPEGImageReader extends ImageReader {
     /**
      * Skip over a complete image in the stream, leaving the stream
      * positioned such that the next byte to be read is the first
-     * byte of the next image.  For JPEG, this means that we read
+     * byte of the next image. For JPEG, this means that we read
      * until we encounter an EOI marker or until the end of the stream.
-     * If the stream ends before an EOI marker is encountered, an
-     * IndexOutOfBoundsException is thrown.
+     * We can find data same as EOI marker in some headers
+     * or comments, so we have to skip bytes related to these headers.
+     * If the stream ends before an EOI marker is encountered,
+     * an IndexOutOfBoundsException is thrown.
      */
     private void skipImage() throws IOException {
         if (debug) {
             System.out.println("skipImage called");
         }
+        // verify if image starts with an SOI marker
+        int initialFF = iis.read();
+        if (initialFF == 0xff) {
+            int soiMarker = iis.read();
+            if (soiMarker != JPEG.SOI) {
+                throw new IOException("skipImage : Invalid image doesn't "
+                        + "start with SOI marker");
+            }
+        } else {
+            throw new IOException("skipImage : Invalid image doesn't start "
+                    + "with 0xff");
+        }
         boolean foundFF = false;
+        String IOOBE = "skipImage : Reached EOF before we got EOI marker";
+        int markerLength = 2;
         for (int byteval = iis.read();
              byteval != -1;
              byteval = iis.read()) {
 
             if (foundFF == true) {
-                if (byteval == JPEG.EOI) {
-                    return;
+                switch (byteval) {
+                    case JPEG.EOI:
+                        if (debug) {
+                            System.out.println("skipImage : Found EOI at " +
+                                    (iis.getStreamPosition() - markerLength));
+                        }
+                        return;
+                    case JPEG.SOI:
+                        throw new IOException("skipImage : Found extra SOI"
+                                + " marker before getting to EOI");
+                    case 0:
+                    case 255:
+                    // markers which doesn't contain length data
+                    case JPEG.RST0:
+                    case JPEG.RST1:
+                    case JPEG.RST2:
+                    case JPEG.RST3:
+                    case JPEG.RST4:
+                    case JPEG.RST5:
+                    case JPEG.RST6:
+                    case JPEG.RST7:
+                    case JPEG.TEM:
+                        break;
+                    // markers which contains length data
+                    case JPEG.SOF0:
+                    case JPEG.SOF1:
+                    case JPEG.SOF2:
+                    case JPEG.SOF3:
+                    case JPEG.DHT:
+                    case JPEG.SOF5:
+                    case JPEG.SOF6:
+                    case JPEG.SOF7:
+                    case JPEG.JPG:
+                    case JPEG.SOF9:
+                    case JPEG.SOF10:
+                    case JPEG.SOF11:
+                    case JPEG.DAC:
+                    case JPEG.SOF13:
+                    case JPEG.SOF14:
+                    case JPEG.SOF15:
+                    case JPEG.SOS:
+                    case JPEG.DQT:
+                    case JPEG.DNL:
+                    case JPEG.DRI:
+                    case JPEG.DHP:
+                    case JPEG.EXP:
+                    case JPEG.APP0:
+                    case JPEG.APP1:
+                    case JPEG.APP2:
+                    case JPEG.APP3:
+                    case JPEG.APP4:
+                    case JPEG.APP5:
+                    case JPEG.APP6:
+                    case JPEG.APP7:
+                    case JPEG.APP8:
+                    case JPEG.APP9:
+                    case JPEG.APP10:
+                    case JPEG.APP11:
+                    case JPEG.APP12:
+                    case JPEG.APP13:
+                    case JPEG.APP14:
+                    case JPEG.APP15:
+                    case JPEG.COM:
+                        // read length of header from next 2 bytes
+                        int lengthHigherBits, lengthLowerBits, length;
+                        lengthHigherBits = iis.read();
+                        if (lengthHigherBits != (-1)) {
+                            lengthLowerBits = iis.read();
+                            if (lengthLowerBits != (-1)) {
+                                length = (lengthHigherBits << 8) |
+                                        lengthLowerBits;
+                                // length contains already read 2 bytes
+                                length -= 2;
+                            } else {
+                                throw new IndexOutOfBoundsException(IOOBE);
+                            }
+                        } else {
+                            throw new IndexOutOfBoundsException(IOOBE);
+                        }
+                        // skip the length specified in marker
+                        iis.skipBytes(length);
+                        break;
+                    case (-1):
+                        throw new IndexOutOfBoundsException(IOOBE);
+                    default:
+                        throw new IOException("skipImage : Invalid marker "
+                                + "starting with ff "
+                                + Integer.toHexString(byteval));
                 }
             }
-            foundFF = (byteval == 0xff) ? true : false;
+            foundFF = (byteval == 0xff);
         }
-        throw new IndexOutOfBoundsException();
+        throw new IndexOutOfBoundsException(IOOBE);
     }
 
     /**
-     * Returns <code>true</code> if there is an image beyond
+     * Returns {@code true} if there is an image beyond
      * the current stream position.  Does not disturb the
      * stream position.
      */
@@ -614,13 +727,13 @@ public class JPEGImageReader extends ImageReader {
 
     /**
      * Read in the header information starting from the current
-     * stream position, returning <code>true</code> if the
+     * stream position, returning {@code true} if the
      * header was a tables-only image.  After this call, the
      * native IJG decompression struct will contain the image
      * information required by most query calls below
      * (e.g. getWidth, getHeight, etc.), if the header was not
      * a tables-only image.
-     * If reset is <code>true</code>, the state of the IJG
+     * If reset is {@code true}, the state of the IJG
      * object is reset so that it can read a header again.
      * This happens automatically if the header was a tables-only
      * image.
@@ -867,7 +980,7 @@ public class JPEGImageReader extends ImageReader {
      * Checks the implied color conversion between the stream and
      * the target image, altering the IJG output color space if necessary.
      * If a java color conversion is required, then this sets up
-     * <code>convert</code>.
+     * {@code convert}.
      * If bands are being rearranged at all (either source or destination
      * bands are specified in the param), then the default color
      * conversions are assumed to be correct.
@@ -1225,28 +1338,33 @@ public class JPEGImageReader extends ImageReader {
             System.out.println("callbackUpdates is " + callbackUpdates);
         }
 
-        // Finally, we are ready to read
-
+        /*
+         * All the Jpeg processing happens in native, we should clear
+         * abortFlag of imageIODataStruct in imageioJPEG.c. And we need to
+         * clear abortFlag because if in previous read() if we had called
+         * reader.abort() that will continue to be valid for present call also.
+         */
+        clearNativeReadAbortFlag(structPointer);
         processImageStarted(currentImage);
-
-        boolean aborted = false;
-
-        // Note that getData disables acceleration on buffer, but it is
-        // just a 1-line intermediate data transfer buffer that will not
-        // affect the acceleration of the resulting image.
-        aborted = readImage(structPointer,
-                            buffer.getData(),
-                            numRasterBands,
-                            srcBands,
-                            bandSizes,
-                            srcROI.x, srcROI.y,
-                            srcROI.width, srcROI.height,
-                            periodX, periodY,
-                            abbrevQTables,
-                            abbrevDCHuffmanTables,
-                            abbrevACHuffmanTables,
-                            minProgressivePass, maxProgressivePass,
-                            callbackUpdates);
+        /*
+         * Note that getData disables acceleration on buffer, but it is
+         * just a 1-line intermediate data transfer buffer that will not
+         * affect the acceleration of the resulting image.
+         */
+        boolean aborted = readImage(imageIndex,
+                                    structPointer,
+                                    buffer.getData(),
+                                    numRasterBands,
+                                    srcBands,
+                                    bandSizes,
+                                    srcROI.x, srcROI.y,
+                                    srcROI.width, srcROI.height,
+                                    periodX, periodY,
+                                    abbrevQTables,
+                                    abbrevDCHuffmanTables,
+                                    abbrevACHuffmanTables,
+                                    minProgressivePass, maxProgressivePass,
+                                    callbackUpdates);
 
         if (aborted) {
             processReadAborted();
@@ -1394,9 +1512,10 @@ public class JPEGImageReader extends ImageReader {
     }
 
     /**
-     * Returns <code>true</code> if the read was aborted.
+     * Returns {@code true} if the read was aborted.
      */
-    private native boolean readImage(long structPointer,
+    private native boolean readImage(int imageIndex,
+                                     long structPointer,
                                      byte [] buffer,
                                      int numRasterBands,
                                      int [] srcBands,
@@ -1410,6 +1529,12 @@ public class JPEGImageReader extends ImageReader {
                                      int minProgressivePass,
                                      int maxProgressivePass,
                                      boolean wantUpdates);
+
+    /*
+     * We should call clearNativeReadAbortFlag() before we start reading
+     * jpeg image as image processing happens at native side.
+     */
+    private native void clearNativeReadAbortFlag(long structPointer);
 
     public void abort() {
         setThreadLock();
@@ -1773,7 +1898,7 @@ class ImageTypeProducer {
     private static final ImageTypeProducer [] defaultTypes =
             new ImageTypeProducer [JPEG.NUM_JCS_CODES];
 
-    public synchronized static ImageTypeProducer getTypeProducer(int csCode) {
+    public static synchronized ImageTypeProducer getTypeProducer(int csCode) {
         if (csCode < 0 || csCode >= JPEG.NUM_JCS_CODES) {
             return null;
         }
@@ -1788,6 +1913,8 @@ class ImageTypeProducer {
             case JPEG.JCS_GRAYSCALE:
                 return ImageTypeSpecifier.createFromBufferedImageType
                         (BufferedImage.TYPE_BYTE_GRAY);
+            case JPEG.JCS_YCbCr:
+            //there is no YCbCr raw type so by default we assume it as RGB
             case JPEG.JCS_RGB:
                 return ImageTypeSpecifier.createInterleaved(JPEG.JCS.sRGB,
                         JPEG.bOffsRGB,

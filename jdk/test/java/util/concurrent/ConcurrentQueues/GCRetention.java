@@ -38,10 +38,14 @@
  * @run main GCRetention 12345
  */
 
+import static java.util.concurrent.TimeUnit.SECONDS;
+
+import java.lang.ref.WeakReference;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.LinkedTransferQueue;
@@ -56,13 +60,32 @@ import java.util.Queue;
 import java.util.Map;
 
 public class GCRetention {
-    // Suitable for benchmarking.  Overriden by args[0] for testing.
+    // Suitable for benchmarking.  Overridden by args[0] for testing.
     int count = 1024 * 1024;
 
-    final Map<String,String> results = new ConcurrentHashMap<String,String>();
+    /** No guarantees, but effective in practice. */
+    static void forceFullGc() {
+        CountDownLatch finalizeDone = new CountDownLatch(1);
+        WeakReference<?> ref = new WeakReference<Object>(new Object() {
+            protected void finalize() { finalizeDone.countDown(); }});
+        try {
+            for (int i = 0; i < 10; i++) {
+                System.gc();
+                if (finalizeDone.await(1L, SECONDS) && ref.get() == null) {
+                    System.runFinalization(); // try to pick up stragglers
+                    return;
+                }
+            }
+        } catch (InterruptedException unexpected) {
+            throw new AssertionError("unexpected InterruptedException");
+        }
+        throw new AssertionError("failed to do a \"full\" gc");
+    }
+
+    final Map<String,String> results = new ConcurrentHashMap<>();
 
     Collection<Queue<Boolean>> queues() {
-        List<Queue<Boolean>> queues = new ArrayList<Queue<Boolean>>();
+        List<Queue<Boolean>> queues = new ArrayList<>();
         queues.add(new ConcurrentLinkedDeque<Boolean>());
         queues.add(new ConcurrentLinkedQueue<Boolean>());
         queues.add(new ArrayBlockingQueue<Boolean>(count, false));
@@ -84,7 +107,7 @@ public class GCRetention {
     }
 
     void prettyPrintResults() {
-        List<String> classNames = new ArrayList<String>(results.keySet());
+        List<String> classNames = new ArrayList<>(results.keySet());
         Collections.sort(classNames);
         int maxClassNameLength = 0;
         int maxNanosLength = 0;
@@ -117,8 +140,8 @@ public class GCRetention {
         long t0 = System.nanoTime();
         for (int i = 0; i < count; i++)
             check(q.add(Boolean.TRUE));
-        System.gc();
-        System.gc();
+        forceFullGc();
+        // forceFullGc();
         Boolean x;
         while ((x = q.poll()) != null)
             equal(x, Boolean.TRUE);

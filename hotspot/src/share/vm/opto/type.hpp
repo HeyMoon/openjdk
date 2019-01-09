@@ -210,11 +210,11 @@ public:
   static int cmp( const Type *const t1, const Type *const t2 );
   // Test for higher or equal in lattice
   // Variant that drops the speculative part of the types
-  int higher_equal(const Type *t) const {
+  bool higher_equal(const Type *t) const {
     return !cmp(meet(t),t->remove_speculative());
   }
   // Variant that keeps the speculative part of the types
-  int higher_equal_speculative(const Type *t) const {
+  bool higher_equal_speculative(const Type *t) const {
     return !cmp(meet_speculative(t),t);
   }
 
@@ -359,6 +359,8 @@ public:
   }
   virtual void dump2( Dict &d, uint depth, outputStream *st ) const;
   static  void dump_stats();
+
+  static const char* str(const Type* t);
 #endif
   void typerr(const Type *t) const; // Mixing types error
 
@@ -367,6 +369,11 @@ public:
     assert((uint)type <= T_CONFLICT && _const_basic_type[type] != NULL, "bad type");
     return _const_basic_type[type];
   }
+
+  // For two instance arrays of same dimension, return the base element types.
+  // Otherwise or if the arrays have different dimensions, return NULL.
+  static void get_arrays_base_elements(const Type *a1, const Type *a2,
+                                       const TypeInstPtr **e1, const TypeInstPtr **e2);
 
   // Mapping to the array element's basic type.
   BasicType array_element_basic_type() const;
@@ -413,7 +420,25 @@ public:
 
   static const Type* make_from_constant(ciConstant constant,
                                         bool require_constant = false,
+                                        int stable_dimension = 0,
+                                        bool is_narrow = false,
                                         bool is_autobox_cache = false);
+
+  static const Type* make_constant_from_field(ciInstance* holder,
+                                              int off,
+                                              bool is_unsigned_load,
+                                              BasicType loadbt);
+
+  static const Type* make_constant_from_field(ciField* field,
+                                              ciInstance* holder,
+                                              BasicType loadbt,
+                                              bool is_unsigned_load);
+
+  static const Type* make_constant_from_array_element(ciArray* array,
+                                                      int off,
+                                                      int stable_dimension,
+                                                      BasicType loadbt,
+                                                      bool is_unsigned_load);
 
   // Speculative type helper methods. See TypePtr.
   virtual const TypePtr* speculative() const                                  { return NULL; }
@@ -913,7 +938,7 @@ public:
 };
 
 //------------------------------TypeOopPtr-------------------------------------
-// Some kind of oop (Java pointer), either klass or instance or array.
+// Some kind of oop (Java pointer), either instance or array.
 class TypeOopPtr : public TypePtr {
 protected:
   TypeOopPtr(TYPES t, PTR ptr, ciKlass* k, bool xk, ciObject* o, int offset, int instance_id,
@@ -940,7 +965,7 @@ protected:
 
   // If not InstanceTop or InstanceBot, indicates that this is
   // a particular instance of this type which is distinct.
-  // This is the the node index of the allocation node creating this instance.
+  // This is the node index of the allocation node creating this instance.
   int           _instance_id;
 
   static const TypeOopPtr* make_from_klass_common(ciKlass* klass, bool klass_change, bool try_for_exact);
@@ -973,8 +998,7 @@ public:
   // may return a non-singleton type.
   // If require_constant, produce a NULL if a singleton is not possible.
   static const TypeOopPtr* make_from_constant(ciObject* o,
-                                              bool require_constant = false,
-                                              bool not_null_elements = false);
+                                              bool require_constant = false);
 
   // Make a generic (unclassed) pointer to an oop.
   static const TypeOopPtr* make(PTR ptr, int offset, int instance_id,
@@ -1183,6 +1207,8 @@ public:
 
   const TypeAryPtr* cast_to_stable(bool stable, int stable_dimension = 1) const;
   int stable_dimension() const;
+
+  const TypeAryPtr* cast_to_autobox_cache(bool cache) const;
 
   // Convenience common pre-built types.
   static const TypeAryPtr *RANGE;
@@ -1674,12 +1700,12 @@ inline const TypeKlassPtr *Type::is_klassptr() const {
 
 inline const TypePtr* Type::make_ptr() const {
   return (_base == NarrowOop) ? is_narrowoop()->get_ptrtype() :
-    ((_base == NarrowKlass) ? is_narrowklass()->get_ptrtype() :
-     (isa_ptr() ? is_ptr() : NULL));
+                              ((_base == NarrowKlass) ? is_narrowklass()->get_ptrtype() :
+                                                       isa_ptr());
 }
 
 inline const TypeOopPtr* Type::make_oopptr() const {
-  return (_base == NarrowOop) ? is_narrowoop()->get_ptrtype()->is_oopptr() : is_oopptr();
+  return (_base == NarrowOop) ? is_narrowoop()->get_ptrtype()->isa_oopptr() : isa_oopptr();
 }
 
 inline const TypeNarrowOop* Type::make_narrowoop() const {
@@ -1689,7 +1715,7 @@ inline const TypeNarrowOop* Type::make_narrowoop() const {
 
 inline const TypeNarrowKlass* Type::make_narrowklass() const {
   return (_base == NarrowKlass) ? is_narrowklass() :
-                                (isa_ptr() ? TypeNarrowKlass::make(is_ptr()) : NULL);
+                                  (isa_ptr() ? TypeNarrowKlass::make(is_ptr()) : NULL);
 }
 
 inline bool Type::is_floatingpoint() const {

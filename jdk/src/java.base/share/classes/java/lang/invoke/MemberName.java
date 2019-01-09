@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,17 +30,18 @@ import sun.invoke.util.VerifyAccess;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.lang.reflect.Member;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
-import static java.lang.invoke.MethodHandleNatives.Constants.*;
-import static java.lang.invoke.MethodHandleStatics.*;
 import java.util.Objects;
+
+import static java.lang.invoke.MethodHandleNatives.Constants.*;
+import static java.lang.invoke.MethodHandleStatics.newIllegalArgumentException;
+import static java.lang.invoke.MethodHandleStatics.newInternalError;
 
 /**
  * A {@code MemberName} is a compact symbolic datum which fully characterizes
@@ -51,7 +52,7 @@ import java.util.Objects;
  * a naked name/type pair.
  * A member name may also have non-zero modifier flags.
  * Finally, a member name may be either resolved or unresolved.
- * If it is resolved, the existence of the named
+ * If it is resolved, the existence of the named member has been determined by the JVM.
  * <p>
  * Whether resolved or not, a member name provides no access rights or
  * invocation capability to its possessor.  It is merely a compact
@@ -76,7 +77,7 @@ import java.util.Objects;
     private int      flags;       // modifier bits; see reflect.Modifier
     //@Injected JVM_Method* vmtarget;
     //@Injected int         vmindex;
-    private Object   resolution;  // if null, this guy is resolved
+    Object   resolution;  // if null, this guy is resolved
 
     /** Return the declaring class of this member.
      *  In the case of a bare name and type, the declaring class will be null.
@@ -93,7 +94,7 @@ import java.util.Objects;
     /** Return the simple name of this member.
      *  For a type, it is the same as {@link Class#getSimpleName}.
      *  For a method or field, it is the simple name of the member.
-     *  For a constructor, it is always {@code "&lt;init&gt;"}.
+     *  For a constructor, it is always {@code "<init>"}.
      */
     public String getName() {
         if (name == null) {
@@ -141,7 +142,7 @@ import java.util.Objects;
         synchronized (this) {
             if (type instanceof String) {
                 String sig = (String) type;
-                MethodType res = MethodType.fromMethodDescriptorString(sig, getClassLoader());
+                MethodType res = MethodType.fromDescriptor(sig, getClassLoader());
                 type = res;
             } else if (type instanceof Object[]) {
                 Object[] typeInfo = (Object[]) type;
@@ -206,7 +207,7 @@ import java.util.Objects;
         synchronized (this) {
             if (type instanceof String) {
                 String sig = (String) type;
-                MethodType mtype = MethodType.fromMethodDescriptorString("()"+sig, getClassLoader());
+                MethodType mtype = MethodType.fromDescriptor("()"+sig, getClassLoader());
                 Class<?> res = mtype.returnType();
                 type = res;
             }
@@ -341,7 +342,6 @@ import java.util.Objects;
     }
 
     /** Utility method to query if this member is a method handle invocation (invoke or invokeExact).
-     *  Also returns true for the non-public MH.invokeBasic.
      */
     public boolean isMethodHandleInvoke() {
         final int bits = MH_INVOKE_MODS &~ Modifier.PUBLIC;
@@ -356,9 +356,25 @@ import java.util.Objects;
         switch (name) {
         case "invoke":
         case "invokeExact":
-        case "invokeBasic":  // internal sig-poly method
             return true;
         default:
+            return false;
+        }
+    }
+    public boolean isVarHandleMethodInvoke() {
+        final int bits = MH_INVOKE_MODS &~ Modifier.PUBLIC;
+        final int negs = Modifier.STATIC;
+        if (testFlags(bits | negs, bits) &&
+            clazz == VarHandle.class) {
+            return isVarHandleMethodInvokeName(name);
+        }
+        return false;
+    }
+    public static boolean isVarHandleMethodInvokeName(String name) {
+        try {
+            VarHandle.AccessMode.valueFromMethodName(name);
+            return true;
+        } catch (IllegalArgumentException e) {
             return false;
         }
     }
@@ -475,8 +491,16 @@ import java.util.Objects;
 
     /** Utility method to query whether this member is accessible from a given lookup class. */
     public boolean isAccessibleFrom(Class<?> lookupClass) {
+        int mode = (ALL_ACCESS|MethodHandles.Lookup.PACKAGE|MethodHandles.Lookup.MODULE);
         return VerifyAccess.isMemberAccessible(this.getDeclaringClass(), this.getDeclaringClass(), flags,
-                                               lookupClass, ALL_ACCESS|MethodHandles.Lookup.PACKAGE);
+                                               lookupClass, mode);
+    }
+
+    /**
+     * Check if MemberName is a call to a method named {@code name} in class {@code declaredClass}.
+     */
+    public boolean refersTo(Class<?> declc, String n) {
+        return clazz == declc && getName().equals(n);
     }
 
     /** Initialize a query.   It is not resolved. */
@@ -534,6 +558,17 @@ import java.util.Objects;
                 int flags = flagsMods(IS_METHOD, m.getModifiers(), REF_invokeVirtual);
                 init(MethodHandle.class, m.getName(), type, flags);
                 if (isMethodHandleInvoke())
+                    return;
+            }
+            if (m.getDeclaringClass() == VarHandle.class &&
+                isVarHandleMethodInvokeName(m.getName())) {
+                // The JVM did not reify this signature-polymorphic instance.
+                // Need a special case here.
+                // See comments on MethodHandleNatives.linkMethod.
+                MethodType type = MethodType.methodType(m.getReturnType(), m.getParameterTypes());
+                int flags = flagsMods(IS_METHOD, m.getModifiers(), REF_invokeVirtual);
+                init(VarHandle.class, m.getName(), type, flags);
+                if (isVarHandleMethodInvoke())
                     return;
             }
             throw new LinkageError(m.toString());
@@ -664,6 +699,16 @@ import java.util.Objects;
         return mem;
     }
 
+    static MemberName makeVarHandleMethodInvoke(String name, MethodType type) {
+        return makeVarHandleMethodInvoke(name, type, MH_INVOKE_MODS | SYNTHETIC);
+    }
+    static MemberName makeVarHandleMethodInvoke(String name, MethodType type, int mods) {
+        MemberName mem = new MemberName(VarHandle.class, name, type, REF_invokeVirtual);
+        mem.flags |= mods;  // it's not resolved, but add these modifiers anyway
+        assert(mem.isVarHandleMethodInvoke()) : mem;
+        return mem;
+    }
+
     // bare-bones constructor; the JVM will fill it in
     MemberName() { }
 
@@ -693,9 +738,13 @@ import java.util.Objects;
     }
 
     @Override
+    @SuppressWarnings("deprecation")
     public int hashCode() {
-        return Objects.hash(clazz, getReferenceKind(), name, getType());
+        // Avoid autoboxing getReferenceKind(), since this is used early and will force
+        // early initialization of Byte$ByteCache
+        return Objects.hash(clazz, new Byte(getReferenceKind()), name, getType());
     }
+
     @Override
     public boolean equals(Object that) {
         return (that instanceof MemberName && this.equals((MemberName)that));
@@ -727,7 +776,7 @@ import java.util.Objects;
     }
     /** Create a method or constructor name from the given components:
      *  Declaring class, name, type, reference kind.
-     *  It will be a constructor if and only if the name is {@code "&lt;init&gt;"}.
+     *  It will be a constructor if and only if the name is {@code "<init>"}.
      *  The declaring class may be supplied as null if this is to be a bare name and type.
      *  The last argument is optional, a boolean which requests REF_invokeSpecial.
      *  The resulting name will in an unresolved state.
@@ -776,14 +825,14 @@ import java.util.Objects;
         return resolution == null;
     }
 
-    private void initResolved(boolean isResolved) {
+    void initResolved(boolean isResolved) {
         assert(this.resolution == null);  // not initialized yet!
         if (!isResolved)
             this.resolution = this;
         assert(isResolved() == isResolved);
     }
 
-    void checkForTypeAlias() {
+    void checkForTypeAlias(Class<?> refc) {
         if (isInvocable()) {
             MethodType type;
             if (this.type instanceof MethodType)
@@ -791,16 +840,16 @@ import java.util.Objects;
             else
                 this.type = type = getMethodType();
             if (type.erase() == type)  return;
-            if (VerifyAccess.isTypeVisible(type, clazz))  return;
-            throw new LinkageError("bad method type alias: "+type+" not visible from "+clazz);
+            if (VerifyAccess.isTypeVisible(type, refc))  return;
+            throw new LinkageError("bad method type alias: "+type+" not visible from "+refc);
         } else {
             Class<?> type;
             if (this.type instanceof Class<?>)
                 type = (Class<?>) this.type;
             else
                 this.type = type = getFieldType();
-            if (VerifyAccess.isTypeVisible(type, clazz))  return;
-            throw new LinkageError("bad field type alias: "+type+" not visible from "+clazz);
+            if (VerifyAccess.isTypeVisible(type, refc))  return;
+            throw new LinkageError("bad field type alias: "+type+" not visible from "+refc);
         }
     }
 
@@ -848,7 +897,20 @@ import java.util.Objects;
 
     public IllegalAccessException makeAccessException(String message, Object from) {
         message = message + ": "+ toString();
-        if (from != null)  message += ", from " + from;
+        if (from != null)  {
+            if (from == MethodHandles.publicLookup()) {
+                message += ", from public Lookup";
+            } else {
+                Module m;
+                if (from instanceof MethodHandles.Lookup) {
+                    MethodHandles.Lookup lookup = (MethodHandles.Lookup)from;
+                    m = lookup.lookupClass().getModule();
+                } else {
+                    m = from.getClass().getModule();
+                }
+                message += ", from " + from + " (" + m + ")";
+            }
+        }
         return new IllegalAccessException(message);
     }
     private String message() {
@@ -936,7 +998,9 @@ import java.util.Objects;
                     Collections.addAll(result, buf0);
                 }
             }
-            result.addAll(Arrays.asList(buf).subList(0, bufCount));
+            for (int i = 0; i < bufCount; i++) {
+                result.add(buf[i]);
+            }
             // Signature matching is not the same as type matching, since
             // one signature might correspond to several types.
             // So if matchType is a Class or MethodType, refilter the results.
@@ -959,10 +1023,25 @@ import java.util.Objects;
             MemberName m = ref.clone();  // JVM will side-effect the ref
             assert(refKind == m.getReferenceKind());
             try {
+                // There are 4 entities in play here:
+                //   * LC: lookupClass
+                //   * REFC: symbolic reference class (MN.clazz before resolution);
+                //   * DEFC: resolved method holder (MN.clazz after resolution);
+                //   * PTYPES: parameter types (MN.type)
+                //
+                // What we care about when resolving a MemberName is consistency between DEFC and PTYPES.
+                // We do type alias (TA) checks on DEFC to ensure that. DEFC is not known until the JVM
+                // finishes the resolution, so do TA checks right after MHN.resolve() is over.
+                //
+                // All parameters passed by a caller are checked against MH type (PTYPES) on every invocation,
+                // so it is safe to call a MH from any context.
+                //
+                // REFC view on PTYPES doesn't matter, since it is used only as a starting point for resolution and doesn't
+                // participate in method selection.
                 m = MethodHandleNatives.resolve(m, lookupClass);
-                m.checkForTypeAlias();
+                m.checkForTypeAlias(m.getDeclaringClass());
                 m.resolution = null;
-            } catch (LinkageError ex) {
+            } catch (ClassNotFoundException | LinkageError ex) {
                 // JVM reports that the "bytecode behavior" would get an error
                 assert(!m.isResolved());
                 m.resolution = ex;
@@ -1069,9 +1148,4 @@ import java.util.Objects;
             return buf;
         }
     }
-
-//    static {
-//        System.out.println("Hello world!  My methods are:");
-//        System.out.println(Factory.INSTANCE.getMethods(MemberName.class, true, null));
-//    }
 }

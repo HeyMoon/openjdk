@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  */
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
@@ -76,6 +76,7 @@ import java.util.Map;
 import java.util.StringTokenizer;
 import java.util.WeakHashMap;
 import javax.xml.XMLConstants;
+import jdk.xml.internal.JdkXmlUtils;
 import org.w3c.dom.DOMConfiguration;
 import org.w3c.dom.DOMError;
 import org.w3c.dom.DOMErrorHandler;
@@ -173,7 +174,8 @@ XSLoader, DOMConfiguration {
         HONOUR_ALL_SCHEMALOCATIONS,
         NAMESPACE_GROWTH,
         TOLERATE_DUPLICATES,
-        USE_SERVICE_MECHANISM
+        USE_SERVICE_MECHANISM,
+        XMLConstants.USE_CATALOG
     };
 
     // property identifiers
@@ -187,7 +189,7 @@ XSLoader, DOMConfiguration {
         Constants.XERCES_PROPERTY_PREFIX + Constants.ERROR_REPORTER_PROPERTY;
 
     /** Property identifier: error handler. */
-    protected static final String ERROR_HANDLER =
+    public static final String ERROR_HANDLER =
         Constants.XERCES_PROPERTY_PREFIX + Constants.ERROR_HANDLER_PROPERTY;
 
     /** Property identifier: entity resolver. */
@@ -244,7 +246,12 @@ XSLoader, DOMConfiguration {
         SECURITY_MANAGER,
         LOCALE,
         SCHEMA_DV_FACTORY,
-        XML_SECURITY_PROPERTY_MANAGER
+        XML_SECURITY_PROPERTY_MANAGER,
+        JdkXmlUtils.CATALOG_DEFER,
+        JdkXmlUtils.CATALOG_FILES,
+        JdkXmlUtils.CATALOG_PREFER,
+        JdkXmlUtils.CATALOG_RESOLVE,
+        JdkXmlUtils.CDATA_CHUNK_SIZE
     };
 
     // Data
@@ -276,7 +283,7 @@ XSLoader, DOMConfiguration {
     private XSDDescription fXSDDescription = new XSDDescription();
     private String faccessExternalSchema = Constants.EXTERNAL_ACCESS_DEFAULT;
 
-    private WeakHashMap fJAXPCache;
+    private WeakHashMap<Object, SchemaGrammar> fJAXPCache;
     private Locale fLocale = Locale.getDefault();
 
     // XSLoader attributes
@@ -360,7 +367,7 @@ XSLoader, DOMConfiguration {
         }
         fCMBuilder = builder;
         fSchemaHandler = new XSDHandler(fGrammarBucket);
-        fJAXPCache = new WeakHashMap();
+        fJAXPCache = new WeakHashMap<>();
 
         fSettingsChanged = true;
     }
@@ -371,7 +378,7 @@ XSLoader, DOMConfiguration {
      * are recognized.
      */
     public String[] getRecognizedFeatures() {
-        return (String[])(RECOGNIZED_FEATURES.clone());
+        return RECOGNIZED_FEATURES.clone();
     } // getRecognizedFeatures():  String[]
 
     /**
@@ -413,7 +420,7 @@ XSLoader, DOMConfiguration {
      * are recognized.
      */
     public String[] getRecognizedProperties() {
-        return (String[])(RECOGNIZED_PROPERTIES.clone());
+        return RECOGNIZED_PROPERTIES.clone();
     } // getRecognizedProperties():  String[]
 
     /**
@@ -562,7 +569,7 @@ XSLoader, DOMConfiguration {
         desc.setBaseSystemId(source.getBaseSystemId());
         desc.setLiteralSystemId( source.getSystemId());
         // none of the other fields make sense for preparsing
-        Map locationPairs = new HashMap();
+        Map<String, LocationArray> locationPairs = new HashMap<>();
         // Process external schema location properties.
         // We don't call tokenizeSchemaLocationStr here, because we also want
         // to check whether the values are valid URI.
@@ -592,9 +599,8 @@ XSLoader, DOMConfiguration {
      * @throws IOException
      * @throws XNIException
      */
-    SchemaGrammar loadSchema(XSDDescription desc,
-            XMLInputSource source,
-            Map locationPairs) throws IOException, XNIException {
+    SchemaGrammar loadSchema(XSDDescription desc, XMLInputSource source,
+            Map<String, LocationArray> locationPairs) throws IOException, XNIException {
 
         // this should only be done once per invocation of this object;
         // unless application alters JAXPSource in the mean time.
@@ -602,7 +608,7 @@ XSLoader, DOMConfiguration {
             processJAXPSchemaSource(locationPairs);
         }
 
-        if (desc.isExternal()) {
+        if (desc.isExternal() && !source.isCreatedByResolver()) {
             String accessError = SecuritySupport.checkAccess(desc.getExpandedSystemId(), faccessExternalSchema, Constants.ACCESS_EXTERNAL_ALL);
             if (accessError != null) {
                 throw new XNIException(fErrorReporter.reportError(XSMessageFormatter.SCHEMA_DOMAIN,
@@ -617,9 +623,9 @@ XSLoader, DOMConfiguration {
 
     /**
      * This method tries to resolve location of the given schema.
-     * The loader stores the namespace/location pairs in a hashtable (use "" as the
+     * The loader stores the namespace/location pairs in a map (use "" as the
      * namespace of absent namespace). When resolving an entity, loader first tries
-     * to find in the hashtable whether there is a value for that namespace,
+     * to find in the map whether there is a value for that namespace,
      * if so, pass that location value to the user-defined entity resolver.
      *
      * @param desc
@@ -628,7 +634,8 @@ XSLoader, DOMConfiguration {
      * @return the XMLInputSource
      * @throws IOException
      */
-    public static XMLInputSource resolveDocument(XSDDescription desc, Map locationPairs,
+    public static XMLInputSource resolveDocument(XSDDescription desc,
+            Map<String, LocationArray> locationPairs,
             XMLEntityResolver entityResolver) throws IOException {
         String loc = null;
         // we consider the schema location properties for import
@@ -638,7 +645,7 @@ XSLoader, DOMConfiguration {
             String namespace = desc.getTargetNamespace();
             String ns = namespace == null ? XMLSymbols.EMPTY_STRING : namespace;
             // get the location hint for that namespace
-            LocationArray tempLA = (LocationArray)locationPairs.get(ns);
+            LocationArray tempLA = locationPairs.get(ns);
             if(tempLA != null)
                 loc = tempLA.getFirstLocation();
         }
@@ -659,7 +666,7 @@ XSLoader, DOMConfiguration {
 
     // add external schema locations to the location pairs
     public static void processExternalHints(String sl, String nsl,
-            Map locations,
+            Map<String, LocationArray> locations,
             XMLErrorReporter er) {
         if (sl != null) {
             try {
@@ -688,9 +695,10 @@ XSLoader, DOMConfiguration {
         if (nsl != null) {
             try {
                 // similarly for no ns schema location property
-                XSAttributeDecl attrDecl = SchemaGrammar.SG_XSI.getGlobalAttributeDecl(SchemaSymbols.XSI_NONAMESPACESCHEMALOCATION);
+                XSAttributeDecl attrDecl = SchemaGrammar.SG_XSI.getGlobalAttributeDecl(
+                        SchemaSymbols.XSI_NONAMESPACESCHEMALOCATION);
                 attrDecl.fType.validate(nsl, null, null);
-                LocationArray la = ((LocationArray)locations.get(XMLSymbols.EMPTY_STRING));
+                LocationArray la = locations.get(XMLSymbols.EMPTY_STRING);
                 if(la == null) {
                     la = new LocationArray();
                     locations.put(XMLSymbols.EMPTY_STRING, la);
@@ -712,7 +720,8 @@ XSLoader, DOMConfiguration {
     // @param schemaStr     The schemaLocation string to tokenize
     // @param locations     HashMap mapping namespaces to LocationArray objects holding lists of locaitons
     // @return true if no problems; false if string could not be tokenized
-    public static boolean tokenizeSchemaLocationStr(String schemaStr, Map locations, String base) {
+    public static boolean tokenizeSchemaLocationStr(String schemaStr,
+            Map<String, XMLSchemaLoader.LocationArray> locations, String base) {
         if (schemaStr!= null) {
             StringTokenizer t = new StringTokenizer(schemaStr, " \n\t\r");
             String namespace, location;
@@ -722,7 +731,7 @@ XSLoader, DOMConfiguration {
                     return false; // error!
                 }
                 location = t.nextToken();
-                LocationArray la = ((LocationArray)locations.get(namespace));
+                LocationArray la = locations.get(namespace);
                 if(la == null) {
                     la = new LocationArray();
                     locations.put(namespace, la);
@@ -749,20 +758,21 @@ XSLoader, DOMConfiguration {
      * Note: all JAXP schema files will be checked for full-schema validity if the feature was set up
      *
      */
-    private void processJAXPSchemaSource(Map locationPairs) throws IOException {
+    private void processJAXPSchemaSource(
+            Map<String, LocationArray> locationPairs) throws IOException {
         fJAXPProcessed = true;
         if (fJAXPSource == null) {
             return;
         }
 
-        Class componentType = fJAXPSource.getClass().getComponentType();
+        Class<?> componentType = fJAXPSource.getClass().getComponentType();
         XMLInputSource xis = null;
         String sid = null;
         if (componentType == null) {
             // Not an array
             if (fJAXPSource instanceof InputStream ||
                     fJAXPSource instanceof InputSource) {
-                SchemaGrammar g = (SchemaGrammar)fJAXPCache.get(fJAXPSource);
+                SchemaGrammar g = fJAXPCache.get(fJAXPSource);
                 if (g != null) {
                     fGrammarBucket.putGrammar(g);
                     return;
@@ -811,11 +821,11 @@ XSLoader, DOMConfiguration {
         // InputSource also, apart from [] of type Object.
         Object[] objArr = (Object[]) fJAXPSource;
         // make local array for storing target namespaces of schemasources specified in object arrays.
-        ArrayList jaxpSchemaSourceNamespaces = new ArrayList();
+        ArrayList<String> jaxpSchemaSourceNamespaces = new ArrayList<>();
         for (int i = 0; i < objArr.length; i++) {
             if (objArr[i] instanceof InputStream ||
                     objArr[i] instanceof InputSource) {
-                SchemaGrammar g = (SchemaGrammar)fJAXPCache.get(objArr[i]);
+                SchemaGrammar g = fJAXPCache.get(objArr[i]);
                 if (g != null) {
                     fGrammarBucket.putGrammar(g);
                     continue;
@@ -880,7 +890,7 @@ XSLoader, DOMConfiguration {
             if (xis == null) {
                 // REVISIT: can this happen?
                 // Treat value as a URI and pass in as systemId
-                return new XMLInputSource(null, loc, null);
+                return new XMLInputSource(null, loc, null, false);
             }
             return xis;
         }
@@ -929,10 +939,10 @@ XSLoader, DOMConfiguration {
                     sis.getEncoding());
         }
 
-        return new XMLInputSource(publicId, systemId, null);
+        return new XMLInputSource(publicId, systemId, null, false);
     }
 
-    static class LocationArray{
+    public static class LocationArray{
 
         int length ;
         String [] locations = new String[2];
@@ -1168,7 +1178,7 @@ XSLoader, DOMConfiguration {
      */
     public XSModel loadURI(String uri) {
         try {
-            Grammar g = loadGrammar(new XMLInputSource(null, uri, null));
+            Grammar g = loadGrammar(new XMLInputSource(null, uri, null, false));
             return ((XSGrammar)g).toXSModel();
         }
         catch (Exception e){
@@ -1186,7 +1196,7 @@ XSLoader, DOMConfiguration {
         for (int i = 0; i < length; i++) {
             try {
                 gs[i] =
-                    (SchemaGrammar) loadGrammar(new XMLInputSource(null, uriList.item(i), null));
+                    (SchemaGrammar) loadGrammar(new XMLInputSource(null, uriList.item(i), null, false));
             } catch (Exception e) {
                 reportDOMFatalError(e);
                 return null;
@@ -1278,7 +1288,7 @@ XSLoader, DOMConfiguration {
      */
     public DOMStringList getParameterNames() {
         if (fRecognizedParameters == null){
-            ArrayList v = new ArrayList();
+            ArrayList<String> v = new ArrayList<>();
             v.add(Constants.DOM_VALIDATE);
             v.add(Constants.DOM_ERROR_HANDLER);
             v.add(Constants.DOM_RESOURCE_RESOLVER);
@@ -1379,7 +1389,7 @@ XSLoader, DOMConfiguration {
 
     }
 
-        XMLInputSource dom2xmlInputSource(LSInput is) {
+    XMLInputSource dom2xmlInputSource(LSInput is) {
         // need to wrap the LSInput with an XMLInputSource
         XMLInputSource xis = null;
 
@@ -1413,7 +1423,7 @@ XSLoader, DOMConfiguration {
         // otherwise, just use the public/system/base Ids
         else {
             xis = new XMLInputSource(is.getPublicId(), is.getSystemId(),
-                    is.getBaseURI());
+                    is.getBaseURI(), false);
         }
 
         return xis;

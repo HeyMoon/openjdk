@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,15 +23,17 @@
  */
 
 #include "precompiled.hpp"
-#include "gc/g1/concurrentMark.inline.hpp"
 #include "gc/g1/dirtyCardQueue.hpp"
 #include "gc/g1/g1CollectedHeap.inline.hpp"
 #include "gc/g1/g1CollectorState.hpp"
+#include "gc/g1/g1ConcurrentMark.inline.hpp"
 #include "gc/g1/g1EvacFailure.hpp"
+#include "gc/g1/g1HeapVerifier.hpp"
 #include "gc/g1/g1OopClosures.inline.hpp"
 #include "gc/g1/g1_globals.hpp"
 #include "gc/g1/heapRegion.hpp"
 #include "gc/g1/heapRegionRemSet.hpp"
+#include "gc/shared/preservedMarks.inline.hpp"
 
 class UpdateRSetDeferred : public OopsInHeapRegionClosure {
 private:
@@ -47,8 +49,9 @@ public:
   virtual void do_oop(      oop* p) { do_oop_work(p); }
   template <class T> void do_oop_work(T* p) {
     assert(_from->is_in_reserved(p), "paranoia");
-    if (!_from->is_in_reserved(oopDesc::load_decode_heap_oop(p)) &&
-        !_from->is_survivor()) {
+    assert(!_from->is_survivor(), "Unexpected evac failure in survivor region");
+
+    if (!_from->is_in_reserved(oopDesc::load_decode_heap_oop(p))) {
       size_t card_index = _ct_bs->index_for(p);
       if (_ct_bs->mark_card_deferred(card_index)) {
         _dcq->enqueue((jbyte*)_ct_bs->byte_for_index(card_index));
@@ -60,7 +63,7 @@ public:
 class RemoveSelfForwardPtrObjClosure: public ObjectClosure {
 private:
   G1CollectedHeap* _g1;
-  ConcurrentMark* _cm;
+  G1ConcurrentMark* _cm;
   HeapRegion* _hr;
   size_t _marked_bytes;
   OopsInHeapRegionClosure *_update_rset_cl;
@@ -93,8 +96,6 @@ public:
   void do_object(oop obj) {
     HeapWord* obj_addr = (HeapWord*) obj;
     assert(_hr->is_in(obj_addr), "sanity");
-    size_t obj_size = obj->size();
-    HeapWord* obj_end = obj_addr + obj_size;
 
     if (obj->is_forwarded() && obj->forwardee() == obj) {
       // The object failed to move.
@@ -117,10 +118,12 @@ public:
         // explicitly and all objects in the CSet are considered
         // (implicitly) live. So, we won't mark them explicitly and
         // we'll leave them over NTAMS.
-        _cm->grayRoot(obj, obj_size, _worker_id, _hr);
+        _cm->grayRoot(obj, _hr);
       }
+      size_t obj_size = obj->size();
+
       _marked_bytes += (obj_size * HeapWordSize);
-      obj->set_mark(markOopDesc::prototype());
+      PreservedMarks::init_forwarded_mark(obj);
 
       // While we were processing RSet buffers during the collection,
       // we actually didn't scan any cards on the collection set,
@@ -136,6 +139,7 @@ public:
       // the collection set. So, we'll recreate such entries now.
       obj->oop_iterate(_update_rset_cl);
 
+      HeapWord* obj_end = obj_addr + obj_size;
       _last_forwarded_object_end = obj_end;
       _hr->cross_threshold(obj_addr, obj_end);
     }
@@ -165,9 +169,9 @@ public:
         size_t size_second_obj = ((oop)end_first_obj)->size();
         HeapWord* end_of_second_obj = end_first_obj + size_second_obj;
         assert(end == end_of_second_obj,
-               err_msg("More than two objects were used to fill the area from " PTR_FORMAT " to " PTR_FORMAT ", "
-                       "second objects size " SIZE_FORMAT " ends at " PTR_FORMAT,
-                       p2i(start), p2i(end), size_second_obj, p2i(end_of_second_obj)));
+               "More than two objects were used to fill the area from " PTR_FORMAT " to " PTR_FORMAT ", "
+               "second objects size " SIZE_FORMAT " ends at " PTR_FORMAT,
+               p2i(start), p2i(end), size_second_obj, p2i(end_of_second_obj));
 #endif
       }
     }
@@ -215,24 +219,15 @@ public:
     bool during_initial_mark = _g1h->collector_state()->during_initial_mark_pause();
     bool during_conc_mark = _g1h->collector_state()->mark_in_progress();
 
-    assert(!hr->is_pinned(), err_msg("Unexpected pinned region at index %u", hr->hrm_index()));
+    assert(!hr->is_pinned(), "Unexpected pinned region at index %u", hr->hrm_index());
     assert(hr->in_collection_set(), "bad CS");
 
     if (_hrclaimer->claim_region(hr->hrm_index())) {
       if (hr->evacuation_failed()) {
         hr->note_self_forwarding_removal_start(during_initial_mark,
                                                during_conc_mark);
-        _g1h->check_bitmaps("Self-Forwarding Ptr Removal", hr);
+        _g1h->verifier()->check_bitmaps("Self-Forwarding Ptr Removal", hr);
 
-        // In the common case (i.e. when there is no evacuation
-        // failure) we make sure that the following is done when
-        // the region is freed so that it is "ready-to-go" when it's
-        // re-allocated. However, when evacuation failure happens, a
-        // region will remain in the heap and might ultimately be added
-        // to a CSet in the future. So we have to be careful here and
-        // make sure the region's RSet is ready for parallel iteration
-        // whenever this might be required in the future.
-        hr->rem_set()->reset_for_par_iteration();
         hr->reset_bot();
 
         size_t live_bytes = remove_self_forward_ptr_by_walking_hr(hr, during_initial_mark);
@@ -256,6 +251,5 @@ G1ParRemoveSelfForwardPtrsTask::G1ParRemoveSelfForwardPtrsTask() :
 void G1ParRemoveSelfForwardPtrsTask::work(uint worker_id) {
   RemoveSelfForwardPtrHRClosure rsfp_cl(worker_id, &_hrclaimer);
 
-  HeapRegion* hr = _g1h->start_cset_region_for_worker(worker_id);
-  _g1h->collection_set_iterate_from(hr, &rsfp_cl);
+  _g1h->collection_set_iterate_from(&rsfp_cl, worker_id);
 }

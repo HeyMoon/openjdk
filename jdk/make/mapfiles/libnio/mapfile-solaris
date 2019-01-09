@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2001, 2013, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 
 SUNWprivate_1.1 {
 	global:
+                JNI_OnLoad;
                 Java_java_nio_MappedByteBuffer_force0;
                 Java_java_nio_MappedByteBuffer_isLoaded0;
                 Java_java_nio_MappedByteBuffer_load0;
@@ -47,6 +48,7 @@ SUNWprivate_1.1 {
                 Java_sun_nio_ch_FileChannelImpl_position0;
                 Java_sun_nio_ch_FileChannelImpl_transferTo0;
                 Java_sun_nio_ch_FileChannelImpl_unmap0;
+		Java_sun_nio_ch_FileDispatcherImpl_allocate0;
                 Java_sun_nio_ch_FileDispatcherImpl_close0;
                 Java_sun_nio_ch_FileDispatcherImpl_closeIntFD;
 		Java_sun_nio_ch_FileDispatcherImpl_force0;
@@ -96,6 +98,7 @@ SUNWprivate_1.1 {
 		Java_sun_nio_ch_Net_setIntOption0;
                 Java_sun_nio_ch_Net_initIDs;
 		Java_sun_nio_ch_Net_isIPv6Available0;
+                Java_sun_nio_ch_Net_isReusePortAvailable0;
 		Java_sun_nio_ch_Net_joinOrDrop4;
 		Java_sun_nio_ch_Net_blockOrUnblock4;
 		Java_sun_nio_ch_Net_joinOrDrop6;
@@ -129,16 +132,14 @@ SUNWprivate_1.1 {
 		Java_sun_nio_ch_SolarisEventPort_port_1get;
 		Java_sun_nio_ch_SolarisEventPort_port_1getn;
 		Java_sun_nio_ch_SolarisEventPort_port_1send;
-		Java_sun_nio_fs_GnomeFileTypeDetector_initializeGio;
-		Java_sun_nio_fs_GnomeFileTypeDetector_probeUsingGio;
-		Java_sun_nio_fs_GnomeFileTypeDetector_initializeGnomeVfs;
-		Java_sun_nio_fs_GnomeFileTypeDetector_probeUsingGnomeVfs;
 		Java_sun_nio_fs_UnixNativeDispatcher_init;
 		Java_sun_nio_fs_UnixNativeDispatcher_getcwd;
 		Java_sun_nio_fs_UnixNativeDispatcher_strerror;
 		Java_sun_nio_fs_UnixNativeDispatcher_dup;
 		Java_sun_nio_fs_UnixNativeDispatcher_access0;
+		Java_sun_nio_fs_UnixNativeDispatcher_exists0;
 		Java_sun_nio_fs_UnixNativeDispatcher_stat0;
+		Java_sun_nio_fs_UnixNativeDispatcher_stat1;
 		Java_sun_nio_fs_UnixNativeDispatcher_lstat0;
 		Java_sun_nio_fs_UnixNativeDispatcher_fstat;
 		Java_sun_nio_fs_UnixNativeDispatcher_fstatat0;
@@ -151,7 +152,7 @@ SUNWprivate_1.1 {
 		Java_sun_nio_fs_UnixNativeDispatcher_futimes;
 		Java_sun_nio_fs_UnixNativeDispatcher_open0;
 		Java_sun_nio_fs_UnixNativeDispatcher_openat0;
-		Java_sun_nio_fs_UnixNativeDispatcher_close;
+		Java_sun_nio_fs_UnixNativeDispatcher_close0;
 		Java_sun_nio_fs_UnixNativeDispatcher_read;
 		Java_sun_nio_fs_UnixNativeDispatcher_write;
 		Java_sun_nio_fs_UnixNativeDispatcher_fopen0;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -55,6 +55,7 @@ private:
   DebugInformationRecorder* _debug_info;
   Dependencies*    _dependencies;
   const char*      _failure_reason;
+  bool             _inc_decompile_count_on_failure;
   int              _compilable;
   bool             _break_at_compile;
   int              _num_inlined_bytecodes;
@@ -118,45 +119,46 @@ private:
                              bool require_local);
 
   // Constant pool access.
-  ciKlass*   get_klass_by_index(constantPoolHandle cpool,
+  ciKlass*   get_klass_by_index(const constantPoolHandle& cpool,
                                 int klass_index,
                                 bool& is_accessible,
                                 ciInstanceKlass* loading_klass);
-  ciConstant get_constant_by_index(constantPoolHandle cpool,
+  ciConstant get_constant_by_index(const constantPoolHandle& cpool,
                                    int pool_index, int cache_index,
                                    ciInstanceKlass* accessor);
   ciField*   get_field_by_index(ciInstanceKlass* loading_klass,
                                 int field_index);
-  ciMethod*  get_method_by_index(constantPoolHandle cpool,
+  ciMethod*  get_method_by_index(const constantPoolHandle& cpool,
                                  int method_index, Bytecodes::Code bc,
                                  ciInstanceKlass* loading_klass);
 
   // Implementation methods for loading and constant pool access.
   ciKlass* get_klass_by_name_impl(ciKlass* accessing_klass,
-                                  constantPoolHandle cpool,
+                                  const constantPoolHandle& cpool,
                                   ciSymbol* klass_name,
                                   bool require_local);
-  ciKlass*   get_klass_by_index_impl(constantPoolHandle cpool,
+  ciKlass*   get_klass_by_index_impl(const constantPoolHandle& cpool,
                                      int klass_index,
                                      bool& is_accessible,
                                      ciInstanceKlass* loading_klass);
-  ciConstant get_constant_by_index_impl(constantPoolHandle cpool,
+  ciConstant get_constant_by_index_impl(const constantPoolHandle& cpool,
                                         int pool_index, int cache_index,
                                         ciInstanceKlass* loading_klass);
   ciField*   get_field_by_index_impl(ciInstanceKlass* loading_klass,
                                      int field_index);
-  ciMethod*  get_method_by_index_impl(constantPoolHandle cpool,
+  ciMethod*  get_method_by_index_impl(const constantPoolHandle& cpool,
                                       int method_index, Bytecodes::Code bc,
                                       ciInstanceKlass* loading_klass);
 
   // Helper methods
   bool       check_klass_accessibility(ciKlass* accessing_klass,
                                       Klass* resolved_klass);
-  Method*    lookup_method(InstanceKlass*  accessor,
-                           InstanceKlass*  holder,
-                           Symbol*         name,
-                           Symbol*         sig,
-                           Bytecodes::Code bc);
+  Method*    lookup_method(ciInstanceKlass* accessor,
+                           ciKlass*         holder,
+                           Symbol*          name,
+                           Symbol*          sig,
+                           Bytecodes::Code  bc,
+                           constantTag      tag);
 
   // Get a ciObject from the object factory.  Ensures uniqueness
   // of ciObjects.
@@ -225,11 +227,12 @@ private:
   // Get a ciMethod representing either an unfound method or
   // a method with an unloaded holder.  Ensures uniqueness of
   // the result.
-  ciMethod* get_unloaded_method(ciInstanceKlass* holder,
+  ciMethod* get_unloaded_method(ciKlass*         holder,
                                 ciSymbol*        name,
                                 ciSymbol*        signature,
                                 ciInstanceKlass* accessor) {
-    return _factory->get_unloaded_method(holder, name, signature, accessor);
+    ciInstanceKlass* declared_holder = get_instance_klass_for_declared_method_holder(holder);
+    return _factory->get_unloaded_method(declared_holder, name, signature, accessor);
   }
 
   // Get a ciKlass representing an unloaded klass.
@@ -352,6 +355,7 @@ public:
   // The compiler task which has created this env.
   // May be useful to find out compile_id, comp_level, etc.
   CompileTask* task() { return _task; }
+
   // Handy forwards to the task:
   int comp_level();   // task()->comp_level()
   uint compile_id();  // task()->compile_id()
@@ -367,7 +371,6 @@ public:
                        ExceptionHandlerTable*    handler_table,
                        ImplicitExceptionTable*   inc_table,
                        AbstractCompiler*         compiler,
-                       int                       comp_level,
                        bool                      has_unsafe_access,
                        bool                      has_wide_vectors,
                        RTMState                  rtm_state = NoRTM);

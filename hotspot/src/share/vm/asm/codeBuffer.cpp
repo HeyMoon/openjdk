@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -305,7 +305,34 @@ address CodeSection::target(Label& L, address branch_pc) {
   }
 }
 
+void CodeSection::relocate(address at, relocInfo::relocType rtype, int format, jint method_index) {
+  RelocationHolder rh;
+  switch (rtype) {
+    case relocInfo::none: return;
+    case relocInfo::opt_virtual_call_type: {
+      rh = opt_virtual_call_Relocation::spec(method_index);
+      break;
+    }
+    case relocInfo::static_call_type: {
+      rh = static_call_Relocation::spec(method_index);
+      break;
+    }
+    case relocInfo::virtual_call_type: {
+      assert(method_index == 0, "resolved method overriding is not supported");
+      rh = Relocation::spec_simple(rtype);
+      break;
+    }
+    default: {
+      rh = Relocation::spec_simple(rtype);
+      break;
+    }
+  }
+  relocate(at, rh, format);
+}
+
 void CodeSection::relocate(address at, RelocationHolder const& spec, int format) {
+  // Do not relocate in scratch buffers.
+  if (scratch_emit()) { return; }
   Relocation* reloc = spec.reloc();
   relocInfo::relocType rtype = (relocInfo::relocType) reloc->type();
   if (rtype == relocInfo::none)  return;
@@ -509,8 +536,8 @@ static void append_oop_references(GrowableArray<oop>* oops, Klass* k) {
   }
 }
 
-void CodeBuffer::finalize_oop_references(methodHandle mh) {
-  No_Safepoint_Verifier nsv;
+void CodeBuffer::finalize_oop_references(const methodHandle& mh) {
+  NoSafepointVerifier nsv;
 
   GrowableArray<oop> oops;
 
@@ -579,7 +606,7 @@ void CodeBuffer::finalize_oop_references(methodHandle mh) {
 
 
 
-csize_t CodeBuffer::total_offset_of(CodeSection* cs) const {
+csize_t CodeBuffer::total_offset_of(const CodeSection* cs) const {
   csize_t size_so_far = 0;
   for (int n = (int) SECT_FIRST; n < (int) SECT_LIMIT; n++) {
     const CodeSection* cur_cs = code_section(n);
@@ -602,21 +629,19 @@ csize_t CodeBuffer::total_relocation_size() const {
   return (csize_t) align_size_up(total, HeapWordSize);
 }
 
-csize_t CodeBuffer::copy_relocations_to(CodeBlob* dest) const {
-  address buf = NULL;
+csize_t CodeBuffer::copy_relocations_to(address buf, csize_t buf_limit, bool only_inst) const {
   csize_t buf_offset = 0;
-  csize_t buf_limit = 0;
-  if (dest != NULL) {
-    buf = (address)dest->relocation_begin();
-    buf_limit = (address)dest->relocation_end() - buf;
-    assert((uintptr_t)buf % HeapWordSize == 0, "buf must be fully aligned");
-    assert(buf_limit % HeapWordSize == 0, "buf must be evenly sized");
-  }
-  // if dest == NULL, this is just the sizing pass
-
   csize_t code_end_so_far = 0;
   csize_t code_point_so_far = 0;
+
+  assert((uintptr_t)buf % HeapWordSize == 0, "buf must be fully aligned");
+  assert(buf_limit % HeapWordSize == 0, "buf must be evenly sized");
+
   for (int n = (int) SECT_FIRST; n < (int)SECT_LIMIT; n++) {
+    if (only_inst && (n != (int)SECT_INSTS)) {
+      // Need only relocation info for code.
+      continue;
+    }
     // pull relocs out of each section
     const CodeSection* cs = code_section(n);
     assert(!(cs->is_empty() && cs->locs_count() > 0), "sanity");
@@ -683,7 +708,23 @@ csize_t CodeBuffer::copy_relocations_to(CodeBlob* dest) const {
     buf_offset += sizeof(relocInfo);
   }
 
-  assert(code_end_so_far == total_content_size(), "sanity");
+  assert(only_inst || code_end_so_far == total_content_size(), "sanity");
+
+  return buf_offset;
+}
+
+csize_t CodeBuffer::copy_relocations_to(CodeBlob* dest) const {
+  address buf = NULL;
+  csize_t buf_offset = 0;
+  csize_t buf_limit = 0;
+
+  if (dest != NULL) {
+    buf = (address)dest->relocation_begin();
+    buf_limit = (address)dest->relocation_end() - buf;
+  }
+  // if dest == NULL, this is just the sizing pass
+  //
+  buf_offset = copy_relocations_to(buf, buf_limit, false);
 
   // Account for index:
   if (buf != NULL) {
@@ -706,6 +747,10 @@ void CodeBuffer::copy_code_to(CodeBlob* dest_blob) {
   CodeBuffer dest(dest_blob);
   assert(dest_blob->content_size() >= total_content_size(), "good sizing");
   this->compute_final_layout(&dest);
+
+  // Set beginning of constant table before relocating.
+  dest_blob->set_ctable_begin(dest.consts()->start());
+
   relocate_code_to(&dest);
 
   // transfer strings and comments from buffer to blob
@@ -859,6 +904,7 @@ void CodeBuffer::expand(CodeSection* which_cs, csize_t amount) {
 
   // Figure new capacity for each section.
   csize_t new_capacity[SECT_LIMIT];
+  memset(new_capacity, 0, sizeof(csize_t) * SECT_LIMIT);
   csize_t new_total_cap
     = figure_expanded_capacities(which_cs, amount, new_capacity);
 
@@ -897,6 +943,9 @@ void CodeBuffer::expand(CodeSection* which_cs, csize_t amount) {
       cb_sect->set_mark(cb_start + this_sect->mark_off());
     }
   }
+
+  // Needs to be initialized when calling fix_relocation_after_move.
+  cb.blob()->set_ctable_begin(cb.consts()->start());
 
   // Move all the code and relocations to the new blob:
   relocate_code_to(&cb);
@@ -1126,7 +1175,8 @@ void CodeStrings::print_block_comment(outputStream* stream, intptr_t offset) con
     while (c && c->offset() == offset) {
       stream->bol();
       stream->print("%s", _prefix);
-      stream->print_cr("%s", c->string());
+      // Don't interpret as format strings since it could contain %
+      stream->print_raw_cr(c->string());
       c = c->next_comment();
     }
   }

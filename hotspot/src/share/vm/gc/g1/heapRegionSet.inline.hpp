@@ -29,11 +29,11 @@
 
 inline void HeapRegionSetBase::add(HeapRegion* hr) {
   check_mt_safety();
-  assert(hr->containing_set() == NULL, hrs_ext_msg(this, "should not already have a containing set %u"));
-  assert(hr->next() == NULL, hrs_ext_msg(this, "should not already be linked"));
-  assert(hr->prev() == NULL, hrs_ext_msg(this, "should not already be linked"));
+  assert_heap_region_set(hr->containing_set() == NULL, "should not already have a containing set");
+  assert_heap_region_set(hr->next() == NULL, "should not already be linked");
+  assert_heap_region_set(hr->prev() == NULL, "should not already be linked");
 
-  _count.increment(1u, hr->capacity());
+  _length++;
   hr->set_containing_set(this);
   verify_region(hr);
 }
@@ -41,18 +41,18 @@ inline void HeapRegionSetBase::add(HeapRegion* hr) {
 inline void HeapRegionSetBase::remove(HeapRegion* hr) {
   check_mt_safety();
   verify_region(hr);
-  assert(hr->next() == NULL, hrs_ext_msg(this, "should already be unlinked"));
-  assert(hr->prev() == NULL, hrs_ext_msg(this, "should already be unlinked"));
+  assert_heap_region_set(hr->next() == NULL, "should already be unlinked");
+  assert_heap_region_set(hr->prev() == NULL, "should already be unlinked");
 
   hr->set_containing_set(NULL);
-  assert(_count.length() > 0, hrs_ext_msg(this, "pre-condition"));
-  _count.decrement(1u, hr->capacity());
+  assert_heap_region_set(_length > 0, "pre-condition");
+  _length--;
 }
 
 inline void FreeRegionList::add_ordered(HeapRegion* hr) {
-  assert((length() == 0 && _head == NULL && _tail == NULL && _last == NULL) ||
-         (length() >  0 && _head != NULL && _tail != NULL),
-         hrs_ext_msg(this, "invariant"));
+  assert_free_region_list((length() == 0 && _head == NULL && _tail == NULL && _last == NULL) ||
+                          (length() >  0 && _head != NULL && _tail != NULL),
+                          "invariant");
   // add() will verify the region and check mt safety.
   add(hr);
 
@@ -128,8 +128,7 @@ inline HeapRegion* FreeRegionList::remove_region(bool from_head) {
   if (is_empty()) {
     return NULL;
   }
-  assert(length() > 0 && _head != NULL && _tail != NULL,
-         hrs_ext_msg(this, "invariant"));
+  assert_free_region_list(length() > 0 && _head != NULL && _tail != NULL, "invariant");
 
   HeapRegion* hr;
 

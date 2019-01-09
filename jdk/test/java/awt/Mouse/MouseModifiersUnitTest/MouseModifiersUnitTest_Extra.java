@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,7 @@
 
 /*
   @test %I% %E%
+  @key headful
   @bug 6315717
   @summary verifies that modifiers are correct for extra buttons
   @author Andrei Dmitriev : area=awt.mouse
@@ -446,7 +447,7 @@ public class MouseModifiersUnitTest_Extra extends Frame {
 
     public static void main(String []s){
         if (MouseInfo.getNumberOfButtons() < 4){
-            System.out.println("There are less then 4 buttons on the mouse. The test may not be accomplished. Skipping.");
+            System.out.println("There are less than 4 buttons on the mouse. The test may not be accomplished. Skipping.");
             return;
         }
         initVars();

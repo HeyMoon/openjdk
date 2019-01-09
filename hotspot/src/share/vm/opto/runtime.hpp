@@ -146,15 +146,11 @@ class OptoRuntime : public AllStatic {
   static address _vtable_must_compile_Java;
   static address _complete_monitor_locking_Java;
   static address _rethrow_Java;
+  static address _monitor_notify_Java;
+  static address _monitor_notifyAll_Java;
 
   static address _slow_arraycopy_Java;
   static address _register_finalizer_Java;
-
-# ifdef ENABLE_ZAP_DEAD_LOCALS
-  static address _zap_dead_Java_locals_Java;
-  static address _zap_dead_native_locals_Java;
-# endif
-
 
   //
   // Implementation of runtime methods
@@ -186,6 +182,9 @@ public:
   static void complete_monitor_locking_C(oopDesc* obj, BasicLock* lock, JavaThread* thread);
   static void complete_monitor_unlocking_C(oopDesc* obj, BasicLock* lock, JavaThread* thread);
 
+  static void monitor_notify_C(oopDesc* obj, JavaThread* thread);
+  static void monitor_notifyAll_C(oopDesc* obj, JavaThread* thread);
+
 private:
 
   // Implicit exception support
@@ -206,19 +205,6 @@ private:
   static void generate_exception_blob();
 
   static void register_finalizer(oopDesc* obj, JavaThread* thread);
-
-  // zaping dead locals, either from Java frames or from native frames
-# ifdef ENABLE_ZAP_DEAD_LOCALS
-  static void zap_dead_Java_locals_C(   JavaThread* thread);
-  static void zap_dead_native_locals_C( JavaThread* thread);
-
-  static void zap_dead_java_or_native_locals( JavaThread*, bool (*)(frame*));
-
- public:
-   static int ZapDeadCompiledLocals_count;
-
-# endif
-
 
  public:
 
@@ -244,18 +230,12 @@ private:
   static address g1_wb_pre_Java()                        { return _g1_wb_pre_Java; }
   static address g1_wb_post_Java()                       { return _g1_wb_post_Java; }
   static address vtable_must_compile_stub()              { return _vtable_must_compile_Java; }
-  static address complete_monitor_locking_Java()         { return _complete_monitor_locking_Java;   }
+  static address complete_monitor_locking_Java()         { return _complete_monitor_locking_Java; }
+  static address monitor_notify_Java()                   { return _monitor_notify_Java; }
+  static address monitor_notifyAll_Java()                { return _monitor_notifyAll_Java; }
 
   static address slow_arraycopy_Java()                   { return _slow_arraycopy_Java; }
   static address register_finalizer_Java()               { return _register_finalizer_Java; }
-
-
-# ifdef ENABLE_ZAP_DEAD_LOCALS
-  static address zap_dead_locals_stub(bool is_native)    { return is_native
-                                                                  ? _zap_dead_native_locals_Java
-                                                                  : _zap_dead_Java_locals_Java; }
-  static MachNode* node_to_call_zap_dead_locals(Node* n, int block_num, bool is_native);
-# endif
 
   static ExceptionBlob*    exception_blob()                      { return _exception_blob; }
 
@@ -285,6 +265,7 @@ private:
   static const TypeFunc* g1_wb_post_Type();
   static const TypeFunc* complete_monitor_enter_Type();
   static const TypeFunc* complete_monitor_exit_Type();
+  static const TypeFunc* monitor_notify_Type();
   static const TypeFunc* uncommon_trap_Type();
   static const TypeFunc* athrow_Type();
   static const TypeFunc* rethrow_Type();
@@ -306,6 +287,7 @@ private:
 
   static const TypeFunc* aescrypt_block_Type();
   static const TypeFunc* cipherBlockChaining_aescrypt_Type();
+  static const TypeFunc* counterMode_aescrypt_Type();
 
   static const TypeFunc* sha_implCompress_Type();
   static const TypeFunc* digestBase_implCompressMB_Type();
@@ -318,10 +300,14 @@ private:
 
   static const TypeFunc* mulAdd_Type();
 
+  static const TypeFunc* vectorizedMismatch_Type();
+
   static const TypeFunc* ghash_processBlocks_Type();
 
   static const TypeFunc* updateBytesCRC32_Type();
   static const TypeFunc* updateBytesCRC32C_Type();
+
+  static const TypeFunc* updateBytesAdler32_Type();
 
   // leaf on stack replacement interpreter accessor types
   static const TypeFunc* osr_end_Type();
@@ -342,10 +328,6 @@ private:
   // Dtrace support
   static const TypeFunc* dtrace_method_entry_exit_Type();
   static const TypeFunc* dtrace_object_alloc_Type();
-
-# ifdef ENABLE_ZAP_DEAD_LOCALS
-  static const TypeFunc* zap_dead_locals_Type();
-# endif
 
  private:
  static NamedCounter * volatile _named_counters;

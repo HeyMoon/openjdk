@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,164 +22,155 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package jdk.internal.jrtfs;
 
-import java.io.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.nio.channels.*;
+import java.nio.channels.FileChannel;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.file.*;
-import java.nio.file.DirectoryStream.Filter;
-import java.nio.file.attribute.*;
-import java.util.*;
+import java.nio.file.DirectoryStream.Filter;;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.BasicFileAttributeView;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.FileTime;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Objects;
+import java.util.Set;
 import static java.nio.file.StandardOpenOption.*;
 import static java.nio.file.StandardCopyOption.*;
 
+/**
+ * Base class for Path implementation of jrt file systems.
+ *
+ * @implNote This class needs to maintain JDK 8 source compatibility.
+ *
+ * It is used internally in the JDK to implement jimage/jrtfs access,
+ * but also compiled and delivered as part of the jrtfs.jar to support access
+ * to the jimage file provided by the shipped JDK by tools running on JDK 8.
+ */
 final class JrtPath implements Path {
 
-    private final JrtFileSystem jrtfs;
-    private final byte[] path;
+    final JrtFileSystem jrtfs;
+    private final String path;
     private volatile int[] offsets;
-    private int hashcode = 0;  // cached hashcode (created lazily)
 
-    JrtPath(JrtFileSystem jrtfs, byte[] path) {
-        this(jrtfs, path, false);
-    }
-
-    JrtPath(JrtFileSystem jrtfs, byte[] path, boolean normalized) {
+    JrtPath(JrtFileSystem jrtfs, String path) {
         this.jrtfs = jrtfs;
-        if (normalized)
-            this.path = path;
-        else
-            this.path = normalize(path);
+        this.path = normalize(path);
+        this.resolved = null;
     }
 
-    byte[] getName() {
+    JrtPath(JrtFileSystem jrtfs, String path, boolean normalized) {
+        this.jrtfs = jrtfs;
+        this.path = normalized ? path : normalize(path);
+        this.resolved = null;
+    }
+
+    final String getName() {
         return path;
     }
 
     @Override
-    public JrtPath getRoot() {
-        if (this.isAbsolute())
+    public final JrtPath getRoot() {
+        if (this.isAbsolute()) {
             return jrtfs.getRootPath();
-        else
+        } else {
             return null;
+        }
     }
 
     @Override
-    public Path getFileName() {
-        initOffsets();
-        int count = offsets.length;
-        if (count == 0)
-            return null;  // no elements so no name
-        if (count == 1 && path[0] != '/')
+    public final JrtPath getFileName() {
+        if (path.length() == 0)
             return this;
-        int lastOffset = offsets[count-1];
-        int len = path.length - lastOffset;
-        byte[] result = new byte[len];
-        System.arraycopy(path, lastOffset, result, 0, len);
-        return new JrtPath(jrtfs, result);
+        if (path.length() == 1 && path.charAt(0) == '/')
+            return null;
+        int off = path.lastIndexOf('/');
+        if (off == -1)
+            return this;
+        return new JrtPath(jrtfs, path.substring(off + 1), true);
     }
 
     @Override
-    public JrtPath getParent() {
+    public final JrtPath getParent() {
         initOffsets();
         int count = offsets.length;
-        if (count == 0)    // no elements so no parent
+        if (count == 0) {     // no elements so no parent
             return null;
-        int len = offsets[count-1] - 1;
-        if (len <= 0)      // parent is root only (may be null)
+        }
+        int off = offsets[count - 1] - 1;
+        if (off <= 0) {       // parent is root only (may be null)
             return getRoot();
-        byte[] result = new byte[len];
-        System.arraycopy(path, 0, result, 0, len);
-        return new JrtPath(jrtfs, result);
+        }
+        return new JrtPath(jrtfs, path.substring(0, off));
     }
 
     @Override
-    public int getNameCount() {
+    public final int getNameCount() {
         initOffsets();
         return offsets.length;
     }
 
     @Override
-    public JrtPath getName(int index) {
+    public final JrtPath getName(int index) {
         initOffsets();
-        if (index < 0 || index >= offsets.length)
-            throw new IllegalArgumentException();
+        if (index < 0 || index >= offsets.length) {
+            throw new IllegalArgumentException("index: " +
+                index + ", offsets length: " + offsets.length);
+        }
         int begin = offsets[index];
-        int len;
-        if (index == (offsets.length-1))
-            len = path.length - begin;
-        else
-            len = offsets[index+1] - begin - 1;
-        // construct result
-        byte[] result = new byte[len];
-        System.arraycopy(path, begin, result, 0, len);
-        return new JrtPath(jrtfs, result);
-    }
-
-    @Override
-    public JrtPath subpath(int beginIndex, int endIndex) {
-        initOffsets();
-        if (beginIndex < 0 ||
-            beginIndex >=  offsets.length ||
-            endIndex > offsets.length ||
-            beginIndex >= endIndex)
-            throw new IllegalArgumentException();
-
-        // starting offset and length
-        int begin = offsets[beginIndex];
-        int len;
-        if (endIndex == offsets.length)
-            len = path.length - begin;
-        else
-            len = offsets[endIndex] - begin - 1;
-        // construct result
-        byte[] result = new byte[len];
-        System.arraycopy(path, begin, result, 0, len);
-        return new JrtPath(jrtfs, result);
-    }
-
-    @Override
-    public JrtPath toRealPath(LinkOption... options) throws IOException {
-        JrtPath realPath = new JrtPath(jrtfs, getResolvedPath()).toAbsolutePath();
-        realPath = JrtFileSystem.followLinks(options)? jrtfs.resolveLink(this) : realPath;
-        realPath.checkAccess();
-        return realPath;
-    }
-
-    JrtPath readSymbolicLink() throws IOException {
-        if (! jrtfs.isLink(this)) {
-           throw new IOException("not a symbolic link");
-        }
-
-        return jrtfs.resolveLink(this);
-    }
-
-    boolean isHidden() {
-        return false;
-    }
-
-    @Override
-    public JrtPath toAbsolutePath() {
-        if (isAbsolute()) {
-            return this;
+        int end;
+        if (index == (offsets.length - 1)) {
+            end = path.length();
         } else {
-            //add / bofore the existing path
-            byte[] tmp = new byte[path.length + 1];
-            tmp[0] = '/';
-            System.arraycopy(path, 0, tmp, 1, path.length);
-            return (JrtPath) new JrtPath(jrtfs, tmp).normalize();
+            end = offsets[index + 1];
         }
+        return new JrtPath(jrtfs, path.substring(begin, end));
     }
 
     @Override
-    public URI toUri() {
+    public final JrtPath subpath(int beginIndex, int endIndex) {
+        initOffsets();
+        if (beginIndex < 0 || endIndex > offsets.length ||
+            beginIndex >= endIndex) {
+            throw new IllegalArgumentException(
+                "beginIndex: " + beginIndex + ", endIndex: " + endIndex +
+                ", offsets length: " + offsets.length);
+        }
+        // starting/ending offsets
+        int begin = offsets[beginIndex];
+        int end;
+        if (endIndex == offsets.length) {
+            end = path.length();
+        } else {
+            end = offsets[endIndex];
+        }
+        return new JrtPath(jrtfs, path.substring(begin, end));
+    }
+
+    @Override
+    public final JrtPath toRealPath(LinkOption... options) throws IOException {
+        return jrtfs.toRealPath(this, options);
+    }
+
+    @Override
+    public final JrtPath toAbsolutePath() {
+        if (isAbsolute())
+            return this;
+        return new JrtPath(jrtfs, "/" + path, true);
+    }
+
+    @Override
+    public final URI toUri() {
         try {
-            return new URI("jrt",
-                           JrtFileSystem.getString(toAbsolutePath().path),
-                           null);
+            return new URI("jrt", toAbsolutePath().path, null);
         } catch (URISyntaxException ex) {
             throw new AssertionError(ex);
         }
@@ -188,64 +179,80 @@ final class JrtPath implements Path {
     private boolean equalsNameAt(JrtPath other, int index) {
         int mbegin = offsets[index];
         int mlen;
-        if (index == (offsets.length-1))
-            mlen = path.length - mbegin;
-        else
+        if (index == (offsets.length - 1)) {
+            mlen = path.length() - mbegin;
+        } else {
             mlen = offsets[index + 1] - mbegin - 1;
+        }
         int obegin = other.offsets[index];
         int olen;
-        if (index == (other.offsets.length - 1))
-            olen = other.path.length - obegin;
-        else
+        if (index == (other.offsets.length - 1)) {
+            olen = other.path.length() - obegin;
+        } else {
             olen = other.offsets[index + 1] - obegin - 1;
-        if (mlen != olen)
+        }
+        if (mlen != olen) {
             return false;
+        }
         int n = 0;
-        while(n < mlen) {
-            if (path[mbegin + n] != other.path[obegin + n])
+        while (n < mlen) {
+            if (path.charAt(mbegin + n) != other.path.charAt(obegin + n)) {
                 return false;
+            }
             n++;
         }
         return true;
     }
 
     @Override
-    public Path relativize(Path other) {
+    public final JrtPath relativize(Path other) {
         final JrtPath o = checkPath(other);
-        if (o.equals(this))
-            return new JrtPath(getFileSystem(), new byte[0], true);
-        if (/* this.getFileSystem() != o.getFileSystem() || */
-            this.isAbsolute() != o.isAbsolute()) {
-            throw new IllegalArgumentException();
+        if (o.equals(this)) {
+            return new JrtPath(jrtfs, "", true);
+        }
+        if (path.length() == 0) {
+            return o;
+        }
+        if (jrtfs != o.jrtfs || isAbsolute() != o.isAbsolute()) {
+            throw new IllegalArgumentException(
+                "Incorrect filesystem or path: " + other);
+        }
+        final String tp = this.path;
+        final String op = o.path;
+        if (op.startsWith(tp)) {    // fast path
+            int off = tp.length();
+            if (op.charAt(off - 1) == '/')
+                return new JrtPath(jrtfs, op.substring(off), true);
+            if (op.charAt(off) == '/')
+                return new JrtPath(jrtfs, op.substring(off + 1), true);
         }
         int mc = this.getNameCount();
         int oc = o.getNameCount();
         int n = Math.min(mc, oc);
         int i = 0;
         while (i < n) {
-            if (!equalsNameAt(o, i))
+            if (!equalsNameAt(o, i)) {
                 break;
+            }
             i++;
         }
         int dotdots = mc - i;
         int len = dotdots * 3 - 1;
-        if (i < oc)
-            len += (o.path.length - o.offsets[i] + 1);
-        byte[] result = new byte[len];
-
-        int pos = 0;
+        if (i < oc) {
+            len += (o.path.length() - o.offsets[i] + 1);
+        }
+        StringBuilder sb  = new StringBuilder(len);
         while (dotdots > 0) {
-            result[pos++] = (byte)'.';
-            result[pos++] = (byte)'.';
-            if (pos < len)       // no tailing slash at the end
-                result[pos++] = (byte)'/';
+            sb.append("..");
+            if (sb.length() < len) {  // no tailing slash at the end
+                sb.append('/');
+            }
             dotdots--;
         }
-        if (i < oc)
-            System.arraycopy(o.path, o.offsets[i],
-                             result, pos,
-                             o.path.length - o.offsets[i]);
-        return new JrtPath(getFileSystem(), result);
+        if (i < oc) {
+            sb.append(o.path, o.offsets[i], o.path.length());
+        }
+        return new JrtPath(jrtfs, sb.toString(), true);
     }
 
     @Override
@@ -254,78 +261,85 @@ final class JrtPath implements Path {
     }
 
     @Override
-    public boolean isAbsolute() {
-        return (this.path.length > 0 && path[0] == '/');
+    public final boolean isAbsolute() {
+        return path.length() > 0 && path.charAt(0) == '/';
     }
 
     @Override
-    public JrtPath resolve(Path other) {
+    public final JrtPath resolve(Path other) {
         final JrtPath o = checkPath(other);
-        if (o.isAbsolute())
+        if (this.path.length() == 0 || o.isAbsolute()) {
             return o;
-        byte[] res;
-        if (this.path[path.length - 1] == '/') {
-            res = new byte[path.length + o.path.length];
-            System.arraycopy(path, 0, res, 0, path.length);
-            System.arraycopy(o.path, 0, res, path.length, o.path.length);
-        } else {
-            res = new byte[path.length + 1 + o.path.length];
-            System.arraycopy(path, 0, res, 0, path.length);
-            res[path.length] = '/';
-            System.arraycopy(o.path, 0, res, path.length + 1, o.path.length);
         }
-        return new JrtPath(jrtfs, res);
+        if (o.path.length() == 0) {
+            return this;
+        }
+        StringBuilder sb = new StringBuilder(path.length() + o.path.length());
+        sb.append(path);
+        if (path.charAt(path.length() - 1) != '/')
+            sb.append('/');
+        sb.append(o.path);
+        return new JrtPath(jrtfs, sb.toString(), true);
     }
 
     @Override
-    public Path resolveSibling(Path other) {
-        if (other == null)
-            throw new NullPointerException();
+    public final Path resolveSibling(Path other) {
+        Objects.requireNonNull(other, "other");
         Path parent = getParent();
         return (parent == null) ? other : parent.resolve(other);
     }
 
     @Override
-    public boolean startsWith(Path other) {
-        final JrtPath o = checkPath(other);
-        if (o.isAbsolute() != this.isAbsolute() ||
-            o.path.length > this.path.length)
+    public final boolean startsWith(Path other) {
+        if (!(Objects.requireNonNull(other) instanceof JrtPath))
             return false;
-        int olast = o.path.length;
-        for (int i = 0; i < olast; i++) {
-            if (o.path[i] != this.path[i])
-                return false;
+        final JrtPath o = (JrtPath)other;
+        final String tp = this.path;
+        final String op = o.path;
+        if (isAbsolute() != o.isAbsolute() || !tp.startsWith(op)) {
+            return false;
         }
-        olast--;
-        return o.path.length == this.path.length ||
-               o.path[olast] == '/' ||
-               this.path[olast + 1] == '/';
+        int off = op.length();
+        if (off == 0) {
+            return tp.length() == 0;
+        }
+        // check match is on name boundary
+        return tp.length() == off || tp.charAt(off) == '/' ||
+               off == 0 || op.charAt(off - 1) == '/';
     }
 
     @Override
-    public boolean endsWith(Path other) {
-        final JrtPath o = checkPath(other);
-        int olast = o.path.length - 1;
-        if (olast > 0 && o.path[olast] == '/')
+    public final boolean endsWith(Path other) {
+        if (!(Objects.requireNonNull(other) instanceof JrtPath))
+            return false;
+        final JrtPath o = (JrtPath)other;
+        final JrtPath t = this;
+        int olast = o.path.length() - 1;
+        if (olast > 0 && o.path.charAt(olast) == '/') {
             olast--;
-        int last = this.path.length - 1;
-        if (last > 0 && this.path[last] == '/')
-            last--;
-        if (olast == -1)    // o.path.length == 0
-            return last == -1;
-        if ((o.isAbsolute() &&(!this.isAbsolute() || olast != last)) ||
-            (last < olast))
-            return false;
-        for (; olast >= 0; olast--, last--) {
-            if (o.path[olast] != this.path[last])
-                return false;
         }
-        return o.path[olast + 1] == '/' ||
-               last == -1 || this.path[last] == '/';
+        int last = t.path.length() - 1;
+        if (last > 0 && t.path.charAt(last) == '/') {
+            last--;
+        }
+        if (olast == -1) {  // o.path.length == 0
+            return last == -1;
+        }
+        if ((o.isAbsolute() && (!t.isAbsolute() || olast != last))
+            || last < olast) {
+            return false;
+        }
+        for (; olast >= 0; olast--, last--) {
+            if (o.path.charAt(olast) != t.path.charAt(last)) {
+                return false;
+            }
+        }
+        return o.path.charAt(olast + 1) == '/' ||
+               last == -1 || t.path.charAt(last) == '/';
     }
 
     @Override
-    public JrtPath resolve(String other) {
+    public final JrtPath resolve(String other) {
         return resolve(getFileSystem().getPath(other));
     }
 
@@ -345,237 +359,210 @@ final class JrtPath implements Path {
     }
 
     @Override
-    public Path normalize() {
-        byte[] res = getResolved();
-        if (res == path)    // no change
+    public final JrtPath normalize() {
+        String res = getResolved();
+        if (res == path) {  // no change
             return this;
+        }
         return new JrtPath(jrtfs, res, true);
     }
 
     private JrtPath checkPath(Path path) {
-        if (path == null)
-            throw new NullPointerException();
+        Objects.requireNonNull(path);
         if (!(path instanceof JrtPath))
-            throw new ProviderMismatchException();
+            throw new ProviderMismatchException("path class: " +
+                path.getClass());
         return (JrtPath) path;
     }
 
     // create offset list if not already created
     private void initOffsets() {
-        if (offsets == null) {
-            int count, index;
+        if (this.offsets == null) {
+            int len = path.length();
             // count names
-            count = 0;
-            index = 0;
-            while (index < path.length) {
-                byte c = path[index++];
+            int count = 0;
+            int off = 0;
+            while (off < len) {
+                char c = path.charAt(off++);
                 if (c != '/') {
                     count++;
-                    while (index < path.length && path[index] != '/')
-                        index++;
+                    off = path.indexOf('/', off);
+                    if (off == -1)
+                        break;
                 }
             }
             // populate offsets
-            int[] result = new int[count];
+            int[] offsets = new int[count];
             count = 0;
-            index = 0;
-            while (index < path.length) {
-                byte c = path[index];
+            off = 0;
+            while (off < len) {
+                char c = path.charAt(off);
                 if (c == '/') {
-                    index++;
+                    off++;
                 } else {
-                    result[count++] = index++;
-                    while (index < path.length && path[index] != '/')
-                        index++;
+                    offsets[count++] = off++;
+                    off = path.indexOf('/', off);
+                    if (off == -1)
+                        break;
                 }
             }
-            synchronized (this) {
-                if (offsets == null)
-                    offsets = result;
-            }
+            this.offsets = offsets;
         }
     }
 
-    // resolved path for locating jrt entry inside the jrt file,
-    // the result path does not contain ./ and .. components
-    // resolved bytes will always start with '/'
-    private volatile byte[] resolved = null;
-    byte[] getResolvedPath() {
-        byte[] r = resolved;
+    private volatile String resolved;
+
+    final String getResolvedPath() {
+        String r = resolved;
         if (r == null) {
-            if (isAbsolute())
+            if (isAbsolute()) {
                 r = getResolved();
-            else
+            } else {
                 r = toAbsolutePath().getResolvedPath();
+            }
             resolved = r;
         }
-        return resolved;
+        return r;
     }
 
     // removes redundant slashs, replace "\" to separator "/"
     // and check for invalid characters
-    private static byte[] normalize(byte[] path) {
-        if (path.length == 0)
+    private static String normalize(String path) {
+        int len = path.length();
+        if (len == 0) {
             return path;
-        byte prevC = 0;
-        for (int i = 0; i < path.length; i++) {
-            byte c = path[i];
-            if (c == '\\')
+        }
+        char prevC = 0;
+        for (int i = 0; i < len; i++) {
+            char c = path.charAt(i);
+            if (c == '\\' || c == '\u0000') {
                 return normalize(path, i);
-            if (c == (byte)'/' && prevC == '/')
+            }
+            if (c == '/' && prevC == '/') {
                 return normalize(path, i - 1);
-            if (c == '\u0000')
-                throw new InvalidPathException(JrtFileSystem.getString(path),
-                                               "Path: nul character not allowed");
+            }
             prevC = c;
         }
-
-        if (path.length > 1 && path[path.length - 1] == '/') {
-            return Arrays.copyOf(path, path.length - 1);
+        if (prevC == '/' && len > 1) {
+            return path.substring(0, len - 1);
         }
-
         return path;
     }
 
-    private static byte[] normalize(byte[] path, int off) {
-        byte[] to = new byte[path.length];
-        int n = 0;
-        while (n < off) {
-            to[n] = path[n];
-            n++;
-        }
-        int m = n;
-        byte prevC = 0;
-        while (n < path.length) {
-            byte c = path[n++];
-            if (c == (byte)'\\')
-                c = (byte)'/';
-            if (c == (byte)'/' && prevC == (byte)'/')
+    private static String normalize(String path, int off) {
+        int len = path.length();
+        StringBuilder to = new StringBuilder(len);
+        to.append(path, 0, off);
+        char prevC = 0;
+        while (off < len) {
+            char c = path.charAt(off++);
+            if (c == '\\') {
+                c = '/';
+            }
+            if (c == '/' && prevC == '/') {
                 continue;
-            if (c == '\u0000')
-                throw new InvalidPathException(JrtFileSystem.getString(path),
-                                               "Path: nul character not allowed");
-            to[m++] = c;
+            }
+            if (c == '\u0000') {
+                throw new InvalidPathException(path,
+                        "Path: NUL character not allowed");
+            }
+            to.append(c);
             prevC = c;
         }
-        if (m > 1 && to[m - 1] == '/')
-            m--;
-        return (m == to.length)? to : Arrays.copyOf(to, m);
+        len = to.length();
+        if (len > 1 && to.charAt(len - 1) == '/') {
+            to.deleteCharAt(len - 1);
+        }
+        return to.toString();
     }
 
     // Remove DotSlash(./) and resolve DotDot (..) components
-    private byte[] getResolved() {
-        if (path.length == 0)
+    private String getResolved() {
+        if (path.length() == 0) {
             return path;
-        for (int i = 0; i < path.length; i++) {
-            byte c = path[i];
-            if (c == (byte)'.')
-                return resolve0();
         }
-
-        return path;
-    }
-
-    // TBD: performance, avoid initOffsets
-    private byte[] resolve0() {
-        byte[] to = new byte[path.length];
+        if (path.indexOf('.') == -1) {
+            return path;
+        }
+        int length = path.length();
+        char[] to = new char[length];
         int nc = getNameCount();
         int[] lastM = new int[nc];
         int lastMOff = -1;
         int m = 0;
         for (int i = 0; i < nc; i++) {
             int n = offsets[i];
-            int len = (i == offsets.length - 1)?
-                      (path.length - n):(offsets[i + 1] - n - 1);
-            if (len == 1 && path[n] == (byte)'.') {
-                if (m == 0 && path[0] == '/')   // absolute path
+            int len = (i == offsets.length - 1) ? length - n
+                                                : offsets[i + 1] - n - 1;
+            if (len == 1 && path.charAt(n) == '.') {
+                if (m == 0 && path.charAt(0) == '/')   // absolute path
                     to[m++] = '/';
                 continue;
             }
-            if (len == 2 && path[n] == '.' && path[n + 1] == '.') {
+            if (len == 2 && path.charAt(n) == '.' && path.charAt(n + 1) == '.') {
                 if (lastMOff >= 0) {
-                    m = lastM[lastMOff--];  // retreat
+                    m = lastM[lastMOff--];    // retreat
                     continue;
                 }
-                if (path[0] == '/') {  // "/../xyz" skip
+                if (path.charAt(0) == '/') {  // "/../xyz" skip
                     if (m == 0)
                         to[m++] = '/';
-                } else {               // "../xyz" -> "../xyz"
+                } else {                      // "../xyz" -> "../xyz"
                     if (m != 0 && to[m-1] != '/')
                         to[m++] = '/';
                     while (len-- > 0)
-                        to[m++] = path[n++];
+                        to[m++] = path.charAt(n++);
                 }
                 continue;
             }
-            if (m == 0 && path[0] == '/' ||   // absolute path
+            if (m == 0 && path.charAt(0) == '/' ||   // absolute path
                 m != 0 && to[m-1] != '/') {   // not the first name
                 to[m++] = '/';
             }
             lastM[++lastMOff] = m;
             while (len-- > 0)
-                to[m++] = path[n++];
+                to[m++] = path.charAt(n++);
         }
         if (m > 1 && to[m - 1] == '/')
             m--;
-        return (m == to.length)? to : Arrays.copyOf(to, m);
+        return (m == to.length) ? new String(to) : new String(to, 0, m);
     }
 
     @Override
-    public String toString() {
-        return JrtFileSystem.getString(path);
+    public final String toString() {
+        return path;
     }
 
     @Override
-    public int hashCode() {
-        int h = hashcode;
-        if (h == 0)
-            hashcode = h = Arrays.hashCode(path);
-        return h;
+    public final int hashCode() {
+        return path.hashCode();
     }
 
     @Override
-    public boolean equals(Object obj) {
-        return obj != null &&
-               obj instanceof JrtPath &&
-               this.jrtfs == ((JrtPath)obj).jrtfs &&
-               compareTo((Path) obj) == 0;
+    public final boolean equals(Object obj) {
+        return obj instanceof JrtPath &&
+               this.path.equals(((JrtPath) obj).path);
     }
 
     @Override
-    public int compareTo(Path other) {
+    public final int compareTo(Path other) {
         final JrtPath o = checkPath(other);
-        int len1 = this.path.length;
-        int len2 = o.path.length;
-
-        int n = Math.min(len1, len2);
-        byte v1[] = this.path;
-        byte v2[] = o.path;
-
-        int k = 0;
-        while (k < n) {
-            int c1 = v1[k] & 0xff;
-            int c2 = v2[k] & 0xff;
-            if (c1 != c2)
-                return c1 - c2;
-            k++;
-        }
-        return len1 - len2;
+        return path.compareTo(o.path);
     }
 
     @Override
-    public WatchKey register(
+    public final WatchKey register(
             WatchService watcher,
             WatchEvent.Kind<?>[] events,
             WatchEvent.Modifier... modifiers) {
-        if (watcher == null || events == null || modifiers == null) {
-            throw new NullPointerException();
-        }
+        Objects.requireNonNull(watcher, "watcher");
+        Objects.requireNonNull(events, "events");
+        Objects.requireNonNull(modifiers, "modifiers");
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public WatchKey register(WatchService watcher, WatchEvent.Kind<?>... events) {
+    public final WatchKey register(WatchService watcher, WatchEvent.Kind<?>... events) {
         return register(watcher, events, new WatchEvent.Modifier[0]);
     }
 
@@ -585,7 +572,7 @@ final class JrtPath implements Path {
     }
 
     @Override
-    public Iterator<Path> iterator() {
+    public final Iterator<Path> iterator() {
         return new Iterator<Path>() {
             private int i = 0;
 
@@ -612,217 +599,176 @@ final class JrtPath implements Path {
         };
     }
 
-    /////////////////////////////////////////////////////////////////////
     // Helpers for JrtFileSystemProvider and JrtFileSystem
 
-    int getPathLength() {
-        return path.length;
+    final JrtPath readSymbolicLink() throws IOException {
+        if (!jrtfs.isLink(this)) {
+            throw new IOException("not a symbolic link");
+        }
+        return jrtfs.resolveLink(this);
     }
 
-
-    void createDirectory(FileAttribute<?>... attrs)
-        throws IOException
-    {
-        jrtfs.createDirectory(getResolvedPath(), attrs);
+    final boolean isHidden() {
+        return false;
     }
 
-    InputStream newInputStream(OpenOption... options) throws IOException
-    {
+    final void createDirectory(FileAttribute<?>... attrs)
+            throws IOException {
+        jrtfs.createDirectory(this, attrs);
+    }
+
+    final InputStream newInputStream(OpenOption... options) throws IOException {
         if (options.length > 0) {
             for (OpenOption opt : options) {
-                if (opt != READ)
+                if (opt != READ) {
                     throw new UnsupportedOperationException("'" + opt + "' not allowed");
+                }
             }
         }
-        return jrtfs.newInputStream(getResolvedPath());
+        return jrtfs.newInputStream(this);
     }
 
-    DirectoryStream<Path> newDirectoryStream(Filter<? super Path> filter)
-        throws IOException
-    {
+    final DirectoryStream<Path> newDirectoryStream(Filter<? super Path> filter)
+            throws IOException {
         return new JrtDirectoryStream(this, filter);
     }
 
-    void delete() throws IOException {
-        jrtfs.deleteFile(getResolvedPath(), true);
+    final void delete() throws IOException {
+        jrtfs.deleteFile(this, true);
     }
 
-    void deleteIfExists() throws IOException {
-        jrtfs.deleteFile(getResolvedPath(), false);
+    final void deleteIfExists() throws IOException {
+        jrtfs.deleteFile(this, false);
     }
 
-    JrtFileAttributes getAttributes(LinkOption... options) throws IOException
-    {
-        JrtFileAttributes zfas = jrtfs.getFileAttributes(getResolvedPath(), options);
-        if (zfas == null)
+    final JrtFileAttributes getAttributes(LinkOption... options) throws IOException {
+        JrtFileAttributes zfas = jrtfs.getFileAttributes(this, options);
+        if (zfas == null) {
             throw new NoSuchFileException(toString());
+        }
         return zfas;
     }
 
-    void setAttribute(String attribute, Object value, LinkOption... options)
-        throws IOException
-    {
-        String type;
-        String attr;
-        int colonPos = attribute.indexOf(':');
-        if (colonPos == -1) {
-            type = "basic";
-            attr = attribute;
-        } else {
-            type = attribute.substring(0, colonPos++);
-            attr = attribute.substring(colonPos);
-        }
-        JrtFileAttributeView view = JrtFileAttributeView.get(this, type, options);
-        if (view == null)
-            throw new UnsupportedOperationException("view <" + view + "> is not supported");
-        view.setAttribute(attr, value);
+    final void setAttribute(String attribute, Object value, LinkOption... options)
+            throws IOException {
+        JrtFileAttributeView.setAttribute(this, attribute, value);
     }
 
-    void setTimes(FileTime mtime, FileTime atime, FileTime ctime)
-        throws IOException
-    {
-        jrtfs.setTimes(getResolvedPath(), mtime, atime, ctime);
+    final Map<String, Object> readAttributes(String attributes, LinkOption... options)
+            throws IOException {
+        return JrtFileAttributeView.readAttributes(this, attributes, options);
     }
 
-    Map<String, Object> readAttributes(String attributes, LinkOption... options)
-        throws IOException
-
-    {
-        String view;
-        String attrs;
-        int colonPos = attributes.indexOf(':');
-        if (colonPos == -1) {
-            view = "basic";
-            attrs = attributes;
-        } else {
-            view = attributes.substring(0, colonPos++);
-            attrs = attributes.substring(colonPos);
-        }
-        JrtFileAttributeView jrtfv = JrtFileAttributeView.get(this, view, options);
-        if (jrtfv == null) {
-            throw new UnsupportedOperationException("view not supported");
-        }
-        return jrtfv.readAttributes(attrs);
+    final void setTimes(FileTime mtime, FileTime atime, FileTime ctime)
+            throws IOException {
+        jrtfs.setTimes(this, mtime, atime, ctime);
     }
 
-    FileStore getFileStore() throws IOException {
+    final FileStore getFileStore() throws IOException {
         // each JrtFileSystem only has one root (as requested for now)
-        if (exists())
+        if (exists()) {
             return jrtfs.getFileStore(this);
-        throw new NoSuchFileException(JrtFileSystem.getString(path));
+        }
+        throw new NoSuchFileException(path);
     }
 
-    boolean isSameFile(Path other) throws IOException {
-        if (this.equals(other))
+    final boolean isSameFile(Path other) throws IOException {
+        if (this == other || this.equals(other)) {
             return true;
-        if (other == null ||
-            this.getFileSystem() != other.getFileSystem())
+        }
+        if (other == null || this.getFileSystem() != other.getFileSystem()) {
             return false;
+        }
         this.checkAccess();
-        JrtPath path = (JrtPath)other;
-        path.checkAccess();
-        return Arrays.equals(this.getResolvedPath(), path.getResolvedPath()) ||
-            jrtfs.isSameFile(this, (JrtPath)other);
+        JrtPath o = (JrtPath) other;
+        o.checkAccess();
+        return this.getResolvedPath().equals(o.getResolvedPath()) ||
+               jrtfs.isSameFile(this, o);
     }
 
-    SeekableByteChannel newByteChannel(Set<? extends OpenOption> options,
-                                       FileAttribute<?>... attrs)
-        throws IOException
+    final SeekableByteChannel newByteChannel(Set<? extends OpenOption> options,
+                                             FileAttribute<?>... attrs)
+            throws IOException
     {
-        return jrtfs.newByteChannel(getResolvedPath(), options, attrs);
+        return jrtfs.newByteChannel(this, options, attrs);
     }
 
-
-    FileChannel newFileChannel(Set<? extends OpenOption> options,
-                               FileAttribute<?>... attrs)
-        throws IOException
-    {
-        return jrtfs.newFileChannel(getResolvedPath(), options, attrs);
+    final FileChannel newFileChannel(Set<? extends OpenOption> options,
+            FileAttribute<?>... attrs)
+            throws IOException {
+        return jrtfs.newFileChannel(this, options, attrs);
     }
 
-    void checkAccess(AccessMode... modes) throws IOException {
-        boolean w = false;
-        boolean x = false;
-        for (AccessMode mode : modes) {
-            switch (mode) {
-                case READ:
-                    break;
-                case WRITE:
-                    w = true;
-                    break;
-                case EXECUTE:
-                    x = true;
-                    break;
-                default:
-                    throw new UnsupportedOperationException();
+    final void checkAccess(AccessMode... modes) throws IOException {
+        if (modes.length == 0) {    // check if the path exists
+            jrtfs.checkNode(this);  // no need to follow link. the "link" node
+                                    // is built from real node under "/module"
+        } else {
+            boolean w = false;
+            for (AccessMode mode : modes) {
+                switch (mode) {
+                    case READ:
+                        break;
+                    case WRITE:
+                        w = true;
+                        break;
+                    case EXECUTE:
+                        throw new AccessDeniedException(toString());
+                    default:
+                        throw new UnsupportedOperationException();
+                }
+            }
+            jrtfs.checkNode(this);
+            if (w && jrtfs.isReadOnly()) {
+                throw new AccessDeniedException(toString());
             }
         }
-        JrtFileAttributes attrs = jrtfs.getFileAttributes(getResolvedPath());
-        if (attrs == null && (path.length != 1 || path[0] != '/'))
-            throw new NoSuchFileException(toString());
-        if (w) {
-            if (jrtfs.isReadOnly())
-                throw new AccessDeniedException(toString());
-        }
-        if (x)
-            throw new AccessDeniedException(toString());
     }
 
-    boolean exists() {
-        if (isAbsolute())
-            return true;
+    final boolean exists() {
         try {
-            return jrtfs.exists(getResolvedPath());
+            return jrtfs.exists(this);
         } catch (IOException x) {}
         return false;
     }
 
-    OutputStream newOutputStream(OpenOption... options) throws IOException
-    {
-        if (options.length == 0)
-            return jrtfs.newOutputStream(getResolvedPath(),
-                                       CREATE_NEW, WRITE);
-        return jrtfs.newOutputStream(getResolvedPath(), options);
+    final OutputStream newOutputStream(OpenOption... options) throws IOException {
+        if (options.length == 0) {
+            return jrtfs.newOutputStream(this, CREATE_NEW, WRITE);
+        }
+        return jrtfs.newOutputStream(this, options);
     }
 
-    void move(JrtPath target, CopyOption... options)
-        throws IOException
-    {
-        if (this.jrtfs == target.jrtfs)
-        {
-            jrtfs.copyFile(true,
-                         getResolvedPath(), target.getResolvedPath(),
-                         options);
+    final void move(JrtPath target, CopyOption... options) throws IOException {
+        if (this.jrtfs == target.jrtfs) {
+            jrtfs.copyFile(true, this, target, options);
         } else {
             copyToTarget(target, options);
             delete();
         }
     }
 
-    void copy(JrtPath target, CopyOption... options)
-        throws IOException
-    {
-        if (this.jrtfs == target.jrtfs)
-            jrtfs.copyFile(false,
-                         getResolvedPath(), target.getResolvedPath(),
-                         options);
-        else
+    final void copy(JrtPath target, CopyOption... options) throws IOException {
+        if (this.jrtfs == target.jrtfs) {
+            jrtfs.copyFile(false, this, target, options);
+        } else {
             copyToTarget(target, options);
+        }
     }
 
     private void copyToTarget(JrtPath target, CopyOption... options)
-        throws IOException
-    {
+            throws IOException {
         boolean replaceExisting = false;
         boolean copyAttrs = false;
         for (CopyOption opt : options) {
-            if (opt == REPLACE_EXISTING)
+            if (opt == REPLACE_EXISTING) {
                 replaceExisting = true;
-            else if (opt == COPY_ATTRIBUTES)
+            } else if (opt == COPY_ATTRIBUTES) {
                 copyAttrs = true;
+            }
         }
         // attributes of source file
-        JrtFileAttributes jrtfas = getAttributes();
+        BasicFileAttributes jrtfas = getAttributes();
         // check if target exists
         boolean exists;
         if (replaceExisting) {
@@ -835,14 +781,15 @@ final class JrtPath implements Path {
         } else {
             exists = target.exists();
         }
-        if (exists)
+        if (exists) {
             throw new FileAlreadyExistsException(target.toString());
-
+        }
         if (jrtfas.isDirectory()) {
             // create directory or file
             target.createDirectory();
         } else {
-            try (InputStream is = jrtfs.newInputStream(getResolvedPath()); OutputStream os = target.newOutputStream()) {
+            try (InputStream is = jrtfs.newInputStream(this);
+                 OutputStream os = target.newOutputStream()) {
                 byte[] buf = new byte[8192];
                 int n;
                 while ((n = is.read(buf)) != -1) {
@@ -852,16 +799,15 @@ final class JrtPath implements Path {
         }
         if (copyAttrs) {
             BasicFileAttributeView view =
-                JrtFileAttributeView.get(target, BasicFileAttributeView.class);
+                Files.getFileAttributeView(target, BasicFileAttributeView.class);
             try {
                 view.setTimes(jrtfas.lastModifiedTime(),
                               jrtfas.lastAccessTime(),
                               jrtfas.creationTime());
             } catch (IOException x) {
-                // rollback?
                 try {
-                    target.delete();
-                } catch (IOException ignore) { }
+                    target.delete();  // rollback?
+                } catch (IOException ignore) {}
                 throw x;
             }
         }

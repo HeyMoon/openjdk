@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -66,9 +66,9 @@ class vframe: public ResourceObj {
   // Accessors
   frame              fr()           const { return _fr;       }
   CodeBlob*          cb()         const { return _fr.cb();  }
-  nmethod*           nm()         const {
-      assert( cb() != NULL && cb()->is_nmethod(), "usage");
-      return (nmethod*) cb();
+  CompiledMethod*   nm()         const {
+      assert( cb() != NULL && cb()->is_compiled(), "usage");
+      return (CompiledMethod*) cb();
   }
 
 // ???? Does this need to be a copy?
@@ -135,7 +135,8 @@ class javaVFrame: public vframe {
   // Return an array of monitors locked by this frame in the youngest to oldest order
   GrowableArray<MonitorInfo*>* locked_monitors();
 
-  // printing used during stack dumps
+  // printing used during stack dumps and diagnostics
+  static void print_locked_object_class_name(outputStream* st, Handle obj, const char* lock_state);
   void print_lock_info_on(outputStream* st, int frame_count);
   void print_lock_info(int frame_count) { print_lock_info_on(tty, frame_count); }
 
@@ -296,13 +297,13 @@ class vframeStreamCommon : StackObj {
   void fill_from_compiled_frame(int decode_offset);
   void fill_from_compiled_native_frame();
 
-  void found_bad_method_frame();
-
   void fill_from_interpreter_frame();
   bool fill_from_frame();
 
   // Helper routine for security_get_caller_frame
   void skip_prefixed_method_and_wrappers();
+
+  DEBUG_ONLY(void found_bad_method_frame() const;)
 
  public:
   // Constructor
@@ -317,9 +318,9 @@ class vframeStreamCommon : StackObj {
   address frame_pc() const { return _frame.pc(); }
 
   CodeBlob*          cb()         const { return _frame.cb();  }
-  nmethod*           nm()         const {
-      assert( cb() != NULL && cb()->is_nmethod(), "usage");
-      return (nmethod*) cb();
+  CompiledMethod*   nm()         const {
+      assert( cb() != NULL && cb()->is_compiled(), "usage");
+      return (CompiledMethod*) cb();
   }
 
   // Frame type
@@ -397,6 +398,7 @@ inline void vframeStreamCommon::fill_from_compiled_frame(int decode_offset) {
     // as it were a native compiled frame (no Java-level assumptions).
 #ifdef ASSERT
     if (WizardMode) {
+      ttyLocker ttyl;
       tty->print_cr("Error in fill_from_frame: pc_desc for "
                     INTPTR_FORMAT " not found or invalid at %d",
                     p2i(_frame.pc()), decode_offset);
@@ -405,9 +407,9 @@ inline void vframeStreamCommon::fill_from_compiled_frame(int decode_offset) {
       nm()->print_code();
       nm()->print_pcs();
     }
+    found_bad_method_frame();
 #endif
     // Provide a cheap fallback in product mode.  (See comment above.)
-    found_bad_method_frame();
     fill_from_compiled_native_frame();
     return;
   }
@@ -439,7 +441,7 @@ inline bool vframeStreamCommon::fill_from_frame() {
 
   // Compiled frame
 
-  if (cb() != NULL && cb()->is_nmethod()) {
+  if (cb() != NULL && cb()->is_compiled()) {
     if (nm()->is_native_method()) {
       // Do not rely on scopeDesc since the pc might be unprecise due to the _last_native_pc trick.
       fill_from_compiled_native_frame();
@@ -521,7 +523,7 @@ inline void vframeStreamCommon::fill_from_interpreter_frame() {
   // In this scenario, pretend that the interpreter is at the point
   // of entering the method.
   if (bci < 0) {
-    found_bad_method_frame();
+    DEBUG_ONLY(found_bad_method_frame();)
     bci = 0;
   }
   _mode   = interpreted_mode;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,6 +32,7 @@
 #include "opto/cfgnode.hpp"
 #include "opto/compile.hpp"
 #include "opto/convertnode.hpp"
+#include "opto/graphKit.hpp"
 #include "opto/locknode.hpp"
 #include "opto/loopnode.hpp"
 #include "opto/macro.hpp"
@@ -244,7 +245,7 @@ void PhaseMacroExpand::eliminate_card_mark(Node* p2x) {
   } else {
     // G1 pre/post barriers
     assert(p2x->outcnt() <= 2, "expects 1 or 2 users: Xor and URShift nodes");
-    // It could be only one user, URShift node, in Object.clone() instrinsic
+    // It could be only one user, URShift node, in Object.clone() intrinsic
     // but the new allocation is passed to arraycopy stub and it could not
     // be scalar replaced. So we don't check the case.
 
@@ -263,41 +264,58 @@ void PhaseMacroExpand::eliminate_card_mark(Node* p2x) {
     // checks if the store done to a different from the value's region.
     // And replace Cmp with #0 (false) to collapse G1 post barrier.
     Node* xorx = p2x->find_out_with(Op_XorX);
-    assert(xorx != NULL, "missing G1 post barrier");
-    Node* shift = xorx->unique_out();
-    Node* cmpx = shift->unique_out();
-    assert(cmpx->is_Cmp() && cmpx->unique_out()->is_Bool() &&
-    cmpx->unique_out()->as_Bool()->_test._test == BoolTest::ne,
-    "missing region check in G1 post barrier");
-    _igvn.replace_node(cmpx, makecon(TypeInt::CC_EQ));
+    if (xorx != NULL) {
+      Node* shift = xorx->unique_out();
+      Node* cmpx = shift->unique_out();
+      assert(cmpx->is_Cmp() && cmpx->unique_out()->is_Bool() &&
+      cmpx->unique_out()->as_Bool()->_test._test == BoolTest::ne,
+      "missing region check in G1 post barrier");
+      _igvn.replace_node(cmpx, makecon(TypeInt::CC_EQ));
 
-    // Remove G1 pre barrier.
+      // Remove G1 pre barrier.
 
-    // Search "if (marking != 0)" check and set it to "false".
-    // There is no G1 pre barrier if previous stored value is NULL
-    // (for example, after initialization).
-    if (this_region->is_Region() && this_region->req() == 3) {
-      int ind = 1;
-      if (!this_region->in(ind)->is_IfFalse()) {
-        ind = 2;
-      }
-      if (this_region->in(ind)->is_IfFalse()) {
-        Node* bol = this_region->in(ind)->in(0)->in(1);
-        assert(bol->is_Bool(), "");
-        cmpx = bol->in(1);
-        if (bol->as_Bool()->_test._test == BoolTest::ne &&
-            cmpx->is_Cmp() && cmpx->in(2) == intcon(0) &&
-            cmpx->in(1)->is_Load()) {
-          Node* adr = cmpx->in(1)->as_Load()->in(MemNode::Address);
-          const int marking_offset = in_bytes(JavaThread::satb_mark_queue_offset() +
-                                              PtrQueue::byte_offset_of_active());
-          if (adr->is_AddP() && adr->in(AddPNode::Base) == top() &&
-              adr->in(AddPNode::Address)->Opcode() == Op_ThreadLocal &&
-              adr->in(AddPNode::Offset) == MakeConX(marking_offset)) {
-            _igvn.replace_node(cmpx, makecon(TypeInt::CC_EQ));
+      // Search "if (marking != 0)" check and set it to "false".
+      // There is no G1 pre barrier if previous stored value is NULL
+      // (for example, after initialization).
+      if (this_region->is_Region() && this_region->req() == 3) {
+        int ind = 1;
+        if (!this_region->in(ind)->is_IfFalse()) {
+          ind = 2;
+        }
+        if (this_region->in(ind)->is_IfFalse()) {
+          Node* bol = this_region->in(ind)->in(0)->in(1);
+          assert(bol->is_Bool(), "");
+          cmpx = bol->in(1);
+          if (bol->as_Bool()->_test._test == BoolTest::ne &&
+              cmpx->is_Cmp() && cmpx->in(2) == intcon(0) &&
+              cmpx->in(1)->is_Load()) {
+            Node* adr = cmpx->in(1)->as_Load()->in(MemNode::Address);
+            const int marking_offset = in_bytes(JavaThread::satb_mark_queue_offset() +
+                                                SATBMarkQueue::byte_offset_of_active());
+            if (adr->is_AddP() && adr->in(AddPNode::Base) == top() &&
+                adr->in(AddPNode::Address)->Opcode() == Op_ThreadLocal &&
+                adr->in(AddPNode::Offset) == MakeConX(marking_offset)) {
+              _igvn.replace_node(cmpx, makecon(TypeInt::CC_EQ));
+            }
           }
         }
       }
+    } else {
+      assert(!GraphKit::use_ReduceInitialCardMarks(), "can only happen with card marking");
+      // This is a G1 post barrier emitted by the Object.clone() intrinsic.
+      // Search for the CastP2X->URShiftX->AddP->LoadB->Cmp path which checks if the card
+      // is marked as young_gen and replace the Cmp with 0 (false) to collapse the barrier.
+      Node* shift = p2x->find_out_with(Op_URShiftX);
+      assert(shift != NULL, "missing G1 post barrier");
+      Node* addp = shift->unique_out();
+      Node* load = addp->find_out_with(Op_LoadB);
+      assert(load != NULL, "missing G1 post barrier");
+      Node* cmpx = load->unique_out();
+      assert(cmpx->is_Cmp() && cmpx->unique_out()->is_Bool() &&
+             cmpx->unique_out()->as_Bool()->_test._test == BoolTest::ne,
+             "missing card value check in G1 post barrier");
+      _igvn.replace_node(cmpx, makecon(TypeInt::CC_EQ));
+      // There is no G1 pre barrier in this case
     }
     // Now CastP2X can be removed since it is used only on dead path
     // which currently still alive until igvn optimize it.
@@ -324,18 +342,26 @@ static Node *scan_mem_chain(Node *mem, int alias_idx, int offset, Node *start_me
         return in;
       } else if (in->is_Call()) {
         CallNode *call = in->as_Call();
-        if (!call->may_modify(tinst, phase)) {
-          mem = call->in(TypeFunc::Memory);
+        if (call->may_modify(tinst, phase)) {
+          assert(call->is_ArrayCopy(), "ArrayCopy is the only call node that doesn't make allocation escape");
+          if (call->as_ArrayCopy()->modifies(offset, offset, phase, false)) {
+            return in;
+          }
         }
         mem = in->in(TypeFunc::Memory);
       } else if (in->is_MemBar()) {
+        ArrayCopyNode* ac = NULL;
+        if (ArrayCopyNode::may_modify(tinst, in->as_MemBar(), phase, ac)) {
+          assert(ac != NULL && ac->is_clonebasic(), "Only basic clone is a non escaping clone");
+          return ac;
+        }
         mem = in->in(TypeFunc::Memory);
       } else {
         assert(false, "unexpected projection");
       }
     } else if (mem->is_Store()) {
       const TypePtr* atype = mem->as_Store()->adr_type();
-      int adr_idx = Compile::current()->get_alias_index(atype);
+      int adr_idx = phase->C->get_alias_index(atype);
       if (adr_idx == alias_idx) {
         assert(atype->isa_oopptr(), "address type must be oopptr");
         int adr_offset = atype->offset();
@@ -369,13 +395,25 @@ static Node *scan_mem_chain(Node *mem, int alias_idx, int offset, Node *start_me
       if (mem->is_LoadStore()) {
         adr = mem->in(MemNode::Address);
       } else {
-        assert(mem->Opcode() == Op_EncodeISOArray, "sanity");
+        assert(mem->Opcode() == Op_EncodeISOArray ||
+               mem->Opcode() == Op_StrCompressedCopy, "sanity");
         adr = mem->in(3); // Destination array
       }
       const TypePtr* atype = adr->bottom_type()->is_ptr();
-      int adr_idx = Compile::current()->get_alias_index(atype);
+      int adr_idx = phase->C->get_alias_index(atype);
       if (adr_idx == alias_idx) {
-        assert(false, "Object is not scalar replaceable if a LoadStore node access its field");
+        DEBUG_ONLY(mem->dump();)
+        assert(false, "Object is not scalar replaceable if a LoadStore node accesses its field");
+        return NULL;
+      }
+      mem = mem->in(MemNode::Memory);
+   } else if (mem->Opcode() == Op_StrInflatedCopy) {
+      Node* adr = mem->in(3); // Destination array
+      const TypePtr* atype = adr->bottom_type()->is_ptr();
+      int adr_idx = phase->C->get_alias_index(atype);
+      if (adr_idx == alias_idx) {
+        DEBUG_ONLY(mem->dump();)
+        assert(false, "Object is not scalar replaceable if a StrInflatedCopy node accesses its field");
         return NULL;
       }
       mem = mem->in(MemNode::Memory);
@@ -386,12 +424,55 @@ static Node *scan_mem_chain(Node *mem, int alias_idx, int offset, Node *start_me
   }
 }
 
+// Generate loads from source of the arraycopy for fields of
+// destination needed at a deoptimization point
+Node* PhaseMacroExpand::make_arraycopy_load(ArrayCopyNode* ac, intptr_t offset, Node* ctl, Node* mem, BasicType ft, const Type *ftype, AllocateNode *alloc) {
+  BasicType bt = ft;
+  const Type *type = ftype;
+  if (ft == T_NARROWOOP) {
+    bt = T_OBJECT;
+    type = ftype->make_oopptr();
+  }
+  Node* res = NULL;
+  if (ac->is_clonebasic()) {
+    Node* base = ac->in(ArrayCopyNode::Src)->in(AddPNode::Base);
+    Node* adr = _igvn.transform(new AddPNode(base, base, MakeConX(offset)));
+    const TypePtr* adr_type = _igvn.type(base)->is_ptr()->add_offset(offset);
+    res = LoadNode::make(_igvn, ctl, mem, adr, adr_type, type, bt, MemNode::unordered, LoadNode::Pinned);
+  } else {
+    if (ac->modifies(offset, offset, &_igvn, true)) {
+      assert(ac->in(ArrayCopyNode::Dest) == alloc->result_cast(), "arraycopy destination should be allocation's result");
+      uint shift  = exact_log2(type2aelembytes(bt));
+      Node* diff = _igvn.transform(new SubINode(ac->in(ArrayCopyNode::SrcPos), ac->in(ArrayCopyNode::DestPos)));
+#ifdef _LP64
+      diff = _igvn.transform(new ConvI2LNode(diff));
+#endif
+      diff = _igvn.transform(new LShiftXNode(diff, intcon(shift)));
+
+      Node* off = _igvn.transform(new AddXNode(MakeConX(offset), diff));
+      Node* base = ac->in(ArrayCopyNode::Src);
+      Node* adr = _igvn.transform(new AddPNode(base, base, off));
+      const TypePtr* adr_type = _igvn.type(base)->is_ptr()->add_offset(offset);
+      res = LoadNode::make(_igvn, ctl, mem, adr, adr_type, type, bt, MemNode::unordered, LoadNode::Pinned);
+    }
+  }
+  if (res != NULL) {
+    res = _igvn.transform(res);
+    if (ftype->isa_narrowoop()) {
+      // PhaseMacroExpand::scalar_replacement adds DecodeN nodes
+      res = _igvn.transform(new EncodePNode(res, ftype));
+    }
+    return res;
+  }
+  return NULL;
+}
+
 //
 // Given a Memory Phi, compute a value Phi containing the values from stores
 // on the input paths.
-// Note: this function is recursive, its depth is limied by the "level" argument
+// Note: this function is recursive, its depth is limited by the "level" argument
 // Returns the computed Phi, or NULL if it cannot compute it.
-Node *PhaseMacroExpand::value_from_mem_phi(Node *mem, BasicType ft, const Type *phi_type, const TypeOopPtr *adr_t, Node *alloc, Node_Stack *value_phis, int level) {
+Node *PhaseMacroExpand::value_from_mem_phi(Node *mem, BasicType ft, const Type *phi_type, const TypeOopPtr *adr_t, AllocateNode *alloc, Node_Stack *value_phis, int level) {
   assert(mem->is_Phi(), "sanity");
   int alias_idx = C->get_alias_index(adr_t);
   int offset = adr_t->offset();
@@ -402,7 +483,7 @@ Node *PhaseMacroExpand::value_from_mem_phi(Node *mem, BasicType ft, const Type *
   for (DUIterator_Fast kmax, k = region->fast_outs(kmax); k < kmax; k++) {
     Node* phi = region->fast_out(k);
     if (phi->is_Phi() && phi != mem &&
-        phi->as_Phi()->is_same_inst_field(phi_type, instance_id, alias_idx, offset)) {
+        phi->as_Phi()->is_same_inst_field(phi_type, (int)mem->_idx, instance_id, alias_idx, offset)) {
       return phi;
     }
   }
@@ -421,7 +502,7 @@ Node *PhaseMacroExpand::value_from_mem_phi(Node *mem, BasicType ft, const Type *
   GrowableArray <Node *> values(length, length, NULL, false);
 
   // create a new Phi for the value
-  PhiNode *phi = new PhiNode(mem->in(0), phi_type, NULL, instance_id, alias_idx, offset);
+  PhiNode *phi = new PhiNode(mem->in(0), phi_type, NULL, mem->_idx, instance_id, alias_idx, offset);
   transform_later(phi);
   value_phis->push(phi, mem->_idx);
 
@@ -455,9 +536,17 @@ Node *PhaseMacroExpand::value_from_mem_phi(Node *mem, BasicType ft, const Type *
         }
         values.at_put(j, val);
       } else if (val->Opcode() == Op_SCMemProj) {
-        assert(val->in(0)->is_LoadStore() || val->in(0)->Opcode() == Op_EncodeISOArray, "sanity");
-        assert(false, "Object is not scalar replaceable if a LoadStore node access its field");
+        assert(val->in(0)->is_LoadStore() ||
+               val->in(0)->Opcode() == Op_EncodeISOArray ||
+               val->in(0)->Opcode() == Op_StrCompressedCopy, "sanity");
+        assert(false, "Object is not scalar replaceable if a LoadStore node accesses its field");
         return NULL;
+      } else if (val->is_ArrayCopy()) {
+        Node* res = make_arraycopy_load(val->as_ArrayCopy(), offset, val->in(0), val->in(TypeFunc::Memory), ft, phi_type, alloc);
+        if (res == NULL) {
+          return NULL;
+        }
+        values.at_put(j, res);
       } else {
 #ifdef ASSERT
         val->dump();
@@ -479,7 +568,7 @@ Node *PhaseMacroExpand::value_from_mem_phi(Node *mem, BasicType ft, const Type *
 }
 
 // Search the last value stored into the object's field.
-Node *PhaseMacroExpand::value_from_mem(Node *sfpt_mem, BasicType ft, const Type *ftype, const TypeOopPtr *adr_t, Node *alloc) {
+Node *PhaseMacroExpand::value_from_mem(Node *sfpt_mem, Node *sfpt_ctl, BasicType ft, const Type *ftype, const TypeOopPtr *adr_t, AllocateNode *alloc) {
   assert(adr_t->is_known_instance_field(), "instance required");
   int instance_id = adr_t->instance_id();
   assert((uint)instance_id == alloc->_idx, "wrong allocation");
@@ -538,6 +627,8 @@ Node *PhaseMacroExpand::value_from_mem(Node *sfpt_mem, BasicType ft, const Type 
       } else {
         done = true;
       }
+    } else if (mem->is_ArrayCopy()) {
+      done = true;
     } else {
       assert(false, "unexpected node");
     }
@@ -562,6 +653,15 @@ Node *PhaseMacroExpand::value_from_mem(Node *sfpt_mem, BasicType ft, const Type 
           value_phis.pop();
         }
       }
+    } else if (mem->is_ArrayCopy()) {
+      Node* ctl = mem->in(0);
+      Node* m = mem->in(TypeFunc::Memory);
+      if (sfpt_ctl->is_Proj() && sfpt_ctl->as_Proj()->is_uncommon_trap_proj(Deoptimization::Reason_none)) {
+        // pin the loads in the uncommon trap path
+        ctl = sfpt_ctl;
+        m = sfpt_mem;
+      }
+      return make_arraycopy_load(mem->as_ArrayCopy(), offset, ctl, m, ft, ftype, alloc);
     }
   }
   // Something go wrong.
@@ -703,10 +803,10 @@ bool PhaseMacroExpand::scalar_replacement(AllocateNode *alloc, GrowableArray <Sa
   ciKlass* klass = NULL;
   ciInstanceKlass* iklass = NULL;
   int nfields = 0;
-  int array_base;
-  int element_size;
-  BasicType basic_elem_type;
-  ciType* elem_type;
+  int array_base = 0;
+  int element_size = 0;
+  BasicType basic_elem_type = T_ILLEGAL;
+  ciType* elem_type = NULL;
 
   Node* res = alloc->result_cast();
   assert(res == NULL || res->is_CheckCastPP(), "unexpected AllocateNode result");
@@ -738,6 +838,7 @@ bool PhaseMacroExpand::scalar_replacement(AllocateNode *alloc, GrowableArray <Sa
   while (safepoints.length() > 0) {
     SafePointNode* sfpt = safepoints.pop();
     Node* mem = sfpt->memory();
+    Node* ctl = sfpt->control();
     assert(sfpt->jvms() != NULL, "missed JVMS");
     // Fields of scalar objs are referenced only at the end
     // of regular debuginfo at the last (youngest) JVMS.
@@ -769,7 +870,7 @@ bool PhaseMacroExpand::scalar_replacement(AllocateNode *alloc, GrowableArray <Sa
       if (basic_elem_type == T_OBJECT || basic_elem_type == T_ARRAY) {
         if (!elem_type->is_loaded()) {
           field_type = TypeInstPtr::BOTTOM;
-        } else if (field != NULL && field->is_constant() && field->is_static()) {
+        } else if (field != NULL && field->is_static_constant()) {
           // This can happen if the constant oop is non-perm.
           ciObject* con = field->constant_value().as_object();
           // Do not "join" in the previous type; it doesn't add value,
@@ -789,7 +890,7 @@ bool PhaseMacroExpand::scalar_replacement(AllocateNode *alloc, GrowableArray <Sa
 
       const TypeOopPtr *field_addr_type = res_type->add_offset(offset)->isa_oopptr();
 
-      Node *field_val = value_from_mem(mem, basic_elem_type, field_type, field_addr_type, alloc);
+      Node *field_val = value_from_mem(mem, ctl, basic_elem_type, field_type, field_addr_type, alloc);
       if (field_val == NULL) {
         // We weren't able to find a value for this field,
         // give up on eliminating this allocation.
@@ -871,6 +972,17 @@ bool PhaseMacroExpand::scalar_replacement(AllocateNode *alloc, GrowableArray <Sa
   return true;
 }
 
+static void disconnect_projections(MultiNode* n, PhaseIterGVN& igvn) {
+  Node* ctl_proj = n->proj_out(TypeFunc::Control);
+  Node* mem_proj = n->proj_out(TypeFunc::Memory);
+  if (ctl_proj != NULL) {
+    igvn.replace_node(ctl_proj, n->in(0));
+  }
+  if (mem_proj != NULL) {
+    igvn.replace_node(mem_proj, n->in(TypeFunc::Memory));
+  }
+}
+
 // Process users of eliminated allocation.
 void PhaseMacroExpand::process_users_of_allocation(CallNode *alloc) {
   Node* res = alloc->result_cast();
@@ -901,13 +1013,13 @@ void PhaseMacroExpand::process_users_of_allocation(CallNode *alloc) {
             // Disconnect ArrayCopy node
             ArrayCopyNode* ac = n->as_ArrayCopy();
             assert(ac->is_clonebasic(), "unexpected array copy kind");
-            Node* ctl_proj = ac->proj_out(TypeFunc::Control);
-            Node* mem_proj = ac->proj_out(TypeFunc::Memory);
-            if (ctl_proj != NULL) {
-              _igvn.replace_node(ctl_proj, n->in(0));
-            }
-            if (mem_proj != NULL) {
-              _igvn.replace_node(mem_proj, n->in(TypeFunc::Memory));
+            Node* membar_after = ac->proj_out(TypeFunc::Control)->unique_ctrl_out();
+            disconnect_projections(ac, _igvn);
+            assert(alloc->in(0)->is_Proj() && alloc->in(0)->in(0)->Opcode() == Op_MemBarCPUOrder, "mem barrier expected before allocation");
+            Node* membar_before = alloc->in(0)->in(0);
+            disconnect_projections(membar_before->as_MemBar(), _igvn);
+            if (membar_after->is_MemBar()) {
+              disconnect_projections(membar_after->as_MemBar(), _igvn);
             }
           } else {
             eliminate_card_mark(n);
@@ -935,7 +1047,9 @@ void PhaseMacroExpand::process_users_of_allocation(CallNode *alloc) {
         // opportunities for allocation elimination
         Node* src = ac->in(ArrayCopyNode::Src);
         ac->replace_edge(src, top());
-        if (src->outcnt() == 0) {
+        // src can be top at this point if src and dest of the
+        // arraycopy were the same
+        if (src->outcnt() == 0 && !src->is_top()) {
           _igvn.remove_dead_node(src);
         }
 
@@ -1228,10 +1342,10 @@ void PhaseMacroExpand::expand_allocate_common(
   // We need a Region and corresponding Phi's to merge the slow-path and fast-path results.
   // they will not be used if "always_slow" is set
   enum { slow_result_path = 1, fast_result_path = 2 };
-  Node *result_region;
-  Node *result_phi_rawmem;
-  Node *result_phi_rawoop;
-  Node *result_phi_i_o;
+  Node *result_region = NULL;
+  Node *result_phi_rawmem = NULL;
+  Node *result_phi_rawoop = NULL;
+  Node *result_phi_i_o = NULL;
 
   // The initial slow comparison is a size check, the comparison
   // we want to do is a BoolTest::gt
@@ -1431,11 +1545,21 @@ void PhaseMacroExpand::expand_allocate_common(
 
     // If initialization is performed by an array copy, any required
     // MemBarStoreStore was already added. If the object does not
-    // escape no need for a MemBarStoreStore. Otherwise we need a
-    // MemBarStoreStore so that stores that initialize this object
-    // can't be reordered with a subsequent store that makes this
-    // object accessible by other threads.
-    if (init == NULL || (!init->is_complete_with_arraycopy() && !init->does_not_escape())) {
+    // escape no need for a MemBarStoreStore. If the object does not
+    // escape in its initializer and memory barrier (MemBarStoreStore or
+    // stronger) is already added at exit of initializer, also no need
+    // for a MemBarStoreStore. Otherwise we need a MemBarStoreStore
+    // so that stores that initialize this object can't be reordered
+    // with a subsequent store that makes this object accessible by
+    // other threads.
+    // Other threads include java threads and JVM internal threads
+    // (for example concurrent GC threads). Current concurrent GC
+    // implementation: CMS and G1 will not scan newly created object,
+    // so it's safe to skip storestore barrier when allocation does
+    // not escape.
+    if (!alloc->does_not_escape_thread() &&
+        !alloc->is_allocation_MemBar_redundant() &&
+        (init == NULL || !init->is_complete_with_arraycopy())) {
       if (init == NULL || init->req() < InitializeNode::RawStores) {
         // No InitializeNode or no stores captured by zeroing
         // elimination. Simply add the MemBarStoreStore after object
@@ -1479,8 +1603,12 @@ void PhaseMacroExpand::expand_allocate_common(
         // All nodes that depended on the InitializeNode for control
         // and memory must now depend on the MemBarNode that itself
         // depends on the InitializeNode
-        _igvn.replace_node(init_ctrl, ctrl);
-        _igvn.replace_node(init_mem, mem);
+        if (init_ctrl != NULL) {
+          _igvn.replace_node(init_ctrl, ctrl);
+        }
+        if (init_mem != NULL) {
+          _igvn.replace_node(init_mem, mem);
+        }
       }
     }
 
@@ -1712,10 +1840,11 @@ PhaseMacroExpand::initialize_object(AllocateNode* alloc,
     // there can be two Allocates to one Initialize.  The answer in all these
     // edge cases is safety first.  It is always safe to clear immediately
     // within an Allocate, and then (maybe or maybe not) clear some more later.
-    if (!ZeroTLAB)
+    if (!(UseTLAB && ZeroTLAB)) {
       rawmem = ClearArrayNode::clear_memory(control, rawmem, object,
                                             header_size, size_in_bytes,
                                             &_igvn);
+    }
   } else {
     if (!init->is_complete()) {
       // Try to win by zeroing only what the init does not store.
@@ -1795,7 +1924,7 @@ Node* PhaseMacroExpand::prefetch_allocation(Node* i_o, Node*& needgc_false,
 
       Node *prefetch_adr;
       Node *prefetch;
-      uint lines = AllocatePrefetchDistance / AllocatePrefetchStepSize;
+      uint lines = (length != NULL) ? AllocatePrefetchLines : AllocateInstancePrefetchLines;
       uint step_size = AllocatePrefetchStepSize;
       uint distance = 0;
 
@@ -1824,12 +1953,8 @@ Node* PhaseMacroExpand::prefetch_allocation(Node* i_o, Node*& needgc_false,
       contended_phi_rawmem = pf_phi_rawmem;
       i_o = pf_phi_abio;
    } else if( UseTLAB && AllocatePrefetchStyle == 3 ) {
-      // Insert a prefetch for each allocation.
-      // This code is used for Sparc with BIS.
-      Node *pf_region = new RegionNode(3);
-      Node *pf_phi_rawmem = new PhiNode( pf_region, Type::MEMORY,
-                                             TypeRawPtr::BOTTOM );
-      transform_later(pf_region);
+      // Insert a prefetch instruction for each allocation.
+      // This code is used to generate 1 prefetch instruction per cache line.
 
       // Generate several prefetch instructions.
       uint lines = (length != NULL) ? AllocatePrefetchLines : AllocateInstancePrefetchLines;
@@ -1838,10 +1963,12 @@ Node* PhaseMacroExpand::prefetch_allocation(Node* i_o, Node*& needgc_false,
 
       // Next cache address.
       Node *cache_adr = new AddPNode(old_eden_top, old_eden_top,
-                                            _igvn.MakeConX(distance));
+                                     _igvn.MakeConX(step_size + distance));
       transform_later(cache_adr);
       cache_adr = new CastP2XNode(needgc_false, cache_adr);
       transform_later(cache_adr);
+      // Address is aligned to execute prefetch to the beginning of cache line size
+      // (it is important when BIS instruction is used on SPARC as prefetch).
       Node* mask = _igvn.MakeConX(~(intptr_t)(step_size-1));
       cache_adr = new AndXNode(cache_adr, mask);
       transform_later(cache_adr);
@@ -2552,9 +2679,9 @@ bool PhaseMacroExpand::expand_macro_nodes() {
   eliminate_macro_nodes();
 
   // Make sure expansion will not cause node limit to be exceeded.
-  // Worst case is a macro node gets expanded into about 50 nodes.
+  // Worst case is a macro node gets expanded into about 200 nodes.
   // Allow 50% more for optimization.
-  if (C->check_node_count(C->macro_count() * 75, "out of nodes before macro expansion" ) )
+  if (C->check_node_count(C->macro_count() * 300, "out of nodes before macro expansion" ) )
     return true;
 
   // Eliminate Opaque and LoopLimit nodes. Do it after all loop optimizations.

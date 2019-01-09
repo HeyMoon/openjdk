@@ -22,9 +22,8 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-package com.sun.media.sound;
 
-import sun.misc.ManagedLocalsThread;
+package com.sun.media.sound;
 
 import java.io.IOException;
 
@@ -55,7 +54,7 @@ public final class SoftAudioPusher implements Runnable {
         if (active)
             return;
         active = true;
-        audiothread = new ManagedLocalsThread(this);
+        audiothread = new Thread(null, this, "AudioPusher", 0, false);
         audiothread.setDaemon(true);
         audiothread.setPriority(Thread.MAX_PRIORITY);
         audiothread.start();
@@ -72,6 +71,7 @@ public final class SoftAudioPusher implements Runnable {
         }
     }
 
+    @Override
     public void run() {
         byte[] buffer = SoftAudioPusher.this.buffer;
         AudioInputStream ais = SoftAudioPusher.this.ais;
@@ -89,6 +89,5 @@ public final class SoftAudioPusher implements Runnable {
             active = false;
             //e.printStackTrace();
         }
-
     }
 }

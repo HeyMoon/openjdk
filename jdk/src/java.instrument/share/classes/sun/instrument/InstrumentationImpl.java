@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,21 +23,27 @@
  * questions.
  */
 
-
 package sun.instrument;
 
+import java.lang.instrument.UnmodifiableModuleException;
 import java.lang.reflect.Method;
 import java.lang.reflect.AccessibleObject;
-
 import java.lang.instrument.ClassFileTransformer;
 import java.lang.instrument.ClassDefinition;
 import java.lang.instrument.Instrumentation;
-
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.security.ProtectionDomain;
-
+import java.util.Collections;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.jar.JarFile;
+
+import jdk.internal.module.Modules;
 
 /*
  * Copyright 2003 Wily Technology, Inc.
@@ -123,6 +129,13 @@ public class InstrumentationImpl implements Instrumentation {
                          "null passed as 'theClass' in isModifiableClass");
         }
         return isModifiableClass0(mNativeAgent, theClass);
+    }
+
+    public boolean isModifiableModule(Module module) {
+        if (module == null) {
+            throw new NullPointerException("'module' is null");
+        }
+        return true;
     }
 
     public boolean
@@ -224,6 +237,107 @@ public class InstrumentationImpl implements Instrumentation {
         String[] prefixes = mgr.getNativeMethodPrefixes();
         setNativeMethodPrefixes(mNativeAgent, prefixes, mgr.isRetransformable());
     }
+
+    @Override
+    public void redefineModule(Module module,
+                               Set<Module> extraReads,
+                               Map<String, Set<Module>> extraExports,
+                               Map<String, Set<Module>> extraOpens,
+                               Set<Class<?>> extraUses,
+                               Map<Class<?>, List<Class<?>>> extraProvides)
+    {
+        if (!module.isNamed())
+            return;
+
+        if (!isModifiableModule(module))
+            throw new UnmodifiableModuleException(module.getName());
+
+        // copy and check reads
+        extraReads = new HashSet<>(extraReads);
+        if (extraReads.contains(null))
+            throw new NullPointerException("'extraReads' contains null");
+
+        // copy and check exports and opens
+        extraExports = cloneAndCheckMap(module, extraExports);
+        extraOpens = cloneAndCheckMap(module, extraOpens);
+
+        // copy and check uses
+        extraUses = new HashSet<>(extraUses);
+        if (extraUses.contains(null))
+            throw new NullPointerException("'extraUses' contains null");
+
+        // copy and check provides
+        Map<Class<?>, List<Class<?>>> tmpProvides = new HashMap<>();
+        for (Map.Entry<Class<?>, List<Class<?>>> e : extraProvides.entrySet()) {
+            Class<?> service = e.getKey();
+            if (service == null)
+                throw new NullPointerException("'extraProvides' contains null");
+            List<Class<?>> providers = new ArrayList<>(e.getValue());
+            if (providers.isEmpty())
+                throw new IllegalArgumentException("list of providers is empty");
+            providers.forEach(p -> {
+                if (p.getModule() != module)
+                    throw new IllegalArgumentException(p + " not in " + module);
+                if (!service.isAssignableFrom(p))
+                    throw new IllegalArgumentException(p + " is not a " + service);
+            });
+            tmpProvides.put(service, providers);
+        }
+        extraProvides = tmpProvides;
+
+
+        // update reads
+        extraReads.forEach(m -> Modules.addReads(module, m));
+
+        // update exports
+        for (Map.Entry<String, Set<Module>> e : extraExports.entrySet()) {
+            String pkg = e.getKey();
+            Set<Module> targets = e.getValue();
+            targets.forEach(m -> Modules.addExports(module, pkg, m));
+        }
+
+        // update opens
+        for (Map.Entry<String, Set<Module>> e : extraOpens.entrySet()) {
+            String pkg = e.getKey();
+            Set<Module> targets = e.getValue();
+            targets.forEach(m -> Modules.addOpens(module, pkg, m));
+        }
+
+        // update uses
+        extraUses.forEach(service -> Modules.addUses(module, service));
+
+        // update provides
+        for (Map.Entry<Class<?>, List<Class<?>>> e : extraProvides.entrySet()) {
+            Class<?> service = e.getKey();
+            List<Class<?>> providers = e.getValue();
+            providers.forEach(p -> Modules.addProvides(module, service, p));
+        }
+    }
+
+    private Map<String, Set<Module>>
+        cloneAndCheckMap(Module module, Map<String, Set<Module>> map)
+    {
+        if (map.isEmpty())
+            return Collections.emptyMap();
+
+        Map<String, Set<Module>> result = new HashMap<>();
+        Set<String> packages = module.getPackages();
+        for (Map.Entry<String, Set<Module>> e : map.entrySet()) {
+            String pkg = e.getKey();
+            if (pkg == null)
+                throw new NullPointerException("package cannot be null");
+            if (!packages.contains(pkg))
+                throw new IllegalArgumentException(pkg + " not in module");
+            Set<Module> targets = new HashSet<>(e.getValue());
+            if (targets.isEmpty())
+                throw new IllegalArgumentException("set of targets is empty");
+            if (targets.contains(null))
+                throw new NullPointerException("set of targets cannot include null");
+            result.put(pkg, targets);
+        }
+        return result;
+    }
+
 
     private TransformerManager
     findTransformerManager(ClassFileTransformer transformer) {
@@ -387,9 +501,6 @@ public class InstrumentationImpl implements Instrumentation {
         } else {
             m.invoke(null, new Object[] { optionsString });
         }
-
-        // don't let others access a non-public premain method
-        setAccessible(m, false);
     }
 
     // WARNING: the native code knows the name & signature of this method
@@ -413,7 +524,8 @@ public class InstrumentationImpl implements Instrumentation {
 
     // WARNING: the native code knows the name & signature of this method
     private byte[]
-    transform(  ClassLoader         loader,
+    transform(  Module              module,
+                ClassLoader         loader,
                 String              classname,
                 Class<?>            classBeingRedefined,
                 ProtectionDomain    protectionDomain,
@@ -422,14 +534,36 @@ public class InstrumentationImpl implements Instrumentation {
         TransformerManager mgr = isRetransformer?
                                         mRetransfomableTransformerManager :
                                         mTransformerManager;
+        // module is null when not a class load or when loading a class in an
+        // unnamed module and this is the first type to be loaded in the package.
+        if (module == null) {
+            if (classBeingRedefined != null) {
+                module = classBeingRedefined.getModule();
+            } else {
+                module = (loader == null) ? jdk.internal.loader.BootLoader.getUnnamedModule()
+                                          : loader.getUnnamedModule();
+            }
+        }
         if (mgr == null) {
             return null; // no manager, no transform
         } else {
-            return mgr.transform(   loader,
+            return mgr.transform(   module,
+                                    loader,
                                     classname,
                                     classBeingRedefined,
                                     protectionDomain,
                                     classfileBuffer);
         }
     }
+
+
+    /**
+     * Invoked by the java launcher to load a java agent that is packaged with
+     * the main application in an executable JAR file.
+     */
+    public static void loadAgent(String path) {
+        loadAgent0(path);
+    }
+
+    private static native void loadAgent0(String path);
 }

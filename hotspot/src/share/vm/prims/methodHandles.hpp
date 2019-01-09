@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,12 @@
 #include "runtime/frame.inline.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/interfaceSupport.hpp"
+#include "utilities/macros.hpp"
+
+#ifdef ZERO
+# include "entry_zero.hpp"
+#endif
+
 
 class MacroAssembler;
 class Label;
@@ -60,7 +66,7 @@ class MethodHandles: AllStatic {
   static Handle new_MemberName(TRAPS);  // must be followed by init_MemberName
   static oop init_MemberName(Handle mname_h, Handle target_h); // compute vmtarget/vmindex from target
   static oop init_field_MemberName(Handle mname_h, fieldDescriptor& fd, bool is_setter = false);
-  static oop init_method_MemberName(Handle mname_h, CallInfo& info);
+  static oop init_method_MemberName(Handle mname_h, CallInfo& info, bool intern = true);
   static int method_ref_kind(Method* m, bool do_dispatch_if_possible = true);
   static int find_MemberNames(KlassHandle k, Symbol* name, Symbol* sig,
                               int mflags, KlassHandle caller,
@@ -75,7 +81,7 @@ class MethodHandles: AllStatic {
   static void flush_dependent_nmethods(Handle call_site, Handle target);
 
   // Generate MethodHandles adapters.
-  static bool generate_adapters();
+  static void generate_adapters();
 
   // Called from MethodHandlesAdapterGenerator.
   static address generate_method_handle_interpreter_entry(MacroAssembler* _masm, vmIntrinsics::ID iid);
@@ -89,6 +95,10 @@ class MethodHandles: AllStatic {
   static bool is_signature_polymorphic(vmIntrinsics::ID iid) {
     return (iid >= vmIntrinsics::FIRST_MH_SIG_POLY &&
             iid <= vmIntrinsics::LAST_MH_SIG_POLY);
+  }
+
+  static bool is_signature_polymorphic_method(Method* m) {
+    return is_signature_polymorphic(m->intrinsic_id());
   }
 
   static bool is_signature_polymorphic_intrinsic(vmIntrinsics::ID iid) {
@@ -110,7 +120,8 @@ class MethodHandles: AllStatic {
             iid <= vmIntrinsics::_linkToInterface);
   }
   static bool has_member_arg(Symbol* klass, Symbol* name) {
-    if ((klass == vmSymbols::java_lang_invoke_MethodHandle()) &&
+    if ((klass == vmSymbols::java_lang_invoke_MethodHandle() ||
+         klass == vmSymbols::java_lang_invoke_VarHandle()) &&
         is_signature_polymorphic_name(name)) {
       vmIntrinsics::ID iid = signature_polymorphic_name_id(name);
       return has_member_arg(iid);
@@ -130,6 +141,8 @@ class MethodHandles: AllStatic {
   static bool is_signature_polymorphic_name(Klass* klass, Symbol* name) {
     return signature_polymorphic_name_id(klass, name) != vmIntrinsics::_none;
   }
+
+  static Bytecodes::Code signature_polymorphic_intrinsic_bytecode(vmIntrinsics::ID id);
 
   static int get_named_constant(int which, Handle name_box, TRAPS);
 
@@ -179,25 +192,7 @@ public:
             ref_kind == JVM_REF_invokeInterface);
   }
 
-
-#ifdef TARGET_ARCH_x86
-# include "methodHandles_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "methodHandles_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "methodHandles_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "methodHandles_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "methodHandles_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "methodHandles_aarch64.hpp"
-#endif
+#include CPU_HEADER(methodHandles)
 
   // Tracing
   static void trace_method_handle(MacroAssembler* _masm, const char* adaptername) PRODUCT_RETURN;
@@ -240,7 +235,8 @@ class MemberNameTable : public GrowableArray<jweak> {
  public:
   MemberNameTable(int methods_cnt);
   ~MemberNameTable();
-  void add_member_name(jweak mem_name_ref);
+  oop add_member_name(jweak mem_name_ref);
+  oop find_or_add_member_name(jweak mem_name_ref);
 
 #if INCLUDE_JVMTI
   // RedefineClasses() API support:

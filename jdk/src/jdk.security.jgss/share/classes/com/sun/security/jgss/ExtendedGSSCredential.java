@@ -26,23 +26,13 @@
 package com.sun.security.jgss;
 
 import org.ietf.jgss.*;
-import sun.security.jgss.GSSCredentialImpl;
 
 /**
  * The extended GSSCredential interface for supporting additional
  * functionalities not defined by {@code org.ietf.jgss.GSSCredential}.
  * @since 1.8
  */
-@jdk.Exported
 public interface ExtendedGSSCredential extends GSSCredential {
-
-    static class ExtendedGSSCredentialImpl extends GSSCredentialImpl
-            implements ExtendedGSSCredential {
-
-        public ExtendedGSSCredentialImpl(GSSCredentialImpl old) {
-            super(old);
-        }
-    }
 
     /**
      * Impersonates a principal. In Kerberos, this can be implemented

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,14 +24,27 @@
 package javax.xml.parsers.ptests;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.assertNotSame;
+import static org.testng.Assert.assertSame;
+import static org.testng.Assert.assertEquals;
+
 import javax.xml.parsers.SAXParserFactory;
-import jaxp.library.JAXPBaseTest;
+
+import org.testng.annotations.Listeners;
 import org.testng.annotations.Test;
 
 /**
  * Class containing the test cases for SAXParserFactory API.
  */
-public class SAXParserFactTest extends JAXPBaseTest {
+/*
+ * @test
+ * @bug 8169778
+ * @library /javax/xml/jaxp/libs
+ * @run testng/othervm -DrunSecMngr=true javax.xml.parsers.ptests.SAXParserFactTest
+ * @run testng/othervm javax.xml.parsers.ptests.SAXParserFactTest
+ */
+@Listeners({jaxp.library.BasePolicy.class})
+public class SAXParserFactTest {
 
     private static final String NAMESPACES = "http://xml.org/sax/features/namespaces";
     private static final String NAMESPACE_PREFIXES = "http://xml.org/sax/features/namespace-prefixes";
@@ -39,6 +52,23 @@ public class SAXParserFactTest extends JAXPBaseTest {
     private static final String VALIDATION = "http://xml.org/sax/features/validation";
     private static final String EXTERNAL_G_ENTITIES = "http://xml.org/sax/features/external-general-entities";
     private static final String EXTERNAL_P_ENTITIES = "http://xml.org/sax/features/external-parameter-entities";
+    private static final String DEFAULT_IMPL_CLASS =
+        "com.sun.org.apache.xerces.internal.jaxp.SAXParserFactoryImpl";
+
+    /**
+     * Test if newDefaultInstance() method returns an instance
+     * of the expected factory.
+     * @throws Exception If any errors occur.
+     */
+    @Test
+    public void testDefaultInstance() throws Exception {
+        SAXParserFactory spf1 = SAXParserFactory.newDefaultInstance();
+        SAXParserFactory spf2 = SAXParserFactory.newInstance();
+        assertNotSame(spf1, spf2, "same instance returned:");
+        assertSame(spf1.getClass(), spf2.getClass(),
+                  "unexpected class mismatch for newDefaultInstance():");
+        assertEquals(spf1.getClass().getName(), DEFAULT_IMPL_CLASS);
+    }
 
     /**
      * Test if newSAXParser() method returns SAXParser.

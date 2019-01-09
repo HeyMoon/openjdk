@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,8 +31,8 @@
 #include "oops/method.hpp"
 #include "runtime/frame.inline.hpp"
 #include "runtime/signature.hpp"
-#include "runtime/thread.inline.hpp"
-#include "utilities/top.hpp"
+#include "runtime/thread.hpp"
+#include "utilities/macros.hpp"
 
 // The InterpreterRuntime is called by the interpreter for everything
 // that cannot/should not be dealt with in assembly and needs C support.
@@ -95,6 +95,7 @@ class InterpreterRuntime: AllStatic {
   static void    throw_AbstractMethodError(JavaThread* thread);
   static void    throw_IncompatibleClassChangeError(JavaThread* thread);
   static void    throw_StackOverflowError(JavaThread* thread);
+  static void    throw_delayed_StackOverflowError(JavaThread* thread);
   static void    throw_ArrayIndexOutOfBoundsException(JavaThread* thread, char* name, jint index);
   static void    throw_ClassCastException(JavaThread* thread, oopDesc* obj);
   static void    create_exception(JavaThread* thread, char* name, char* message);
@@ -112,7 +113,7 @@ class InterpreterRuntime: AllStatic {
   static void    note_rangeCheck_trap(JavaThread* thread, Method *method, int trap_bci);
   static void    note_classCheck_trap(JavaThread* thread, Method *method, int trap_bci);
   static void    note_arrayCheck_trap(JavaThread* thread, Method *method, int trap_bci);
-  // A dummy for makros that shall not profile traps.
+  // A dummy for macros that shall not profile traps.
   static void    note_no_trap(JavaThread* thread, Method *method, int trap_bci) {}
 #endif // CC_INTERP
 
@@ -163,25 +164,11 @@ class InterpreterRuntime: AllStatic {
   static void popframe_move_outgoing_args(JavaThread* thread, void* src_address, void* dest_address);
 #endif
 
+  // bytecode tracing is only used by the TraceBytecodes
+  static intptr_t trace_bytecode(JavaThread* thread, intptr_t preserve_this_value, intptr_t tos, intptr_t tos2) PRODUCT_RETURN0;
+
   // Platform dependent stuff
-#ifdef TARGET_ARCH_x86
-# include "interpreterRT_x86.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "interpreterRT_sparc.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
-# include "interpreterRT_zero.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "interpreterRT_arm.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "interpreterRT_ppc.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "interpreterRT_aarch64.hpp"
-#endif
+#include CPU_HEADER(interpreterRT)
 
   // optional normalization of fingerprints to reduce the number of adapters
   static uint64_t normalize_fast_native_fingerprint(uint64_t fingerprint);
@@ -218,7 +205,7 @@ class SignatureHandlerLibrary: public AllStatic {
   static void pd_set_handler(address handler);
 
  public:
-  static void add(methodHandle method);
+  static void add(const methodHandle& method);
   static void add(uint64_t fingerprint, address handler);
 };
 

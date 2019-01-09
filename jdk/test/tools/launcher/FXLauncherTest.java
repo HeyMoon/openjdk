@@ -29,6 +29,7 @@
  * jfx app class, a main-class for the manifest, a bogus one and none.
  * All should execute except the incorrect fx app class entries.
  * @run main/othervm FXLauncherTest
+ * @key intermittent
  */
 import java.io.File;
 import java.io.IOException;
@@ -239,7 +240,7 @@ public class FXLauncherTest extends TestHelper {
             createFile(ManifestFile, createManifestContents(StdMainClass, fxMC));
             createJar(FXtestJar, ManifestFile);
             String sTestJar = FXtestJar.getAbsolutePath();
-            TestResult tr;
+            final TestResult tr;
             if (useCP) {
                 tr = doExec(javaCmd, "-cp", sTestJar, StdMainClass, APP_PARMS[0], APP_PARMS[1]);
             } else {
@@ -290,7 +291,7 @@ public class FXLauncherTest extends TestHelper {
             createFile(ManifestFile, createManifestContents(ExtMainClass, fxMC));
             createJar(FXtestJar, ManifestFile);
             String sTestJar = FXtestJar.getAbsolutePath();
-            TestResult tr;
+            final TestResult tr;
             if (useCP) {
                 tr = doExec(javaCmd, "-cp", sTestJar, ExtMainClass, APP_PARMS[0], APP_PARMS[1]);
             } else {
@@ -359,7 +360,7 @@ public class FXLauncherTest extends TestHelper {
         createFile(ManifestFile, createManifestContents(NonFXMainClass, null));
         createJar(FXtestJar, ManifestFile);
         String sTestJar = FXtestJar.getAbsolutePath();
-        TestResult tr;
+        final TestResult tr;
 
         if (useCP) {
             tr = doExec(javaCmd, "-verbose:class", "-cp", sTestJar, NonFXMainClass, APP_PARMS[0], APP_PARMS[1]);

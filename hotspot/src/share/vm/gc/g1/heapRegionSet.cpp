@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,22 +29,15 @@
 
 uint FreeRegionList::_unrealistically_long_length = 0;
 
-void HeapRegionSetBase::fill_in_ext_msg(hrs_ext_msg* msg, const char* message) {
-  msg->append("[%s] %s ln: %u cy: " SIZE_FORMAT,
-              name(), message, length(), total_capacity_bytes());
-  fill_in_ext_msg_extra(msg);
-}
-
 #ifndef PRODUCT
 void HeapRegionSetBase::verify_region(HeapRegion* hr) {
-  assert(hr->containing_set() == this, err_msg("Inconsistent containing set for %u", hr->hrm_index()));
-  assert(!hr->is_young(), err_msg("Adding young region %u", hr->hrm_index())); // currently we don't use these sets for young regions
-  assert(hr->is_humongous() == regions_humongous(), err_msg("Wrong humongous state for region %u and set %s", hr->hrm_index(), name()));
-  assert(hr->is_free() == regions_free(), err_msg("Wrong free state for region %u and set %s", hr->hrm_index(), name()));
-  assert(!hr->is_free() || hr->is_empty(), err_msg("Free region %u is not empty for set %s", hr->hrm_index(), name()));
+  assert(hr->containing_set() == this, "Inconsistent containing set for %u", hr->hrm_index());
+  assert(!hr->is_young(), "Adding young region %u", hr->hrm_index()); // currently we don't use these sets for young regions
+  assert(hr->is_humongous() == regions_humongous(), "Wrong humongous state for region %u and set %s", hr->hrm_index(), name());
+  assert(hr->is_free() == regions_free(), "Wrong free state for region %u and set %s", hr->hrm_index(), name());
+  assert(!hr->is_free() || hr->is_empty(), "Free region %u is not empty for set %s", hr->hrm_index(), name());
   assert(!hr->is_empty() || hr->is_free() || hr->is_archive(),
-         err_msg("Empty region %u is not free or archive for set %s", hr->hrm_index(), name()));
-  assert(hr->rem_set()->verify_ready_for_par_iteration(), err_msg("Wrong iteration state %u", hr->hrm_index()));
+         "Empty region %u is not free or archive for set %s", hr->hrm_index(), name());
 }
 #endif
 
@@ -55,16 +48,15 @@ void HeapRegionSetBase::verify() {
   // verification might fail and send us on a wild goose chase.
   check_mt_safety();
 
-  guarantee(( is_empty() && length() == 0 && total_capacity_bytes() == 0) ||
-            (!is_empty() && length() > 0  && total_capacity_bytes() > 0) ,
-            hrs_ext_msg(this, "invariant"));
+  guarantee_heap_region_set(( is_empty() && length() == 0) ||
+                            (!is_empty() && length() > 0),
+                            "invariant");
 }
 
 void HeapRegionSetBase::verify_start() {
   // See comment in verify() about MT safety and verification.
   check_mt_safety();
-  assert(!_verify_in_progress,
-         hrs_ext_msg(this, "verification should not be in progress"));
+  assert_heap_region_set(!_verify_in_progress, "verification should not be in progress");
 
   // Do the basic verification first before we do the checks over the regions.
   HeapRegionSetBase::verify();
@@ -75,8 +67,7 @@ void HeapRegionSetBase::verify_start() {
 void HeapRegionSetBase::verify_end() {
   // See comment in verify() about MT safety and verification.
   check_mt_safety();
-  assert(_verify_in_progress,
-         hrs_ext_msg(this, "verification should be in progress"));
+  assert_heap_region_set(_verify_in_progress, "verification should be in progress");
 
   _verify_in_progress = false;
 }
@@ -89,23 +80,17 @@ void HeapRegionSetBase::print_on(outputStream* out, bool print_contents) {
   out->print_cr("    free              : %s", BOOL_TO_STR(regions_free()));
   out->print_cr("  Attributes");
   out->print_cr("    length            : %14u", length());
-  out->print_cr("    total capacity    : " SIZE_FORMAT_W(14) " bytes",
-                total_capacity_bytes());
 }
 
 HeapRegionSetBase::HeapRegionSetBase(const char* name, bool humongous, bool free, HRSMtSafeChecker* mt_safety_checker)
   : _name(name), _verify_in_progress(false),
     _is_humongous(humongous), _is_free(free), _mt_safety_checker(mt_safety_checker),
-    _count()
+    _length(0)
 { }
 
 void FreeRegionList::set_unrealistically_long_length(uint len) {
   guarantee(_unrealistically_long_length == 0, "should only be set once");
   _unrealistically_long_length = len;
-}
-
-void FreeRegionList::fill_in_ext_msg_extra(hrs_ext_msg* msg) {
-  msg->append(" hd: " PTR_FORMAT " tl: " PTR_FORMAT, p2i(_head), p2i(_tail));
 }
 
 void FreeRegionList::remove_all() {
@@ -151,7 +136,7 @@ void FreeRegionList::add_ordered(FreeRegionList* from_list) {
   #endif // ASSERT
 
   if (is_empty()) {
-    assert(length() == 0 && _tail == NULL, hrs_ext_msg(this, "invariant"));
+    assert_free_region_list(length() == 0 && _tail == NULL, "invariant");
     _head = from_list->_head;
     _tail = from_list->_tail;
   } else {
@@ -189,7 +174,7 @@ void FreeRegionList::add_ordered(FreeRegionList* from_list) {
     }
   }
 
-  _count.increment(from_list->length(), from_list->total_capacity_bytes());
+  _length += from_list->length();
   from_list->clear();
 
   verify_optional();
@@ -198,8 +183,8 @@ void FreeRegionList::add_ordered(FreeRegionList* from_list) {
 
 void FreeRegionList::remove_starting_at(HeapRegion* first, uint num_regions) {
   check_mt_safety();
-  assert(num_regions >= 1, hrs_ext_msg(this, "pre-condition"));
-  assert(!is_empty(), hrs_ext_msg(this, "pre-condition"));
+  assert_free_region_list(num_regions >= 1, "pre-condition");
+  assert_free_region_list(!is_empty(), "pre-condition");
 
   verify_optional();
   DEBUG_ONLY(uint old_length = length();)
@@ -212,25 +197,25 @@ void FreeRegionList::remove_starting_at(HeapRegion* first, uint num_regions) {
     HeapRegion* prev = curr->prev();
 
     assert(count < num_regions,
-           hrs_err_msg("[%s] should not come across more regions "
-                       "pending for removal than num_regions: %u",
-                       name(), num_regions));
+           "[%s] should not come across more regions "
+           "pending for removal than num_regions: %u",
+           name(), num_regions);
 
     if (prev == NULL) {
-      assert(_head == curr, hrs_ext_msg(this, "invariant"));
+      assert_free_region_list(_head == curr, "invariant");
       _head = next;
     } else {
-      assert(_head != curr, hrs_ext_msg(this, "invariant"));
+      assert_free_region_list(_head != curr, "invariant");
       prev->set_next(next);
     }
     if (next == NULL) {
-      assert(_tail == curr, hrs_ext_msg(this, "invariant"));
+      assert_free_region_list(_tail == curr, "invariant");
       _tail = prev;
     } else {
-      assert(_tail != curr, hrs_ext_msg(this, "invariant"));
+      assert_free_region_list(_tail != curr, "invariant");
       next->set_prev(prev);
     }
-    if (_last = curr) {
+    if (_last == curr) {
       _last = NULL;
     }
 
@@ -243,12 +228,12 @@ void FreeRegionList::remove_starting_at(HeapRegion* first, uint num_regions) {
   }
 
   assert(count == num_regions,
-         hrs_err_msg("[%s] count: %u should be == num_regions: %u",
-                     name(), count, num_regions));
+         "[%s] count: %u should be == num_regions: %u",
+         name(), count, num_regions);
   assert(length() + num_regions == old_length,
-         hrs_err_msg("[%s] new length should be consistent "
-                     "new length: %u old length: %u num_regions: %u",
-                     name(), length(), old_length, num_regions));
+         "[%s] new length should be consistent "
+         "new length: %u old length: %u num_regions: %u",
+         name(), length(), old_length, num_regions);
 
   verify_optional();
 }
@@ -267,28 +252,10 @@ void FreeRegionList::verify() {
 }
 
 void FreeRegionList::clear() {
-  _count = HeapRegionSetCount();
+  _length = 0;
   _head = NULL;
   _tail = NULL;
   _last = NULL;
-}
-
-void FreeRegionList::print_on(outputStream* out, bool print_contents) {
-  HeapRegionSetBase::print_on(out, print_contents);
-  out->print_cr("  Linking");
-  out->print_cr("    head              : " PTR_FORMAT, p2i(_head));
-  out->print_cr("    tail              : " PTR_FORMAT, p2i(_tail));
-
-  if (print_contents) {
-    out->print_cr("  Contents");
-    FreeRegionListIterator iter(this);
-    while (iter.more_available()) {
-      HeapRegion* hr = iter.get_next();
-      hr->print_on(out);
-    }
-  }
-
-  out->cr();
 }
 
 void FreeRegionList::verify_list() {
@@ -305,8 +272,8 @@ void FreeRegionList::verify_list() {
 
     count++;
     guarantee(count < _unrealistically_long_length,
-        hrs_err_msg("[%s] the calculated length: %u seems very long, is there maybe a cycle? curr: " PTR_FORMAT " prev0: " PTR_FORMAT " " "prev1: " PTR_FORMAT " length: %u",
-            name(), count, p2i(curr), p2i(prev0), p2i(prev1), length()));
+              "[%s] the calculated length: %u seems very long, is there maybe a cycle? curr: " PTR_FORMAT " prev0: " PTR_FORMAT " " "prev1: " PTR_FORMAT " length: %u",
+              name(), count, p2i(curr), p2i(prev0), p2i(prev1), length());
 
     if (curr->next() != NULL) {
       guarantee(curr->next()->prev() == curr, "Next or prev pointers messed up");
@@ -321,11 +288,9 @@ void FreeRegionList::verify_list() {
     curr = curr->next();
   }
 
-  guarantee(_tail == prev0, err_msg("Expected %s to end with %u but it ended with %u.", name(), _tail->hrm_index(), prev0->hrm_index()));
+  guarantee(_tail == prev0, "Expected %s to end with %u but it ended with %u.", name(), _tail->hrm_index(), prev0->hrm_index());
   guarantee(_tail == NULL || _tail->next() == NULL, "_tail should not have a next");
-  guarantee(length() == count, err_msg("%s count mismatch. Expected %u, actual %u.", name(), length(), count));
-  guarantee(total_capacity_bytes() == capacity, err_msg("%s capacity mismatch. Expected " SIZE_FORMAT ", actual " SIZE_FORMAT,
-      name(), total_capacity_bytes(), capacity));
+  guarantee(length() == count, "%s count mismatch. Expected %u, actual %u.", name(), length(), count);
 }
 
 // Note on the check_mt_safety() methods below:
@@ -404,51 +369,4 @@ void HumongousRegionSetMtSafeChecker::check() {
     guarantee(Heap_lock->owned_by_self(),
               "master humongous set MT safety protocol outside a safepoint");
   }
-}
-
-void FreeRegionList_test() {
-  FreeRegionList l("test");
-
-  const uint num_regions_in_test = 5;
-  // Create a fake heap. It does not need to be valid, as the HeapRegion constructor
-  // does not access it.
-  MemRegion heap(NULL, num_regions_in_test * HeapRegion::GrainWords);
-  // Allocate a fake BOT because the HeapRegion constructor initializes
-  // the BOT.
-  size_t bot_size = G1BlockOffsetSharedArray::compute_size(heap.word_size());
-  HeapWord* bot_data = NEW_C_HEAP_ARRAY(HeapWord, bot_size, mtGC);
-  ReservedSpace bot_rs(G1BlockOffsetSharedArray::compute_size(heap.word_size()));
-  G1RegionToSpaceMapper* bot_storage =
-    G1RegionToSpaceMapper::create_mapper(bot_rs,
-                                         bot_rs.size(),
-                                         os::vm_page_size(),
-                                         HeapRegion::GrainBytes,
-                                         G1BlockOffsetSharedArray::N_bytes,
-                                         mtGC);
-  G1BlockOffsetSharedArray oa(heap, bot_storage);
-  bot_storage->commit_regions(0, num_regions_in_test);
-
-  // Set up memory regions for the heap regions.
-  MemRegion mr0(heap.start(), HeapRegion::GrainWords);
-  MemRegion mr1(mr0.end(), HeapRegion::GrainWords);
-  MemRegion mr2(mr1.end(), HeapRegion::GrainWords);
-  MemRegion mr3(mr2.end(), HeapRegion::GrainWords);
-  MemRegion mr4(mr3.end(), HeapRegion::GrainWords);
-
-  HeapRegion hr0(0, &oa, mr0);
-  HeapRegion hr1(1, &oa, mr1);
-  HeapRegion hr2(2, &oa, mr2);
-  HeapRegion hr3(3, &oa, mr3);
-  HeapRegion hr4(4, &oa, mr4);
-  l.add_ordered(&hr1);
-  l.add_ordered(&hr0);
-  l.add_ordered(&hr3);
-  l.add_ordered(&hr4);
-  l.add_ordered(&hr2);
-  assert(l.length() == num_regions_in_test, "wrong length");
-  l.verify_list();
-
-  bot_storage->uncommit_regions(0, num_regions_in_test);
-  delete bot_storage;
-  FREE_C_HEAP_ARRAY(HeapWord, bot_data);
 }

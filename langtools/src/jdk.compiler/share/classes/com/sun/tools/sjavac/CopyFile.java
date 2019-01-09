@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,15 +31,15 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.PrintStream;
+import java.io.Writer;
 import java.net.URI;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
+import com.sun.tools.sjavac.comp.CompilationService;
 import com.sun.tools.sjavac.options.Options;
 import com.sun.tools.sjavac.pubapi.PubApi;
-import com.sun.tools.sjavac.server.Sjavac;
 
 /**
  * The copy file transform simply copies a matching file from -src to -d .
@@ -58,10 +58,9 @@ public class CopyFile implements Transformer {
     public void setExtra(Options a) {
     }
 
-    public boolean transform(Sjavac sjavac,
+    public boolean transform(CompilationService compilationService,
                              Map<String,Set<URI>> pkgSrcs,
                              Set<URI> visibleSrcs,
-                             Map<URI,Set<String>> visibleClasses,
                              Map<String,Set<String>> oldPackageDependents,
                              URI destRoot,
                              Map<String,Set<URI>>    packageArtifacts,
@@ -71,9 +70,7 @@ public class CopyFile implements Transformer {
                              Map<String, PubApi> dependencyPubapis,
                              int debugLevel,
                              boolean incremental,
-                             int numCores,
-                             PrintStream out,
-                             PrintStream err)
+                             int numCores)
     {
         boolean rc = true;
         String dest_filename;

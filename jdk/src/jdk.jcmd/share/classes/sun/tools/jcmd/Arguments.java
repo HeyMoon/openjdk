@@ -33,20 +33,20 @@ class Arguments {
     private boolean listProcesses = false;
     private boolean listCounters  = false;
     private boolean showUsage     = false;
-    private int     pid           = -1;
     private String  command       = null;
-    private String  processSubstring;
+    private String  processString = null;
 
     public boolean isListProcesses() { return listProcesses; }
     public boolean isListCounters() { return listCounters; }
     public boolean isShowUsage() { return showUsage; }
-    public int getPid() { return pid; }
     public String getCommand() { return command; }
-    public String getProcessSubstring() { return processSubstring; }
+    public String getProcessString() { return processString; }
 
     public Arguments(String[] args) {
         if (args.length == 0 || args[0].equals("-l")) {
             listProcesses = true;
+            /* list all processes */
+            processString = "0";
             return;
         }
 
@@ -55,15 +55,7 @@ class Arguments {
             return;
         }
 
-        try {
-            pid = Integer.parseInt(args[0]);
-        } catch (NumberFormatException ex) {
-            // use as a partial class-name instead
-            if (args[0].charAt(0) != '-') {
-                // unless it starts with a '-'
-                processSubstring = args[0];
-            }
-        }
+        processString = args[0];
 
         StringBuilder sb = new StringBuilder();
         for (int i = 1; i < args.length; i++) {
@@ -119,7 +111,7 @@ class Arguments {
         System.out.println("  If the pid is 0, commands will be sent to all Java processes.   ");
         System.out.println("  The main class argument will be used to match (either partially ");
         System.out.println("  or fully) the class used to start Java.                         ");
-        System.out.println("  If no options are given, lists Java processes (same as -p).     ");
+        System.out.println("  If no options are given, lists Java processes (same as -l).     ");
         System.out.println("                                                                  ");
         System.out.println("  PerfCounter.print display the counters exposed by this process  ");
         System.out.println("  -f  read and execute commands from the file                     ");

@@ -34,7 +34,6 @@
 /*
  * @test
  * @bug 4486658
- * @run main/timeout=1600 MapLoops
  * @summary Exercise multithreaded maps, by default ConcurrentHashMap.
  * Multithreaded hash table test.  Each thread does a random walk
  * though elements of "key" array. On each iteration, it checks if
@@ -42,24 +41,34 @@
  * inserts it, and if present, with probability premove it removes
  * it.  (pinsert and premove are expressed as percentages to simplify
  * parsing from command line.)
+ * @library /lib/testlibrary/
+ * @run main/timeout=1600 MapLoops
  */
 
-import java.util.*;
-import java.util.concurrent.*;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+
+import java.util.List;
+import java.util.Map;
+import java.util.SplittableRandom;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import jdk.testlibrary.Utils;
 
 public class MapLoops {
-    static int nkeys       = 10000;
+    static final long LONG_DELAY_MS = Utils.adjustTimeout(10_000);
+    static int nkeys       = 1000; // 10_000
     static int pinsert     = 60;
     static int premove     = 2;
     static int maxThreads  = 100;
-    static int nops        = 100000;
+    static int nops        = 10000; // 100_000
     static int removesPerMaxRandom;
     static int insertsPerMaxRandom;
 
     static final ExecutorService pool = Executors.newCachedThreadPool();
 
-    static final List<Throwable> throwables
-        = new CopyOnWriteArrayList<Throwable>();
+    static final List<Throwable> throwables = new CopyOnWriteArrayList<>();
 
     public static void main(String[] args) throws Exception {
 
@@ -104,7 +113,6 @@ public class MapLoops {
         int k = 1;
         int warmups = 2;
         for (int i = 1; i <= maxThreads;) {
-            Thread.sleep(100);
             test(i, nkeys, mapClass);
             if (warmups > 0)
                 --warmups;
@@ -120,7 +128,7 @@ public class MapLoops {
                 i = k;
         }
         pool.shutdown();
-        if (! pool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS))
+        if (! pool.awaitTermination(LONG_DELAY_MS, MILLISECONDS))
             throw new Error();
 
         if (! throwables.isEmpty())
@@ -129,17 +137,17 @@ public class MapLoops {
     }
 
     static Integer[] makeKeys(int n) {
-        LoopHelpers.SimpleRandom rng = new LoopHelpers.SimpleRandom();
+        SplittableRandom rnd = new SplittableRandom();
         Integer[] key = new Integer[n];
         for (int i = 0; i < key.length; ++i)
-            key[i] = new Integer(rng.next());
+            key[i] = new Integer(rnd.nextInt());
         return key;
     }
 
     static void shuffleKeys(Integer[] key) {
-        Random rng = new Random();
+        SplittableRandom rnd = new SplittableRandom();
         for (int i = key.length; i > 1; --i) {
-            int j = rng.nextInt(i);
+            int j = rnd.nextInt(i);
             Integer tmp = key[j];
             key[j] = key[i-1];
             key[i-1] = tmp;
@@ -155,8 +163,9 @@ public class MapLoops {
         //            map.put(key[j], key[j]);
         LoopHelpers.BarrierTimer timer = new LoopHelpers.BarrierTimer();
         CyclicBarrier barrier = new CyclicBarrier(i+1, timer);
+        SplittableRandom rnd = new SplittableRandom();
         for (int t = 0; t < i; ++t)
-            pool.execute(new Runner(map, key, barrier));
+            pool.execute(new Runner(map, key, barrier, rnd.split()));
         barrier.await();
         barrier.await();
         long time = timer.getTime();
@@ -170,21 +179,25 @@ public class MapLoops {
     static class Runner implements Runnable {
         final Map<Integer,Integer> map;
         final Integer[] key;
-        final LoopHelpers.SimpleRandom rng = new LoopHelpers.SimpleRandom();
         final CyclicBarrier barrier;
+        final SplittableRandom rnd;
         int position;
         int total;
 
-        Runner(Map<Integer,Integer> map, Integer[] key,  CyclicBarrier barrier) {
+        Runner(Map<Integer,Integer> map,
+               Integer[] key,
+               CyclicBarrier barrier,
+               SplittableRandom rnd) {
             this.map = map;
             this.key = key;
             this.barrier = barrier;
+            this.rnd = rnd;
             position = key.length / 2;
         }
 
         int step() {
-            // random-walk around key positions,  bunching accesses
-            int r = rng.next();
+            // random-walk around key positions, bunching accesses
+            int r = rnd.nextInt(Integer.MAX_VALUE);
             position += (r & 7) - 3;
             while (position >= key.length) position -= key.length;
             while (position < 0) position += key.length;

@@ -81,7 +81,7 @@ public final class NativeFloat32Array extends ArrayBufferView {
         private static final MethodHandle SET_ELEM = specialCall(MethodHandles.lookup(), Float32ArrayData.class, "setElem", void.class, int.class, double.class).methodHandle();
 
         private Float32ArrayData(final FloatBuffer nb, final int start, final int end) {
-            super(((FloatBuffer)nb.position(start).limit(end)).slice(), end - start);
+            super((nb.position(start).limit(end)).slice(), end - start);
         }
 
         @Override
@@ -124,7 +124,7 @@ public final class NativeFloat32Array extends ArrayBufferView {
 
         @Override
         public MethodHandle getElementGetter(final Class<?> returnType, final int programPoint) {
-            if (returnType == int.class || returnType == long.class) {
+            if (returnType == int.class) {
                 return null;
             }
             return getContinuousElementGetter(getClass(), GET_ELEM, returnType, programPoint);
@@ -133,11 +133,6 @@ public final class NativeFloat32Array extends ArrayBufferView {
         @Override
         public int getInt(final int index) {
             return (int)getDouble(index);
-        }
-
-        @Override
-        public long getLong(final int index) {
-            return (long)getDouble(index);
         }
 
         @Override
@@ -162,11 +157,6 @@ public final class NativeFloat32Array extends ArrayBufferView {
 
         @Override
         public ArrayData set(final int index, final int value, final boolean strict) {
-            return set(index, (double)value, strict);
-        }
-
-        @Override
-        public ArrayData set(final int index, final long value, final boolean strict) {
             return set(index, (double)value, strict);
         }
 
@@ -240,6 +230,17 @@ public final class NativeFloat32Array extends ArrayBufferView {
     @Function(attributes = Attribute.NOT_ENUMERABLE)
     protected static NativeFloat32Array subarray(final Object self, final Object begin, final Object end) {
         return (NativeFloat32Array)ArrayBufferView.subarrayImpl(self, begin, end);
+    }
+
+    /**
+     * ECMA 6 22.2.3.30 %TypedArray%.prototype [ @@iterator ] ( )
+     *
+     * @param self the self reference
+     * @return an iterator over the array's values
+     */
+    @Function(attributes = Attribute.NOT_ENUMERABLE, name = "@@iterator")
+    public static Object getIterator(final Object self) {
+        return ArrayIterator.newArrayValueIterator(self);
     }
 
     @Override

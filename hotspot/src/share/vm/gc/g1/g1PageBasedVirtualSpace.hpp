@@ -30,6 +30,8 @@
 #include "memory/virtualspace.hpp"
 #include "utilities/bitMap.hpp"
 
+class WorkGang;
+
 // Virtual space management helper for a virtual space with an OS page allocation
 // granularity.
 // (De-)Allocation requests are always OS page aligned by passing a page index
@@ -57,13 +59,13 @@ class G1PageBasedVirtualSpace VALUE_OBJ_CLASS_SPEC {
   size_t _page_size;
 
   // Bitmap used for verification of commit/uncommit operations.
-  BitMap _committed;
+  CHeapBitMap _committed;
 
   // Bitmap used to keep track of which pages are dirty or not for _special
   // spaces. This is needed because for those spaces the underlying memory
   // will only be zero filled the first time it is committed. Calls to commit
   // will use this bitmap and return whether or not the memory is zero filled.
-  BitMap _dirty;
+  CHeapBitMap _dirty;
 
   // Indicates that the entire space has been committed and pinned in memory,
   // os::commit_memory() or os::uncommit_memory() have no function.
@@ -117,6 +119,8 @@ class G1PageBasedVirtualSpace VALUE_OBJ_CLASS_SPEC {
   // Uncommit the given area of pages starting at start being size_in_pages large.
   void uncommit(size_t start_page, size_t size_in_pages);
 
+  void pretouch(size_t start_page, size_t size_in_pages, WorkGang* pretouch_gang = NULL);
+
   // Initialize the given reserved space with the given base address and the size
   // actually used.
   // Prefer to commit in page_size chunks.
@@ -138,8 +142,6 @@ class G1PageBasedVirtualSpace VALUE_OBJ_CLASS_SPEC {
     MemRegion x((HeapWord*)_low_boundary, reserved_size() / HeapWordSize);
     return x;
   }
-
-  void release();
 
   void check_for_contiguity() PRODUCT_RETURN;
 

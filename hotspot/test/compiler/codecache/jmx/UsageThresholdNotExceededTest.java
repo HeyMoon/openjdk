@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,25 +21,35 @@
  * questions.
  */
 
-import jdk.test.lib.Asserts;
-import java.lang.management.MemoryPoolMXBean;
-import sun.hotspot.code.BlobType;
-
 /*
  * @test UsageThresholdNotExceededTest
- * @library /testlibrary /../../test/lib
- * @modules java.base/sun.misc
- *          java.management
- * @build UsageThresholdNotExceededTest
- * @run main ClassFileInstaller sun.hotspot.WhiteBox
- *     sun.hotspot.WhiteBox$WhiteBoxPermission
- * @run main/othervm -Xbootclasspath/a:. -XX:-UseCodeCacheFlushing
- *     -XX:-MethodFlushing -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *     -XX:+SegmentedCodeCache -XX:CompileCommand=compileonly,null::*
- *     UsageThresholdNotExceededTest
  * @summary verifying that usage threshold not exceeded while allocating less
  *     than usage threshold
+ * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
+ *          java.management
+ *
+ * @build sun.hotspot.WhiteBox
+ * @run driver ClassFileInstaller sun.hotspot.WhiteBox
+ *                                sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *     -XX:+WhiteBoxAPI -XX:-UseCodeCacheFlushing -XX:-MethodFlushing
+ *     -XX:CompileCommand=compileonly,null::*
+ *     -XX:+SegmentedCodeCache
+ *     compiler.codecache.jmx.UsageThresholdNotExceededTest
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *     -XX:+WhiteBoxAPI -XX:-UseCodeCacheFlushing -XX:-MethodFlushing
+ *     -XX:CompileCommand=compileonly,null::*
+ *     -XX:-SegmentedCodeCache
+ *     compiler.codecache.jmx.UsageThresholdNotExceededTest
  */
+
+package compiler.codecache.jmx;
+
+import sun.hotspot.code.BlobType;
+
+import java.lang.management.MemoryPoolMXBean;
+
 public class UsageThresholdNotExceededTest {
 
     private final BlobType btype;
@@ -58,9 +68,12 @@ public class UsageThresholdNotExceededTest {
         MemoryPoolMXBean bean = btype.getMemoryPool();
         long initialThresholdCount = bean.getUsageThresholdCount();
         long initialUsage = bean.getUsage().getUsed();
+
         bean.setUsageThreshold(initialUsage + 1 + CodeCacheUtils.MIN_ALLOCATION);
-        CodeCacheUtils.WB.allocateCodeBlob(CodeCacheUtils.MIN_ALLOCATION
-                - CodeCacheUtils.getHeaderSize(btype), btype.id);
+        long size = CodeCacheUtils.getHeaderSize(btype);
+
+        CodeCacheUtils.WB.allocateCodeBlob(Math.max(0, CodeCacheUtils.MIN_ALLOCATION
+                - size), btype.id);
         // a gc cycle triggers usage threshold recalculation
         CodeCacheUtils.WB.fullGC();
         CodeCacheUtils.assertEQorGTE(btype, bean.getUsageThresholdCount(), initialThresholdCount,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,8 +36,11 @@
  *      6919624 6998391 7019267 7020960 7025837 7020583 7036905 7066203 7101495
  *      7003124 7085757 7028073 7171028 7189611 8000983 7195759 8004489 8006509
  *      7114053 7074882 7040556 8008577 8013836 8021121 6192407 6931564 8027695
- *      8017142 8037343 8055222 8042126 8074791 8075173 8080774
+ *      8017142 8037343 8055222 8042126 8074791 8075173 8080774 8129361 8134916
+ *      8145136 8145952 8164784 8037111 8081643 7037368
  * @summary Verify locale data
+ * @modules java.base/sun.util.resources
+ * @modules jdk.localedata
  * @run main LocaleDataTest
  * @run main LocaleDataTest -cldr
  *
@@ -143,12 +146,21 @@
  *    this test against the new version of the data.
  */
 
-import java.io.*;
-import java.text.*;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FilterReader;
+import java.io.FilterWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.io.Reader;
+import java.io.Writer;
 import java.util.Locale;
-import java.util.ResourceBundle;
-import java.util.ResourceBundle.Control;
 import java.util.MissingResourceException;
+import java.util.ResourceBundle;
+import sun.util.resources.LocaleData;
 
 public class LocaleDataTest
 {
@@ -312,9 +324,7 @@ public class LocaleDataTest
             } else {
                 locale = new Locale(language, country, variant);
             }
-            ResourceBundle bundle = ResourceBundle.getBundle(fullName,
-                                                             locale,
-                                                             JRELocaleResourceBundleControl.INSTANCE);
+            ResourceBundle bundle = LocaleData.getBundle(fullName, locale);
             resource = bundle.getObject(resTag);
         }
         catch (MissingResourceException e) {
@@ -367,51 +377,6 @@ public class LocaleDataTest
                 out.println(key + "=" + expectedValue);
         }
         return true;
-    }
-
-    private static class JRELocaleResourceBundleControl extends ResourceBundle.Control {
-        static final JRELocaleResourceBundleControl INSTANCE = new JRELocaleResourceBundleControl();
-
-        private JRELocaleResourceBundleControl() {
-        }
-
-        @Override
-        public Locale getFallbackLocale(String baseName, Locale locale) {
-            if (baseName == null || locale == null) {
-                throw new NullPointerException();
-            }
-            return null;
-        }
-
-        /**
-         * Changes baseName to its per-language/country package name and
-         * calls the super class implementation. For example,
-         * if the baseName is "sun.text.resources.FormatData" and locale is ja_JP,
-         * the baseName is changed to "sun.text.resources.ja.JP.FormatData". If
-         * baseName contains "cldr", such as "sun.text.resources.cldr.FormatData",
-         * the name is changed to "sun.text.resources.cldr.ja.JP.FormatData".
-         */
-        @Override
-        public String toBundleName(String baseName, Locale locale) {
-            String newBaseName = baseName;
-            String lang = locale.getLanguage();
-            String ctry = locale.getCountry();
-            if (lang.length() > 0) {
-                if (baseName.startsWith(UTIL_RESOURCES_PACKAGE + cldrSuffix)
-                    || baseName.startsWith(TEXT_RESOURCES_PACKAGE + cldrSuffix)) {
-                    // Assume the lengths are the same.
-                    if (UTIL_RESOURCES_PACKAGE.length()
-                        != TEXT_RESOURCES_PACKAGE.length()) {
-                        throw new InternalError("The resources package names have different lengths.");
-                    }
-                    int index = (TEXT_RESOURCES_PACKAGE + cldrSuffix).length();
-                    ctry = (ctry.length() == 2) ? ("." + ctry) : "";
-                    newBaseName = baseName.substring(0, index + 1) + lang + ctry
-                                      + baseName.substring(index);
-                }
-            }
-            return super.toBundleName(newBaseName, locale);
-        }
     }
 }
 

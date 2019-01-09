@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -51,6 +51,8 @@ import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.*;
 
 import java.security.AlgorithmParameters;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
 import javax.crypto.spec.PBEParameterSpec;
 import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -392,19 +394,19 @@ public final class PKCS12KeyStore extends KeyStoreSpi {
 
             // decode secret key
             } else {
-                SecretKeyFactory sKeyFactory =
-                    SecretKeyFactory.getInstance(keyAlgo);
                 byte[] keyBytes = in.getOctetString();
                 SecretKeySpec secretKeySpec =
                     new SecretKeySpec(keyBytes, keyAlgo);
 
                 // Special handling required for PBE: needs a PBEKeySpec
                 if (keyAlgo.startsWith("PBE")) {
+                    SecretKeyFactory sKeyFactory =
+                        SecretKeyFactory.getInstance(keyAlgo);
                     KeySpec pbeKeySpec =
                         sKeyFactory.getKeySpec(secretKeySpec, PBEKeySpec.class);
                     key = sKeyFactory.generateSecret(pbeKeySpec);
                 } else {
-                    key = sKeyFactory.generateSecret(secretKeySpec);
+                    key = secretKeySpec;
                 }
 
                 if (debug != null) {
@@ -578,6 +580,9 @@ public final class PKCS12KeyStore extends KeyStoreSpi {
             Entry entry;
 
             if (key instanceof PrivateKey) {
+                // Check that all the certs are X.509 certs
+                checkX509Certs(chain);
+
                 PrivateKeyEntry keyEntry = new PrivateKeyEntry();
                 keyEntry.date = new Date();
 
@@ -688,6 +693,9 @@ public final class PKCS12KeyStore extends KeyStoreSpi {
                                   Certificate[] chain)
         throws KeyStoreException
     {
+        // Check that all the certs are X.509 certs
+        checkX509Certs(chain);
+
         // Private key must be encoded as EncryptedPrivateKeyInfo
         // as defined in PKCS#8
         try {
@@ -958,6 +966,13 @@ public final class PKCS12KeyStore extends KeyStoreSpi {
     private void setCertEntry(String alias, Certificate cert,
         Set<KeyStore.Entry.Attribute> attributes) throws KeyStoreException {
 
+        // Check that the cert is an X.509 cert
+        if (cert != null && (!(cert instanceof X509Certificate))) {
+            throw new KeyStoreException(
+                "Only X.509 certificates are supported - rejecting class: " +
+                cert.getClass().getName());
+        }
+
         Entry entry = entries.get(alias.toLowerCase(Locale.ENGLISH));
         if (entry != null && entry instanceof KeyEntry) {
             throw new KeyStoreException("Cannot overwrite own certificate");
@@ -967,7 +982,7 @@ public final class PKCS12KeyStore extends KeyStoreSpi {
             new CertEntry((X509Certificate) cert, null, alias, AnyUsage,
                 attributes);
         certificateCount++;
-        entries.put(alias, certEntry);
+        entries.put(alias.toLowerCase(Locale.ENGLISH), certEntry);
 
         if (debug != null) {
             debug.println("Setting a trusted certificate at alias '" + alias +
@@ -1503,6 +1518,21 @@ public final class PKCS12KeyStore extends KeyStoreSpi {
         return set.size() == certChain.length;
     }
 
+    /*
+     * Check that all the certificates are X.509 certificates
+     */
+    private static void checkX509Certs(Certificate[] certs)
+            throws KeyStoreException {
+        if (certs != null) {
+            for (Certificate cert : certs) {
+                if (!(cert instanceof X509Certificate)) {
+                    throw new KeyStoreException(
+                        "Only X.509 certificates are supported - " +
+                        "rejecting class: " + cert.getClass().getName());
+                }
+            }
+        }
+    }
 
     /*
      * Create PKCS#12 Attributes, friendlyName, localKeyId and trustedKeyUsage.
@@ -2060,7 +2090,7 @@ public final class PKCS12KeyStore extends KeyStoreSpi {
                 }
 
                 if (!MessageDigest.isEqual(macData.getDigest(), macResult)) {
-                   throw new SecurityException("Failed PKCS12" +
+                   throw new UnrecoverableKeyException("Failed PKCS12" +
                                         " integrity checking");
                 }
            } catch (Exception e) {
@@ -2378,9 +2408,9 @@ public final class PKCS12KeyStore extends KeyStoreSpi {
         { 0x3081000201033081L, 0x0006092A864886F7L, 0x0D010701A0810004L },
         { 0x3082000002010330L, 0x810006092A864886L, 0xF70D010701A08100L },
         { 0x3083000000020103L, 0x3082000006092A86L, 0x4886F70D010701A0L },
-        { 0x3083000000020103L, 0x308200000006092AL, 0x864886F70D010701L },
-        { 0x3084000000000201L, 0x0330820000000609L, 0x2A864886F70D0107L },
-        { 0x3084000000000201L, 0x0330820000000006L, 0x092A864886F70D01L }
+        { 0x3083000000020103L, 0x308300000006092AL, 0x864886F70D010701L },
+        { 0x3084000000000201L, 0x0330830000000609L, 0x2A864886F70D0107L },
+        { 0x3084000000000201L, 0x0330840000000006L, 0x092A864886F70D01L }
     };
 
     private static final long[][] PKCS12_HEADER_MASKS = {

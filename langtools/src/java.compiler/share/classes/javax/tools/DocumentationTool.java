@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,6 +22,7 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
+
 package javax.tools;
 
 import java.io.Writer;
@@ -32,6 +33,8 @@ import java.util.concurrent.Callable;
 /**
  * Interface to invoke Java&trade; programming language documentation tools from
  * programs.
+ *
+ * @since 1.8
  */
 public interface DocumentationTool extends Tool, OptionChecker {
     /**
@@ -56,7 +59,7 @@ public interface DocumentationTool extends Tool, OptionChecker {
      * use the tool's default method for reporting diagnostics
      *
      * @param docletClass a class providing the necessary methods required
-     * of a doclet
+     * of a doclet; a value of {@code null} means to use the standard doclet.
      *
      * @param options documentation tool options and doclet options,
      * {@code null} means no options
@@ -120,7 +123,21 @@ public interface DocumentationTool extends Tool, OptionChecker {
      */
     interface DocumentationTask extends Callable<Boolean> {
         /**
-         * Set the locale to be applied when formatting diagnostics and
+         * Adds root modules to be taken into account during module
+         * resolution.
+         * Invalid module names may cause either
+         * {@code IllegalArgumentException} to be thrown,
+         * or diagnostics to be reported when the task is started.
+         * @param moduleNames the names of the root modules
+         * @throws IllegalArgumentException may be thrown for some
+         *      invalid module names
+         * @throws IllegalStateException if the task has started
+         * @since 9
+         */
+        void addModules(Iterable<String> moduleNames);
+
+        /**
+         * Sets the locale to be applied when formatting diagnostics and
          * other localized data.
          *
          * @param locale the locale to apply; {@code null} means apply no

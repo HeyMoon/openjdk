@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -552,57 +552,60 @@ public class AlgorithmId implements Serializable, DerEncoder {
             return AlgorithmId.sha512WithECDSA_oid;
         }
 
-        // See if any of the installed providers supply a mapping from
-        // the given algorithm name to an OID string
-        String oidString;
-        if (!initOidTable) {
-            Provider[] provs = Security.getProviders();
-            for (int i=0; i<provs.length; i++) {
-                for (Enumeration<Object> enum_ = provs[i].keys();
-                     enum_.hasMoreElements(); ) {
-                    String alias = (String)enum_.nextElement();
-                    String upperCaseAlias = alias.toUpperCase(Locale.ENGLISH);
-                    int index;
-                    if (upperCaseAlias.startsWith("ALG.ALIAS") &&
-                            (index=upperCaseAlias.indexOf("OID.", 0)) != -1) {
-                        index += "OID.".length();
-                        if (index == alias.length()) {
-                            // invalid alias entry
-                            break;
-                        }
-                        if (oidTable == null) {
-                            oidTable = new HashMap<>();
-                        }
-                        oidString = alias.substring(index);
-                        String stdAlgName = provs[i].getProperty(alias);
-                        if (stdAlgName != null) {
-                            stdAlgName = stdAlgName.toUpperCase(Locale.ENGLISH);
-                        }
-                        if (stdAlgName != null &&
-                                oidTable.get(stdAlgName) == null) {
-                            oidTable.put(stdAlgName,
-                                         new ObjectIdentifier(oidString));
-                        }
-                    }
-                }
-            }
-
-            if (oidTable == null) {
-                oidTable = new HashMap<>(1);
-            }
-            initOidTable = true;
-        }
-
-        return oidTable.get(name.toUpperCase(Locale.ENGLISH));
+        return oidTable().get(name.toUpperCase(Locale.ENGLISH));
     }
 
     private static ObjectIdentifier oid(int ... values) {
         return ObjectIdentifier.newInternal(values);
     }
 
-    private static boolean initOidTable = false;
-    private static Map<String,ObjectIdentifier> oidTable;
+    private static volatile Map<String,ObjectIdentifier> oidTable;
     private static final Map<ObjectIdentifier,String> nameTable;
+
+    /** Returns the oidTable, lazily initializing it on first access. */
+    private static Map<String,ObjectIdentifier> oidTable()
+        throws IOException {
+        // Double checked locking; safe because oidTable is volatile
+        Map<String,ObjectIdentifier> tab;
+        if ((tab = oidTable) == null) {
+            synchronized (AlgorithmId.class) {
+                if ((tab = oidTable) == null)
+                    oidTable = tab = computeOidTable();
+            }
+        }
+        return tab;
+    }
+
+    /** Collects the algorithm names from the installed providers. */
+    private static HashMap<String,ObjectIdentifier> computeOidTable()
+        throws IOException {
+        HashMap<String,ObjectIdentifier> tab = new HashMap<>();
+        for (Provider provider : Security.getProviders()) {
+            for (Object key : provider.keySet()) {
+                String alias = (String)key;
+                String upperCaseAlias = alias.toUpperCase(Locale.ENGLISH);
+                int index;
+                if (upperCaseAlias.startsWith("ALG.ALIAS") &&
+                    (index=upperCaseAlias.indexOf("OID.", 0)) != -1) {
+                    index += "OID.".length();
+                    if (index == alias.length()) {
+                        // invalid alias entry
+                        break;
+                    }
+                    String oidString = alias.substring(index);
+                    String stdAlgName = provider.getProperty(alias);
+                    if (stdAlgName != null) {
+                        stdAlgName = stdAlgName.toUpperCase(Locale.ENGLISH);
+                    }
+                    if (stdAlgName != null &&
+                        tab.get(stdAlgName) == null) {
+                        tab.put(stdAlgName, new ObjectIdentifier(oidString));
+                    }
+                }
+            }
+        }
+        return tab;
+    }
 
     /*****************************************************************/
 
@@ -976,5 +979,70 @@ public class AlgorithmId implements Serializable, DerEncoder {
             return signatureAlgorithm.substring(0, with);
         }
         return null;
+    }
+
+    /**
+     * Checks if a signature algorithm matches a key algorithm, i.e. a
+     * signature can be initialized with a key.
+     *
+     * @param kAlg must not be null
+     * @param sAlg must not be null
+     * @throws IllegalArgumentException if they do not match
+     */
+    public static void checkKeyAndSigAlgMatch(String kAlg, String sAlg) {
+        String sAlgUp = sAlg.toUpperCase(Locale.US);
+        if ((sAlgUp.endsWith("WITHRSA") && !kAlg.equalsIgnoreCase("RSA")) ||
+                (sAlgUp.endsWith("WITHECDSA") && !kAlg.equalsIgnoreCase("EC")) ||
+                (sAlgUp.endsWith("WITHDSA") && !kAlg.equalsIgnoreCase("DSA"))) {
+            throw new IllegalArgumentException(
+                    "key algorithm not compatible with signature algorithm");
+        }
+    }
+
+    /**
+     * Returns the default signature algorithm for a private key. The digest
+     * part might evolve with time. Remember to update the spec of
+     * {@link jdk.security.jarsigner.JarSigner.Builder#getDefaultSignatureAlgorithm(PrivateKey)}
+     * if updated.
+     *
+     * @param k cannot be null
+     * @return the default alg, might be null if unsupported
+     */
+    public static String getDefaultSigAlgForKey(PrivateKey k) {
+        switch (k.getAlgorithm().toUpperCase(Locale.ROOT)) {
+            case "EC":
+                return ecStrength(KeyUtil.getKeySize(k))
+                    + "withECDSA";
+            case "DSA":
+                return ifcFfcStrength(KeyUtil.getKeySize(k))
+                    + "withDSA";
+            case "RSA":
+                return ifcFfcStrength(KeyUtil.getKeySize(k))
+                    + "withRSA";
+            default:
+                return null;
+        }
+    }
+
+    // Values from SP800-57 part 1 rev 4 tables 2 and 3
+    private static String ecStrength (int bitLength) {
+        if (bitLength >= 512) { // 256 bits of strength
+            return "SHA512";
+        } else if (bitLength >= 384) {  // 192 bits of strength
+            return "SHA384";
+        } else { // 128 bits of strength and less
+            return "SHA256";
+        }
+    }
+
+    // Same values for RSA and DSA
+    private static String ifcFfcStrength (int bitLength) {
+        if (bitLength > 7680) { // 256 bits
+            return "SHA512";
+        } else if (bitLength > 3072) {  // 192 bits
+            return "SHA384";
+        } else  { // 128 bits and less
+            return "SHA256";
+        }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,13 +24,16 @@
 
 #include "precompiled.hpp"
 #include "interpreter/bytecodeStream.hpp"
+#include "logging/log.hpp"
 #include "oops/generateOopMap.hpp"
 #include "oops/oop.inline.hpp"
 #include "oops/symbol.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/java.hpp"
 #include "runtime/relocator.hpp"
+#include "runtime/timerTrace.hpp"
 #include "utilities/bitMap.inline.hpp"
+#include "utilities/ostream.hpp"
 #include "prims/methodHandles.hpp"
 
 //
@@ -222,7 +225,7 @@ void RetTableEntry::add_delta(int bci, int delta) {
   }
 }
 
-void RetTable::compute_ret_table(methodHandle method) {
+void RetTable::compute_ret_table(const methodHandle& method) {
   BytecodeStream i(method);
   Bytecodes::Code bytecode;
 
@@ -375,11 +378,10 @@ void CellTypeState::print(outputStream *os) {
 // Basicblock handling methods
 //
 
-void GenerateOopMap ::initialize_bb() {
+void GenerateOopMap::initialize_bb() {
   _gc_points = 0;
   _bb_count  = 0;
-  _bb_hdr_bits.clear();
-  _bb_hdr_bits.resize(method()->code_size());
+  _bb_hdr_bits.reinitialize(method()->code_size());
 }
 
 void GenerateOopMap::bb_mark_fct(GenerateOopMap *c, int bci, int *data) {
@@ -786,7 +788,7 @@ void GenerateOopMap::merge_state_into_bb(BasicBlock *bb) {
         bb->set_changed(true);
       }
     } else {
-      if (TraceMonitorMismatch) {
+      if (log_is_enabled(Info, monitormismatch)) {
         report_monitor_mismatch("monitor stack height merge conflict");
       }
       // When the monitor stacks are not matched, we set _monitor_top to
@@ -855,7 +857,7 @@ CellTypeState GenerateOopMap::monitor_pop() {
     _monitor_safe = false;
      _monitor_top = bad_monitors;
 
-    if (TraceMonitorMismatch) {
+    if (log_is_enabled(Info, monitormismatch)) {
       report_monitor_mismatch("monitor stack underflow");
     }
     return CellTypeState::ref; // just to keep the analysis going.
@@ -871,7 +873,7 @@ void GenerateOopMap::monitor_push(CellTypeState cts) {
     _monitor_safe = false;
     _monitor_top = bad_monitors;
 
-    if (TraceMonitorMismatch) {
+    if (log_is_enabled(Info, monitormismatch)) {
       report_monitor_mismatch("monitor stack overflow");
     }
     return;
@@ -1038,13 +1040,7 @@ void GenerateOopMap::update_basic_blocks(int bci, int delta,
   assert(new_method_size >= method()->code_size() + delta,
          "new method size is too small");
 
-  BitMap::bm_word_t* new_bb_hdr_bits =
-    NEW_RESOURCE_ARRAY(BitMap::bm_word_t,
-                       BitMap::word_align_up(new_method_size));
-  _bb_hdr_bits.set_map(new_bb_hdr_bits);
-  _bb_hdr_bits.set_size(new_method_size);
-  _bb_hdr_bits.clear();
-
+  _bb_hdr_bits.reinitialize(new_method_size);
 
   for(int k = 0; k < _bb_count; k++) {
     if (_basic_blocks[k]._bci > bci) {
@@ -1244,7 +1240,7 @@ void GenerateOopMap::do_exception_edge(BytecodeStream* itr) {
   // We don't set _monitor_top to bad_monitors because there are no successors
   // to this exceptional exit.
 
-  if (TraceMonitorMismatch && _monitor_safe) {
+  if (log_is_enabled(Info, monitormismatch) && _monitor_safe) {
     // We check _monitor_safe so that we only report the first mismatched
     // exceptional exit.
     report_monitor_mismatch("non-empty monitor stack at exceptional exit");
@@ -1254,11 +1250,11 @@ void GenerateOopMap::do_exception_edge(BytecodeStream* itr) {
 }
 
 void GenerateOopMap::report_monitor_mismatch(const char *msg) {
-#ifndef PRODUCT
-  tty->print("    Monitor mismatch in method ");
-  method()->print_short_name(tty);
-  tty->print_cr(": %s", msg);
-#endif
+  ResourceMark rm;
+  outputStream* out = Log(monitormismatch)::info_stream();
+  out->print("Monitor mismatch in method ");
+  method()->print_short_name(out);
+  out->print_cr(": %s", msg);
 }
 
 void GenerateOopMap::print_states(outputStream *os,
@@ -1682,8 +1678,14 @@ void GenerateOopMap::ppdupswap(int poplen, const char *out) {
   CellTypeState actual[5];
   assert(poplen < 5, "this must be less than length of actual vector");
 
-  // pop all arguments
-  for(int i = 0; i < poplen; i++) actual[i] = pop();
+  // Pop all arguments.
+  for (int i = 0; i < poplen; i++) {
+    actual[i] = pop();
+  }
+  // Field _state is uninitialized when calling push.
+  for (int i = poplen; i < 5; i++) {
+    actual[i] = CellTypeState::uninit;
+  }
 
   // put them back
   char push_ch = *out++;
@@ -1781,7 +1783,7 @@ void GenerateOopMap::do_monitorenter(int bci) {
     _monitor_top = bad_monitors;
     _monitor_safe = false;
 
-    if (TraceMonitorMismatch) {
+    if (log_is_enabled(Info, monitormismatch)) {
       report_monitor_mismatch("nested redundant lock -- bailout...");
     }
     return;
@@ -1819,7 +1821,7 @@ void GenerateOopMap::do_monitorexit(int bci) {
     bb->set_changed(true);
     bb->_monitor_top = bad_monitors;
 
-    if (TraceMonitorMismatch) {
+    if (log_is_enabled(Info, monitormismatch)) {
       report_monitor_mismatch("improper monitor pair");
     }
   } else {
@@ -1845,7 +1847,7 @@ void GenerateOopMap::do_return_monitor_check() {
     // Since there are no successors to the *return bytecode, it
     // isn't necessary to set _monitor_top to bad_monitors.
 
-    if (TraceMonitorMismatch) {
+    if (log_is_enabled(Info, monitormismatch)) {
       report_monitor_mismatch("non-empty monitor stack at return");
     }
   }
@@ -2039,7 +2041,7 @@ void GenerateOopMap::print_time() {
 //
 //  ============ Main Entry Point ===========
 //
-GenerateOopMap::GenerateOopMap(methodHandle method) {
+GenerateOopMap::GenerateOopMap(const methodHandle& method) {
   // We have to initialize all variables here, that can be queried directly
   _method = method;
   _max_locals=0;

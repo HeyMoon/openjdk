@@ -5,6 +5,7 @@ compiler.err.bad.functional.intf.anno                   # seems to be masked by 
 compiler.err.cant.read.file                             # (apt.JavaCompiler?)
 compiler.err.cant.select.static.class.from.param.type
 compiler.err.dc.unterminated.string                     # cannot happen
+compiler.err.file.patched.and.msp                       # needs the same dir on --module-source-path and --patch-module
 compiler.err.illegal.char.for.encoding
 compiler.err.invalid.repeatable.annotation              # should not happen
 compiler.err.invalid.repeatable.annotation.invalid.value # "can't" happen
@@ -20,11 +21,13 @@ compiler.err.limit.pool.in.class                        # UNUSED?
 compiler.err.limit.stack                                # Code
 compiler.err.limit.string                               # Gen
 compiler.err.limit.string.overflow                      # JavaCompiler
+compiler.err.module.non.zero.opens                      # bad class file
 compiler.err.name.reserved.for.internal.use             # UNUSED
 compiler.err.no.annotation.member
 compiler.err.no.encl.instance.of.type.in.scope          # cannot occur; always followed by assert false;
 compiler.err.no.match.entry                             # UNUSED?
 compiler.err.not.annotation.type                        # cannot occur given preceding checkType
+compiler.err.not.def.access.package.cant.access
 compiler.err.proc.bad.config.file                       # JavacProcessingEnvironment
 compiler.err.proc.cant.access                           # completion failure
 compiler.err.proc.cant.access.1                         # completion failure, no stack trace
@@ -43,14 +46,14 @@ compiler.err.unsupported.cross.fp.lit                   # Scanner: host system d
 compiler.misc.bad.class.signature                       # bad class file
 compiler.misc.bad.const.pool.tag                        # bad class file
 compiler.misc.bad.const.pool.tag.at                     # bad class file
+compiler.misc.bad.constant.range                        # bad class file
+compiler.misc.bad.constant.value                        # bad class file
 compiler.misc.bad.enclosing.class                       # bad class file
 compiler.misc.bad.enclosing.method                      # bad class file
 compiler.misc.bad.runtime.invisible.param.annotations   # bad class file
 compiler.misc.bad.signature                             # bad class file
 compiler.misc.bad.type.annotation.value
 compiler.misc.base.membership                           # UNUSED
-compiler.misc.ccf.found.later.version
-compiler.misc.ccf.unrecognized.attribute
 compiler.misc.class.file.not.found                      # ClassReader
 compiler.misc.class.file.wrong.class
 compiler.misc.fatal.err.cant.locate.ctor                # Resolve, from Lower
@@ -68,8 +71,12 @@ compiler.misc.kindname.type.variable
 compiler.misc.kindname.type.variable.bound
 compiler.misc.kindname.value
 compiler.misc.incompatible.eq.lower.bounds              # cannot happen?
+compiler.misc.module.name.mismatch
+compiler.misc.module.non.zero.opens                     # bad class file
 compiler.misc.no.unique.minimal.instance.exists
 compiler.misc.no.unique.maximal.instance.exists         # cannot happen?
+compiler.misc.not.def.access.package.cant.access
+compiler.misc.package.not.visible
 compiler.misc.resume.abort                              # prompt for a response
 compiler.misc.source.unavailable                        # DiagnosticSource
 compiler.misc.token.bad-symbol
@@ -88,9 +95,6 @@ compiler.misc.unable.to.access.file                     # ClassFile
 compiler.misc.undecl.type.var                           # ClassReader
 compiler.misc.unicode.str.not.supported                 # ClassReader
 compiler.misc.malformed.vararg.method                   # ClassReader
-compiler.misc.verbose.retro                             # UNUSED
-compiler.misc.verbose.retro.with                        # UNUSED
-compiler.misc.verbose.retro.with.list                   # UNUSED
 compiler.misc.version.not.available                     # JavaCompiler; implies build error
 compiler.misc.where.description.captured
 compiler.misc.where.typevar.1
@@ -100,6 +104,7 @@ compiler.warn.annotation.method.not.found.reason        # ClassReader
 compiler.warn.big.major.version                         # ClassReader
 compiler.warn.future.attr                               # ClassReader
 compiler.warn.illegal.char.for.encoding
+compiler.warn.incubating.modules                        # requires adjusted classfile
 compiler.warn.invalid.archive.file
 compiler.warn.override.bridge
 compiler.warn.position.overflow                         # CRTable: caused by files with long lines >= 1024 chars
@@ -107,6 +112,7 @@ compiler.warn.proc.type.already.exists                  # JavacFiler: just menti
 compiler.warn.unchecked.assign                          # DEAD, replaced by compiler.misc.unchecked.assign
 compiler.warn.unchecked.cast.to.type                    # DEAD, replaced by compiler.misc.unchecked.cast.to.type
 compiler.warn.unexpected.archive.file                   # Paths: zip file with unknown extn
+compiler.err.no.zipfs.for.archive                       # would need zip/jar file
 compiler.warn.unknown.enum.constant                     # in bad class file
 compiler.warn.unknown.enum.constant.reason              # in bad class file
 compiler.warn.override.equals.but.not.hashcode          # when a class overrides equals but not hashCode method from Object
@@ -114,4 +120,33 @@ compiler.warn.file.from.future                          # warning for future mod
 compiler.err.cant.inherit.from.anon                     # error for subclass of anonymous class
 compiler.misc.bad.class.file                            # class file is malformed
 compiler.misc.bad.const.pool.entry                      # constant pool entry has wrong type
-compiler.misc.incompatible.upper.eq.bounds
+compiler.warn.access.to.member.from.serializable.lambda # in order to generate it we need to modify a restricted package
+compiler.warn.invalid.path                              # this warning is generated only in Windows systems
+compiler.note.multiple.elements                         # needs user code
+
+# The following module-related messages will have to stay on the not-yet list for various reasons:
+compiler.warn.locn.unknown.file.on.module.path                # Never issued ATM (short circuited with an if (false))
+compiler.err.no.output.dir                                    # -d is always specified by test infrastructure
+compiler.err.output.dir.must.be.specified.with.dash.m.option  # -d is always specified by test infrastructure
+compiler.warn.outdir.is.in.exploded.module                    # No control over -d specified by test infrastructure
+compiler.err.invalid.module.specifier                         # Not possible (?)
+compiler.err.locn.cant.get.module.name.for.jar                # bad binary ? Infer module name failure
+compiler.misc.anachronistic.module.info                       # requires binaries compiled with EA compilers.
+compiler.misc.bad.module-info.name                            # bad class file
+compiler.err.locn.bad.module-info                             # bad class file
+compiler.err.locn.cant.read.file                              # bad class file
+compiler.misc.module.info.invalid.super.class                 # bad class file
+compiler.err.locn.cant.read.directory                         # file system issue
+compiler.err.locn.invalid.arg.for.xpatch                      # command line option error
+compiler.misc.unnamed.module                                  # fragment uninteresting in and of itself
+compiler.misc.kindname.module                                 # fragment uninteresting in and of itself
+compiler.misc.locn.module_path                                # fragment uninteresting in and of itself
+compiler.misc.locn.module_source_path                         # fragment uninteresting in and of itself
+compiler.misc.locn.system_modules                             # fragment uninteresting in and of itself
+compiler.misc.locn.upgrade_module_path                        # fragment uninteresting in and of itself
+
+# The following are new module-related messages, that need new  examples to be created
+compiler.err.duplicate.module.on.path
+compiler.err.locn.module-info.not.allowed.on.patch.path
+compiler.misc.cant.resolve.modules
+compiler.misc.file.does.not.contain.module

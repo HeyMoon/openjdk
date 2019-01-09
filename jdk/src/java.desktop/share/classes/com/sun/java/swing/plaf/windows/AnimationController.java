@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,8 +36,6 @@ import java.awt.event.*;
 import javax.swing.*;
 
 
-
-import sun.swing.UIClientPropertyKey;
 import com.sun.java.swing.plaf.windows.TMSchema.State;
 import static com.sun.java.swing.plaf.windows.TMSchema.State.*;
 import com.sun.java.swing.plaf.windows.TMSchema.Part;
@@ -69,11 +67,11 @@ import sun.awt.AppContext;
  */
 class AnimationController implements ActionListener, PropertyChangeListener {
 
-    private final static boolean VISTA_ANIMATION_DISABLED =
+    private static final boolean VISTA_ANIMATION_DISABLED =
         AccessController.doPrivileged(new GetBooleanAction("swing.disablevistaanimation"));
 
 
-    private final static Object ANIMATION_CONTROLLER_KEY =
+    private static final Object ANIMATION_CONTROLLER_KEY =
         new StringBuilder("ANIMATION_CONTROLLER_KEY");
 
     private final Map<JComponent, Map<Part, AnimationState>> animationStateMap =
@@ -384,18 +382,25 @@ class AnimationController implements ActionListener, PropertyChangeListener {
             updateProgress();
             if (! isDone()) {
                 Graphics2D g = (Graphics2D) _g.create();
-                skin.paintSkinRaw(g, dx, dy, dw, dh, startState);
-                float alpha;
-                if (isForward) {
-                    alpha = progress;
+                if (skin.haveToSwitchStates()) {
+                    skin.paintSkinRaw(g, dx, dy, dw, dh, state);
+                    g.setComposite(AlphaComposite.SrcOver.derive(1 - progress));
+                    skin.paintSkinRaw(g, dx, dy, dw, dh, startState);
                 } else {
-                    alpha = 1 - progress;
+                    skin.paintSkinRaw(g, dx, dy, dw, dh, startState);
+                    float alpha;
+                    if (isForward) {
+                        alpha = progress;
+                    } else {
+                        alpha = 1 - progress;
+                    }
+                    g.setComposite(AlphaComposite.SrcOver.derive(alpha));
+                    skin.paintSkinRaw(g, dx, dy, dw, dh, state);
                 }
-                g.setComposite(AlphaComposite.SrcOver.derive(alpha));
-                skin.paintSkinRaw(g, dx, dy, dw, dh, state);
                 g.dispose();
             } else {
                 skin.paintSkinRaw(_g, dx, dy, dw, dh, state);
+                skin.switchStates(false);
             }
         }
         boolean isDone() {

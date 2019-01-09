@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,21 +31,21 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.Set;
-import sun.misc.SharedSecrets;
+import jdk.internal.misc.SharedSecrets;
 
 /**
- * The <code>NumericShaper</code> class is used to convert Latin-1 (European)
+ * The {@code NumericShaper} class is used to convert Latin-1 (European)
  * digits to other Unicode decimal digits.  Users of this class will
  * primarily be people who wish to present data using
  * national digit shapes, but find it more convenient to represent the
  * data internally using Latin-1 (European) digits.  This does not
  * interpret the deprecated numeric shape selector character (U+206E).
  * <p>
- * Instances of <code>NumericShaper</code> are typically applied
+ * Instances of {@code NumericShaper} are typically applied
  * as attributes to text with the
  * {@link TextAttribute#NUMERIC_SHAPING NUMERIC_SHAPING} attribute
- * of the <code>TextAttribute</code> class.
- * For example, this code snippet causes a <code>TextLayout</code> to
+ * of the {@code TextAttribute} class.
+ * For example, this code snippet causes a {@code TextLayout} to
  * shape European digits to Arabic in an Arabic context:<br>
  * <blockquote><pre>
  * Map map = new HashMap();
@@ -57,7 +57,7 @@ import sun.misc.SharedSecrets;
  * </pre></blockquote>
  * <br>
  * It is also possible to perform numeric shaping explicitly using instances
- * of <code>NumericShaper</code>, as this code snippet demonstrates:<br>
+ * of {@code NumericShaper}, as this code snippet demonstrates:<br>
  * <blockquote><pre>
  * char[] text = ...;
  * // shape all EUROPEAN digits (except zero) to ARABIC digits
@@ -106,12 +106,16 @@ import sun.misc.SharedSecrets;
  * multiple decimal digits sets are specified for the same Unicode
  * range, one of the sets will take precedence as follows.
  *
- * <table border=1 cellspacing=3 cellpadding=0 summary="NumericShaper constants precedence.">
+ * <table class="plain">
+ * <caption>NumericShaper constants precedence</caption>
+ *    <thead>
  *    <tr>
  *       <th class="TableHeadingColor">Unicode Range</th>
- *       <th class="TableHeadingColor"><code>NumericShaper</code> Constants</th>
+ *       <th class="TableHeadingColor">{@code NumericShaper} Constants</th>
  *       <th class="TableHeadingColor">Precedence</th>
  *    </tr>
+ *    </thead>
+ *    <tbody>
  *    <tr>
  *       <td rowspan="2">Arabic</td>
  *       <td>{@link NumericShaper#ARABIC NumericShaper.ARABIC}<br>
@@ -123,12 +127,15 @@ import sun.misc.SharedSecrets;
  *           {@link NumericShaper.Range#EASTERN_ARABIC}</td>
  *       <td>{@link NumericShaper.Range#EASTERN_ARABIC}</td>
  *    </tr>
+ *    </tbody>
+ *    <tbody>
  *    <tr>
  *       <td>Tai Tham</td>
  *       <td>{@link NumericShaper.Range#TAI_THAM_HORA}<br>
  *           {@link NumericShaper.Range#TAI_THAM_THAM}</td>
  *       <td>{@link NumericShaper.Range#TAI_THAM_THAM}</td>
  *    </tr>
+ *    </tbody>
  * </table>
  *
  * @since 1.4
@@ -149,7 +156,7 @@ public final class NumericShaper implements java.io.Serializable {
      * NumericShaper.Range#THAI} range has the Thai digits, THAI DIGIT
      * ZERO (U+0E50) to THAI DIGIT NINE (U+0E59).
      *
-     * <p>The <code>Range</code> enum replaces the traditional bit
+     * <p>The {@code Range} enum replaces the traditional bit
      * mask-based values (e.g., {@link NumericShaper#ARABIC}), and
      * supports more Unicode ranges than the bit mask-based ones. For
      * example, the following code using the bit mask:
@@ -321,12 +328,12 @@ public final class NumericShaper implements java.io.Serializable {
         MEETEI_MAYEK    ('\uabf0', '\uabc0', '\uac00'),
         /**
          * The Sinhala range with the Sinhala digits.
-         * @since 1.9
+         * @since 9
          */
         SINHALA         ('\u0de6', '\u0d80', '\u0e00'),
         /**
          * The Myanmar Extended-B range with the Myanmar Tai Laing digits.
-         * @since 1.9
+         * @since 9
          */
         MYANMAR_TAI_LAING ('\ua9f0', '\ua9e0', '\uaa00');
 
@@ -411,7 +418,7 @@ public final class NumericShaper implements java.io.Serializable {
 
     /**
      * rangeSet.toArray() value. Sorted by Range.base when the number
-     * of elements is greater then BSEARCH_THRESHOLD.
+     * of elements is greater than BSEARCH_THRESHOLD.
      */
     private transient Range[] rangeArray;
 
@@ -672,7 +679,7 @@ public final class NumericShaper implements java.io.Serializable {
         0x0825, 0x0828,
         0x0829, 0x082e,
         0x0859, 0x085c,
-        0x08e4, 0x0903,
+        0x08e3, 0x0903,
         0x093a, 0x093b,
         0x093c, 0x093d,
         0x0941, 0x0949,
@@ -721,7 +728,8 @@ public final class NumericShaper implements java.io.Serializable {
         0x0acd, 0x0ad0,
         0x0ad1, 0x0ae0,
         0x0ae2, 0x0ae6,
-        0x0af1, 0x0b02,
+        0x0af1, 0x0af9,
+        0x0afa, 0x0b02,
         0x0b04, 0x0b05,
         0x0b0d, 0x0b0f,
         0x0b11, 0x0b13,
@@ -761,7 +769,7 @@ public final class NumericShaper implements java.io.Serializable {
         0x0c3a, 0x0c3d,
         0x0c3e, 0x0c41,
         0x0c45, 0x0c58,
-        0x0c5a, 0x0c60,
+        0x0c5b, 0x0c60,
         0x0c62, 0x0c66,
         0x0c70, 0x0c7f,
         0x0c80, 0x0c82,
@@ -787,7 +795,7 @@ public final class NumericShaper implements java.io.Serializable {
         0x0d49, 0x0d4a,
         0x0d4d, 0x0d4e,
         0x0d4f, 0x0d57,
-        0x0d58, 0x0d60,
+        0x0d58, 0x0d5f,
         0x0d62, 0x0d66,
         0x0d76, 0x0d79,
         0x0d80, 0x0d82,
@@ -867,7 +875,8 @@ public final class NumericShaper implements java.io.Serializable {
         0x135b, 0x1360,
         0x137d, 0x1380,
         0x1390, 0x13a0,
-        0x13f5, 0x1401,
+        0x13f6, 0x13f8,
+        0x13fe, 0x1401,
         0x1680, 0x1681,
         0x169b, 0x16a0,
         0x16f9, 0x1700,
@@ -1019,7 +1028,7 @@ public final class NumericShaper implements java.io.Serializable {
         0x33de, 0x33e0,
         0x33ff, 0x3400,
         0x4db6, 0x4e00,
-        0x9fcd, 0xa000,
+        0x9fd6, 0xa000,
         0xa48d, 0xa4d0,
         0xa60d, 0xa610,
         0xa62c, 0xa640,
@@ -1028,9 +1037,8 @@ public final class NumericShaper implements java.io.Serializable {
         0xa6f0, 0xa6f2,
         0xa6f8, 0xa722,
         0xa788, 0xa789,
-        0xa78f, 0xa790,
         0xa7ae, 0xa7b0,
-        0xa7b2, 0xa7f7,
+        0xa7b8, 0xa7f7,
         0xa802, 0xa803,
         0xa806, 0xa807,
         0xa80b, 0xa80c,
@@ -1040,7 +1048,7 @@ public final class NumericShaper implements java.io.Serializable {
         0xa874, 0xa880,
         0xa8c4, 0xa8ce,
         0xa8da, 0xa8f2,
-        0xa8fc, 0xa900,
+        0xa8fe, 0xa900,
         0xa926, 0xa92e,
         0xa947, 0xa952,
         0xa954, 0xa95f,
@@ -1073,8 +1081,7 @@ public final class NumericShaper implements java.io.Serializable {
         0xab17, 0xab20,
         0xab27, 0xab28,
         0xab2f, 0xab30,
-        0xab60, 0xab64,
-        0xab66, 0xabc0,
+        0xab66, 0xab70,
         0xabe5, 0xabe6,
         0xabe8, 0xabe9,
         0xabed, 0xabf0,
@@ -1152,15 +1159,20 @@ public final class NumericShaper implements java.io.Serializable {
         0x11173, 0x11174,
         0x11177, 0x11182,
         0x111b6, 0x111bf,
-        0x111c9, 0x111cd,
+        0x111ca, 0x111cd,
         0x111ce, 0x111d0,
-        0x111db, 0x111e1,
+        0x111e0, 0x111e1,
         0x111f5, 0x11200,
         0x11212, 0x11213,
         0x1122f, 0x11232,
         0x11234, 0x11235,
         0x11236, 0x11238,
-        0x1123e, 0x112b0,
+        0x1123e, 0x11280,
+        0x11287, 0x11288,
+        0x11289, 0x1128a,
+        0x1128e, 0x1128f,
+        0x1129e, 0x1129f,
+        0x112aa, 0x112b0,
         0x112df, 0x112e0,
         0x112e3, 0x112f0,
         0x112fa, 0x11302,
@@ -1174,7 +1186,8 @@ public final class NumericShaper implements java.io.Serializable {
         0x11340, 0x11341,
         0x11345, 0x11347,
         0x11349, 0x1134b,
-        0x1134e, 0x11357,
+        0x1134e, 0x11350,
+        0x11351, 0x11357,
         0x11358, 0x1135d,
         0x11364, 0x11480,
         0x114b3, 0x114b9,
@@ -1186,7 +1199,7 @@ public final class NumericShaper implements java.io.Serializable {
         0x115b2, 0x115b8,
         0x115bc, 0x115be,
         0x115bf, 0x115c1,
-        0x115ca, 0x11600,
+        0x115dc, 0x11600,
         0x11633, 0x1163b,
         0x1163d, 0x1163e,
         0x1163f, 0x11641,
@@ -1196,14 +1209,20 @@ public final class NumericShaper implements java.io.Serializable {
         0x116ad, 0x116ae,
         0x116b0, 0x116b6,
         0x116b7, 0x116c0,
-        0x116ca, 0x118a0,
+        0x116ca, 0x11700,
+        0x1171a, 0x11720,
+        0x11722, 0x11726,
+        0x11727, 0x11730,
+        0x11740, 0x118a0,
         0x118f3, 0x118ff,
         0x11900, 0x11ac0,
         0x11af9, 0x12000,
-        0x12399, 0x12400,
+        0x1239a, 0x12400,
         0x1246f, 0x12470,
-        0x12475, 0x13000,
-        0x1342f, 0x16800,
+        0x12475, 0x12480,
+        0x12544, 0x13000,
+        0x1342f, 0x14400,
+        0x14647, 0x16800,
         0x16a39, 0x16a40,
         0x16a5f, 0x16a60,
         0x16a6a, 0x16a6e,
@@ -1232,7 +1251,7 @@ public final class NumericShaper implements java.io.Serializable {
         0x1d173, 0x1d183,
         0x1d185, 0x1d18c,
         0x1d1aa, 0x1d1ae,
-        0x1d1de, 0x1d360,
+        0x1d1e9, 0x1d360,
         0x1d372, 0x1d400,
         0x1d455, 0x1d456,
         0x1d49d, 0x1d49e,
@@ -1258,7 +1277,12 @@ public final class NumericShaper implements java.io.Serializable {
         0x1d74f, 0x1d750,
         0x1d789, 0x1d78a,
         0x1d7c3, 0x1d7c4,
-        0x1d7cc, 0x1e800,
+        0x1d7cc, 0x1d800,
+        0x1da00, 0x1da37,
+        0x1da3b, 0x1da6d,
+        0x1da75, 0x1da76,
+        0x1da84, 0x1da85,
+        0x1da8c, 0x1e800,
         0x1e8d0, 0x1e8d7,
         0x1eef0, 0x1eef2,
         0x1f000, 0x1f110,
@@ -1271,7 +1295,8 @@ public final class NumericShaper implements java.io.Serializable {
         0x1f252, 0x20000,
         0x2a6d7, 0x2a700,
         0x2b735, 0x2b740,
-        0x2b81e, 0x2f800,
+        0x2b81e, 0x2b820,
+        0x2cea2, 0x2f800,
         0x2fa1e, 0xf0000,
         0xffffe, 0x100000,
         0x10fffe, 0x10ffff // sentinel
@@ -1340,7 +1365,7 @@ public final class NumericShaper implements java.io.Serializable {
      * corresponding to the range of the preceding text, if the
      * range is one of the provided ranges.  Multiple ranges are
      * represented by or-ing the values together, such as,
-     * <code>NumericShaper.ARABIC | NumericShaper.THAI</code>.  The
+     * {@code NumericShaper.ARABIC | NumericShaper.THAI}.  The
      * shaper assumes EUROPEAN as the starting context, that is, if
      * EUROPEAN digits are encountered before any strong directional
      * text in the string, the context is presumed to be EUROPEAN, and
@@ -1381,14 +1406,14 @@ public final class NumericShaper implements java.io.Serializable {
      * corresponding to the range of the preceding text, if the
      * range is one of the provided ranges.  Multiple ranges are
      * represented by or-ing the values together, for example,
-     * <code>NumericShaper.ARABIC | NumericShaper.THAI</code>.  The
+     * {@code NumericShaper.ARABIC | NumericShaper.THAI}.  The
      * shaper uses defaultContext as the starting context.
      * @param ranges the specified Unicode ranges
      * @param defaultContext the starting context, such as
-     * <code>NumericShaper.EUROPEAN</code>
+     * {@code NumericShaper.EUROPEAN}
      * @return a shaper for the specified Unicode ranges.
      * @throws IllegalArgumentException if the specified
-     * <code>defaultContext</code> is not a single valid range.
+     * {@code defaultContext} is not a single valid range.
      */
     public static NumericShaper getContextualShaper(int ranges, int defaultContext) {
         int key = getKeyFromMask(defaultContext);
@@ -1463,9 +1488,9 @@ public final class NumericShaper implements java.io.Serializable {
      * Converts the digits in the text that occur between start and
      * start + count.
      * @param text an array of characters to convert
-     * @param start the index into <code>text</code> to start
+     * @param start the index into {@code text} to start
      *        converting
-     * @param count the number of characters in <code>text</code>
+     * @param count the number of characters in {@code text}
      *        to convert
      * @throws IndexOutOfBoundsException if start or start + count is
      *        out of bounds
@@ -1489,17 +1514,17 @@ public final class NumericShaper implements java.io.Serializable {
      * start + count, using the provided context.
      * Context is ignored if the shaper is not a contextual shaper.
      * @param text an array of characters
-     * @param start the index into <code>text</code> to start
+     * @param start the index into {@code text} to start
      *        converting
-     * @param count the number of characters in <code>text</code>
+     * @param count the number of characters in {@code text}
      *        to convert
      * @param context the context to which to convert the
-     *        characters, such as <code>NumericShaper.EUROPEAN</code>
+     *        characters, such as {@code NumericShaper.EUROPEAN}
      * @throws IndexOutOfBoundsException if start or start + count is
      *        out of bounds
      * @throws NullPointerException if text is null
      * @throws IllegalArgumentException if this is a contextual shaper
-     * and the specified <code>context</code> is not a single valid
+     * and the specified {@code context} is not a single valid
      * range.
      */
     public void shape(char[] text, int start, int count, int context) {
@@ -1570,17 +1595,17 @@ public final class NumericShaper implements java.io.Serializable {
     }
 
     /**
-     * Returns a <code>boolean</code> indicating whether or not
+     * Returns a {@code boolean} indicating whether or not
      * this shaper shapes contextually.
-     * @return <code>true</code> if this shaper is contextual;
-     *         <code>false</code> otherwise.
+     * @return {@code true} if this shaper is contextual;
+     *         {@code false} otherwise.
      */
     public boolean isContextual() {
         return (mask & CONTEXTUAL_MASK) != 0;
     }
 
     /**
-     * Returns an <code>int</code> that ORs together the values for
+     * Returns an {@code int} that ORs together the values for
      * all the ranges that will be shaped.
      * <p>
      * For example, to check if a shaper shapes to Arabic, you would use the
@@ -1730,7 +1755,7 @@ public final class NumericShaper implements java.io.Serializable {
 
     /**
      * Returns {@code true} if the specified object is an instance of
-     * <code>NumericShaper</code> and shapes identically to this one,
+     * {@code NumericShaper} and shapes identically to this one,
      * regardless of the range representations, the bit mask or the
      * enum. For example, the following code produces {@code "true"}.
      * <blockquote><pre>
@@ -1740,10 +1765,10 @@ public final class NumericShaper implements java.io.Serializable {
      * </pre></blockquote>
      *
      * @param o the specified object to compare to this
-     *          <code>NumericShaper</code>
-     * @return <code>true</code> if <code>o</code> is an instance
-     *         of <code>NumericShaper</code> and shapes in the same way;
-     *         <code>false</code> otherwise.
+     *          {@code NumericShaper}
+     * @return {@code true} if {@code o} is an instance
+     *         of {@code NumericShaper} and shapes in the same way;
+     *         {@code false} otherwise.
      * @see java.lang.Object#equals(java.lang.Object)
      */
     public boolean equals(Object o) {
@@ -1775,9 +1800,9 @@ public final class NumericShaper implements java.io.Serializable {
     }
 
     /**
-     * Returns a <code>String</code> that describes this shaper. This method
+     * Returns a {@code String} that describes this shaper. This method
      * is used for debugging purposes only.
-     * @return a <code>String</code> describing this shaper.
+     * @return a {@code String} describing this shaper.
      */
     public String toString() {
         StringBuilder buf = new StringBuilder(super.toString());

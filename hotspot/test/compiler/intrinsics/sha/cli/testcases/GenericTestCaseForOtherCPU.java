@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,7 +21,10 @@
  * questions.
  */
 
-import jdk.test.lib.ExitCode;
+package compiler.intrinsics.sha.cli.testcases;
+
+import compiler.intrinsics.sha.cli.SHAOptionsBase;
+import jdk.test.lib.process.ExitCode;
 import jdk.test.lib.Platform;
 import jdk.test.lib.cli.CommandLineOptionTest;
 import jdk.test.lib.cli.predicate.NotPredicate;
@@ -34,11 +37,12 @@ import jdk.test.lib.cli.predicate.OrPredicate;
 public class GenericTestCaseForOtherCPU extends
         SHAOptionsBase.TestCase {
     public GenericTestCaseForOtherCPU(String optionName) {
-        // Execute the test case on any CPU except SPARC and X86
+        // Execute the test case on any CPU except AArch64, S390x, SPARC and X86.
         super(optionName, new NotPredicate(
-                new OrPredicate(
-                    new OrPredicate(Platform::isSparc, Platform::isAArch64),
-                    new OrPredicate(Platform::isX64, Platform::isX86))));
+                              new OrPredicate(Platform::isAArch64,
+                              new OrPredicate(Platform::isS390x,
+                              new OrPredicate(Platform::isSparc,
+                              new OrPredicate(Platform::isX64, Platform::isX86))))));
     }
 
     @Override
@@ -50,11 +54,13 @@ public class GenericTestCaseForOtherCPU extends
         CommandLineOptionTest.verifySameJVMStartup(null,
                 new String[] { ".*" + optionName + ".*" }, shouldPassMessage,
                 shouldPassMessage, ExitCode.OK,
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(optionName, true));
 
         CommandLineOptionTest.verifySameJVMStartup(null,
                 new String[] { ".*" + optionName + ".*" }, shouldPassMessage,
                 shouldPassMessage, ExitCode.OK,
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(optionName, false));
     }
 
@@ -63,13 +69,15 @@ public class GenericTestCaseForOtherCPU extends
         // Verify that option is disabled by default.
         CommandLineOptionTest.verifyOptionValueForSameVM(optionName, "false",
                 String.format("Option '%s' should be disabled by default",
-                        optionName));
+                        optionName),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS);
 
         // Verify that option is disabled even if it was explicitly enabled
         // using CLI options.
         CommandLineOptionTest.verifyOptionValueForSameVM(optionName, "false",
                 String.format("Option '%s' should be off on unsupported "
                         + "CPU even if set to true directly", optionName),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(optionName, true));
 
         // Verify that option is disabled when it explicitly disabled
@@ -79,6 +87,7 @@ public class GenericTestCaseForOtherCPU extends
                         + " even if '%s' flag set to JVM", optionName,
                         CommandLineOptionTest.prepareBooleanFlag(
                         SHAOptionsBase.USE_SHA_OPTION, true)),
+                SHAOptionsBase.UNLOCK_DIAGNOSTIC_VM_OPTIONS,
                 CommandLineOptionTest.prepareBooleanFlag(optionName, false));
     }
 }

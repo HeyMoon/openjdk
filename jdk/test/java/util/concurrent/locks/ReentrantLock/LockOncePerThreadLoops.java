@@ -34,21 +34,26 @@
 /*
  * @test
  * @bug 4486658
- * @run main/timeout=15000 LockOncePerThreadLoops
  * @summary Checks for missed signals by locking and unlocking each of an array of locks once per thread
+ * @library /lib/testlibrary/
  */
 
-import java.util.concurrent.*;
-import java.util.concurrent.locks.*;
-import java.util.*;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.locks.ReentrantLock;
+import jdk.testlibrary.Utils;
 
 public final class LockOncePerThreadLoops {
+    static final long LONG_DELAY_MS = Utils.adjustTimeout(10_000);
     static final ExecutorService pool = Executors.newCachedThreadPool();
-    static final LoopHelpers.SimpleRandom rng = new LoopHelpers.SimpleRandom();
     static boolean print = false;
-    static int nlocks = 50000;
-    static int nthreads = 100;
-    static int replications = 5;
+    static int nlocks = 20_000;
+    static int nthreads = 20;
+    static int replications = 3;
 
     public static void main(String[] args) throws Exception {
         if (args.length > 0)
@@ -62,15 +67,14 @@ public final class LockOncePerThreadLoops {
         for (int i = 0; i < replications; ++i) {
             System.out.print("Iteration: " + i);
             new ReentrantLockLoop().test();
-            Thread.sleep(100);
         }
         pool.shutdown();
-        if (! pool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS))
+        if (! pool.awaitTermination(LONG_DELAY_MS, MILLISECONDS))
             throw new Error();
     }
 
     static final class ReentrantLockLoop implements Runnable {
-        private int v = rng.next();
+        private int v = ThreadLocalRandom.current().nextInt();
         private volatile int result = 17;
         final ReentrantLock[]locks = new ReentrantLock[nlocks];
 
@@ -107,7 +111,7 @@ public final class LockOncePerThreadLoops {
                 for (int i = 0; i < locks.length; ++i) {
                     locks[i].lock();
                     try {
-                            v = x += ~(v - i);
+                        v = x += ~(v - i);
                     }
                     finally {
                         locks[i].unlock();
@@ -122,7 +126,7 @@ public final class LockOncePerThreadLoops {
                 barrier.await();
                 result += sum;
             }
-            catch (Exception ie) {
+            catch (Exception ex) {
                 return;
             }
         }

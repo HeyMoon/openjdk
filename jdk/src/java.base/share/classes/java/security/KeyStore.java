@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,6 @@
 package java.security;
 
 import java.io.*;
-import java.net.URI;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.security.cert.CertificateException;
@@ -177,9 +176,9 @@ import sun.security.util.Debug;
  * <li>{@code PKCS12}</li>
  * </ul>
  * This type is described in the <a href=
- * "{@docRoot}/../technotes/guides/security/StandardNames.html#KeyStore">
+ * "{@docRoot}/../specs/security/standard-names.html#keystore-types">
  * KeyStore section</a> of the
- * Java Cryptography Architecture Standard Algorithm Name Documentation.
+ * Java Security Standard Algorithm Names Specification.
  * Consult the release documentation for your implementation to see if any
  * other types are supported.
  *
@@ -292,9 +291,8 @@ public class KeyStore {
          * @param protectionAlgorithm the encryption algorithm name, for
          *     example, {@code PBEWithHmacSHA256AndAES_256}.
          *     See the Cipher section in the <a href=
-         * "{@docRoot}/../technotes/guides/security/StandardNames.html#Cipher">
-         * Java Cryptography Architecture Standard Algorithm Name
-         * Documentation</a>
+         * "{@docRoot}/../specs/security/standard-names.html#cipher-algorithm-names">
+         * Java Security Standard Algorithm Names Specification</a>
          *     for information about standard encryption algorithm names.
          * @param protectionParameters the encryption algorithm parameter
          *     specification, which may be {@code null}
@@ -825,8 +823,12 @@ public class KeyStore {
 
         if (!skipDebug && pdebug != null) {
             pdebug.println("KeyStore." + type.toUpperCase() + " type from: " +
-                this.provider.getName());
+                getProviderName());
         }
+    }
+
+    private String getProviderName() {
+        return (provider == null) ? "(no provider)" : provider.getName();
     }
 
     /**
@@ -841,23 +843,34 @@ public class KeyStore {
      * <p> Note that the list of registered providers may be retrieved via
      * the {@link Security#getProviders() Security.getProviders()} method.
      *
+     * @implNote
+     * The JDK Reference Implementation additionally uses the
+     * {@code jdk.security.provider.preferred}
+     * {@link Security#getProperty(String) Security} property to determine
+     * the preferred provider order for the specified algorithm. This
+     * may be different than the order of providers returned by
+     * {@link Security#getProviders() Security.getProviders()}.
+     *
      * @param type the type of keystore.
      * See the KeyStore section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#KeyStore">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#keystore-types">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard keystore types.
      *
-     * @return a keystore object of the specified type.
+     * @return a keystore object of the specified type
      *
-     * @exception KeyStoreException if no Provider supports a
-     *          KeyStoreSpi implementation for the
-     *          specified type.
+     * @throws KeyStoreException if no {@code Provider} supports a
+     *         {@code KeyStoreSpi} implementation for the
+     *         specified type
+     *
+     * @throws NullPointerException if {@code type} is {@code null}
      *
      * @see Provider
      */
     public static KeyStore getInstance(String type)
         throws KeyStoreException
     {
+        Objects.requireNonNull(type, "null type name");
         try {
             Object[] objs = Security.getImpl(type, "KeyStore", (String)null);
             return new KeyStore((KeyStoreSpi)objs[0], (Provider)objs[1], type);
@@ -881,29 +894,32 @@ public class KeyStore {
      *
      * @param type the type of keystore.
      * See the KeyStore section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#KeyStore">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#keystore-types">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard keystore types.
      *
      * @param provider the name of the provider.
      *
-     * @return a keystore object of the specified type.
+     * @return a keystore object of the specified type
      *
-     * @exception KeyStoreException if a KeyStoreSpi
-     *          implementation for the specified type is not
-     *          available from the specified provider.
+     * @throws IllegalArgumentException if the provider name is {@code null}
+     *         or empty
      *
-     * @exception NoSuchProviderException if the specified provider is not
-     *          registered in the security provider list.
+     * @throws KeyStoreException if a {@code KeyStoreSpi}
+     *         implementation for the specified type is not
+     *         available from the specified provider
      *
-     * @exception IllegalArgumentException if the provider name is null
-     *          or empty.
+     * @throws NoSuchProviderException if the specified provider is not
+     *         registered in the security provider list
+     *
+     * @throws NullPointerException if {@code type} is {@code null}
      *
      * @see Provider
      */
     public static KeyStore getInstance(String type, String provider)
         throws KeyStoreException, NoSuchProviderException
     {
+        Objects.requireNonNull(type, "null type name");
         if (provider == null || provider.length() == 0)
             throw new IllegalArgumentException("missing provider");
         try {
@@ -924,19 +940,22 @@ public class KeyStore {
      *
      * @param type the type of keystore.
      * See the KeyStore section in the <a href=
-     * "{@docRoot}/../technotes/guides/security/StandardNames.html#KeyStore">
-     * Java Cryptography Architecture Standard Algorithm Name Documentation</a>
+     * "{@docRoot}/../specs/security/standard-names.html#keystore-types">
+     * Java Security Standard Algorithm Names Specification</a>
      * for information about standard keystore types.
      *
      * @param provider the provider.
      *
-     * @return a keystore object of the specified type.
+     * @return a keystore object of the specified type
      *
-     * @exception KeyStoreException if KeyStoreSpi
-     *          implementation for the specified type is not available
-     *          from the specified Provider object.
+     * @throws IllegalArgumentException if the specified provider is
+     *         {@code null}
      *
-     * @exception IllegalArgumentException if the specified provider is null.
+     * @throws KeyStoreException if {@code KeyStoreSpi}
+     *         implementation for the specified type is not available
+     *         from the specified {@code Provider} object
+     *
+     * @throws NullPointerException if {@code type} is {@code null}
      *
      * @see Provider
      *
@@ -945,6 +964,7 @@ public class KeyStore {
     public static KeyStore getInstance(String type, Provider provider)
         throws KeyStoreException
     {
+        Objects.requireNonNull(type, "null type name");
         if (provider == null)
             throw new IllegalArgumentException("missing provider");
         try {
@@ -974,7 +994,7 @@ public class KeyStore {
      * if no such property exists.
      * @see java.security.Security security properties
      */
-    public final static String getDefaultType() {
+    public static final String getDefaultType() {
         String kstype;
         kstype = AccessController.doPrivileged(new PrivilegedAction<>() {
             public String run() {
@@ -1611,8 +1631,13 @@ public class KeyStore {
      * First the keystore type is determined by probing the specified file.
      * Then a keystore object is instantiated and loaded using the data from
      * that file.
-     * A password may be supplied to unlock the keystore data or perform an
-     * integrity check.
+     *
+     * <p>
+     * A password may be given to unlock the keystore
+     * (e.g. the keystore resides on a hardware token device),
+     * or to check the integrity of the keystore data.
+     * If a password is not given for integrity checking,
+     * then integrity checking is not performed.
      *
      * <p>
      * This method traverses the list of registered security
@@ -1654,7 +1679,7 @@ public class KeyStore {
      *
      * @see Provider
      *
-     * @since 1.9
+     * @since 9
      */
     public static final KeyStore getInstance(File file, char[] password)
         throws KeyStoreException, IOException, NoSuchAlgorithmException,
@@ -1710,7 +1735,7 @@ public class KeyStore {
      *
      * @see Provider
      *
-     * @since 1.9
+     * @since 9
      */
     public static final KeyStore getInstance(File file,
         LoadStoreParameter param) throws KeyStoreException, IOException,
@@ -1806,7 +1831,7 @@ public class KeyStore {
      * @see javax.net.ssl.KeyStoreBuilderParameters
      * @since 1.5
      */
-    public static abstract class Builder {
+    public abstract static class Builder {
 
         // maximum times to try the callbackhandler if the password is wrong
         static final int MAX_CALLBACK_TRIES = 3;
@@ -1994,7 +2019,7 @@ public class KeyStore {
          *   of either PasswordProtection or CallbackHandlerProtection; or
          *   if file does not exist or does not refer to a normal file
          *
-         * @since 1.9
+         * @since 9
          */
         public static Builder newInstance(File file,
             ProtectionParameter protection) {

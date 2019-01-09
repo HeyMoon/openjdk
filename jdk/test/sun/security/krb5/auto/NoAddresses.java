@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,9 +24,10 @@
 /*
  * @test
  * @bug 7032354
- * @run main/othervm NoAddresses 1
- * @run main/othervm NoAddresses 2
- * @run main/othervm/fail NoAddresses 3
+ * @run main/othervm NoAddresses setup
+ * @run main/othervm -Djdk.net.hosts.file=TestHosts NoAddresses 1
+ * @run main/othervm -Djdk.net.hosts.file=TestHosts NoAddresses 2
+ * @run main/othervm/fail -Djdk.net.hosts.file=TestHosts NoAddresses 3
  * @summary no-addresses should not be used on acceptor side
  */
 
@@ -34,12 +35,26 @@ import java.net.InetAddress;
 import org.ietf.jgss.ChannelBinding;
 import sun.security.jgss.GSSUtil;
 import sun.security.krb5.Config;
+import java.io.PrintWriter;
+import java.io.FileWriter;
+import java.io.BufferedWriter;
+import java.nio.file.*;
 
 public class NoAddresses {
 
     public static void main(String[] args)
             throws Exception {
 
+        if (args[0].equalsIgnoreCase("setup")) {
+            // add a mapping of test host name to 127.0.0.1 to test's hosts file
+            InetAddress localHost = InetAddress.getLocalHost();
+            String localHostName = localHost.getHostName();
+            String hostsFileName = System.getProperty("test.src", ".") + "/TestHosts";
+            String hostsFileNameLocal = "TestHosts";
+            String loopBackAddress = "127.0.0.1";
+            Files.copy(Paths.get(hostsFileName), Paths.get(hostsFileNameLocal));
+            addMappingToHostsFile(localHostName, loopBackAddress, hostsFileNameLocal, true);
+        } else {
         OneKDC kdc = new OneKDC(null);
         kdc.writeJAASConf();
         KDC.saveConfig(OneKDC.KRB5_CONF, kdc,
@@ -77,5 +92,18 @@ public class NoAddresses {
         }
 
         Context.handshake(c, s);
+    }
+}
+
+    private static void addMappingToHostsFile (String host,
+                                               String addr,
+                                               String hostsFileName,
+                                               boolean append)
+                                             throws Exception {
+        String mapping = addr + " " + host;
+        try (PrintWriter hfPWriter = new PrintWriter(new BufferedWriter(
+                new FileWriter(hostsFileName, append)))) {
+            hfPWriter.println(mapping);
+        }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,12 +25,14 @@
  * @test
  * @bug 8027314
  * @summary Warn if diagnostic or experimental vm option is used and -XX:+UnlockDiagnosticVMOptions or -XX:+UnlockExperimentalVMOptions, respectively, isn't specified. Warn if develop or notproduct vm option is used with product version of VM.
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.process.ProcessTools;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.Platform;
 
 public class VMOptionWarning {
     public static void main(String[] args) throws Exception {
@@ -47,12 +49,12 @@ public class VMOptionWarning {
         output = new OutputAnalyzer(pb.start());
         output.shouldContain("Error: VM option 'PrintInlining' is diagnostic and must be enabled via -XX:+UnlockDiagnosticVMOptions.");
 
-        pb = ProcessTools.createJavaProcessBuilder("-XX:+TraceJNICalls", "-version");
+        pb = ProcessTools.createJavaProcessBuilder("-XX:+VerifyStack", "-version");
         output = new OutputAnalyzer(pb.start());
-        output.shouldContain("Error: VM option 'TraceJNICalls' is develop and is available only in debug version of VM.");
+        output.shouldContain("Error: VM option 'VerifyStack' is develop and is available only in debug version of VM.");
 
-        pb = ProcessTools.createJavaProcessBuilder("-XX:+TraceJVMCalls", "-version");
+        pb = ProcessTools.createJavaProcessBuilder("-XX:+ExecuteInternalVMTests", "-version");
         output = new OutputAnalyzer(pb.start());
-        output.shouldContain("Error: VM option 'TraceJVMCalls' is notproduct and is available only in debug version of VM.");
+        output.shouldContain("Error: VM option 'ExecuteInternalVMTests' is notproduct and is available only in debug version of VM.");
     }
 }

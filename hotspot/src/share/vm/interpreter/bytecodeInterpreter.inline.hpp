@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
 
 #include "interpreter/bytecodeInterpreter.hpp"
 #include "runtime/stubRoutines.hpp"
+#include "utilities/macros.hpp"
 
 // This file holds platform-independent bodies of inline functions for the C++ based interpreter
 
@@ -35,31 +36,17 @@
 #ifdef ASSERT
 #define VERIFY_OOP(o_) \
       if (VerifyOops) { \
-        assert((oop(o_))->is_oop_or_null(), err_msg("Expected an oop or NULL at " PTR_FORMAT, p2i(oop(o_)))); \
+        assert((oop(o_))->is_oop_or_null(), "Expected an oop or NULL at " PTR_FORMAT, p2i(oop(o_))); \
         StubRoutines::_verify_oop_count++;  \
       }
 #else
 #define VERIFY_OOP(o)
 #endif
 
-// Platform dependent data manipulation
-#ifdef TARGET_ARCH_x86
-# include "bytecodeInterpreter_x86.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_sparc
-# include "bytecodeInterpreter_sparc.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_zero
+#ifdef ZERO
 # include "bytecodeInterpreter_zero.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_arm
-# include "bytecodeInterpreter_arm.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_ppc
-# include "bytecodeInterpreter_ppc.inline.hpp"
-#endif
-#ifdef TARGET_ARCH_aarch64
-# include "bytecodeInterpreter_aarch64.inline.hpp"
+#else
+#error "Only Zero Bytecode Interpreter is supported"
 #endif
 
 #endif // CC_INTERP

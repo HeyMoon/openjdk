@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,82 +21,48 @@
  * questions.
  */
 
-import org.testng.annotations.Test;
-import org.testng.Assert;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
-
-import jdk.test.lib.dcmd.CommandExecutor;
-import jdk.test.lib.dcmd.JMXExecutor;
+import jdk.test.lib.process.ProcessTools;
 
 /*
  * @test
  * @summary Test of diagnostic command GC.run_finalization
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.compiler
  *          java.management
- *          jdk.jvmstat/sun.jvmstat.monitor
- * @build jdk.test.lib.*
- * @build jdk.test.lib.dcmd.*
- * @run testng RunFinalizationTest
+ *          jdk.internal.jvmstat/sun.jvmstat.monitor
+ * @build FinalizationRunner
+ * @run main RunFinalizationTest
  */
 public class RunFinalizationTest {
-    static ReentrantLock lock = new ReentrantLock();
-    static Condition cond = lock.newCondition();
-    static volatile boolean wasFinalized = false;
-    static volatile boolean wasInitialized = false;
+    private final static String TEST_APP_NAME = "FinalizationRunner";
 
-    class MyObject {
-        public MyObject() {
-            /* Make sure object allocation/deallocation is not optimized out */
-            wasInitialized = true;
-        }
+    public static void main(String ... args) throws Exception {
+        List<String> javaArgs = new ArrayList<>();
+        javaArgs.add("-cp");
+        javaArgs.add(System.getProperty("test.class.path"));
+        javaArgs.add(TEST_APP_NAME);
+        ProcessBuilder testAppPb = ProcessTools.createJavaProcessBuilder(javaArgs.toArray(new String[javaArgs.size()]));
 
-        protected void finalize() {
-            lock.lock();
-            wasFinalized = true;
-            cond.signalAll();
-            lock.unlock();
-        }
-    }
+        final AtomicBoolean failed = new AtomicBoolean();
+        final AtomicBoolean passed = new AtomicBoolean();
 
-    public static MyObject o;
-
-    public void run(CommandExecutor executor) {
-        lock.lock();
-        o = new MyObject();
-        o = null;
-        System.gc();
-        executor.execute("GC.run_finalization");
-
-        int waited = 0;
-        int waitTime = 15;
-
-        try {
-            System.out.println("Waiting for signal from finalizer");
-
-            while (!cond.await(waitTime, TimeUnit.SECONDS)) {
-                waited += waitTime;
-                System.out.println(String.format("Waited %d seconds", waited));
+        Process runner = ProcessTools.startProcess(
+            "FinalizationRunner",
+            testAppPb,
+            l -> {
+                failed.compareAndSet(false, l.contains(FinalizationRunner.FAILED));
+                passed.compareAndSet(false, l.contains(FinalizationRunner.PASSED));
             }
+        );
+        runner.waitFor();
 
-            System.out.println("Received signal");
-        } catch (InterruptedException e) {
-            Assert.fail("Test error: Interrupted while waiting for signal from finalizer", e);
-        } finally {
-            lock.unlock();
+        if (failed.get() || !passed.get()) {
+            throw new Error("RunFinalizationTest failed");
         }
-
-        if (!wasFinalized) {
-            Assert.fail("Test failure: Object was not finalized");
-        }
-    }
-
-    @Test
-    public void jmx() {
-        run(new JMXExecutor());
     }
 }

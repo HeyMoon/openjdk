@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,16 +22,18 @@
  */
 
 /**
- *  @test
- *  @bug 6293795
- *  @summary  Backend hangs when invokeMethod is called from a JDI eventHandler
+ * @test
+ * @bug 6293795
+ * @summary  Backend hangs when invokeMethod is called from a JDI eventHandler
+ * @author jjh
  *
- *  @author jjh
+ * @library /test/lib
+ * @modules java.management
+ *          jdk.jdi
  *
- *  @modules jdk.jdi
- *  @run build TestScaffold VMConnection TargetListener TargetAdapter
- *  @run compile -g InvokeHangTest.java
- *  @run driver InvokeHangTest
+ * @run build TestScaffold VMConnection TargetListener TargetAdapter
+ * @run compile -g InvokeHangTest.java
+ * @run driver InvokeHangTest
  */
 import com.sun.jdi.*;
 import com.sun.jdi.event.*;
@@ -133,7 +135,7 @@ public class InvokeHangTest extends TestScaffold {
     BreakpointRequest request2;
     static volatile int bkpts = 0;
     Thread timerThread;
-    static int waitTime = 20000;
+    static long waitTime = jdk.test.lib.Utils.adjustTimeout(20000);
 
     InvokeHangTest (String args[]) {
         super(args);

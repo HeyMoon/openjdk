@@ -25,8 +25,8 @@ package m;
 
 
 class Gee extends g.G {
-    public sun.misc.Lock lock;
-    public com.sun.tools.classfile.ClassFile cf;     // @jdk.Exported(false)
-    public com.sun.source.tree.BinaryTree tree;      // @jdk.Exported
-    public com.sun.management.ThreadMXBean mxbean;   // @jdk.Exported on package-info
+    public sun.security.x509.X509CertInfo cert;
+    public com.sun.tools.classfile.ClassFile cf;     // not exported
+    public com.sun.source.tree.BinaryTree tree;      // exported
+    public com.sun.management.ThreadMXBean mxbean;   // exported
 }

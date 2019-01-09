@@ -27,8 +27,16 @@
  * @summary lazySet methods
  */
 
-import java.util.concurrent.atomic.*;
-import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerArray;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
+import java.util.concurrent.atomic.AtomicLongFieldUpdater;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceArray;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 public class Lazy {
     volatile int ii;
@@ -40,11 +48,11 @@ public class Lazy {
         final AtomicBoolean b = new AtomicBoolean();
         final AtomicInteger i = new AtomicInteger();
         final AtomicLong    l = new AtomicLong();
-        final AtomicReference<Long> r = new AtomicReference<Long>();
+        final AtomicReference<Long> r = new AtomicReference<>();
 
         final AtomicIntegerArray ia = new AtomicIntegerArray(1);
         final AtomicLongArray    la = new AtomicLongArray(1);
-        final AtomicReferenceArray<Long> ra = new AtomicReferenceArray<Long>(1);
+        final AtomicReferenceArray<Long> ra = new AtomicReferenceArray<>(1);
 
         final AtomicIntegerFieldUpdater<Lazy> iu =
             AtomicIntegerFieldUpdater.newUpdater(Lazy.class, "ii");

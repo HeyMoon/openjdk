@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2004, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,10 +23,14 @@
 
 /**
  * @test
- * @bug 4931668
+ * @key headful
+ * @bug 4931668 7146533
  * @summary Tests XEmbed server/client functionality
  * @author Denis Mikhalkin: area=awt.xembed
+ * @requires (!(os.family=="mac") & !(os.family=="windows"))
+ * @library /lib/testlibrary
  * @modules java.desktop/sun.awt
+ * @build jdk.testlibrary.Platform
  * @compile JavaClient.java TesterClient.java TestXEmbedServer.java
  * @run main/timeout=6000 RunTestXEmbed
  */
@@ -36,6 +40,7 @@ import java.lang.reflect.Method;
 import java.util.logging.*;
 import java.util.*;
 import java.io.*;
+import jdk.testlibrary.Platform;
 
 public class RunTestXEmbed extends TestXEmbedServer {
     private static final Logger log = Logger.getLogger("test.xembed");
@@ -68,10 +73,11 @@ public class RunTestXEmbed extends TestXEmbedServer {
                     enva[ind++] = "AWT_TOOLKIT=sun.awt.X11.XToolkit";
                 }
             }
-            Process proc = Runtime.getRuntime().exec(java_home +
-                                                     "/bin/java -Dawt.toolkit=sun.awt.X11.XToolkit TesterClient "
-                                                     + test.getName() + " " + window + buf,
-                                                     enva);
+            Process proc = Runtime.getRuntime().
+                exec(java_home +
+                     "/bin/java --add-exports java.desktop/sun.awt.X11=ALL-UNNAMED -Dawt.toolkit=sun.awt.X11.XToolkit TesterClient "
+                     + test.getName() + " " + window + buf,
+                     enva);
             System.err.println("Test for " + test.getName() + " has started.");
             log.fine("Test for " + test.getName() + " has started.");
             new InputReader(proc.getInputStream());
@@ -93,7 +99,7 @@ public class RunTestXEmbed extends TestXEmbedServer {
     }
 
     public static void main(String[] args) throws Throwable {
-        if (System.getProperty("os.name").toLowerCase().startsWith("win")) {
+        if (Platform.isWindows() || Platform.isOSX()) {
             return;
         }
 

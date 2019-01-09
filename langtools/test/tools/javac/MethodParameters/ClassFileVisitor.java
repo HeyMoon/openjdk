@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,9 +52,9 @@ import com.sun.tools.classfile.*;
  * rule is checked: <i>param[n] == ++param[n-1].charAt(0) + param[n-1]</i>
  * </ul>
  */
-class ClassFileVisitor extends Tester.Visitor {
+class ClassFileVisitor extends MethodParametersTester.Visitor {
 
-    Tester tester;
+    MethodParametersTester tester;
 
     public String cname;
     public boolean isEnum;
@@ -66,7 +66,7 @@ class ClassFileVisitor extends Tester.Visitor {
     public ClassFile classFile;
 
 
-    public ClassFileVisitor(Tester tester) {
+    public ClassFileVisitor(MethodParametersTester tester) {
         super(tester);
     }
 
@@ -147,7 +147,6 @@ class ClassFileVisitor extends Tester.Visitor {
         public int mAttrs;
         public int mNumParams;
         public boolean mSynthetic;
-        public boolean mIsLambda;
         public boolean mIsConstructor;
         public boolean mIsClinit;
         public boolean mIsBridge;
@@ -166,7 +165,6 @@ class ClassFileVisitor extends Tester.Visitor {
             mIsClinit = mName.equals("<clinit>");
             prefix = cname + "." + mName + "() - ";
             mIsBridge = method.access_flags.is(AccessFlags.ACC_BRIDGE);
-            mIsLambda = mSynthetic && mName.startsWith("lambda$");
 
             if (mIsClinit) {
                 sb = new StringBuilder(); // Discard output
@@ -227,7 +225,7 @@ class ClassFileVisitor extends Tester.Visitor {
 
             // IMPL: Whether MethodParameters attributes will be generated
             // for some synthetics is unresolved. For now, assume no.
-            if (mSynthetic && !mIsLambda) {
+            if (mSynthetic) {
                 warn(prefix + "synthetic has MethodParameter attribute");
             }
 
@@ -281,7 +279,7 @@ class ClassFileVisitor extends Tester.Visitor {
                     userParam = param;
                 }
                 }
-                if (expect != null && !param.equals(expect)) {
+                if (check > 0 && expect != null && !param.equals(expect)) {
                     error(prefix + "param[" + x + "]='"
                           + param + "' expected '" + expect + "'");
                     return null;
@@ -348,15 +346,24 @@ class ClassFileVisitor extends Tester.Visitor {
                         }
                     }
                 }
+
+                if (synthetic && !mandated && !allowSynthetic) {
+                    //patch treatment for local captures
+                    if (isAnon || (isInner & !isStatic)) {
+                        expect = "val\\$.*";
+                        allowSynthetic = true;
+                        if (isFinal) {
+                            expect = "final val\\$.*";
+                        }
+                    }
+                }
             } else if (isEnum && mNumParams == 1 && index == 0 && mName.equals("valueOf")) {
                 expect = "name";
                 allowMandated = true;
-            } else if (mIsBridge || mIsLambda) {
+            } else if (mIsBridge) {
                 allowSynthetic = true;
                 /*  you can't expect an special name for bridges' parameters.
-                 *  The name of the original parameters are now copied. Likewise
-                 *  for a method encoding the lambda expression, names are derived
-                 *  from source lambda's parameters and captured enclosing locals.
+                 *  The name of the original parameters are now copied.
                  */
                 expect = null;
             }
@@ -415,7 +422,6 @@ class ClassFileVisitor extends Tester.Visitor {
             if (mSynthetic) {
                 return 0;
             }
-
             // Otherwise, do check test parameter naming convention.
             return 1;
         }

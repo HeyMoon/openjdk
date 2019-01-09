@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -63,6 +63,7 @@ import com.sun.source.doctree.InheritDocTree;
 import com.sun.source.doctree.LinkTree;
 import com.sun.source.doctree.LiteralTree;
 import com.sun.source.doctree.ParamTree;
+import com.sun.source.doctree.ProvidesTree;
 import com.sun.source.doctree.ReferenceTree;
 import com.sun.source.doctree.ReturnTree;
 import com.sun.source.doctree.SerialDataTree;
@@ -73,6 +74,7 @@ import com.sun.source.doctree.TextTree;
 import com.sun.source.doctree.ThrowsTree;
 import com.sun.source.doctree.UnknownBlockTagTree;
 import com.sun.source.doctree.UnknownInlineTagTree;
+import com.sun.source.doctree.UsesTree;
 import com.sun.source.doctree.ValueTree;
 import com.sun.source.doctree.VersionTree;
 import com.sun.source.tree.Tree;
@@ -85,6 +87,7 @@ import com.sun.tools.javac.util.Assert;
 import com.sun.tools.javac.util.DefinedBy;
 import com.sun.tools.javac.util.DefinedBy.Api;
 import com.sun.tools.javac.util.StringUtils;
+
 import static com.sun.tools.doclint.Messages.Group.*;
 
 
@@ -131,7 +134,7 @@ public class Checker extends DocTreePathScanner<Void, Void> {
         }
     }
 
-    private Deque<TagStackItem> tagStack; // TODO: maybe want to record starting tree as well
+    private final Deque<TagStackItem> tagStack; // TODO: maybe want to record starting tree as well
     private HtmlTag currHeaderTag;
 
     private final int implicitHeaderLevel;
@@ -149,13 +152,13 @@ public class Checker extends DocTreePathScanner<Void, Void> {
         env.setCurrent(p, tree);
 
         boolean isOverridingMethod = !env.currOverriddenMethods.isEmpty();
+        JavaFileObject fo = p.getCompilationUnit().getSourceFile();
 
         if (p.getLeaf().getKind() == Tree.Kind.PACKAGE) {
             // If p points to a package, the implied declaration is the
             // package declaration (if any) for the compilation unit.
             // Handle this case specially, because doc comments are only
             // expected in package-info files.
-            JavaFileObject fo = p.getCompilationUnit().getSourceFile();
             boolean isPkgInfo = fo.isNameCompatible("package-info", JavaFileObject.Kind.SOURCE);
             if (tree == null) {
                 if (isPkgInfo)
@@ -164,6 +167,12 @@ public class Checker extends DocTreePathScanner<Void, Void> {
             } else {
                 if (!isPkgInfo)
                     reportReference("dc.unexpected.comment");
+            }
+        } else if (tree != null && fo.isNameCompatible("package", JavaFileObject.Kind.HTML)) {
+            // a package.html file with a DocCommentTree
+            if (tree.getFullBody().isEmpty()) {
+                reportMissing("dc.missing.comment");
+                return null;
             }
         } else {
             if (tree == null) {
@@ -414,7 +423,16 @@ public class Checker extends DocTreePathScanner<Void, Void> {
                 break;
 
             case OTHER:
-                env.messages.error(HTML, tree, "dc.tag.not.allowed", treeName);
+                switch (t) {
+                    case SCRIPT:
+                        // <script> may or may not be allowed, depending on --allow-script-in-comments
+                        // but we allow it here, and rely on a separate scanner to detect all uses
+                        // of JavaScript, including <script> tags, and use in attributes, etc.
+                        break;
+
+                    default:
+                        env.messages.error(HTML, tree, "dc.tag.not.allowed", treeName);
+                }
                 return;
         }
 
@@ -543,15 +561,19 @@ public class Checker extends DocTreePathScanner<Void, Void> {
                 if (!first)
                     env.messages.error(HTML, tree, "dc.attr.repeated", name);
             }
-            AttrKind k = currTag.getAttrKind(name);
-            switch (env.htmlVersion) {
-                case HTML4:
-                    validateHtml4Attrs(tree, name, k);
-                    break;
+            // for now, doclint allows all attribute names beginning with "on" as event handler names,
+            // without checking the validity or applicability of the name
+            if (!name.toString().startsWith("on")) {
+                AttrKind k = currTag.getAttrKind(name);
+                switch (env.htmlVersion) {
+                    case HTML4:
+                        validateHtml4Attrs(tree, name, k);
+                        break;
 
-                case HTML5:
-                    validateHtml5Attrs(tree, name, k);
-                    break;
+                    case HTML5:
+                        validateHtml5Attrs(tree, name, k);
+                        break;
+                }
             }
 
             if (attr != null) {
@@ -713,6 +735,9 @@ public class Checker extends DocTreePathScanner<Void, Void> {
     }
 
     private void checkURI(AttributeTree tree, String uri) {
+        // allow URIs beginning with javascript:, which would otherwise be rejected by the URI API.
+        if (uri.startsWith("javascript:"))
+            return;
         try {
             URI u = new URI(uri);
         } catch (URISyntaxException e) {
@@ -796,7 +821,11 @@ public class Checker extends DocTreePathScanner<Void, Void> {
                     break;
             }
         } else {
-            foundParams.add(paramElement);
+            boolean unique = foundParams.add(paramElement);
+
+            if (!unique) {
+                env.messages.warning(REFERENCE, tree, "dc.exists.param", nameTree);
+            }
         }
 
         warnIfEmpty(tree, tree.getDescription());
@@ -818,6 +847,20 @@ public class Checker extends DocTreePathScanner<Void, Void> {
     }
 
     @Override @DefinedBy(Api.COMPILER_TREE)
+    public Void visitProvides(ProvidesTree tree, Void ignore) {
+        Element e = env.trees.getElement(env.currPath);
+        if (e.getKind() != ElementKind.MODULE) {
+            env.messages.error(REFERENCE, tree, "dc.invalid.provides");
+        }
+        ReferenceTree serviceType = tree.getServiceType();
+        Element se = env.trees.getElement(new DocTreePath(getCurrentPath(), serviceType));
+        if (se == null) {
+            env.messages.error(REFERENCE, tree, "dc.service.not.found");
+        }
+        return super.visitProvides(tree, ignore);
+    }
+
+    @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitReference(ReferenceTree tree, Void ignore) {
         String sig = tree.getSignature();
         if (sig.contains("<") || sig.contains(">"))
@@ -831,6 +874,10 @@ public class Checker extends DocTreePathScanner<Void, Void> {
 
     @Override @DefinedBy(Api.COMPILER_TREE)
     public Void visitReturn(ReturnTree tree, Void ignore) {
+        if (foundReturn) {
+            env.messages.warning(REFERENCE, tree, "dc.exists.return");
+        }
+
         Element e = env.trees.getElement(env.currPath);
         if (e.getKind() != ElementKind.METHOD
                 || ((ExecutableElement) e).getReturnType().getKind() == TypeKind.VOID)
@@ -929,6 +976,20 @@ public class Checker extends DocTreePathScanner<Void, Void> {
     private void checkUnknownTag(DocTree tree, String tagName) {
         if (env.customTags != null && !env.customTags.contains(tagName))
             env.messages.error(SYNTAX, tree, "dc.tag.unknown", tagName);
+    }
+
+    @Override @DefinedBy(Api.COMPILER_TREE)
+    public Void visitUses(UsesTree tree, Void ignore) {
+        Element e = env.trees.getElement(env.currPath);
+        if (e.getKind() != ElementKind.MODULE) {
+            env.messages.error(REFERENCE, tree, "dc.invalid.uses");
+        }
+        ReferenceTree serviceType = tree.getServiceType();
+        Element se = env.trees.getElement(new DocTreePath(getCurrentPath(), serviceType));
+        if (se == null) {
+            env.messages.error(REFERENCE, tree, "dc.service.not.found");
+        }
+        return super.visitUses(tree, ignore);
     }
 
     @Override @DefinedBy(Api.COMPILER_TREE)

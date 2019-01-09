@@ -26,6 +26,7 @@
  * @bug 4931668
  * @summary Tests XEmbed server/client functionality
  * @author denis mikhalkin: area=awt.xembed
+ * @requires (!(os.family=="mac") & !(os.family=="windows"))
  * @modules java.desktop/sun.awt
  * @compile JavaClient.java TesterClient.java TestXEmbedServer.java
  * @run main/manual TestXEmbedServerJava
@@ -38,9 +39,6 @@ import java.io.*;
 
 public class TestXEmbedServerJava extends TestXEmbedServer {
     public static void main(String[] args) {
-        if (System.getProperty("os.name").toLowerCase().startsWith("win")) {
-            return;
-        }
 
         // Enabled XEmbed
         System.setProperty("sun.awt.xembedserver", "true");
@@ -78,7 +76,23 @@ public class TestXEmbedServerJava extends TestXEmbedServer {
     public Process startClient(Rectangle[] bounds, long window) {
         try {
             String java_home = System.getProperty("java.home");
-            return Runtime.getRuntime().exec(java_home + "/bin/java JavaClient " + window);
+            boolean hasModules = true;
+            try {
+                Class.class.getMethod("getModule");
+            }catch(Exception hasModulesEx) {
+                hasModules = false;
+            }
+            if (hasModules) {
+                System.out.println(java_home +
+                               "/bin/java --add-exports java.desktop/sun.awt.X11=ALL-UNNAMED "+
+                               "--add-exports java.desktop/sun.awt=ALL-UNNAMED  JavaClient " + window);
+                return Runtime.getRuntime().exec(java_home +
+                               "/bin/java --add-exports java.desktop/sun.awt.X11=ALL-UNNAMED "+
+                               "--add-exports java.desktop/sun.awt=ALL-UNNAMED  JavaClient " + window);
+            }else{
+                System.out.println(java_home + "/bin/java JavaClient " + window);
+                return Runtime.getRuntime().exec(java_home + "/bin/java JavaClient " + window);
+            }
         } catch (IOException ex1) {
             ex1.printStackTrace();
         }

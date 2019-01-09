@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,14 +25,14 @@
 
 package com.sun.tools.sjavac;
 
-import java.io.PrintStream;
+import java.io.Writer;
 import java.net.URI;
 import java.util.Map;
 import java.util.Set;
 
+import com.sun.tools.sjavac.comp.CompilationService;
 import com.sun.tools.sjavac.options.Options;
 import com.sun.tools.sjavac.pubapi.PubApi;
-import com.sun.tools.sjavac.server.Sjavac;
 
 /**
  * The transform interface is used to transform content inside a package, from one form to another.
@@ -83,10 +83,9 @@ public interface Transformer {
      * If num_cores is set to a non-zero value. The transform should attempt to use no more than these
      * number of threads for heavy work.
      */
-    boolean transform(Sjavac sjavac,
+    boolean transform(CompilationService sjavac,
                       Map<String,Set<URI>> pkgSrcs,
                       Set<URI>             visibleSources,
-                      Map<URI,Set<String>> visibleClasses,
                       Map<String,Set<String>> oldPackageDependencies,
                       URI destRoot,
                       Map<String,Set<URI>>    packageArtifacts,
@@ -96,9 +95,7 @@ public interface Transformer {
                       Map<String, PubApi>     dependencyApis,
                       int debugLevel,
                       boolean incremental,
-                      int numCores,
-                      PrintStream out,
-                      PrintStream err);
+                      int numCores);
 
     void setExtra(String e);
     void setExtra(Options args);

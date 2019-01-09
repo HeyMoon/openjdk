@@ -47,8 +47,8 @@ import java.security.PrivilegedAction;
 
 import java.security.AccessControlContext;
 import java.security.ProtectionDomain;
-import sun.misc.SharedSecrets;
-import sun.misc.JavaSecurityAccess;
+import jdk.internal.misc.SharedSecrets;
+import jdk.internal.misc.JavaSecurityAccess;
 
 import sun.awt.AWTAccessor;
 
@@ -210,7 +210,7 @@ public class TransferHandler implements Serializable {
      * @see #importData(TransferHandler.TransferSupport)
      * @since 1.6
      */
-    public final static class TransferSupport {
+    public static final class TransferSupport {
         private boolean isDrop;
         private Component component;
 
@@ -1695,13 +1695,10 @@ public class TransferHandler implements Serializable {
             super(name);
         }
 
-        public boolean isEnabled(Object sender) {
-            if (sender instanceof JComponent
-                && ((JComponent)sender).getTransferHandler() == null) {
-                    return false;
-            }
-
-            return true;
+        @Override
+        public boolean accept(Object sender) {
+            return !(sender instanceof JComponent
+                    && ((JComponent)sender).getTransferHandler() == null);
         }
 
         private static final JavaSecurityAccess javaSecurityAccess =

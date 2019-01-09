@@ -346,6 +346,7 @@ public class SwingUtilities implements SwingConstants
      *
      * @return the new mouse event
      */
+    @SuppressWarnings("deprecation")
     public static MouseEvent convertMouseEvent(Component source,
                                                MouseEvent sourceEvent,
                                                Component destination) {
@@ -416,6 +417,7 @@ public class SwingUtilities implements SwingConstants
      * @param p  a Point object (converted to the new coordinate system)
      * @param c  a Component object
      */
+    @SuppressWarnings("deprecation")
     public static void convertPointToScreen(Point p,Component c) {
             Rectangle b;
             int x,y;
@@ -455,6 +457,7 @@ public class SwingUtilities implements SwingConstants
      * @param p  a Point object (converted to the new coordinate system)
      * @param c  a Component object
      */
+    @SuppressWarnings("deprecation")
     public static void convertPointFromScreen(Point p,Component c) {
         Rectangle b;
         int x,y;
@@ -846,14 +849,46 @@ public class SwingUtilities implements SwingConstants
     }
 
     /**
+     * Check whether MouseEvent contains speficied mouse button or
+     * mouse button down mask based on MouseEvent ID.
+     *
+     * @param anEvent  a MouseEvent object
+     * @param mouseButton mouse button type
+     * @param mouseButtonDownMask mouse button down mask event modifier
+     *
+     * @return true if the anEvent contains speficied mouseButton or
+     * mouseButtonDownMask based on MouseEvent ID.
+     */
+    private static boolean checkMouseButton(MouseEvent anEvent,
+                                            int mouseButton,
+                                            int mouseButtonDownMask)
+    {
+        switch (anEvent.getID()) {
+        case MouseEvent.MOUSE_PRESSED:
+        case MouseEvent.MOUSE_RELEASED:
+        case MouseEvent.MOUSE_CLICKED:
+            return (anEvent.getButton() == mouseButton);
+
+        case MouseEvent.MOUSE_ENTERED:
+        case MouseEvent.MOUSE_EXITED:
+        case MouseEvent.MOUSE_DRAGGED:
+            return ((anEvent.getModifiersEx() & mouseButtonDownMask) != 0);
+
+        default:
+            return ((anEvent.getModifiersEx() & mouseButtonDownMask) != 0 ||
+                    anEvent.getButton() == mouseButton);
+        }
+    }
+
+    /**
      * Returns true if the mouse event specifies the left mouse button.
      *
      * @param anEvent  a MouseEvent object
      * @return true if the left mouse button was active
      */
     public static boolean isLeftMouseButton(MouseEvent anEvent) {
-         return ((anEvent.getModifiersEx() & InputEvent.BUTTON1_DOWN_MASK) != 0 ||
-                 anEvent.getButton() == MouseEvent.BUTTON1);
+        return checkMouseButton(anEvent, MouseEvent.BUTTON1,
+                                InputEvent.BUTTON1_DOWN_MASK);
     }
 
     /**
@@ -863,8 +898,8 @@ public class SwingUtilities implements SwingConstants
      * @return true if the middle mouse button was active
      */
     public static boolean isMiddleMouseButton(MouseEvent anEvent) {
-        return ((anEvent.getModifiersEx() & InputEvent.BUTTON2_DOWN_MASK) != 0 ||
-                anEvent.getButton() == MouseEvent.BUTTON2);
+        return checkMouseButton(anEvent, MouseEvent.BUTTON2,
+                                InputEvent.BUTTON2_DOWN_MASK);
     }
 
     /**
@@ -874,8 +909,8 @@ public class SwingUtilities implements SwingConstants
      * @return true if the right mouse button was active
      */
     public static boolean isRightMouseButton(MouseEvent anEvent) {
-        return ((anEvent.getModifiersEx() & InputEvent.BUTTON3_DOWN_MASK) != 0 ||
-                anEvent.getButton() == MouseEvent.BUTTON3);
+        return checkMouseButton(anEvent, MouseEvent.BUTTON3,
+                                InputEvent.BUTTON3_DOWN_MASK);
     }
 
     /**
@@ -1623,6 +1658,7 @@ public class SwingUtilities implements SwingConstants
      * @param c the component
      * @return the first ancestor of c that's a Window or the last Applet ancestor
      */
+    @SuppressWarnings("deprecation")
     public static Component getRoot(Component c) {
         Component applet = null;
         for(Component p = c; p != null; p = p.getParent()) {
@@ -1663,6 +1699,7 @@ public class SwingUtilities implements SwingConstants
      * @return true if a binding has found and processed
      * @since 1.4
      */
+    @SuppressWarnings("deprecation")
     public static boolean processKeyBindings(KeyEvent event) {
         if (event != null) {
             if (event.isConsumed()) {
@@ -1704,9 +1741,9 @@ public class SwingUtilities implements SwingConstants
     }
 
     /**
-     * Invokes <code>actionPerformed</code> on <code>action</code> if
-     * <code>action</code> is enabled (and non-{@code null}). The command for the
-     * ActionEvent is determined by:
+     * Invokes {@code actionPerformed} on {@code action} if {@code action}
+     * is non-{@code null} and accepts the sender object.
+     * The command for the ActionEvent is determined by:
      * <ol>
      *   <li>If the action was registered via
      *       <code>registerKeyboardAction</code>, then the command string
@@ -1725,23 +1762,18 @@ public class SwingUtilities implements SwingConstants
      * @param modifiers action modifiers
      * @return {@code true} if {@code action} is non-{@code null} and
      *         actionPerformed is invoked on it.
+     * @see javax.swing.Action#accept
      *
      * @since 1.3
      */
     public static boolean notifyAction(Action action, KeyStroke ks,
                                        KeyEvent event, Object sender,
                                        int modifiers) {
-        if (action == null) {
+
+        if (action == null || !action.accept(sender)) {
             return false;
         }
-        if (action instanceof UIAction) {
-            if (!((UIAction)action).isEnabled(sender)) {
-                return false;
-            }
-        }
-        else if (!action.isEnabled()) {
-            return false;
-        }
+
         Object commandO;
         boolean stayNull;
 
@@ -2182,6 +2214,7 @@ public class SwingUtilities implements SwingConstants
      * @see java.awt.Component#isVisible()
      * @since 1.7
      */
+    @SuppressWarnings("deprecation")
     static Container getValidateRoot(Container c, boolean visibleOnly) {
         Container root = null;
 

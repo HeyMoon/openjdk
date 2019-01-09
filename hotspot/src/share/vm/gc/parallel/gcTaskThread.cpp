@@ -1,6 +1,5 @@
-
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,9 +25,12 @@
 #include "precompiled.hpp"
 #include "gc/parallel/gcTaskManager.hpp"
 #include "gc/parallel/gcTaskThread.hpp"
+#include "gc/shared/gcId.hpp"
+#include "logging/log.hpp"
 #include "memory/allocation.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/resourceArea.hpp"
+#include "runtime/atomic.hpp"
 #include "runtime/handles.hpp"
 #include "runtime/handles.inline.hpp"
 #include "runtime/os.hpp"
@@ -42,16 +44,8 @@ GCTaskThread::GCTaskThread(GCTaskManager* manager,
   _time_stamps(NULL),
   _time_stamp_index(0)
 {
-  if (!os::create_thread(this, os::pgc_thread))
-    vm_exit_out_of_memory(0, OOM_MALLOC_ERROR, "Cannot create GC thread. Out of system resources.");
-
-  if (PrintGCTaskTimeStamps) {
-    _time_stamps = NEW_C_HEAP_ARRAY(GCTaskTimeStamp, GCTaskTimeStampEntries, mtGC);
-
-    guarantee(_time_stamps != NULL, "Sanity");
-  }
   set_id(which);
-  set_name("ParGC Thread#%d", which);
+  set_name("%s#%d", manager->group_name(), which);
 }
 
 GCTaskThread::~GCTaskThread() {
@@ -60,31 +54,59 @@ GCTaskThread::~GCTaskThread() {
   }
 }
 
-void GCTaskThread::start() {
-  os::start_thread(this);
+void GCTaskThread::add_task_timestamp(const char* name, jlong t_entry, jlong t_exit) {
+  if (_time_stamp_index < GCTaskTimeStampEntries) {
+    GCTaskTimeStamp* time_stamp = time_stamp_at(_time_stamp_index);
+    time_stamp->set_name(name);
+    time_stamp->set_entry_time(t_entry);
+    time_stamp->set_exit_time(t_exit);
+  } else {
+    if (_time_stamp_index ==  GCTaskTimeStampEntries) {
+      log_warning(gc, task, time)("GC-thread %u: Too many timestamps, ignoring future ones. "
+                                  "Increase GCTaskTimeStampEntries to get more info.",
+                                  id());
+    }
+    // Let _time_stamp_index keep counting to give the user an idea about how many
+    // are needed.
+  }
+  _time_stamp_index++;
 }
 
 GCTaskTimeStamp* GCTaskThread::time_stamp_at(uint index) {
-  guarantee(index < GCTaskTimeStampEntries, "increase GCTaskTimeStampEntries");
-
+  assert(index < GCTaskTimeStampEntries, "Precondition");
+  if (_time_stamps == NULL) {
+    // We allocate the _time_stamps array lazily since logging can be enabled dynamically
+    GCTaskTimeStamp* time_stamps = NEW_C_HEAP_ARRAY(GCTaskTimeStamp, GCTaskTimeStampEntries, mtGC);
+    void* old = Atomic::cmpxchg_ptr(time_stamps, &_time_stamps, NULL);
+    if (old != NULL) {
+      // Someone already setup the time stamps
+      FREE_C_HEAP_ARRAY(GCTaskTimeStamp, time_stamps);
+    }
+  }
   return &(_time_stamps[index]);
 }
 
 void GCTaskThread::print_task_time_stamps() {
-  assert(PrintGCTaskTimeStamps, "Sanity");
-  assert(_time_stamps != NULL, "Sanity (Probably set PrintGCTaskTimeStamps late)");
+  assert(log_is_enabled(Debug, gc, task, time), "Sanity");
 
-  tty->print_cr("GC-Thread %u entries: %d", id(), _time_stamp_index);
-  for(uint i=0; i<_time_stamp_index; i++) {
-    GCTaskTimeStamp* time_stamp = time_stamp_at(i);
-    tty->print_cr("\t[ %s " JLONG_FORMAT " " JLONG_FORMAT " ]",
-                  time_stamp->name(),
-                  time_stamp->entry_time(),
-                  time_stamp->exit_time());
+  // Since _time_stamps is now lazily allocated we need to check that it
+  // has in fact been allocated when calling this function.
+  if (_time_stamps != NULL) {
+    log_debug(gc, task, time)("GC-Thread %u entries: %d%s", id(),
+                              _time_stamp_index,
+                              _time_stamp_index >= GCTaskTimeStampEntries ? " (overflow)" : "");
+    const uint max_index = MIN2(_time_stamp_index, GCTaskTimeStampEntries);
+    for (uint i = 0; i < max_index; i++) {
+      GCTaskTimeStamp* time_stamp = time_stamp_at(i);
+      log_debug(gc, task, time)("\t[ %s " JLONG_FORMAT " " JLONG_FORMAT " ]",
+                                time_stamp->name(),
+                                time_stamp->entry_time(),
+                                time_stamp->exit_time());
+    }
+
+    // Reset after dumping the data
+    _time_stamp_index = 0;
   }
-
-  // Reset after dumping the data
-  _time_stamp_index = 0;
 }
 
 // GC workers get tasks from the GCTaskManager and execute
@@ -95,18 +117,14 @@ void GCTaskThread::print_task_time_stamps() {
 void GCTaskThread::run() {
   // Set up the thread for stack overflow support
   this->record_stack_base_and_size();
-  this->initialize_thread_local_storage();
   this->initialize_named_thread();
   // Bind yourself to your processor.
   if (processor_id() != GCTaskManager::sentinel_worker()) {
-    if (TraceGCTaskThread) {
-      tty->print_cr("GCTaskThread::run: "
-                    "  binding to processor %u", processor_id());
-    }
+    log_trace(gc, task, thread)("GCTaskThread::run: binding to processor %u", processor_id());
     if (!os::bind_to_processor(processor_id())) {
       DEBUG_ONLY(
-        warning("Couldn't bind GCTaskThread %u to processor %u",
-                      which(), processor_id());
+        log_warning(gc)("Couldn't bind GCTaskThread %u to processor %u",
+                        which(), processor_id());
       )
     }
   }
@@ -124,10 +142,11 @@ void GCTaskThread::run() {
     for (; /* break */; ) {
       // This will block until there is a task to be gotten.
       GCTask* task = manager()->get_task(which());
+      GCIdMark gc_id_mark(task->gc_id());
       // Record if this is an idle task for later use.
       bool is_idle_task = task->is_idle_task();
       // In case the update is costly
-      if (PrintGCTaskTimeStamps) {
+      if (log_is_enabled(Debug, gc, task, time)) {
         timer.update();
       }
 
@@ -143,17 +162,9 @@ void GCTaskThread::run() {
       if (!is_idle_task) {
         manager()->note_completion(which());
 
-        if (PrintGCTaskTimeStamps) {
-          assert(_time_stamps != NULL,
-            "Sanity (PrintGCTaskTimeStamps set late?)");
-
+        if (log_is_enabled(Debug, gc, task, time)) {
           timer.update();
-
-          GCTaskTimeStamp* time_stamp = time_stamp_at(_time_stamp_index++);
-
-          time_stamp->set_name(name);
-          time_stamp->set_entry_time(entry_time);
-          time_stamp->set_exit_time(timer.ticks());
+          add_task_timestamp(name, entry_time, timer.ticks());
         }
       } else {
         // idle tasks complete outside the normal accounting

@@ -166,33 +166,13 @@ public abstract class CGLSurfaceData extends OGLSurfaceData {
     }
 
     @Override
-    public int getDefaultScale() {
+    public double getDefaultScaleX() {
         return scale;
     }
 
     @Override
-    public boolean copyArea(SunGraphics2D sg2d, int x, int y, int w, int h,
-                            int dx, int dy) {
-        final int state = sg2d.transformState;
-        if (state > SunGraphics2D.TRANSFORM_TRANSLATESCALE
-            || sg2d.compositeState >= SunGraphics2D.COMP_XOR) {
-            return false;
-        }
-        if (state <= SunGraphics2D.TRANSFORM_ANY_TRANSLATE) {
-            x += sg2d.transX;
-            y += sg2d.transY;
-        } else if (state == SunGraphics2D.TRANSFORM_TRANSLATESCALE) {
-            final double[] coords = {x, y, x + w, y + h, x + dx, y + dy};
-            sg2d.transform.transform(coords, 0, coords, 0, 3);
-            x = (int) Math.ceil(coords[0] - 0.5);
-            y = (int) Math.ceil(coords[1] - 0.5);
-            w = ((int) Math.ceil(coords[2] - 0.5)) - x;
-            h = ((int) Math.ceil(coords[3] - 0.5)) - y;
-            dx = ((int) Math.ceil(coords[4] - 0.5)) - x;
-            dy = ((int) Math.ceil(coords[5] - 0.5)) - y;
-        }
-        oglRenderPipe.copyArea(sg2d, x, y, w, h, dx, dy);
-        return true;
+    public double getDefaultScaleY() {
+        return scale;
     }
 
     protected native void clearWindow();
@@ -365,7 +345,7 @@ public abstract class CGLSurfaceData extends OGLSurfaceData {
     // Mac OS X specific APIs for JOGL/Java2D bridge...
 
     // given a surface create and attach GL context, then return it
-    private native static long createCGLContextOnSurface(CGLSurfaceData sd,
+    private static native long createCGLContextOnSurface(CGLSurfaceData sd,
             long sharedContext);
 
     public static long createOGLContextOnSurface(Graphics g, long sharedContext) {
@@ -379,7 +359,7 @@ public abstract class CGLSurfaceData extends OGLSurfaceData {
     }
 
     // returns whether or not the makeCurrent operation succeeded
-    native static boolean makeCGLContextCurrentOnSurface(CGLSurfaceData sd,
+    static native boolean makeCGLContextCurrentOnSurface(CGLSurfaceData sd,
             long ctx);
 
     public static boolean makeOGLContextCurrentOnSurface(Graphics g, long ctx) {
@@ -393,7 +373,7 @@ public abstract class CGLSurfaceData extends OGLSurfaceData {
     }
 
     // additional cleanup
-    private native static void destroyCGLContext(long ctx);
+    private static native void destroyCGLContext(long ctx);
 
     public static void destroyOGLContext(long ctx) {
         if (ctx != 0L) {

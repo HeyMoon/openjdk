@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012, 2015 SAP AG. All rights reserved.
+ * Copyright (c) 2002, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2017 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -119,11 +119,8 @@ class MacroAssembler: public Assembler {
 
   // Emits an oop const to the constant pool, loads the constant, and
   // sets a relocation info with address current_pc.
-  void load_const_from_method_toc(Register dst, AddressLiteral& a, Register toc);
-  void load_toc_from_toc(Register dst, AddressLiteral& a, Register toc) {
-    assert(dst == R2_TOC, "base register must be TOC");
-    load_const_from_method_toc(dst, a, toc);
-  }
+  // Returns true if successful.
+  bool load_const_from_method_toc(Register dst, AddressLiteral& a, Register toc, bool fixed_size = false);
 
   static bool is_load_const_from_method_toc_at(address a);
   static int get_offset_of_load_const_from_method_toc_at(address a);
@@ -174,6 +171,7 @@ class MacroAssembler: public Assembler {
   // optimize: flag for telling the conditional far branch to optimize
   //           itself when relocated.
   void bc_far(int boint, int biint, Label& dest, int optimize);
+  void bc_far_optimized(int boint, int biint, Label& dest); // 1 or 2 instructions
   // Relocation of conditional far branches.
   static bool    is_bc_far_at(address instruction_addr);
   static address get_dest_of_bc_far_at(address instruction_addr);
@@ -262,6 +260,7 @@ class MacroAssembler: public Assembler {
   // some ABI-related functions
   void save_nonvolatile_gprs(   Register dst_base, int offset);
   void restore_nonvolatile_gprs(Register src_base, int offset);
+  enum { num_volatile_regs = 11 + 14 }; // GPR + FPR
   void save_volatile_gprs(   Register dst_base, int offset);
   void restore_volatile_gprs(Register src_base, int offset);
   void save_LR_CR(   Register tmp);     // tmp contains LR on return.
@@ -412,6 +411,10 @@ class MacroAssembler: public Assembler {
   // stdux, return the banged address. Otherwise, return 0.
   static address get_stack_bang_address(int instruction, void* ucontext);
 
+  // Check for reserved stack access in method being exited. If the reserved
+  // stack area was accessed, protect it again and throw StackOverflowError.
+  void reserved_stack_check(Register return_pc);
+
   // Atomics
   // CmpxchgX sets condition register to cmpX(current, compare).
   // (flag == ne) => (dest_current_value != compare_value), (!swapped)
@@ -428,14 +431,85 @@ class MacroAssembler: public Assembler {
     MemBarAcq  = 2,
     MemBarFenceAfter = 4 // use powers of 2
   };
+ private:
+  // Helper functions for word/sub-word atomics.
+  void atomic_get_and_modify_generic(Register dest_current_value, Register exchange_value,
+                                     Register addr_base, Register tmp1, Register tmp2, Register tmp3,
+                                     bool cmpxchgx_hint, bool is_add, int size);
+  void cmpxchg_loop_body(ConditionRegister flag, Register dest_current_value,
+                         Register compare_value, Register exchange_value,
+                         Register addr_base, Register tmp1, Register tmp2,
+                         Label &retry, Label &failed, bool cmpxchgx_hint, int size);
+  void cmpxchg_generic(ConditionRegister flag,
+                       Register dest_current_value, Register compare_value, Register exchange_value, Register addr_base,
+                       Register tmp1, Register tmp2,
+                       int semantics, bool cmpxchgx_hint, Register int_flag_success, bool contention_hint, bool weak, int size);
+ public:
+  // Temps and addr_base are killed if processor does not support Power 8 instructions.
+  // Result will be sign extended.
+  void getandsetb(Register dest_current_value, Register exchange_value, Register addr_base,
+                  Register tmp1, Register tmp2, Register tmp3, bool cmpxchgx_hint) {
+    atomic_get_and_modify_generic(dest_current_value, exchange_value, addr_base, tmp1, tmp2, tmp3, cmpxchgx_hint, false, 1);
+  }
+  // Temps and addr_base are killed if processor does not support Power 8 instructions.
+  // Result will be sign extended.
+  void getandseth(Register dest_current_value, Register exchange_value, Register addr_base,
+                  Register tmp1, Register tmp2, Register tmp3, bool cmpxchgx_hint) {
+    atomic_get_and_modify_generic(dest_current_value, exchange_value, addr_base, tmp1, tmp2, tmp3, cmpxchgx_hint, false, 2);
+  }
+  void getandsetw(Register dest_current_value, Register exchange_value, Register addr_base,
+                  bool cmpxchgx_hint) {
+    atomic_get_and_modify_generic(dest_current_value, exchange_value, addr_base, noreg, noreg, noreg, cmpxchgx_hint, false, 4);
+  }
+  void getandsetd(Register dest_current_value, Register exchange_value, Register addr_base,
+                  bool cmpxchgx_hint);
+  // tmp2/3 and addr_base are killed if processor does not support Power 8 instructions (tmp1 is always needed).
+  // Result will be sign extended.
+  void getandaddb(Register dest_current_value, Register inc_value, Register addr_base,
+                  Register tmp1, Register tmp2, Register tmp3, bool cmpxchgx_hint) {
+    atomic_get_and_modify_generic(dest_current_value, inc_value, addr_base, tmp1, tmp2, tmp3, cmpxchgx_hint, true, 1);
+  }
+  // tmp2/3 and addr_base are killed if processor does not support Power 8 instructions (tmp1 is always needed).
+  // Result will be sign extended.
+  void getandaddh(Register dest_current_value, Register inc_value, Register addr_base,
+                  Register tmp1, Register tmp2, Register tmp3, bool cmpxchgx_hint) {
+    atomic_get_and_modify_generic(dest_current_value, inc_value, addr_base, tmp1, tmp2, tmp3, cmpxchgx_hint, true, 2);
+  }
+  void getandaddw(Register dest_current_value, Register inc_value, Register addr_base,
+                  Register tmp1, bool cmpxchgx_hint) {
+    atomic_get_and_modify_generic(dest_current_value, inc_value, addr_base, tmp1, noreg, noreg, cmpxchgx_hint, true, 4);
+  }
+  void getandaddd(Register dest_current_value, Register exchange_value, Register addr_base,
+                  Register tmp, bool cmpxchgx_hint);
+  // Temps, addr_base and exchange_value are killed if processor does not support Power 8 instructions.
+  // compare_value must be at least 32 bit sign extended. Result will be sign extended.
+  void cmpxchgb(ConditionRegister flag,
+                Register dest_current_value, Register compare_value, Register exchange_value, Register addr_base,
+                Register tmp1, Register tmp2, int semantics, bool cmpxchgx_hint = false,
+                Register int_flag_success = noreg, bool contention_hint = false, bool weak = false) {
+    cmpxchg_generic(flag, dest_current_value, compare_value, exchange_value, addr_base, tmp1, tmp2,
+                    semantics, cmpxchgx_hint, int_flag_success, contention_hint, weak, 1);
+  }
+  // Temps, addr_base and exchange_value are killed if processor does not support Power 8 instructions.
+  // compare_value must be at least 32 bit sign extended. Result will be sign extended.
+  void cmpxchgh(ConditionRegister flag,
+                Register dest_current_value, Register compare_value, Register exchange_value, Register addr_base,
+                Register tmp1, Register tmp2, int semantics, bool cmpxchgx_hint = false,
+                Register int_flag_success = noreg, bool contention_hint = false, bool weak = false) {
+    cmpxchg_generic(flag, dest_current_value, compare_value, exchange_value, addr_base, tmp1, tmp2,
+                    semantics, cmpxchgx_hint, int_flag_success, contention_hint, weak, 2);
+  }
   void cmpxchgw(ConditionRegister flag,
                 Register dest_current_value, Register compare_value, Register exchange_value, Register addr_base,
                 int semantics, bool cmpxchgx_hint = false,
-                Register int_flag_success = noreg, bool contention_hint = false);
+                Register int_flag_success = noreg, bool contention_hint = false, bool weak = false) {
+    cmpxchg_generic(flag, dest_current_value, compare_value, exchange_value, addr_base, noreg, noreg,
+                    semantics, cmpxchgx_hint, int_flag_success, contention_hint, weak, 4);
+  }
   void cmpxchgd(ConditionRegister flag,
                 Register dest_current_value, RegisterOrConstant compare_value, Register exchange_value,
                 Register addr_base, int semantics, bool cmpxchgx_hint = false,
-                Register int_flag_success = noreg, Label* failed = NULL, bool contention_hint = false);
+                Register int_flag_success = noreg, Label* failed = NULL, bool contention_hint = false, bool weak = false);
 
   // interface method calling
   void lookup_interface_method(Register recv_klass,
@@ -461,8 +535,10 @@ class MacroAssembler: public Assembler {
                                      Register super_klass,
                                      Register temp1_reg,
                                      Register temp2_reg,
-                                     Label& L_success,
-                                     Label& L_failure);
+                                     Label* L_success,
+                                     Label* L_failure,
+                                     Label* L_slow_path = NULL, // default fall through
+                                     RegisterOrConstant super_check_offset = RegisterOrConstant(-1));
 
   // The rest of the type check; must be wired to a corresponding fast path.
   // It does not repeat the fast path logic, so don't use it standalone.
@@ -507,6 +583,28 @@ class MacroAssembler: public Assembler {
   // biased locking exit case failed.
   void biased_locking_exit(ConditionRegister cr_reg, Register mark_addr, Register temp_reg, Label& done);
 
+  // allocation (for C1)
+  void eden_allocate(
+    Register obj,                      // result: pointer to object after successful allocation
+    Register var_size_in_bytes,        // object size in bytes if unknown at compile time; invalid otherwise
+    int      con_size_in_bytes,        // object size in bytes if   known at compile time
+    Register t1,                       // temp register
+    Register t2,                       // temp register
+    Label&   slow_case                 // continuation point if fast allocation fails
+  );
+  void tlab_allocate(
+    Register obj,                      // result: pointer to object after successful allocation
+    Register var_size_in_bytes,        // object size in bytes if unknown at compile time; invalid otherwise
+    int      con_size_in_bytes,        // object size in bytes if   known at compile time
+    Register t1,                       // temp register
+    Label&   slow_case                 // continuation point if fast allocation fails
+  );
+  void tlab_refill(Label& retry_tlab, Label& try_eden, Label& slow_case);
+  void incr_allocated_bytes(RegisterOrConstant size_in_bytes, Register t1, Register t2);
+
+  enum { trampoline_stub_size = 6 * 4 };
+  address emit_trampoline_stub(int destination_toc_offset, int insts_call_instruction_offset, Register Rtoc = noreg);
+
   void atomic_inc_ptr(Register addr, Register result, int simm16 = 1);
   void atomic_ori_int(Register addr, Register result, int uimm16);
 
@@ -550,6 +648,8 @@ class MacroAssembler: public Assembler {
   // GC barrier support.
   void card_write_barrier_post(Register Rstore_addr, Register Rnew_val, Register Rtmp);
   void card_table_write(jbyte* byte_map_base, Register Rtmp, Register Robj);
+
+  void resolve_jobject(Register value, Register tmp1, Register tmp2, bool needs_frame);
 
 #if INCLUDE_ALL_GCS
   // General G1 pre-barrier generator.
@@ -597,9 +697,7 @@ class MacroAssembler: public Assembler {
 
   // Implicit or explicit null check, jumps to static address exception_entry.
   inline void null_check_throw(Register a, int offset, Register temp_reg, address exception_entry);
-
-  // Check accessed object for null. Use SIGTRAP-based null checks on AIX.
-  inline void load_with_trap_null_check(Register d, int si16, Register s1);
+  inline void null_check(Register a, int offset, Label *Lis_null); // implicit only if Lis_null not provided
 
   // Load heap oop and decompress. Loaded oop may not be null.
   // Specify tmp to save one cycle.
@@ -619,19 +717,19 @@ class MacroAssembler: public Assembler {
   inline Register decode_heap_oop_not_null(Register d, Register src = noreg);
 
   // Null allowed.
+  inline Register encode_heap_oop(Register d, Register src); // Prefer null check in GC barrier!
   inline void decode_heap_oop(Register d);
 
   // Load/Store klass oop from klass field. Compress.
   void load_klass(Register dst, Register src);
-  void load_klass_with_trap_null_check(Register dst, Register src);
   void store_klass(Register dst_oop, Register klass, Register tmp = R0);
   void store_klass_gap(Register dst_oop, Register val = noreg); // Will store 0 if val not specified.
+
+  void load_mirror_from_const_method(Register mirror, Register const_method);
+
   static int instr_size_for_decode_klass_not_null();
   void decode_klass_not_null(Register dst, Register src = noreg);
   Register encode_klass_not_null(Register dst, Register src = noreg);
-
-  // Load common heap base into register.
-  void reinit_heapbase(Register d, Register tmp = noreg);
 
   // SIGTRAP-based range checks for arrays.
   inline void trap_range_check_l(Register a, Register b);
@@ -659,23 +757,95 @@ class MacroAssembler: public Assembler {
            is_trap_range_check_g(x) || is_trap_range_check_ge(x);
   }
 
-  void clear_memory_doubleword(Register base_ptr, Register cnt_dwords, Register tmp = R0);
+  void clear_memory_unrolled(Register base_ptr, int cnt_dwords, Register tmp = R0, int offset = 0);
+  void clear_memory_constlen(Register base_ptr, int cnt_dwords, Register tmp = R0);
+  void clear_memory_doubleword(Register base_ptr, Register cnt_dwords, Register tmp = R0, long const_cnt = -1);
 
-  // Needle of length 1.
-  void string_indexof_1(Register result, Register haystack, Register haycnt,
-                        Register needle, jchar needleChar,
-                        Register tmp1, Register tmp2);
-  // General indexof, eventually with constant needle length.
+#ifdef COMPILER2
+  // Intrinsics for CompactStrings
+  // Compress char[] to byte[] by compressing 16 bytes at once.
+  void string_compress_16(Register src, Register dst, Register cnt,
+                          Register tmp1, Register tmp2, Register tmp3, Register tmp4, Register tmp5,
+                          Label& Lfailure);
+
+  // Compress char[] to byte[]. cnt must be positive int.
+  void string_compress(Register src, Register dst, Register cnt, Register tmp, Label& Lfailure);
+
+  // Inflate byte[] to char[] by inflating 16 bytes at once.
+  void string_inflate_16(Register src, Register dst, Register cnt,
+                         Register tmp1, Register tmp2, Register tmp3, Register tmp4, Register tmp5);
+
+  // Inflate byte[] to char[]. cnt must be positive int.
+  void string_inflate(Register src, Register dst, Register cnt, Register tmp);
+
+  void string_compare(Register str1, Register str2, Register cnt1, Register cnt2,
+                      Register tmp1, Register result, int ae);
+
+  void array_equals(bool is_array_equ, Register ary1, Register ary2,
+                    Register limit, Register tmp1, Register result, bool is_byte);
+
   void string_indexof(Register result, Register haystack, Register haycnt,
                       Register needle, ciTypeArray* needle_values, Register needlecnt, int needlecntval,
-                      Register tmp1, Register tmp2, Register tmp3, Register tmp4);
-  void string_compare(Register str1_reg, Register str2_reg, Register cnt1_reg, Register cnt2_reg,
-                      Register result_reg, Register tmp_reg);
-  void char_arrays_equals(Register str1_reg, Register str2_reg, Register cnt_reg, Register result_reg,
-                          Register tmp1_reg, Register tmp2_reg, Register tmp3_reg, Register tmp4_reg,
-                          Register tmp5_reg);
-  void char_arrays_equalsImm(Register str1_reg, Register str2_reg, int cntval, Register result_reg,
-                             Register tmp1_reg, Register tmp2_reg);
+                      Register tmp1, Register tmp2, Register tmp3, Register tmp4, int ae);
+
+  void string_indexof_char(Register result, Register haystack, Register haycnt,
+                           Register needle, jchar needleChar, Register tmp1, Register tmp2, bool is_byte);
+
+  void has_negatives(Register src, Register cnt, Register result, Register tmp1, Register tmp2);
+#endif
+
+  // Emitters for BigInteger.multiplyToLen intrinsic.
+  inline void multiply64(Register dest_hi, Register dest_lo,
+                         Register x, Register y);
+  void add2_with_carry(Register dest_hi, Register dest_lo,
+                       Register src1, Register src2);
+  void multiply_64_x_64_loop(Register x, Register xstart, Register x_xstart,
+                             Register y, Register y_idx, Register z,
+                             Register carry, Register product_high, Register product,
+                             Register idx, Register kdx, Register tmp);
+  void multiply_add_128_x_128(Register x_xstart, Register y, Register z,
+                              Register yz_idx, Register idx, Register carry,
+                              Register product_high, Register product, Register tmp,
+                              int offset);
+  void multiply_128_x_128_loop(Register x_xstart,
+                               Register y, Register z,
+                               Register yz_idx, Register idx, Register carry,
+                               Register product_high, Register product,
+                               Register carry2, Register tmp);
+  void multiply_to_len(Register x, Register xlen,
+                       Register y, Register ylen,
+                       Register z, Register zlen,
+                       Register tmp1, Register tmp2, Register tmp3, Register tmp4, Register tmp5,
+                       Register tmp6, Register tmp7, Register tmp8, Register tmp9, Register tmp10,
+                       Register tmp11, Register tmp12, Register tmp13);
+
+  // CRC32 Intrinsics.
+  void load_reverse_32(Register dst, Register src);
+  int  crc32_table_columns(Register table, Register tc0, Register tc1, Register tc2, Register tc3);
+  void fold_byte_crc32(Register crc, Register val, Register table, Register tmp);
+  void fold_8bit_crc32(Register crc, Register table, Register tmp);
+  void update_byte_crc32(Register crc, Register val, Register table);
+  void update_byteLoop_crc32(Register crc, Register buf, Register len, Register table,
+                             Register data, bool loopAlignment, bool invertCRC);
+  void update_1word_crc32(Register crc, Register buf, Register table, int bufDisp, int bufInc,
+                          Register t0,  Register t1,  Register t2,  Register t3,
+                          Register tc0, Register tc1, Register tc2, Register tc3);
+  void kernel_crc32_2word(Register crc, Register buf, Register len, Register table,
+                          Register t0,  Register t1,  Register t2,  Register t3,
+                          Register tc0, Register tc1, Register tc2, Register tc3);
+  void kernel_crc32_1word(Register crc, Register buf, Register len, Register table,
+                          Register t0,  Register t1,  Register t2,  Register t3,
+                          Register tc0, Register tc1, Register tc2, Register tc3);
+  void kernel_crc32_1byte(Register crc, Register buf, Register len, Register table,
+                          Register t0,  Register t1,  Register t2,  Register t3);
+  void kernel_crc32_1word_vpmsumd(Register crc, Register buf, Register len, Register table,
+                          Register constants, Register barretConstants,
+                          Register t0,  Register t1, Register t2, Register t3, Register t4);
+  void kernel_crc32_1word_aligned(Register crc, Register buf, Register len,
+                          Register constants, Register barretConstants,
+                          Register t0, Register t1, Register t2);
+
+  void kernel_crc32_singleByte(Register crc, Register buf, Register len, Register table, Register tmp);
 
   //
   // Debugging
@@ -704,6 +874,7 @@ class MacroAssembler: public Assembler {
 
   // Emit code to verify that reg contains a valid oop if +VerifyOops is set.
   void verify_oop(Register reg, const char* s = "broken oop");
+  void verify_oop_addr(RegisterOrConstant offs, Register base, const char* s = "contains broken oop");
 
   // TODO: verify method and klass metadata (compare against vptr?)
   void _verify_method_ptr(Register reg, const char * msg, const char * file, int line) {}

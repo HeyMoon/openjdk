@@ -34,27 +34,46 @@
 /*
  * @test
  * @bug 4486658 6785442
- * @run main ConcurrentQueueLoops 8 123456
  * @summary Checks that a set of threads can repeatedly get and modify items
+ * @library /lib/testlibrary/
+ * @run main ConcurrentQueueLoops 8 123456
  */
 
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.LinkedTransferQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import jdk.testlibrary.Utils;
 
 public class ConcurrentQueueLoops {
+    static final long LONG_DELAY_MS = Utils.adjustTimeout(10_000);
     ExecutorService pool;
     AtomicInteger totalItems;
     boolean print;
 
-    // Suitable for benchmarking.  Overriden by args[0] for testing.
+    // Suitable for benchmarking.  Overridden by args[0] for testing.
     int maxStages = 20;
 
-    // Suitable for benchmarking.  Overriden by args[1] for testing.
+    // Suitable for benchmarking.  Overridden by args[1] for testing.
     int items = 1024 * 1024;
 
     Collection<Queue<Integer>> concurrentQueues() {
-        List<Queue<Integer>> queues = new ArrayList<Queue<Integer>>();
+        List<Queue<Integer>> queues = new ArrayList<>();
         queues.add(new ConcurrentLinkedDeque<Integer>());
         queues.add(new ConcurrentLinkedQueue<Integer>());
         queues.add(new ArrayBlockingQueue<Integer>(items, false));
@@ -90,16 +109,14 @@ public class ConcurrentQueueLoops {
         print = false;
         System.out.println("Warmup...");
         oneRun(1, items, q);
-        //Thread.sleep(100);
         oneRun(3, items, q);
-        Thread.sleep(100);
         print = true;
 
         for (int i = 1; i <= maxStages; i += (i+1) >>> 1) {
             oneRun(i, items, q);
         }
         pool.shutdown();
-        check(pool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS));
+        check(pool.awaitTermination(LONG_DELAY_MS, MILLISECONDS));
    }
 
     class Stage implements Callable<Integer> {
@@ -149,7 +166,7 @@ public class ConcurrentQueueLoops {
         LoopHelpers.BarrierTimer timer = new LoopHelpers.BarrierTimer();
         CyclicBarrier barrier = new CyclicBarrier(n + 1, timer);
         totalItems = new AtomicInteger(n * items);
-        ArrayList<Future<Integer>> results = new ArrayList<Future<Integer>>(n);
+        ArrayList<Future<Integer>> results = new ArrayList<>(n);
         for (int i = 0; i < n; ++i)
             results.add(pool.submit(new Stage(q, barrier, items)));
 

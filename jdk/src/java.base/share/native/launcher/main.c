@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,6 +31,7 @@
  */
 
 #include "defines.h"
+#include "jli_util.h"
 
 #ifdef _MSC_VER
 #if _MSC_VER > 1400 && _MSC_VER < 1600
@@ -96,6 +97,9 @@ main(int argc, char **argv)
     char** margv;
     const jboolean const_javaw = JNI_FALSE;
 #endif /* JAVAW */
+
+    JLI_InitArgProcessing(!HAS_JAVA_ARGS, const_disable_argfile);
+
 #ifdef _WIN32
     {
         int i = 0;
@@ -119,16 +123,53 @@ main(int argc, char **argv)
         margv[i] = NULL;
     }
 #else /* *NIXES */
-    margc = argc;
-    margv = argv;
+    {
+        // accommodate the NULL at the end
+        JLI_List args = JLI_List_new(argc + 1);
+        int i = 0;
+
+        // Add first arg, which is the app name
+        JLI_List_add(args, JLI_StringDup(argv[0]));
+        // Append JDK_JAVA_OPTIONS
+        if (JLI_AddArgsFromEnvVar(args, JDK_JAVA_OPTIONS)) {
+            // JLI_SetTraceLauncher is not called yet
+            // Show _JAVA_OPTIONS content along with JDK_JAVA_OPTIONS to aid diagnosis
+            if (getenv(JLDEBUG_ENV_ENTRY)) {
+                char *tmp = getenv("_JAVA_OPTIONS");
+                if (NULL != tmp) {
+                    JLI_ReportMessage(ARG_INFO_ENVVAR, "_JAVA_OPTIONS", tmp);
+                }
+            }
+        }
+        // Iterate the rest of command line
+        for (i = 1; i < argc; i++) {
+            JLI_List argsInFile = JLI_PreprocessArg(argv[i]);
+            if (NULL == argsInFile) {
+                JLI_List_add(args, JLI_StringDup(argv[i]));
+            } else {
+                int cnt, idx;
+                cnt = argsInFile->size;
+                for (idx = 0; idx < cnt; idx++) {
+                    JLI_List_add(args, argsInFile->elements[idx]);
+                }
+                // Shallow free, we reuse the string to avoid copy
+                JLI_MemFree(argsInFile->elements);
+                JLI_MemFree(argsInFile);
+            }
+        }
+        margc = args->size;
+        // add the NULL pointer at argv[argc]
+        JLI_List_add(args, NULL);
+        margv = args->elements;
+    }
 #endif /* WIN32 */
     return JLI_Launch(margc, margv,
                    sizeof(const_jargs) / sizeof(char *), const_jargs,
-                   sizeof(const_appclasspath) / sizeof(char *), const_appclasspath,
-                   FULL_VERSION,
+                   0, NULL,
+                   VERSION_STRING,
                    DOT_VERSION,
                    (const_progname != NULL) ? const_progname : *margv,
                    (const_launcher != NULL) ? const_launcher : *margv,
                    HAS_JAVA_ARGS,
-                   const_cpwildcard, const_javaw, const_ergo_class);
+                   const_cpwildcard, const_javaw, 0);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -96,7 +96,7 @@ static void save_memory_to_file(char* addr, size_t size) {
   if (fd == OS_ERR) {
     if (PrintMiscellaneous && Verbose) {
       warning("Could not create Perfdata save file: %s: %s\n",
-              destfile, strerror(errno));
+              destfile, os::strerror(errno));
     }
   } else {
     for (size_t remaining = size; remaining > 0;) {
@@ -105,7 +105,7 @@ static void save_memory_to_file(char* addr, size_t size) {
       if (nbytes == OS_ERR) {
         if (PrintMiscellaneous && Verbose) {
           warning("Could not write Perfdata save file: %s: %s\n",
-                  destfile, strerror(errno));
+                  destfile, os::strerror(errno));
         }
         break;
       }
@@ -117,7 +117,7 @@ static void save_memory_to_file(char* addr, size_t size) {
     int result = ::_close(fd);
     if (PrintMiscellaneous && Verbose) {
       if (result == OS_ERR) {
-        warning("Could not close %s: %s\n", destfile, strerror(errno));
+        warning("Could not close %s: %s\n", destfile, os::strerror(errno));
       }
     }
   }
@@ -497,7 +497,7 @@ static void remove_file(const char* dirname, const char* filename) {
     if (PrintMiscellaneous && Verbose) {
       if (errno != ENOENT) {
         warning("Could not unlink shared memory backing"
-                " store file %s : %s\n", path, strerror(errno));
+                " store file %s : %s\n", path, os::strerror(errno));
       }
     }
   }
@@ -628,6 +628,7 @@ static void cleanup_sharedmem_resources(const char* dirname) {
 
   if (!is_directory_secure(dirname)) {
     // the directory is not secure, don't attempt any cleanup
+    os::closedir(dirp);
     return;
   }
 
@@ -1308,25 +1309,21 @@ static HANDLE create_sharedmem_resources(const char* dirname, const char* filena
   // the file. This is important as the apis do not allow a terminating
   // JVM being monitored by another process to remove the file name.
   //
-  // the FILE_SHARE_DELETE share mode is valid only in winnt
-  //
   fh = CreateFile(
-             filename,                   /* LPCTSTR file name */
+             filename,                          /* LPCTSTR file name */
 
-             GENERIC_READ|GENERIC_WRITE, /* DWORD desired access */
+             GENERIC_READ|GENERIC_WRITE,        /* DWORD desired access */
+             FILE_SHARE_DELETE|FILE_SHARE_READ, /* DWORD share mode, future READONLY
+                                                 * open operations allowed
+                                                 */
+             lpFileSA,                          /* LPSECURITY security attributes */
+             CREATE_ALWAYS,                     /* DWORD creation disposition
+                                                 * create file, if it already
+                                                 * exists, overwrite it.
+                                                 */
+             FILE_FLAG_DELETE_ON_CLOSE,         /* DWORD flags and attributes */
 
-             (os::win32::is_nt() ? FILE_SHARE_DELETE : 0)|
-             FILE_SHARE_READ,            /* DWORD share mode, future READONLY
-                                          * open operations allowed
-                                          */
-             lpFileSA,                   /* LPSECURITY security attributes */
-             CREATE_ALWAYS,              /* DWORD creation disposition
-                                          * create file, if it already
-                                          * exists, overwrite it.
-                                          */
-             FILE_FLAG_DELETE_ON_CLOSE,  /* DWORD flags and attributes */
-
-             NULL);                      /* HANDLE template file access */
+             NULL);                             /* HANDLE template file access */
 
   free_security_attr(lpFileSA);
 
@@ -1361,7 +1358,7 @@ static HANDLE create_sharedmem_resources(const char* dirname, const char* filena
     if (ret_code == OS_ERR) {
       if (PrintMiscellaneous && Verbose) {
         warning("Could not get status information from file %s: %s\n",
-            filename, strerror(errno));
+            filename, os::strerror(errno));
       }
       CloseHandle(fmh);
       CloseHandle(fh);
@@ -1407,12 +1404,14 @@ static HANDLE open_sharedmem_object(const char* objectname, DWORD ofm_access, TR
                objectname);      /* name for object */
 
   if (fmh == NULL) {
+    DWORD lasterror = GetLastError();
     if (PrintMiscellaneous && Verbose) {
       warning("OpenFileMapping failed for shared memory object %s:"
-              " lasterror = %d\n", objectname, GetLastError());
+              " lasterror = %d\n", objectname, lasterror);
     }
-    THROW_MSG_(vmSymbols::java_lang_Exception(),
-               "Could not open PerfMemory", INVALID_HANDLE_VALUE);
+    THROW_MSG_(vmSymbols::java_lang_IllegalArgumentException(),
+               err_msg("Could not open PerfMemory, error %d", lasterror),
+               INVALID_HANDLE_VALUE);
   }
 
   return fmh;;
@@ -1449,6 +1448,8 @@ static char* mapping_create_shared(size_t size) {
 
   // check that the file system is secure - i.e. it supports ACLs.
   if (!is_filesystem_secure(dirname)) {
+    FREE_C_HEAP_ARRAY(char, dirname);
+    FREE_C_HEAP_ARRAY(char, user);
     return NULL;
   }
 
@@ -1554,7 +1555,7 @@ static size_t sharedmem_filesize(const char* filename, TRAPS) {
   //
   if (::stat(filename, &statbuf) == OS_ERR) {
     if (PrintMiscellaneous && Verbose) {
-      warning("stat %s failed: %s\n", filename, strerror(errno));
+      warning("stat %s failed: %s\n", filename, os::strerror(errno));
     }
     THROW_MSG_0(vmSymbols::java_io_IOException(),
                 "Could not determine PerfMemory size");
@@ -1628,6 +1629,7 @@ static void open_file_mapping(const char* user, int vmid,
   //
   if (!is_directory_secure(dirname)) {
     FREE_C_HEAP_ARRAY(char, dirname);
+    if (luser != user) FREE_C_HEAP_ARRAY(char, luser);
     THROW_MSG(vmSymbols::java_lang_IllegalArgumentException(),
               "Process not found");
   }
@@ -1734,7 +1736,7 @@ void delete_shared_memory(char* addr, size_t size) {
 //
 void PerfMemory::create_memory_region(size_t size) {
 
-  if (PerfDisableSharedMem || !os::win32::is_nt()) {
+  if (PerfDisableSharedMem) {
     // do not share the memory for the performance data.
     PerfDisableSharedMem = true;
     _start = create_standard_memory(size);

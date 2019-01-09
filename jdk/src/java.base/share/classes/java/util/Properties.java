@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,13 @@ import java.io.Reader;
 import java.io.Writer;
 import java.io.OutputStreamWriter;
 import java.io.BufferedWriter;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.StreamCorruptedException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 import jdk.internal.util.xml.PropertiesDefaultHandler;
 
@@ -60,12 +67,19 @@ import jdk.internal.util.xml.PropertiesDefaultHandler;
  * object that contains a non-{@code String} key.
  *
  * <p>
- * The {@link #load(java.io.Reader) load(Reader)} <tt>/</tt>
+ * The iterators returned by the {@code iterator} method of this class's
+ * "collection views" (that is, {@code entrySet()}, {@code keySet()}, and
+ * {@code values()}) may not fail-fast (unlike the Hashtable implementation).
+ * These iterators are guaranteed to traverse elements as they existed upon
+ * construction exactly once, and may (but are not guaranteed to) reflect any
+ * modifications subsequent to construction.
+ * <p>
+ * The {@link #load(java.io.Reader) load(Reader)} {@code /}
  * {@link #store(java.io.Writer, java.lang.String) store(Writer, String)}
  * methods load and store properties from and to a character based stream
  * in a simple line-oriented format specified below.
  *
- * The {@link #load(java.io.InputStream) load(InputStream)} <tt>/</tt>
+ * The {@link #load(java.io.InputStream) load(InputStream)} {@code /}
  * {@link #store(java.io.OutputStream, java.lang.String) store(OutputStream, String)}
  * methods work the same way as the load(Reader)/store(Writer, String) pair, except
  * the input/output stream is encoded in ISO 8859-1 character encoding.
@@ -105,7 +119,7 @@ import jdk.internal.util.xml.PropertiesDefaultHandler;
  * </pre>
  *
  * <p>This class is thread-safe: multiple threads can share a single
- * <tt>Properties</tt> object without the need for external synchronization.
+ * {@code Properties} object without the need for external synchronization.
  *
  * @author  Arthur van Hoff
  * @author  Michael McCloskey
@@ -128,6 +142,15 @@ class Properties extends Hashtable<Object,Object> {
     protected Properties defaults;
 
     /**
+     * Properties does not store values in its inherited Hashtable, but instead
+     * in an internal ConcurrentHashMap.  Synchronization is omitted from
+     * simple read operations.  Writes and bulk operations remain synchronized,
+     * as in Hashtable.
+     */
+    private transient ConcurrentHashMap<Object, Object> map =
+            new ConcurrentHashMap<>(8);
+
+    /**
      * Creates an empty property list with no default values.
      */
     public Properties() {
@@ -140,17 +163,20 @@ class Properties extends Hashtable<Object,Object> {
      * @param   defaults   the defaults.
      */
     public Properties(Properties defaults) {
+        // use package-private constructor to
+        // initialize unused fields with dummy values
+        super((Void) null);
         this.defaults = defaults;
     }
 
     /**
-     * Calls the <tt>Hashtable</tt> method {@code put}. Provided for
-     * parallelism with the <tt>getProperty</tt> method. Enforces use of
+     * Calls the {@code Hashtable} method {@code put}. Provided for
+     * parallelism with the {@code getProperty} method. Enforces use of
      * strings for property keys and values. The value returned is the
-     * result of the <tt>Hashtable</tt> call to {@code put}.
+     * result of the {@code Hashtable} call to {@code put}.
      *
      * @param key the key to be placed into this property list.
-     * @param value the value corresponding to <tt>key</tt>.
+     * @param value the value corresponding to {@code key}.
      * @return     the previous value of the specified key in this property
      *             list, or {@code null} if it did not have one.
      * @see #getProperty
@@ -264,7 +290,7 @@ class Properties extends Hashtable<Object,Object> {
      * specifies that the key is {@code "cheeses"} and the associated
      * element is the empty string {@code ""}.
      * <p>
-     * <a name="unicodeescapes"></a>
+     * <a id="unicodeescapes"></a>
      * Characters in keys and elements can be represented in escape
      * sequences similar to those used for character and string literals
      * (see sections 3.3 and 3.10.6 of
@@ -445,7 +471,7 @@ class Properties extends Hashtable<Object,Object> {
                 if (inStream != null) {
                     //The line below is equivalent to calling a
                     //ISO8859-1 decoder.
-                    c = (char) (0xff & inByteBuf[inOff++]);
+                    c = (char)(inByteBuf[inOff++] & 0xFF);
                 } else {
                     c = inCharBuf[inOff++];
                 }
@@ -468,8 +494,25 @@ class Properties extends Hashtable<Object,Object> {
                 if (isNewLine) {
                     isNewLine = false;
                     if (c == '#' || c == '!') {
+                        // Comment, quickly consume the rest of the line,
+                        // resume on line-break and backslash.
+                        if (inStream != null) {
+                            while (inOff < inLimit) {
+                                byte b = inByteBuf[inOff++];
+                                if (b == '\n' || b == '\r' || b == '\\') {
+                                    c = (char)(b & 0xFF);
+                                    break;
+                                }
+                            }
+                        } else {
+                            while (inOff < inLimit) {
+                                c = inCharBuf[inOff++];
+                                if (c == '\n' || c == '\r' || c == '\\') {
+                                    break;
+                                }
+                            }
+                        }
                         isCommentLine = true;
-                        continue;
                     }
                 }
 
@@ -756,7 +799,7 @@ class Properties extends Hashtable<Object,Object> {
      * @param   writer      an output character stream writer.
      * @param   comments   a description of the property list.
      * @exception  IOException if writing this property list to the specified
-     *             output stream throws an <tt>IOException</tt>.
+     *             output stream throws an {@code IOException}.
      * @exception  ClassCastException  if this {@code Properties} object
      *             contains any keys or values that are not {@code Strings}.
      * @exception  NullPointerException  if {@code writer} is null.
@@ -803,7 +846,7 @@ class Properties extends Hashtable<Object,Object> {
      * @param   out      an output stream.
      * @param   comments   a description of the property list.
      * @exception  IOException if writing this property list to the specified
-     *             output stream throws an <tt>IOException</tt>.
+     *             output stream throws an {@code IOException}.
      * @exception  ClassCastException  if this {@code Properties} object
      *             contains any keys or values that are not {@code Strings}.
      * @exception  NullPointerException  if {@code out} is null.
@@ -826,9 +869,9 @@ class Properties extends Hashtable<Object,Object> {
         bw.write("#" + new Date().toString());
         bw.newLine();
         synchronized (this) {
-            for (Enumeration<?> e = keys(); e.hasMoreElements();) {
-                String key = (String)e.nextElement();
-                String val = (String)get(key);
+            for (Map.Entry<Object, Object> e : entrySet()) {
+                String key = (String)e.getKey();
+                String val = (String)e.getValue();
                 key = saveConvert(key, true, escUnicode);
                 /* No need to escape embedded and trailing spaces for value, hence
                  * pass false to flag.
@@ -860,7 +903,7 @@ class Properties extends Hashtable<Object,Object> {
      *
      * @param in the input stream from which to read the XML document.
      * @throws IOException if reading from the specified input stream
-     *         results in an <tt>IOException</tt>.
+     *         results in an {@code IOException}.
      * @throws java.io.UnsupportedEncodingException if the document's encoding
      *         declaration can be read and it specifies an encoding that is not
      *         supported
@@ -885,15 +928,15 @@ class Properties extends Hashtable<Object,Object> {
      * Emits an XML document representing all of the properties contained
      * in this table.
      *
-     * <p> An invocation of this method of the form <tt>props.storeToXML(os,
-     * comment)</tt> behaves in exactly the same way as the invocation
-     * <tt>props.storeToXML(os, comment, "UTF-8");</tt>.
+     * <p> An invocation of this method of the form {@code props.storeToXML(os,
+     * comment)} behaves in exactly the same way as the invocation
+     * {@code props.storeToXML(os, comment, "UTF-8");}.
      *
      * @param os the output stream on which to emit the XML document.
      * @param comment a description of the property list, or {@code null}
      *        if no comment is desired.
      * @throws IOException if writing to the specified output stream
-     *         results in an <tt>IOException</tt>.
+     *         results in an {@code IOException}.
      * @throws NullPointerException if {@code os} is null.
      * @throws ClassCastException  if this {@code Properties} object
      *         contains any keys or values that are not
@@ -933,7 +976,7 @@ class Properties extends Hashtable<Object,Object> {
      *                  character encoding</a>
      *
      * @throws IOException if writing to the specified output stream
-     *         results in an <tt>IOException</tt>.
+     *         results in an {@code IOException}.
      * @throws java.io.UnsupportedEncodingException if the encoding is not
      *         supported by the implementation.
      * @throws NullPointerException if {@code os} is {@code null},
@@ -967,7 +1010,7 @@ class Properties extends Hashtable<Object,Object> {
      * @see     #defaults
      */
     public String getProperty(String key) {
-        Object oval = super.get(key);
+        Object oval = map.get(key);
         String sval = (oval instanceof String) ? (String)oval : null;
         return ((sval == null) && (defaults != null)) ? defaults.getProperty(key) : sval;
     }
@@ -1011,27 +1054,27 @@ class Properties extends Hashtable<Object,Object> {
     }
 
     /**
-     * Returns a set of keys in this property list where
-     * the key and its corresponding value are strings,
+     * Returns an unmodifiable set of keys from this property list
+     * where the key and its corresponding value are strings,
      * including distinct keys in the default property list if a key
      * of the same name has not already been found from the main
      * properties list.  Properties whose key or value is not
-     * of type <tt>String</tt> are omitted.
+     * of type {@code String} are omitted.
      * <p>
-     * The returned set is not backed by the <tt>Properties</tt> object.
-     * Changes to this <tt>Properties</tt> are not reflected in the set,
-     * or vice versa.
+     * The returned set is not backed by this {@code Properties} object.
+     * Changes to this {@code Properties} object are not reflected in the
+     * returned set.
      *
-     * @return  a set of keys in this property list where
+     * @return  an unmodifiable set of keys in this property list where
      *          the key and its corresponding value are strings,
      *          including the keys in the default property list.
      * @see     java.util.Properties#defaults
      * @since   1.6
      */
     public Set<String> stringPropertyNames() {
-        Hashtable<String, String> h = new Hashtable<>();
+        Map<String, String> h = new HashMap<>();
         enumerateStringProperties(h);
-        return h.keySet();
+        return Collections.unmodifiableSet(h.keySet());
     }
 
     /**
@@ -1044,11 +1087,11 @@ class Properties extends Hashtable<Object,Object> {
      */
     public void list(PrintStream out) {
         out.println("-- listing properties --");
-        Hashtable<String,Object> h = new Hashtable<>();
+        Map<String, Object> h = new HashMap<>();
         enumerate(h);
-        for (Enumeration<String> e = h.keys() ; e.hasMoreElements() ;) {
-            String key = e.nextElement();
-            String val = (String)h.get(key);
+        for (Map.Entry<String, Object> e : h.entrySet()) {
+            String key = e.getKey();
+            String val = (String)e.getValue();
             if (val.length() > 40) {
                 val = val.substring(0, 37) + "...";
             }
@@ -1072,11 +1115,11 @@ class Properties extends Hashtable<Object,Object> {
      */
     public void list(PrintWriter out) {
         out.println("-- listing properties --");
-        Hashtable<String,Object> h = new Hashtable<>();
+        Map<String, Object> h = new HashMap<>();
         enumerate(h);
-        for (Enumeration<String> e = h.keys() ; e.hasMoreElements() ;) {
-            String key = e.nextElement();
-            String val = (String)h.get(key);
+        for (Map.Entry<String, Object> e : h.entrySet()) {
+            String key = e.getKey();
+            String val = (String)e.getValue();
             if (val.length() > 40) {
                 val = val.substring(0, 37) + "...";
             }
@@ -1085,33 +1128,33 @@ class Properties extends Hashtable<Object,Object> {
     }
 
     /**
-     * Enumerates all key/value pairs in the specified hashtable.
-     * @param h the hashtable
+     * Enumerates all key/value pairs into the specified Map.
+     * @param h the Map
      * @throws ClassCastException if any of the property keys
      *         is not of String type.
      */
-    private synchronized void enumerate(Hashtable<String,Object> h) {
+    private void enumerate(Map<String, Object> h) {
         if (defaults != null) {
             defaults.enumerate(h);
         }
-        for (Enumeration<?> e = keys() ; e.hasMoreElements() ;) {
-            String key = (String)e.nextElement();
-            h.put(key, get(key));
+        for (Map.Entry<Object, Object> e : entrySet()) {
+            String key = (String)e.getKey();
+            h.put(key, e.getValue());
         }
     }
 
     /**
-     * Enumerates all key/value pairs in the specified hashtable
+     * Enumerates all key/value pairs into the specified Map
      * and omits the property if the key or value is not a string.
-     * @param h the hashtable
+     * @param h the Map
      */
-    private synchronized void enumerateStringProperties(Hashtable<String, String> h) {
+    private void enumerateStringProperties(Map<String, String> h) {
         if (defaults != null) {
             defaults.enumerateStringProperties(h);
         }
-        for (Enumeration<?> e = keys() ; e.hasMoreElements() ;) {
-            Object k = e.nextElement();
-            Object v = get(k);
+        for (Map.Entry<Object, Object> e : entrySet()) {
+            Object k = e.getKey();
+            Object v = e.getValue();
             if (k instanceof String && v instanceof String) {
                 h.put((String) k, (String) v);
             }
@@ -1130,4 +1173,283 @@ class Properties extends Hashtable<Object,Object> {
     private static final char[] hexDigit = {
         '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'
     };
+
+    //
+    // Hashtable methods overridden and delegated to a ConcurrentHashMap instance
+
+    @Override
+    public int size() {
+        return map.size();
+    }
+
+    @Override
+    public boolean isEmpty() {
+        return map.isEmpty();
+    }
+
+    @Override
+    public Enumeration<Object> keys() {
+        // CHM.keys() returns Iterator w/ remove() - instead wrap keySet()
+        return Collections.enumeration(map.keySet());
+    }
+
+    @Override
+    public Enumeration<Object> elements() {
+        // CHM.elements() returns Iterator w/ remove() - instead wrap values()
+        return Collections.enumeration(map.values());
+    }
+
+    @Override
+    public boolean contains(Object value) {
+        return map.contains(value);
+    }
+
+    @Override
+    public boolean containsValue(Object value) {
+        return map.containsValue(value);
+    }
+
+    @Override
+    public boolean containsKey(Object key) {
+        return map.containsKey(key);
+    }
+
+    @Override
+    public Object get(Object key) {
+        return map.get(key);
+    }
+
+    @Override
+    public synchronized Object put(Object key, Object value) {
+        return map.put(key, value);
+    }
+
+    @Override
+    public synchronized Object remove(Object key) {
+        return map.remove(key);
+    }
+
+    @Override
+    public synchronized void putAll(Map<?, ?> t) {
+        map.putAll(t);
+    }
+
+    @Override
+    public synchronized void clear() {
+        map.clear();
+    }
+
+    @Override
+    public synchronized String toString() {
+        return map.toString();
+    }
+
+    @Override
+    public Set<Object> keySet() {
+        return Collections.synchronizedSet(map.keySet(), this);
+    }
+
+    @Override
+    public Collection<Object> values() {
+        return Collections.synchronizedCollection(map.values(), this);
+    }
+
+    @Override
+    public Set<Map.Entry<Object, Object>> entrySet() {
+        return Collections.synchronizedSet(new EntrySet(map.entrySet()), this);
+    }
+
+    /*
+     * Properties.entrySet() should not support add/addAll, however
+     * ConcurrentHashMap.entrySet() provides add/addAll.  This class wraps the
+     * Set returned from CHM, changing add/addAll to throw UOE.
+     */
+    private static class EntrySet implements Set<Map.Entry<Object, Object>> {
+        private Set<Map.Entry<Object,Object>> entrySet;
+
+        private EntrySet(Set<Map.Entry<Object, Object>> entrySet) {
+            this.entrySet = entrySet;
+        }
+
+        @Override public int size() { return entrySet.size(); }
+        @Override public boolean isEmpty() { return entrySet.isEmpty(); }
+        @Override public boolean contains(Object o) { return entrySet.contains(o); }
+        @Override public Object[] toArray() { return entrySet.toArray(); }
+        @Override public <T> T[] toArray(T[] a) { return entrySet.toArray(a); }
+        @Override public void clear() { entrySet.clear(); }
+        @Override public boolean remove(Object o) { return entrySet.remove(o); }
+
+        @Override
+        public boolean add(Map.Entry<Object, Object> e) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public boolean addAll(Collection<? extends Map.Entry<Object, Object>> c) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public boolean containsAll(Collection<?> c) {
+            return entrySet.containsAll(c);
+        }
+
+        @Override
+        public boolean removeAll(Collection<?> c) {
+            return entrySet.removeAll(c);
+        }
+
+        @Override
+        public boolean retainAll(Collection<?> c) {
+            return entrySet.retainAll(c);
+        }
+
+        @Override
+        public Iterator<Map.Entry<Object, Object>> iterator() {
+            return entrySet.iterator();
+        }
+    }
+
+    @Override
+    public synchronized boolean equals(Object o) {
+        return map.equals(o);
+    }
+
+    @Override
+    public synchronized int hashCode() {
+        return map.hashCode();
+    }
+
+    @Override
+    public Object getOrDefault(Object key, Object defaultValue) {
+        return map.getOrDefault(key, defaultValue);
+    }
+
+    @Override
+    public synchronized void forEach(BiConsumer<? super Object, ? super Object> action) {
+        map.forEach(action);
+    }
+
+    @Override
+    public synchronized void replaceAll(BiFunction<? super Object, ? super Object, ?> function) {
+        map.replaceAll(function);
+    }
+
+    @Override
+    public synchronized Object putIfAbsent(Object key, Object value) {
+        return map.putIfAbsent(key, value);
+    }
+
+    @Override
+    public synchronized boolean remove(Object key, Object value) {
+        return map.remove(key, value);
+    }
+
+    /** @hidden */
+    @Override
+    public synchronized boolean replace(Object key, Object oldValue, Object newValue) {
+        return map.replace(key, oldValue, newValue);
+    }
+
+    @Override
+    public synchronized Object replace(Object key, Object value) {
+        return map.replace(key, value);
+    }
+
+    @Override
+    public synchronized Object computeIfAbsent(Object key,
+            Function<? super Object, ?> mappingFunction) {
+        return map.computeIfAbsent(key, mappingFunction);
+    }
+
+    @Override
+    public synchronized Object computeIfPresent(Object key,
+            BiFunction<? super Object, ? super Object, ?> remappingFunction) {
+        return map.computeIfPresent(key, remappingFunction);
+    }
+
+    @Override
+    public synchronized Object compute(Object key,
+            BiFunction<? super Object, ? super Object, ?> remappingFunction) {
+        return map.compute(key, remappingFunction);
+    }
+
+    @Override
+    public synchronized Object merge(Object key, Object value,
+            BiFunction<? super Object, ? super Object, ?> remappingFunction) {
+        return map.merge(key, value, remappingFunction);
+    }
+
+    //
+    // Special Hashtable methods
+
+    @Override
+    protected void rehash() { /* no-op */ }
+
+    @Override
+    public synchronized Object clone() {
+        Properties clone = (Properties) cloneHashtable();
+        clone.map = new ConcurrentHashMap<>(map);
+        return clone;
+    }
+
+    //
+    // Hashtable serialization overrides
+    // (these should emit and consume Hashtable-compatible stream)
+
+    @Override
+    void writeHashtable(ObjectOutputStream s) throws IOException {
+        List<Object> entryStack = new ArrayList<>(map.size() * 2); // an estimate
+
+        for (Map.Entry<Object, Object> entry : map.entrySet()) {
+            entryStack.add(entry.getValue());
+            entryStack.add(entry.getKey());
+        }
+
+        // Write out the simulated threshold, loadfactor
+        float loadFactor = 0.75f;
+        int count = entryStack.size() / 2;
+        int length = (int)(count / loadFactor) + (count / 20) + 3;
+        if (length > count && (length & 1) == 0) {
+            length--;
+        }
+        synchronized (map) { // in case of multiple concurrent serializations
+            defaultWriteHashtable(s, length, loadFactor);
+        }
+
+        // Write out simulated length and real count of elements
+        s.writeInt(length);
+        s.writeInt(count);
+
+        // Write out the key/value objects from the stacked entries
+        for (int i = entryStack.size() - 1; i >= 0; i--) {
+            s.writeObject(entryStack.get(i));
+        }
+    }
+
+    @Override
+    void readHashtable(ObjectInputStream s) throws IOException,
+            ClassNotFoundException {
+        // Read in the threshold and loadfactor
+        s.defaultReadObject();
+
+        // Read the original length of the array and number of elements
+        int origlength = s.readInt();
+        int elements = s.readInt();
+
+        // Validate # of elements
+        if (elements < 0) {
+            throw new StreamCorruptedException("Illegal # of Elements: " + elements);
+        }
+
+        // create CHM of appropriate capacity
+        map = new ConcurrentHashMap<>(elements);
+
+        // Read all the key/value objects
+        for (; elements > 0; elements--) {
+            Object key = s.readObject();
+            Object value = s.readObject();
+            map.put(key, value);
+        }
+    }
 }

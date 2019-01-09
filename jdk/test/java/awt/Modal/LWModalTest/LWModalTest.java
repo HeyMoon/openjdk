@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2007, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,10 +23,12 @@
 
 /*
   @test
+  @key headful
   @bug 6178755
   @summary The test checks that Container's method startLWModal
 and stopLWModal work correctly. The test scenario is very close
 to JOptionPane.showInternal*Dialog methods
+  @modules java.desktop/java.awt:open
   @author artem.ananiev@...: area=awt.modal
   @library ../../regtesthelpers
   @build Util
@@ -39,8 +41,6 @@ import java.awt.event.*;
 import java.lang.reflect.*;
 
 import javax.swing.*;
-
-import sun.awt.*;
 
 import test.java.awt.regtesthelpers.Util;
 

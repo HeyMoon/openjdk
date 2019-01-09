@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,6 @@ import static jdk.internal.org.objectweb.asm.Opcodes.DUP2_X1;
 import static jdk.internal.org.objectweb.asm.Opcodes.DUP2_X2;
 import static jdk.internal.org.objectweb.asm.Opcodes.DUP_X1;
 import static jdk.internal.org.objectweb.asm.Opcodes.DUP_X2;
-import static jdk.internal.org.objectweb.asm.Opcodes.H_INVOKESTATIC;
 import static jdk.internal.org.objectweb.asm.Opcodes.IALOAD;
 import static jdk.internal.org.objectweb.asm.Opcodes.IASTORE;
 import static jdk.internal.org.objectweb.asm.Opcodes.INVOKESTATIC;
@@ -46,28 +45,22 @@ import static jdk.internal.org.objectweb.asm.Opcodes.SWAP;
 import static jdk.internal.org.objectweb.asm.Opcodes.T_DOUBLE;
 import static jdk.internal.org.objectweb.asm.Opcodes.T_INT;
 import static jdk.internal.org.objectweb.asm.Opcodes.T_LONG;
-import static jdk.nashorn.internal.codegen.CompilerConstants.staticCallNoLookup;
 
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.io.Serializable;
-import java.lang.invoke.CallSite;
-import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
 import java.util.Collections;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import jdk.internal.org.objectweb.asm.Handle;
 import jdk.internal.org.objectweb.asm.MethodVisitor;
 import jdk.nashorn.internal.codegen.CompilerConstants.Call;
+import jdk.nashorn.internal.runtime.Context;
 import jdk.nashorn.internal.runtime.ScriptObject;
 import jdk.nashorn.internal.runtime.Undefined;
-import jdk.nashorn.internal.runtime.linker.Bootstrap;
 
 /**
  * This is the representation of a JavaScript type, disassociated from java
@@ -123,10 +116,6 @@ public abstract class Type implements Comparable<Type>, BytecodeOps, Serializabl
 
     /** Set way below Integer.MAX_VALUE to prevent overflow when adding weights. Objects are still heaviest. */
     protected static final int MAX_WEIGHT = 20;
-
-    static final Call BOOTSTRAP = staticCallNoLookup(Bootstrap.class, "mathBootstrap", CallSite.class, MethodHandles.Lookup.class, String.class, MethodType.class, int.class);
-
-    static final Handle MATHBOOTSTRAP = new Handle(H_INVOKESTATIC, BOOTSTRAP.className(), "mathBootstrap", BOOTSTRAP.descriptor());
 
     /**
      * Constructor
@@ -245,7 +234,7 @@ public abstract class Type implements Comparable<Type>, BytecodeOps, Serializabl
      * @return Nashorn type
      */
     @SuppressWarnings("fallthrough")
-    static Type typeFor(final jdk.internal.org.objectweb.asm.Type itype) {
+    private static Type typeFor(final jdk.internal.org.objectweb.asm.Type itype) {
         switch (itype.getSort()) {
         case jdk.internal.org.objectweb.asm.Type.BOOLEAN:
             return BOOLEAN;
@@ -256,11 +245,16 @@ public abstract class Type implements Comparable<Type>, BytecodeOps, Serializabl
         case jdk.internal.org.objectweb.asm.Type.DOUBLE:
             return NUMBER;
         case jdk.internal.org.objectweb.asm.Type.OBJECT:
-            try {
-                return Type.typeFor(Class.forName(itype.getClassName()));
-            } catch(final ClassNotFoundException e) {
-                throw new AssertionError(e);
+            if (Context.isStructureClass(itype.getClassName())) {
+                return SCRIPT_OBJECT;
             }
+            return cacheByName.computeIfAbsent(itype.getClassName(), (name) -> {
+                try {
+                    return Type.typeFor(Class.forName(name));
+                } catch(final ClassNotFoundException e) {
+                    throw new AssertionError(e);
+                }
+            });
         case jdk.internal.org.objectweb.asm.Type.VOID:
             return null;
         case jdk.internal.org.objectweb.asm.Type.ARRAY:
@@ -781,19 +775,10 @@ public abstract class Type implements Comparable<Type>, BytecodeOps, Serializabl
      * @return the Type representing this class
      */
     public static Type typeFor(final Class<?> clazz) {
-        final Type type = cache.get(clazz);
-        if(type != null) {
-            return type;
-        }
-        assert !clazz.isPrimitive() || clazz == void.class;
-        final Type newType;
-        if (clazz.isArray()) {
-            newType = new ArrayType(clazz);
-        } else {
-            newType = new ObjectType(clazz);
-        }
-        final Type existingType = cache.putIfAbsent(clazz, newType);
-        return existingType == null ? newType : existingType;
+        return cache.computeIfAbsent(clazz, (keyClass) -> {
+            assert !keyClass.isPrimitive() || keyClass == void.class;
+            return keyClass.isArray() ? new ArrayType(keyClass) : new ObjectType(keyClass);
+        });
     }
 
     @Override
@@ -898,6 +883,7 @@ public abstract class Type implements Comparable<Type>, BytecodeOps, Serializabl
 
     /** Mappings between java classes and their Type singletons */
     private static final ConcurrentMap<Class<?>, Type> cache = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<String, Type> cacheByName = new ConcurrentHashMap<>();
 
     /**
      * This is the boolean singleton, used for all boolean types
@@ -917,7 +903,7 @@ public abstract class Type implements Comparable<Type>, BytecodeOps, Serializabl
     /**
      * This is the long singleton, used for all long types
      */
-    public static final BitwiseType LONG = putInCache(new LongType());
+    public static final Type LONG = putInCache(new LongType());
 
     /**
      * A string singleton
@@ -949,7 +935,7 @@ public abstract class Type implements Comparable<Type>, BytecodeOps, Serializabl
     /**
      * This is the singleton for integer arrays
      */
-    public static final ArrayType INT_ARRAY = new ArrayType(int[].class) {
+    public static final ArrayType INT_ARRAY = putInCache(new ArrayType(int[].class) {
         private static final long serialVersionUID = 1L;
 
         @Override
@@ -973,12 +959,12 @@ public abstract class Type implements Comparable<Type>, BytecodeOps, Serializabl
         public Type getElementType() {
             return INT;
         }
-    };
+    });
 
     /**
      * This is the singleton for long arrays
      */
-    public static final ArrayType LONG_ARRAY = new ArrayType(long[].class) {
+    public static final ArrayType LONG_ARRAY = putInCache(new ArrayType(long[].class) {
         private static final long serialVersionUID = 1L;
 
         @Override
@@ -1002,12 +988,12 @@ public abstract class Type implements Comparable<Type>, BytecodeOps, Serializabl
         public Type getElementType() {
             return LONG;
         }
-    };
+    });
 
     /**
      * This is the singleton for numeric arrays
      */
-    public static final ArrayType NUMBER_ARRAY = new ArrayType(double[].class) {
+    public static final ArrayType NUMBER_ARRAY = putInCache(new ArrayType(double[].class) {
         private static final long serialVersionUID = 1L;
 
         @Override
@@ -1031,13 +1017,7 @@ public abstract class Type implements Comparable<Type>, BytecodeOps, Serializabl
         public Type getElementType() {
             return NUMBER;
         }
-    };
-
-    /** Singleton for method handle arrays used for properties etc. */
-    public static final ArrayType METHODHANDLE_ARRAY = putInCache(new ArrayType(MethodHandle[].class));
-
-    /** This is the singleton for string arrays */
-    public static final ArrayType STRING_ARRAY = putInCache(new ArrayType(String[].class));
+    });
 
     /** This is the singleton for object arrays */
     public static final ArrayType OBJECT_ARRAY = putInCache(new ArrayType(Object[].class));

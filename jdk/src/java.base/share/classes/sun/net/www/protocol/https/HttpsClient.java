@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,14 +39,15 @@ import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.security.Principal;
 import java.security.cert.*;
+import java.util.Objects;
 import java.util.StringTokenizer;
 import java.util.Vector;
-import java.security.AccessController;
 
 import javax.security.auth.x500.X500Principal;
 
 import javax.net.ssl.*;
 import sun.net.www.http.HttpClient;
+import sun.net.www.protocol.http.AuthenticatorKeys;
 import sun.net.www.protocol.http.HttpURLConnection;
 import sun.security.action.*;
 
@@ -139,8 +140,8 @@ final class HttpsClient extends HttpClient
         // If ciphers are assigned, sort them into an array.
         //
         String ciphers [];
-        String cipherString = AccessController.doPrivileged(
-                new GetPropertyAction("https.cipherSuites"));
+        String cipherString =
+                GetPropertyAction.privilegedGetProperty("https.cipherSuites");
 
         if (cipherString == null || "".equals(cipherString)) {
             ciphers = null;
@@ -163,8 +164,8 @@ final class HttpsClient extends HttpClient
         // If protocols are assigned, sort them into an array.
         //
         String protocols [];
-        String protocolString = AccessController.doPrivileged(
-                new GetPropertyAction("https.protocols"));
+        String protocolString =
+                GetPropertyAction.privilegedGetProperty("https.protocols");
 
         if (protocolString == null || "".equals(protocolString)) {
             protocols = null;
@@ -184,8 +185,8 @@ final class HttpsClient extends HttpClient
     }
 
     private String getUserAgent() {
-        String userAgent = java.security.AccessController.doPrivileged(
-                new sun.security.action.GetPropertyAction("https.agent"));
+        String userAgent =
+                GetPropertyAction.privilegedGetProperty("https.agent");
         if (userAgent == null || userAgent.length() == 0) {
             userAgent = "JSSE";
         }
@@ -335,8 +336,12 @@ final class HttpsClient extends HttpClient
             }
 
             if (ret != null) {
-                if ((ret.proxy != null && ret.proxy.equals(p)) ||
-                    (ret.proxy == null && p == Proxy.NO_PROXY)) {
+                String ak = httpuc == null ? AuthenticatorKeys.DEFAULT
+                     : httpuc.getAuthenticatorKey();
+                boolean compatible = ((ret.proxy != null && ret.proxy.equals(p)) ||
+                    (ret.proxy == null && p == Proxy.NO_PROXY))
+                     && Objects.equals(ret.getAuthenticatorKey(), ak);
+                if (compatible) {
                     synchronized (ret) {
                         ret.cachedHttpClient = true;
                         assert ret.inCache;
@@ -365,6 +370,9 @@ final class HttpsClient extends HttpClient
         }
         if (ret == null) {
             ret = new HttpsClient(sf, url, p, connectTimeout);
+            if (httpuc != null) {
+                ret.authenticatorKey = httpuc.getAuthenticatorKey();
+            }
         } else {
             SecurityManager security = System.getSecurityManager();
             if (security != null) {

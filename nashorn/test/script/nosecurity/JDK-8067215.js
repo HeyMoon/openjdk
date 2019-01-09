@@ -27,20 +27,37 @@
  * @test
  * @run
  * @option -Dnashorn.debug=true
+ * @option -scripting
  * @fork
  */
 
 var intType    = Java.type("int");
 var doubleType = Java.type("double");
-var longType   = Java.type("long");
 var objectType = Java.type("java.lang.Object");
 
 var Context = Java.type("jdk.nashorn.internal.runtime.Context");
 var JSType  = Java.type("jdk.nashorn.internal.runtime.JSType");
+var Property = Java.type("jdk.nashorn.internal.runtime.Property");
+var PropertyMap  = Java.type("jdk.nashorn.internal.runtime.PropertyMap");
 
-var context = Context.getContext();
-var dualFields = context.useDualFields();
-var optimisticTypes = context.getEnv()._optimistic_types;
+// Class objects
+var objectCls = Java.type("java.lang.Object").class;
+var contextCls = Context.class;
+var JSTypeCls = JSType.class;
+var propertyCls = Property.class;
+var propertyMapCls  = PropertyMap.class;
+
+// Method objects
+var getContextMethod = contextCls.getMethod("getContext");
+var isRepresentableAsIntMethod = JSTypeCls.getMethod("isRepresentableAsInt", java.lang.Double.TYPE);
+var hasDualFieldsMethod = propertyCls.getMethod("hasDualFields");
+var getTypeMethod = propertyCls.getMethod("getType");
+var findPropertyMethod = propertyMapCls.getMethod("findProperty", objectCls);
+
+var context = getContextMethod.invoke(null);
+var useDualFieldsMethod = contextCls.getMethod("useDualFields");
+var dualFields = useDualFieldsMethod.invoke(context);
+var optimisticTypes = $OPTIONS._optimistic_types;
 
 if (dualFields != optimisticTypes) {
     throw new Error("Wrong dual fields setting");
@@ -52,13 +69,12 @@ function testMap(obj) {
     Object.defineProperty(obj, "z", {value: 0.5});
     var map = Debug.map(obj);
     for (var key in obj) {
-        var prop = map.findProperty(key);
-        if (prop.hasDualFields() !== dualFields) {
+        var prop = findPropertyMethod.invoke(map, key);
+        if (hasDualFieldsMethod.invoke(prop) !== dualFields) {
             throw new Error("Wrong property flags: " + prop);
         }
-        if (prop.getType() != getExpectedType(obj[key])) {
+        if (getTypeMethod.invoke(prop) != getExpectedType(obj[key])) {
             throw new Error("Wrong property type: " + prop.getType() + " // " + getExpectedType(obj[key]));
-
         }
     }
 }
@@ -67,14 +83,8 @@ function getExpectedType(value) {
     if (!dualFields) {
         return objectType.class;
     }
-    if (JSType.isRepresentableAsInt(value)) {
-        return intType.class;
-    }
-    if (JSType.isRepresentableAsLong(value)) {
-        return longType.class;
-    }
-    if (JSType.isNumber(value)) {
-        return doubleType.class;
+    if (typeof value === "number") {
+        return isRepresentableAsIntMethod.invoke(null, value) ? intType.class : doubleType.class;
     }
     return objectType.class;
 }

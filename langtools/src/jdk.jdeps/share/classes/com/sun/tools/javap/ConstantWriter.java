@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -109,13 +109,6 @@ public class ConstantWriter extends BasicWriter {
                 return 2;
             }
 
-            public Integer visitNameAndType(CONSTANT_NameAndType_info info, Void p) {
-                print("#" + info.name_index + ":#" + info.type_index);
-                tab();
-                println("// " + stringValue(info));
-                return 1;
-            }
-
             public Integer visitMethodref(CONSTANT_Methodref_info info, Void p) {
                 print("#" + info.class_index + ".#" + info.name_and_type_index);
                 tab();
@@ -124,7 +117,7 @@ public class ConstantWriter extends BasicWriter {
             }
 
             public Integer visitMethodHandle(CONSTANT_MethodHandle_info info, Void p) {
-                print("#" + info.reference_kind.tag + ":#" + info.reference_index);
+                print(info.reference_kind.tag + ":#" + info.reference_index);
                 tab();
                 println("// " + stringValue(info));
                 return 1;
@@ -134,6 +127,27 @@ public class ConstantWriter extends BasicWriter {
                 print("#" + info.descriptor_index);
                 tab();
                 println("//  " + stringValue(info));
+                return 1;
+            }
+
+            public Integer visitModule(CONSTANT_Module_info info, Void p) {
+                print("#" + info.name_index);
+                tab();
+                println("// " + stringValue(info));
+                return 1;
+            }
+
+            public Integer visitNameAndType(CONSTANT_NameAndType_info info, Void p) {
+                print("#" + info.name_index + ":#" + info.type_index);
+                tab();
+                println("// " + stringValue(info));
+                return 1;
+            }
+
+            public Integer visitPackage(CONSTANT_Package_info info, Void p) {
+                print("#" + info.name_index);
+                tab();
+                println("// " + stringValue(info));
                 return 1;
             }
 
@@ -304,11 +318,27 @@ public class ConstantWriter extends BasicWriter {
             return info.value + "l";
         }
 
+        public String visitModule(CONSTANT_Module_info info, Void p) {
+            try {
+                return checkName(info.getName());
+            } catch (ConstantPoolException e) {
+                return report(e);
+            }
+        }
+
         public String visitNameAndType(CONSTANT_NameAndType_info info, Void p) {
             return getCheckedName(info) + ":" + getType(info);
         }
 
         String getCheckedName(CONSTANT_NameAndType_info info) {
+            try {
+                return checkName(info.getName());
+            } catch (ConstantPoolException e) {
+                return report(e);
+            }
+        }
+
+        public String visitPackage(CONSTANT_Package_info info, Void p) {
             try {
                 return checkName(info.getName());
             } catch (ConstantPoolException e) {
@@ -326,7 +356,7 @@ public class ConstantWriter extends BasicWriter {
 
         public String visitMethodHandle(CONSTANT_MethodHandle_info info, Void p) {
             try {
-                return info.reference_kind.name + " " + stringValue(info.getCPRefInfo());
+                return info.reference_kind + " " + stringValue(info.getCPRefInfo());
             } catch (ConstantPoolException e) {
                 return report(e);
             }
@@ -385,6 +415,10 @@ public class ConstantWriter extends BasicWriter {
                         sb.append('\\').append('\\');
                         break;
                     default:
+                        if (Character.isISOControl(c)) {
+                            sb.append(String.format("\\u%04x", (int) c));
+                            break;
+                        }
                         sb.append(c);
                 }
             }

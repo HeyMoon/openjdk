@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,9 +22,11 @@
  */
 
 /* @test
- * @bug 4640544
+ * @bug 4640544 8044773
  * @summary Unit test for ServerSocketChannel setOption/getOption/options
  *          methods.
+ * @run main SocketOptionTests
+ * @run main/othervm --limit-modules=java.base SocketOptionTests
  */
 
 import java.nio.*;
@@ -49,8 +51,11 @@ public class SocketOptionTests {
 
         // check supported options
         Set<SocketOption<?>> options = ssc.supportedOptions();
+        boolean reuseport = options.contains(SO_REUSEPORT);
         if (!options.contains(SO_REUSEADDR))
             throw new RuntimeException("SO_REUSEADDR should be supported");
+        if (!options.contains(SO_REUSEPORT) && reuseport)
+            throw new RuntimeException("SO_REUSEPORT should be supported");
         if (!options.contains(SO_RCVBUF))
             throw new RuntimeException("SO_RCVBUF should be supported");
 
@@ -64,6 +69,12 @@ public class SocketOptionTests {
         checkOption(ssc, SO_REUSEADDR, true);
         ssc.setOption(SO_REUSEADDR, false);
         checkOption(ssc, SO_REUSEADDR, false);
+        if (reuseport) {
+            ssc.setOption(SO_REUSEPORT, true);
+            checkOption(ssc, SO_REUSEPORT, true);
+            ssc.setOption(SO_REUSEPORT, false);
+            checkOption(ssc, SO_REUSEPORT, false);
+        }
 
         // NullPointerException
         try {

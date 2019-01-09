@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,12 +25,14 @@
  * @test TestHumongousAllocInitialMark
  * @bug 7168848
  * @summary G1: humongous object allocations should initiate marking cycles when necessary
- * @library /testlibrary
- * @modules java.base/sun.misc
+ * @requires vm.gc.G1
+ * @library /test/lib
+ * @modules java.base/jdk.internal.misc
  *          java.management
  */
 
-import jdk.test.lib.*;
+import jdk.test.lib.process.OutputAnalyzer;
+import jdk.test.lib.process.ProcessTools;
 
 public class TestHumongousAllocInitialMark {
     // Heap sizes < 224 MB are increased to 224 MB if vm_page_size == 64K to
@@ -46,11 +48,11 @@ public class TestHumongousAllocInitialMark {
             "-Xmx" + heapSize + "m",
             "-XX:G1HeapRegionSize=" + heapRegionSize + "m",
             "-XX:InitiatingHeapOccupancyPercent=" + initiatingHeapOccupancyPercent,
-            "-XX:+PrintGC",
+            "-Xlog:gc",
             HumongousObjectAllocator.class.getName());
 
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
-        output.shouldContain("GC pause (G1 Humongous Allocation) (young) (initial-mark)");
+        output.shouldContain("Pause Initial Mark (G1 Humongous Allocation)");
         output.shouldNotContain("Full GC");
         output.shouldHaveExitValue(0);
     }

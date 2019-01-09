@@ -3,13 +3,14 @@
  * DO NOT REMOVE OR ALTER!
  */
 /*
- * Copyright 1999-2005 The Apache Software Foundation.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *      http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,9 +18,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- * $Id: XSLTErrorResources_fr.java /st_wptg_1.8.0.0.0jdk/2 2013/09/16 07:05:15 gmolloy Exp $
- */
+
 package com.sun.org.apache.xalan.internal.res;
 
 import java.util.ListResourceBundle;
@@ -1213,7 +1212,7 @@ public class XSLTErrorResources_fr extends ListResourceBundle
       "Le nom de fonction ne peut pas \u00EAtre NULL."},
 
     { ER_XPATH_RESOLVER_NEGATIVE_ARITY,
-      "Le nombre d'arguments ne peut pas \u00EAtre n\u00E9gatif."},
+      "L'arit\u00E9 ne peut pas \u00EAtre n\u00E9gative."},
   // Warnings...
 
     { WG_FOUND_CURLYBRACE,

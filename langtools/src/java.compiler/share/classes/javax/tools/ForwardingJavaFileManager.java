@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2012, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@ package javax.tools;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.Objects;
+import java.util.ServiceLoader;
 import java.util.Set;
 import javax.tools.JavaFileObject.Kind;
 
@@ -162,5 +163,52 @@ public class ForwardingJavaFileManager<M extends JavaFileManager> implements Jav
 
     public void close() throws IOException {
         fileManager.close();
+    }
+
+    /**
+     * @since 9
+     * @spec JPMS
+     */
+    public Location getLocationForModule(Location location, String moduleName) throws IOException {
+        return fileManager.getLocationForModule(location, moduleName);
+    }
+
+    /**
+     * @since 9
+     * @spec JPMS
+     */
+    public Location getLocationForModule(Location location, JavaFileObject fo) throws IOException {
+        return fileManager.getLocationForModule(location, fo);
+    }
+
+    /**
+     * @since 9
+     * @spec JPMS
+     */
+    public <S> ServiceLoader<S> getServiceLoader(Location location, Class<S> service) throws  IOException {
+        return fileManager.getServiceLoader(location, service);
+    }
+
+    /**
+     * @since 9
+     * @spec JPMS
+     */
+    public String inferModuleName(Location location) throws IOException {
+        return fileManager.inferModuleName(location);
+    }
+
+    /**
+     * @since 9
+     * @spec JPMS
+     */
+    public Iterable<Set<Location>> listLocationsForModules(Location location) throws IOException {
+        return fileManager.listLocationsForModules(location);
+    }
+
+    /**
+     * @since 9
+     */
+    public boolean contains(Location location, FileObject fo) throws IOException {
+        return fileManager.contains(location, fo);
     }
 }

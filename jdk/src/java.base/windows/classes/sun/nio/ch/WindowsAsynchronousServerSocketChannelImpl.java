@@ -33,7 +33,7 @@ import java.io.IOException;
 import java.security.AccessControlContext;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 
 /**
  * Windows implementation of AsynchronousServerSocketChannel using overlapped I/O.
@@ -342,11 +342,7 @@ class WindowsAsynchronousServerSocketChannelImpl
             throw new AcceptPendingException();
 
         // initiate I/O
-        if (Iocp.supportsThreadAgnosticIo()) {
-            task.run();
-        } else {
-            Invoker.invokeOnThreadInThreadPool(this, task);
-        }
+        task.run();
         return result;
     }
 

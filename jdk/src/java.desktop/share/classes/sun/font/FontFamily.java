@@ -27,6 +27,7 @@ package sun.font;
 
 import java.io.File;
 import java.awt.Font;
+import java.io.IOException;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
@@ -132,6 +133,16 @@ public class FontFamily {
 
         FileFont newFont = (FileFont)font;
         File newDir = (new File(newFont.platName)).getParentFile();
+        if (existDir != null) {
+            try {
+                existDir = existDir.getCanonicalFile();
+            } catch (IOException ignored) {}
+        }
+        if (newDir != null) {
+            try {
+                newDir = newDir.getCanonicalFile();
+            } catch (IOException ignored) {}
+        }
         return java.util.Objects.equals(newDir, existDir);
     }
 
@@ -335,9 +346,9 @@ public class FontFamily {
         case Font.BOLD|Font.ITALIC:
             if (bolditalic != null) {
                 return bolditalic;
-            } else if (italic != null && italic.canDoStyle(style)) {
-                    return italic;
             } else if (bold != null && bold.canDoStyle(style)) {
+                return bold;
+            } else if (italic != null && italic.canDoStyle(style)) {
                     return italic;
             } else if (plain != null && plain.canDoStyle(style)) {
                     return plain;

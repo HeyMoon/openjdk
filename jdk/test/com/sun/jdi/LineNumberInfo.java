@@ -27,9 +27,8 @@
  *  @summary Test javac regressions in the generation of line number info
  *  @author Gordon Hirsch
  *
- *  @modules jdk.jdi
  *  @run build TestScaffold VMConnection TargetListener TargetAdapter
- *  @run compile -g LineNumberInfo.java ControlFlow.java
+ *  @run compile -XDstringConcat=inline -g LineNumberInfo.java ControlFlow.java
  *
  *  @run driver LineNumberInfo
  */

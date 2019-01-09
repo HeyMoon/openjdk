@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,26 +23,14 @@
  */
 
 #include "precompiled.hpp"
-#include "runtime/atomic.inline.hpp"
+#include "runtime/atomic.hpp"
+#include "runtime/interfaceSupport.hpp"
 #include "runtime/mutex.hpp"
 #include "runtime/orderAccess.inline.hpp"
 #include "runtime/osThread.hpp"
 #include "runtime/thread.inline.hpp"
 #include "utilities/events.hpp"
-#ifdef TARGET_OS_FAMILY_linux
-# include "mutex_linux.inline.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_solaris
-# include "mutex_solaris.inline.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_windows
-# include "mutex_windows.inline.hpp"
-#endif
-#ifdef TARGET_OS_FAMILY_bsd
-# include "mutex_bsd.inline.hpp"
-#endif
-
-PRAGMA_FORMAT_MUTE_WARNINGS_FOR_GCC
+#include "utilities/macros.hpp"
 
 // o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o-o
 //
@@ -464,7 +452,7 @@ void Monitor::ILock(Thread * Self) {
   ParkEvent * const ESelf = Self->_MutexEvent;
   assert(_OnDeck != ESelf, "invariant");
 
-  // As an optimization, spinners could conditionally try to set ONDECK to _LBIT
+  // As an optimization, spinners could conditionally try to set _OnDeck to _LBIT
   // Synchronizer.cpp uses a similar optimization.
   if (TrySpin(Self)) goto Exeunt;
 
@@ -475,7 +463,7 @@ void Monitor::ILock(Thread * Self) {
   OrderAccess::fence();
 
   // Optional optimization ... try barging on the inner lock
-  if ((NativeMonitorFlags & 32) && CASPTR (&_OnDeck, NULL, UNS(Self)) == 0) {
+  if ((NativeMonitorFlags & 32) && CASPTR (&_OnDeck, NULL, UNS(ESelf)) == 0) {
     goto OnDeck_LOOP;
   }
 
@@ -483,14 +471,14 @@ void Monitor::ILock(Thread * Self) {
 
   // At any given time there is at most one ondeck thread.
   // ondeck implies not resident on cxq and not resident on EntryList
-  // Only the OnDeck thread can try to acquire -- contended for -- the lock.
+  // Only the OnDeck thread can try to acquire -- contend for -- the lock.
   // CONSIDER: use Self->OnDeck instead of m->OnDeck.
   // Deschedule Self so that others may run.
-  while (_OnDeck != ESelf) {
+  while (OrderAccess::load_ptr_acquire(&_OnDeck) != ESelf) {
     ParkCommon(ESelf, 0);
   }
 
-  // Self is now in the ONDECK position and will remain so until it
+  // Self is now in the OnDeck position and will remain so until it
   // manages to acquire the lock.
  OnDeck_LOOP:
   for (;;) {
@@ -513,8 +501,8 @@ void Monitor::ILock(Thread * Self) {
   // A. Shift or defer dropping the inner lock until the subsequent IUnlock() operation.
   //    This might avoid potential reacquisition of the inner lock in IUlock().
   // B. While still holding the inner lock, attempt to opportunistically select
-  //    and unlink the next ONDECK thread from the EntryList.
-  //    If successful, set ONDECK to refer to that thread, otherwise clear ONDECK.
+  //    and unlink the next OnDeck thread from the EntryList.
+  //    If successful, set OnDeck to refer to that thread, otherwise clear OnDeck.
   //    It's critical that the select-and-unlink operation run in constant-time as
   //    it executes when holding the outer lock and may artificially increase the
   //    effective length of the critical section.
@@ -541,7 +529,7 @@ void Monitor::IUnlock(bool RelaxAssert) {
   OrderAccess::release_store(&_LockWord.Bytes[_LSBINDEX], 0); // drop outer lock
 
   OrderAccess::storeload();
-  ParkEvent * const w = _OnDeck;
+  ParkEvent * const w = _OnDeck; // raw load as we will just return if non-NULL
   assert(RelaxAssert || w != Thread::current()->_MutexEvent, "invariant");
   if (w != NULL) {
     // Either we have a valid ondeck thread or ondeck is transiently "locked"
@@ -549,7 +537,7 @@ void Monitor::IUnlock(bool RelaxAssert) {
     // OnDeck allows us to discriminate two cases.  If the latter, the
     // responsibility for progress and succession lies with that other thread.
     // For good performance, we also depend on the fact that redundant unpark()
-    // operations are cheap.  That is, repeated Unpark()ing of the ONDECK thread
+    // operations are cheap.  That is, repeated Unpark()ing of the OnDeck thread
     // is inexpensive.  This approach provides implicit futile wakeup throttling.
     // Note that the referent "w" might be stale with respect to the lock.
     // In that case the following unpark() is harmless and the worst that'll happen
@@ -598,8 +586,13 @@ void Monitor::IUnlock(bool RelaxAssert) {
     _EntryList = w->ListNext;
     // as a diagnostic measure consider setting w->_ListNext = BAD
     assert(UNS(_OnDeck) == _LBIT, "invariant");
-    _OnDeck = w;  // pass OnDeck to w.
-                  // w will clear OnDeck once it acquires the outer lock
+
+    // Pass OnDeck role to w, ensuring that _EntryList has been set first.
+    // w will clear _OnDeck once it acquires the outer lock.
+    // Note that once we set _OnDeck that thread can acquire the mutex, proceed
+    // with its critical section and then enter this code to unlock the mutex. So
+    // you can have multiple threads active in IUnlock at the same time.
+    OrderAccess::release_store_ptr(&_OnDeck, w);
 
     // Another optional optimization ...
     // For heavily contended locks it's not uncommon that some other
@@ -847,7 +840,7 @@ int Monitor::IWait(Thread * Self, jlong timo) {
     // ESelf is now on the cxq, EntryList or at the OnDeck position.
     // The following fragment is extracted from Monitor::ILock()
     for (;;) {
-      if (_OnDeck == ESelf && TrySpin(Self)) break;
+      if (OrderAccess::load_ptr_acquire(&_OnDeck) == ESelf && TrySpin(Self)) break;
       ParkCommon(ESelf, 0);
     }
     assert(_OnDeck == ESelf, "invariant");
@@ -897,8 +890,7 @@ int Monitor::IWait(Thread * Self, jlong timo) {
 void Monitor::lock(Thread * Self) {
   // Ensure that the Monitor requires/allows safepoint checks.
   assert(_safepoint_check_required != Monitor::_safepoint_check_never,
-         err_msg("This lock should never have a safepoint check: %s",
-                 name()));
+         "This lock should never have a safepoint check: %s", name());
 
 #ifdef CHECK_UNHANDLED_OOPS
   // Clear unhandled oops so we get a crash right away.  Only clear for non-vm
@@ -960,8 +952,7 @@ void Monitor::lock() {
 void Monitor::lock_without_safepoint_check(Thread * Self) {
   // Ensure that the Monitor does not require or allow safepoint checks.
   assert(_safepoint_check_required != Monitor::_safepoint_check_always,
-         err_msg("This lock should always have a safepoint check: %s",
-                 name()));
+         "This lock should always have a safepoint check: %s", name());
   assert(_owner != Self, "invariant");
   ILock(Self);
   assert(_owner == NULL, "invariant");
@@ -1039,10 +1030,10 @@ void Monitor::jvm_raw_lock() {
  Exeunt:
     assert(ILocked(), "invariant");
     assert(_owner == NULL, "invariant");
-    // This can potentially be called by non-java Threads. Thus, the ThreadLocalStorage
+    // This can potentially be called by non-java Threads. Thus, the Thread::current_or_null()
     // might return NULL. Don't call set_owner since it will break on an NULL owner
     // Consider installing a non-null "ANON" distinguished value instead of just NULL.
-    _owner = ThreadLocalStorage::thread();
+    _owner = Thread::current_or_null();
     return;
   }
 
@@ -1064,10 +1055,10 @@ void Monitor::jvm_raw_lock() {
 
   // At any given time there is at most one ondeck thread.
   // ondeck implies not resident on cxq and not resident on EntryList
-  // Only the OnDeck thread can try to acquire -- contended for -- the lock.
+  // Only the OnDeck thread can try to acquire -- contend for -- the lock.
   // CONSIDER: use Self->OnDeck instead of m->OnDeck.
   for (;;) {
-    if (_OnDeck == ESelf && TrySpin(NULL)) break;
+    if (OrderAccess::load_ptr_acquire(&_OnDeck) == ESelf && TrySpin(NULL)) break;
     ParkCommon(ESelf, 0);
   }
 
@@ -1093,9 +1084,9 @@ bool Monitor::wait(bool no_safepoint_check, long timeout,
                    bool as_suspend_equivalent) {
   // Make sure safepoint checking is used properly.
   assert(!(_safepoint_check_required == Monitor::_safepoint_check_never && no_safepoint_check == false),
-         err_msg("This lock should never have a safepoint check: %s", name()));
+         "This lock should never have a safepoint check: %s", name());
   assert(!(_safepoint_check_required == Monitor::_safepoint_check_always && no_safepoint_check == true),
-         err_msg("This lock should always have a safepoint check: %s", name()));
+         "This lock should always have a safepoint check: %s", name());
 
   Thread * const Self = Thread::current();
   assert(_owner == Self, "invariant");
@@ -1162,7 +1153,16 @@ bool Monitor::wait(bool no_safepoint_check, long timeout,
 }
 
 Monitor::~Monitor() {
-  assert((UNS(_owner)|UNS(_LockWord.FullWord)|UNS(_EntryList)|UNS(_WaitSet)|UNS(_OnDeck)) == 0, "");
+#ifdef ASSERT
+  uintptr_t owner = UNS(_owner);
+  uintptr_t lockword = UNS(_LockWord.FullWord);
+  uintptr_t entrylist = UNS(_EntryList);
+  uintptr_t waitset = UNS(_WaitSet);
+  uintptr_t ondeck = UNS(_OnDeck);
+  assert((owner|lockword|entrylist|waitset|ondeck) == 0,
+         "_owner(" INTPTR_FORMAT ")|_LockWord(" INTPTR_FORMAT ")|_EntryList(" INTPTR_FORMAT ")|_WaitSet("
+         INTPTR_FORMAT ")|_OnDeck(" INTPTR_FORMAT ") != 0", owner, lockword, entrylist, waitset, ondeck);
+#endif
 }
 
 void Monitor::ClearMonitor(Monitor * m, const char *name) {
@@ -1214,9 +1214,9 @@ bool Monitor::owned_by_self() const {
 }
 
 void Monitor::print_on_error(outputStream* st) const {
-  st->print("[" PTR_FORMAT, this);
+  st->print("[" PTR_FORMAT, p2i(this));
   st->print("] %s", _name);
-  st->print(" - owner thread: " PTR_FORMAT, _owner);
+  st->print(" - owner thread: " PTR_FORMAT, p2i(_owner));
 }
 
 
@@ -1227,7 +1227,8 @@ void Monitor::print_on_error(outputStream* st) const {
 
 #ifndef PRODUCT
 void Monitor::print_on(outputStream* st) const {
-  st->print_cr("Mutex: [0x%lx/0x%lx] %s - owner: 0x%lx", this, _LockWord.FullWord, _name, _owner);
+  st->print_cr("Mutex: [" PTR_FORMAT "/" PTR_FORMAT "] %s - owner: " PTR_FORMAT,
+               p2i(this), _LockWord.FullWord, _name, p2i(_owner));
 }
 #endif
 
@@ -1323,21 +1324,18 @@ void Monitor::set_owner_implementation(Thread *new_owner) {
     // The rank Mutex::native  is an exception in that it is not subject
     // to the verification rules.
     // Here are some further notes relating to mutex acquisition anomalies:
-    // . under Solaris, the interrupt lock gets acquired when doing
-    //   profiling, so any lock could be held.
     // . it is also ok to acquire Safepoint_lock at the very end while we
     //   already hold Terminator_lock - may happen because of periodic safepoints
     if (this->rank() != Mutex::native &&
         this->rank() != Mutex::suspend_resume &&
         locks != NULL && locks->rank() <= this->rank() &&
         !SafepointSynchronize::is_at_safepoint() &&
-        this != Interrupt_lock && this != ProfileVM_lock &&
         !(this == Safepoint_lock && contains(locks, Terminator_lock) &&
         SafepointSynchronize::is_synchronizing())) {
       new_owner->print_owned_locks();
-      fatal(err_msg("acquiring lock %s/%d out of order with lock %s/%d -- "
-                    "possible deadlock", this->name(), this->rank(),
-                    locks->name(), locks->rank()));
+      fatal("acquiring lock %s/%d out of order with lock %s/%d -- "
+            "possible deadlock", this->name(), this->rank(),
+            locks->name(), locks->rank());
     }
 
     this->_next = new_owner->_owned_locks;
@@ -1386,8 +1384,7 @@ void Monitor::check_prelock_state(Thread *thread) {
          || rank() == Mutex::special, "wrong thread state for using locks");
   if (StrictSafepointChecks) {
     if (thread->is_VM_thread() && !allow_vm_block()) {
-      fatal(err_msg("VM thread using lock %s (not allowed to block on)",
-                    name()));
+      fatal("VM thread using lock %s (not allowed to block on)", name());
     }
     debug_only(if (rank() != Mutex::special) \
                thread->check_for_valid_safepoint_state(false);)

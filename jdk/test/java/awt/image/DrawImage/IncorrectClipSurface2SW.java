@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,11 +42,12 @@ import static java.awt.geom.Rectangle2D.Double;
 
 /**
  * @test
- * @bug 8041644
+ * @key headful
+ * @bug 8041644 8044788
  * @summary Tests drawing volatile image to BI using different clip.
  *          Results of the blit compatibleImage to BI used for comparison.
  * @author Sergey Bylokhov
- * @run main/othervm -Dsun.java2d.d3d=false IncorrectClipSurface2SW
+ * @run main/othervm IncorrectClipSurface2SW
  */
 public final class IncorrectClipSurface2SW {
 

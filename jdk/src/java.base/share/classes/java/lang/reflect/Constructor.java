@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,9 +25,11 @@
 
 package java.lang.reflect;
 
-import sun.reflect.CallerSensitive;
-import sun.reflect.ConstructorAccessor;
-import sun.reflect.Reflection;
+import jdk.internal.misc.SharedSecrets;
+import jdk.internal.reflect.CallerSensitive;
+import jdk.internal.reflect.ConstructorAccessor;
+import jdk.internal.reflect.Reflection;
+import jdk.internal.vm.annotation.ForceInline;
 import sun.reflect.annotation.TypeAnnotation;
 import sun.reflect.annotation.TypeAnnotationParser;
 import sun.reflect.generics.repository.ConstructorRepository;
@@ -36,6 +38,7 @@ import sun.reflect.generics.factory.GenericsFactory;
 import sun.reflect.generics.scope.ConstructorScope;
 import java.lang.annotation.Annotation;
 import java.lang.annotation.AnnotationFormatError;
+import java.util.StringJoiner;
 
 /**
  * {@code Constructor} provides information about, and access to, a single
@@ -56,6 +59,7 @@ import java.lang.annotation.AnnotationFormatError;
  *
  * @author      Kenneth Russell
  * @author      Nakul Saraiya
+ * @since 1.1
  */
 public final class Constructor<T> extends Executable {
     private Class<T>            clazz;
@@ -158,6 +162,41 @@ public final class Constructor<T> extends Executable {
         return res;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p> A {@code SecurityException} is also thrown if this object is a
+     * {@code Constructor} object for the class {@code Class} and {@code flag}
+     * is true. </p>
+     *
+     * @param flag {@inheritDoc}
+     *
+     * @throws InaccessibleObjectException {@inheritDoc}
+     * @throws SecurityException if the request is denied by the security manager
+     *         or this is a constructor for {@code java.lang.Class}
+     *
+     * @spec JPMS
+     */
+    @Override
+    @CallerSensitive
+    public void setAccessible(boolean flag) {
+        AccessibleObject.checkPermission();
+        if (flag) {
+            checkCanSetAccessible(Reflection.getCallerClass());
+        }
+        setAccessible0(flag);
+    }
+
+    @Override
+    void checkCanSetAccessible(Class<?> caller) {
+        checkCanSetAccessible(caller, clazz);
+        if (clazz == Class.class) {
+            // can we change this to InaccessibleObjectException?
+            throw new SecurityException("Cannot make a java.lang.Class"
+                                        + " constructor accessible");
+        }
+    }
+
     @Override
     boolean hasGenericInformation() {
         return (getSignature() != null);
@@ -169,7 +208,8 @@ public final class Constructor<T> extends Executable {
     }
 
     /**
-     * {@inheritDoc}
+     * Returns the {@code Class} object representing the class that
+     * declares the constructor represented by this object.
      */
     @Override
     public Class<T> getDeclaringClass() {
@@ -207,6 +247,11 @@ public final class Constructor<T> extends Executable {
           return (TypeVariable<Constructor<T>>[])new TypeVariable[0];
     }
 
+
+    @Override
+    Class<?>[] getSharedParameterTypes() {
+        return parameterTypes;
+    }
 
     /**
      * {@inheritDoc}
@@ -286,9 +331,14 @@ public final class Constructor<T> extends Executable {
      * followed by the fully-qualified name of the declaring class,
      * followed by a parenthesized, comma-separated list of the
      * constructor's formal parameter types.  For example:
-     * <pre>
+     * <pre>{@code
      *    public java.util.Hashtable(int,float)
-     * </pre>
+     * }</pre>
+     *
+     * <p>If the constructor is declared to throw exceptions, the
+     * parameter list is followed by a space, followed by the word
+     * "{@code throws}" followed by a comma-separated list of the
+     * thrown exception types.
      *
      * <p>The only possible modifiers for constructors are the access
      * modifiers {@code public}, {@code protected} or
@@ -311,6 +361,20 @@ public final class Constructor<T> extends Executable {
         sb.append(getDeclaringClass().getTypeName());
     }
 
+    @Override
+    String toShortString() {
+        StringBuilder sb = new StringBuilder("constructor ");
+        sb.append(getDeclaringClass().getTypeName());
+        sb.append('(');
+        StringJoiner sj = new StringJoiner(",");
+        for (Class<?> parameterType : getParameterTypes()) {
+            sj.add(parameterType.getTypeName());
+        }
+        sb.append(sj);
+        sb.append(')');
+        return sb.toString();
+    }
+
     /**
      * Returns a string describing this {@code Constructor},
      * including type parameters.  The string is formatted as the
@@ -322,17 +386,17 @@ public final class Constructor<T> extends Executable {
      *
      * If this constructor was declared to take a variable number of
      * arguments, instead of denoting the last parameter as
-     * "<tt><i>Type</i>[]</tt>", it is denoted as
-     * "<tt><i>Type</i>...</tt>".
+     * "<code><i>Type</i>[]</code>", it is denoted as
+     * "<code><i>Type</i>...</code>".
      *
      * A space is used to separate access modifiers from one another
-     * and from the type parameters or return type.  If there are no
+     * and from the type parameters or class name.  If there are no
      * type parameters, the type parameter list is elided; if the type
      * parameter list is present, a space separates the list from the
      * class name.  If the constructor is declared to throw
      * exceptions, the parameter list is followed by a space, followed
      * by the word "{@code throws}" followed by a
-     * comma-separated list of the thrown exception types.
+     * comma-separated list of the generic thrown exception types.
      *
      * <p>The only possible modifiers for constructors are the access
      * modifiers {@code public}, {@code protected} or
@@ -405,15 +469,14 @@ public final class Constructor<T> extends Executable {
      *              by this method fails.
      */
     @CallerSensitive
+    @ForceInline // to ensure Reflection.getCallerClass optimization
     public T newInstance(Object ... initargs)
         throws InstantiationException, IllegalAccessException,
                IllegalArgumentException, InvocationTargetException
     {
         if (!override) {
-            if (!Reflection.quickCheckMemberAccess(clazz, modifiers)) {
-                Class<?> caller = Reflection.getCallerClass();
-                checkAccess(caller, clazz, null, modifiers);
-            }
+            Class<?> caller = Reflection.getCallerClass();
+            checkAccess(caller, clazz, clazz, modifiers);
         }
         if ((clazz.getModifiers() & Modifier.ENUM) != 0)
             throw new IllegalArgumentException("Cannot reflectively create enum objects");
@@ -526,19 +589,18 @@ public final class Constructor<T> extends Executable {
     }
 
     @Override
-    void handleParameterNumberMismatch(int resultLength, int numParameters) {
+    boolean handleParameterNumberMismatch(int resultLength, int numParameters) {
         Class<?> declaringClass = getDeclaringClass();
         if (declaringClass.isEnum() ||
             declaringClass.isAnonymousClass() ||
             declaringClass.isLocalClass() )
-            return ; // Can't do reliable parameter counting
+            return false; // Can't do reliable parameter counting
         else {
-            if (!declaringClass.isMemberClass() || // top-level
-                // Check for the enclosing instance parameter for
-                // non-static member classes
-                (declaringClass.isMemberClass() &&
-                 ((declaringClass.getModifiers() & Modifier.STATIC) == 0)  &&
-                 resultLength + 1 != numParameters) ) {
+            if (declaringClass.isMemberClass() &&
+                ((declaringClass.getModifiers() & Modifier.STATIC) == 0)  &&
+                resultLength + 1 == numParameters) {
+                return true;
+            } else {
                 throw new AnnotationFormatError(
                           "Parameter annotations don't match number of parameters");
             }
@@ -582,7 +644,7 @@ public final class Constructor<T> extends Executable {
 
         // A Constructor for an inner class
         return TypeAnnotationParser.buildAnnotatedType(getTypeAnnotationBytes0(),
-                sun.misc.SharedSecrets.getJavaLangAccess().
+                SharedSecrets.getJavaLangAccess().
                     getConstantPool(thisDeclClass),
                 this,
                 thisDeclClass,

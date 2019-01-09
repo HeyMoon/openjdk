@@ -33,7 +33,7 @@ import java.util.concurrent.ExecutorService;
 import java.io.*;
 import java.util.*;
 import java.security.AccessController;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
 import sun.nio.ch.ThreadPool;
 import sun.security.util.SecurityConstants;
 
@@ -61,15 +61,16 @@ public class WindowsFileSystemProvider
     private void checkUri(URI uri) {
         if (!uri.getScheme().equalsIgnoreCase(getScheme()))
             throw new IllegalArgumentException("URI does not match this provider");
-        if (uri.getAuthority() != null)
+        if (uri.getRawAuthority() != null)
             throw new IllegalArgumentException("Authority component present");
-        if (uri.getPath() == null)
+        String path = uri.getPath();
+        if (path == null)
             throw new IllegalArgumentException("Path component is undefined");
-        if (!uri.getPath().equals("/"))
+        if (!path.equals("/"))
             throw new IllegalArgumentException("Path component should be '/'");
-        if (uri.getQuery() != null)
+        if (uri.getRawQuery() != null)
             throw new IllegalArgumentException("Query component present");
-        if (uri.getFragment() != null)
+        if (uri.getRawFragment() != null)
             throw new IllegalArgumentException("Fragment component present");
     }
 
@@ -525,11 +526,6 @@ public class WindowsFileSystemProvider
         WindowsPath link = WindowsPath.toWindowsPath(obj1);
         WindowsPath target = WindowsPath.toWindowsPath(obj2);
 
-        if (!link.getFileSystem().supportsLinks()) {
-            throw new UnsupportedOperationException("Symbolic links not supported "
-                + "on this operating system");
-        }
-
         // no attributes allowed
         if (attrs.length > 0) {
             WindowsSecurityDescriptor.fromAttribute(attrs);  // may throw NPE or UOE
@@ -613,9 +609,6 @@ public class WindowsFileSystemProvider
     public Path readSymbolicLink(Path obj1) throws IOException {
         WindowsPath link = WindowsPath.toWindowsPath(obj1);
         WindowsFileSystem fs = link.getFileSystem();
-        if (!fs.supportsLinks()) {
-            throw new UnsupportedOperationException("symbolic links not supported");
-        }
 
         // permission check
         SecurityManager sm = System.getSecurityManager();

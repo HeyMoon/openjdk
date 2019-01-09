@@ -30,7 +30,6 @@
 #include "memory/allocation.hpp"
 #include "runtime/icache.hpp"
 #include "runtime/os.hpp"
-#include "utilities/top.hpp"
 
 // We have interfaces for the following instructions:
 // - NativeInstruction
@@ -54,15 +53,25 @@ class NativeInstruction VALUE_OBJ_CLASS_SPEC {
   friend class Relocation;
   friend bool is_NativeCallTrampolineStub_at(address);
  public:
-  enum { instruction_size = 4 };
+  enum {
+    instruction_size = 4
+  };
+
+  juint encoding() const {
+    return uint_at(0);
+  }
+
+  bool is_blr()                      const { return (encoding() & 0xfffffc1f) == 0xd63f0000; }
+  bool is_adr_aligned()              const { return (encoding() & 0xff000000) == 0x10000000; } // adr Xn, <label>, where label is aligned to 4 bytes (address of instruction).
+
   inline bool is_nop();
   inline bool is_illegal();
   inline bool is_return();
   bool is_jump();
+  bool is_general_jump();
   inline bool is_jump_or_nop();
   inline bool is_cond_jump();
   bool is_safepoint_poll();
-  inline bool is_mov_literal64();
   bool is_movz();
   bool is_movk();
   bool is_sigill_zombie_not_entrant();
@@ -95,11 +104,32 @@ class NativeInstruction VALUE_OBJ_CLASS_SPEC {
   inline friend NativeInstruction* nativeInstruction_at(address address);
 
   static bool is_adrp_at(address instr);
+
   static bool is_ldr_literal_at(address instr);
+
+  bool is_ldr_literal() {
+    return is_ldr_literal_at(addr_at(0));
+  }
+
   static bool is_ldrw_to_zr(address instr);
+
+  static bool is_call_at(address instr) {
+    const uint32_t insn = (*(uint32_t*)instr);
+    return (insn >> 26) == 0b100101;
+  }
+
+  bool is_call() {
+    return is_call_at(addr_at(0));
+  }
 
   static bool maybe_cpool_ref(address instr) {
     return is_adrp_at(instr) || is_ldr_literal_at(instr);
+  }
+
+  bool is_Membar() {
+    unsigned int insn = uint_at(0);
+    return Instruction_aarch64::extract(insn, 31, 12) == 0b11010101000000110011 &&
+      Instruction_aarch64::extract(insn, 7, 0) == 0b10111111;
   }
 };
 
@@ -150,11 +180,6 @@ class NativeCall: public NativeInstruction {
   // Creation
   inline friend NativeCall* nativeCall_at(address address);
   inline friend NativeCall* nativeCall_before(address return_address);
-
-  static bool is_call_at(address instr) {
-    const uint32_t insn = (*(uint32_t*)instr);
-    return (insn >> 26) == 0b100101;
-  }
 
   static bool is_call_before(address return_address) {
     return is_call_at(return_address - NativeCall::return_address_offset);
@@ -333,11 +358,15 @@ class NativeMovRegMemPatching: public NativeMovRegMem {
 // An interface for accessing/manipulating native leal instruction of form:
 //        leal reg, [reg + offset]
 
-class NativeLoadAddress: public NativeMovRegMem {
-  static const bool has_rex = true;
-  static const int rex_size = 1;
- public:
+class NativeLoadAddress: public NativeInstruction {
+  enum AArch64_specific_constants {
+    instruction_size            =    4,
+    instruction_offset          =    0,
+    data_offset                 =    0,
+    next_instruction_offset     =    4
+  };
 
+ public:
   void verify();
   void print ();
 
@@ -390,6 +419,10 @@ public:
     data_offset                 =    0,
     next_instruction_offset     =    4 * 4
   };
+
+  address jump_destination() const;
+  void set_jump_destination(address dest);
+
   static void insert_unconditional(address code_pos, address entry);
   static void replace_mt_safe(address instr_addr, address code_buffer);
   static void verify();
@@ -485,6 +518,17 @@ inline bool is_NativeCallTrampolineStub_at(address addr) {
 inline NativeCallTrampolineStub* nativeCallTrampolineStub_at(address addr) {
   assert(is_NativeCallTrampolineStub_at(addr), "no call trampoline found");
   return (NativeCallTrampolineStub*)addr;
+}
+
+class NativeMembar : public NativeInstruction {
+public:
+  unsigned int get_kind() { return Instruction_aarch64::extract(uint_at(0), 11, 8); }
+  void set_kind(int order_kind) { Instruction_aarch64::patch(addr_at(0), 11, 8, order_kind); }
+};
+
+inline NativeMembar *NativeMembar_at(address addr) {
+  assert(nativeInstruction_at(addr)->is_Membar(), "no membar found");
+  return (NativeMembar*)addr;
 }
 
 #endif // CPU_AARCH64_VM_NATIVEINST_AARCH64_HPP

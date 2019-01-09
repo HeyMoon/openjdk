@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,10 +34,11 @@ import java.beans.*;
 import java.util.*;
 import java.util.List;
 import sun.util.logging.PlatformLogger;
-
+import java.awt.geom.AffineTransform;
 import sun.awt.*;
 
 import sun.java2d.pipe.Region;
+import sun.swing.SwingUtilities2;
 
 public class WWindowPeer extends WPanelPeer implements WindowPeer,
        DisplayChangedListener
@@ -59,7 +60,7 @@ public class WWindowPeer extends WPanelPeer implements WindowPeer,
      * is a list of windows, sorted by the time of activation: later a window is
      * activated, greater its index is in the list.
      */
-    private final static StringBuffer ACTIVE_WINDOWS_KEY =
+    private static final StringBuffer ACTIVE_WINDOWS_KEY =
         new StringBuffer("active_windows_list");
 
     /*
@@ -72,7 +73,7 @@ public class WWindowPeer extends WPanelPeer implements WindowPeer,
     /*
      * The object is a listener for the AppContext.GUI_DISPOSED property.
      */
-    private final static PropertyChangeListener guiDisposedListener =
+    private static final PropertyChangeListener guiDisposedListener =
         new GuiDisposedListener();
 
     /*
@@ -80,6 +81,8 @@ public class WWindowPeer extends WPanelPeer implements WindowPeer,
      * WindowStateEvent is posted to the EventQueue.
      */
     private WindowListener windowListener;
+    private float scaleX;
+    private float scaleY;
 
     /**
      * Initialize JNI field IDs
@@ -177,15 +180,23 @@ public class WWindowPeer extends WPanelPeer implements WindowPeer,
 
         updateInsets(insets_);
 
-        Font f = ((Window)target).getFont();
-        if (f == null) {
-            f = defaultFont;
-            ((Window)target).setFont(f);
-            setFont(f);
+        if (!((Window) target).isFontSet()) {
+            ((Window) target).setFont(defaultFont);
+            setFont(defaultFont);
         }
+        if (!((Window) target).isForegroundSet()) {
+            ((Window) target).setForeground(SystemColor.windowText);
+        }
+        if (!((Window) target).isBackgroundSet()) {
+            ((Window) target).setBackground(SystemColor.window);
+        }
+
         // Express our interest in display changes
         GraphicsConfiguration gc = getGraphicsConfiguration();
-        ((Win32GraphicsDevice)gc.getDevice()).addDisplayChangedListener(this);
+        Win32GraphicsDevice gd = (Win32GraphicsDevice) gc.getDevice();
+        gd.addDisplayChangedListener(this);
+        scaleX = gd.getDefaultScaleX();
+        scaleY = gd.getDefaultScaleY();
 
         initActiveWindowsTracking((Window)target);
 
@@ -294,11 +305,17 @@ public class WWindowPeer extends WPanelPeer implements WindowPeer,
 
     synchronized native void reshapeFrame(int x, int y, int width, int height);
 
-    public boolean requestWindowFocus(CausedFocusEvent.Cause cause) {
+    native Dimension getNativeWindowSize();
+
+    public Dimension getScaledWindowSize() {
+        return getNativeWindowSize();
+    }
+
+    public boolean requestWindowFocus(FocusEvent.Cause cause) {
         if (!focusAllowedFor()) {
             return false;
         }
-        return requestWindowFocus(cause == CausedFocusEvent.Cause.MOUSE_EVENT);
+        return requestWindowFocus(cause == FocusEvent.Cause.MOUSE_EVENT);
     }
     private native boolean requestWindowFocus(boolean isMouseEventCause);
 
@@ -380,6 +397,11 @@ public class WWindowPeer extends WPanelPeer implements WindowPeer,
             int h = getSysIconHeight();
             int smw = getSysSmIconWidth();
             int smh = getSysSmIconHeight();
+            AffineTransform tx = getGraphicsConfiguration().getDefaultTransform();
+            w = Region.clipScale(w, tx.getScaleX());
+            h = Region.clipScale(h, tx.getScaleY());
+            smw = Region.clipScale(smw, tx.getScaleX());
+            smh = Region.clipScale(smh, tx.getScaleY());
             DataBufferInt iconData = SunToolkit.getScaledIconData(imageList,
                                                                   w, h);
             DataBufferInt iconSmData = SunToolkit.getScaledIconData(imageList,
@@ -490,8 +512,7 @@ public class WWindowPeer extends WPanelPeer implements WindowPeer,
         }
 
         // get current GD
-        Win32GraphicsDevice oldDev = (Win32GraphicsDevice)winGraphicsConfig
-                                     .getDevice();
+        Win32GraphicsDevice oldDev = winGraphicsConfig.getDevice();
 
         Win32GraphicsDevice newDev;
         GraphicsDevice devs[] = GraphicsEnvironment
@@ -524,6 +545,21 @@ public class WWindowPeer extends WPanelPeer implements WindowPeer,
 
         AWTAccessor.getComponentAccessor().
             setGraphicsConfiguration((Component)target, winGraphicsConfig);
+
+        checkDPIChange(oldDev, newDev);
+    }
+
+    private void checkDPIChange(Win32GraphicsDevice oldDev,
+                                Win32GraphicsDevice newDev) {
+        float newScaleX = newDev.getDefaultScaleX();
+        float newScaleY = newDev.getDefaultScaleY();
+
+        if (scaleX != newScaleX || scaleY != newScaleY) {
+            windowDPIChange(oldDev.getScreen(), scaleX, scaleY,
+                            newDev.getScreen(), newScaleX, newScaleY);
+            scaleX = newScaleX;
+            scaleY = newScaleY;
+        }
     }
 
     /**
@@ -595,8 +631,41 @@ public class WWindowPeer extends WPanelPeer implements WindowPeer,
          sysW = width;
          sysH = height;
 
+         int cx = x + width / 2;
+         int cy = y + height / 2;
+         GraphicsConfiguration current = getGraphicsConfiguration();
+         GraphicsConfiguration other = SwingUtilities2.getGraphicsConfigurationAtPoint(current, cx, cy);
+         if (!current.equals(other)) {
+             AffineTransform tx = other.getDefaultTransform();
+             double otherScaleX = tx.getScaleX();
+             double otherScaleY = tx.getScaleY();
+             initScales();
+             if (scaleX != otherScaleX || scaleY != otherScaleY) {
+                 x = (int) Math.floor(x * otherScaleX / scaleX);
+                 y = (int) Math.floor(y * otherScaleY / scaleY);
+             }
+         }
+
          super.setBounds(x, y, width, height, op);
      }
+
+    private final void initScales() {
+
+        if (scaleX >= 1 && scaleY >= 1) {
+            return;
+        }
+
+        GraphicsConfiguration gc = getGraphicsConfiguration();
+        if (gc instanceof Win32GraphicsConfig) {
+            Win32GraphicsDevice gd = ((Win32GraphicsConfig) gc).getDevice();
+            scaleX = gd.getDefaultScaleX();
+            scaleY = gd.getDefaultScaleY();
+        } else {
+            AffineTransform tx = gc.getDefaultTransform();
+            scaleX = (float) tx.getScaleX();
+            scaleY = (float) tx.getScaleY();
+        }
+    }
 
     @Override
     public void print(Graphics g) {
@@ -765,6 +834,9 @@ public class WWindowPeer extends WPanelPeer implements WindowPeer,
             }
         }
     }
+
+    native void windowDPIChange(int prevScreen, float prevScaleX, float prevScaleY,
+                                int newScreen, float newScaleX, float newScaleY);
 
     /*
      * The method maps the list of the active windows to the window's AppContext,

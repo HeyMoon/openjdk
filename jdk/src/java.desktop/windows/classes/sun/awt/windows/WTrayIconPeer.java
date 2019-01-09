@@ -28,21 +28,24 @@ package sun.awt.windows;
 import java.awt.Graphics2D;
 import java.awt.AWTEvent;
 import java.awt.Frame;
+import java.awt.GraphicsEnvironment;
 import java.awt.PopupMenu;
 import java.awt.Point;
 import java.awt.TrayIcon;
 import java.awt.Image;
+import java.awt.geom.AffineTransform;
 import java.awt.peer.TrayIconPeer;
 import java.awt.image.*;
 
 import sun.awt.AWTAccessor;
 import sun.awt.SunToolkit;
 import sun.awt.image.IntegerComponentRaster;
+import sun.java2d.pipe.Region;
 
 final class WTrayIconPeer extends WObjectPeer implements TrayIconPeer {
-    final static int TRAY_ICON_WIDTH = 16;
-    final static int TRAY_ICON_HEIGHT = 16;
-    final static int TRAY_ICON_MASK_SIZE = (TRAY_ICON_WIDTH * TRAY_ICON_HEIGHT) / 8;
+    static final int TRAY_ICON_WIDTH = 16;
+    static final int TRAY_ICON_HEIGHT = 16;
+    static final int TRAY_ICON_MASK_SIZE = (TRAY_ICON_WIDTH * TRAY_ICON_HEIGHT) / 8;
 
     IconObserver observer = new IconObserver();
     boolean firstUpdate = true;
@@ -123,16 +126,22 @@ final class WTrayIconPeer extends WObjectPeer implements TrayIconPeer {
             return;
 
         boolean autosize = ((TrayIcon)target).isImageAutoSize();
-
-        BufferedImage bufImage = new BufferedImage(TRAY_ICON_WIDTH, TRAY_ICON_HEIGHT,
-                                                   BufferedImage.TYPE_INT_ARGB);
+        AffineTransform tx = GraphicsEnvironment.getLocalGraphicsEnvironment().
+                getDefaultScreenDevice().getDefaultConfiguration().
+                getDefaultTransform();
+        int w = Region.clipScale(TRAY_ICON_WIDTH, tx.getScaleX());
+        int h = Region.clipScale(TRAY_ICON_HEIGHT, tx.getScaleY());
+        int imgWidth = Region.clipScale(image.getWidth(observer), tx.getScaleX());
+        int imgHeight = Region.clipScale(image.getHeight(observer), tx.getScaleY());
+        BufferedImage bufImage = new BufferedImage(w,
+                h, BufferedImage.TYPE_INT_ARGB);
         Graphics2D gr = bufImage.createGraphics();
         if (gr != null) {
             try {
                 gr.setPaintMode();
 
-                gr.drawImage(image, 0, 0, (autosize ? TRAY_ICON_WIDTH : image.getWidth(observer)),
-                             (autosize ? TRAY_ICON_HEIGHT : image.getHeight(observer)), observer);
+                gr.drawImage(image, 0, 0, (autosize ? w : imgWidth),
+                             (autosize ? h : imgHeight), observer);
 
                 createNativeImage(bufImage);
 
@@ -180,7 +189,7 @@ final class WTrayIconPeer extends WObjectPeer implements TrayIconPeer {
 
     /*
      * Updates/adds the icon in/to the system tray.
-     * @param doUpdate if <code>true</code>, updates the icon,
+     * @param doUpdate if {@code true}, updates the icon,
      * otherwise, adds the icon
      */
     native void updateNativeIcon(boolean doUpdate);

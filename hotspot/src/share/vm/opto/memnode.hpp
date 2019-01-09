@@ -39,11 +39,14 @@ class PhaseTransform;
 //------------------------------MemNode----------------------------------------
 // Load or Store, possibly throwing a NULL pointer exception
 class MemNode : public Node {
+private:
+  bool _unaligned_access; // Unaligned access from unsafe
+  bool _mismatched_access; // Mismatched access from unsafe: byte read in integer array for instance
 protected:
 #ifdef ASSERT
   const TypePtr* _adr_type;     // What kind of memory is being addressed?
 #endif
-  virtual uint size_of() const; // Size is bigger (ASSERT only)
+  virtual uint size_of() const;
 public:
   enum { Control,               // When is it safe to do this load?
          Memory,                // Chunk of memory is being loaded from
@@ -53,26 +56,29 @@ public:
   };
   typedef enum { unordered = 0,
                  acquire,       // Load has to acquire or be succeeded by MemBarAcquire.
-                 release        // Store has to release or be preceded by MemBarRelease.
+                 release,       // Store has to release or be preceded by MemBarRelease.
+                 seqcst,        // LoadStore has to have both acquire and release semantics.
+                 unset          // The memory ordering is not set (used for testing)
   } MemOrd;
 protected:
   MemNode( Node *c0, Node *c1, Node *c2, const TypePtr* at )
-    : Node(c0,c1,c2   ) {
+    : Node(c0,c1,c2   ), _unaligned_access(false), _mismatched_access(false) {
     init_class_id(Class_Mem);
     debug_only(_adr_type=at; adr_type();)
   }
   MemNode( Node *c0, Node *c1, Node *c2, const TypePtr* at, Node *c3 )
-    : Node(c0,c1,c2,c3) {
+    : Node(c0,c1,c2,c3), _unaligned_access(false), _mismatched_access(false) {
     init_class_id(Class_Mem);
     debug_only(_adr_type=at; adr_type();)
   }
   MemNode( Node *c0, Node *c1, Node *c2, const TypePtr* at, Node *c3, Node *c4)
-    : Node(c0,c1,c2,c3,c4) {
+    : Node(c0,c1,c2,c3,c4), _unaligned_access(false), _mismatched_access(false) {
     init_class_id(Class_Mem);
     debug_only(_adr_type=at; adr_type();)
   }
 
   virtual Node* find_previous_arraycopy(PhaseTransform* phase, Node* ld_alloc, Node*& mem, bool can_see_stored_value) const { return NULL; }
+  static bool check_if_adr_maybe_raw(Node* adr);
 
 public:
   // Helpers for the optimizer.  Documented in memnode.cpp.
@@ -126,7 +132,11 @@ public:
   // Can this node (load or store) accurately see a stored value in
   // the given memory state?  (The state may or may not be in(Memory).)
   Node* can_see_stored_value(Node* st, PhaseTransform* phase) const;
-  Node* can_see_arraycopy_value(Node* st, PhaseTransform* phase) const;
+
+  void set_unaligned_access() { _unaligned_access = true; }
+  bool is_unaligned_access() const { return _unaligned_access; }
+  void set_mismatched_access() { _mismatched_access = true; }
+  bool is_mismatched_access() const { return _mismatched_access; }
 
 #ifndef PRODUCT
   static void dump_adr_type(const Node* mem, const TypePtr* adr_type, outputStream *st);
@@ -139,9 +149,8 @@ public:
 class LoadNode : public MemNode {
 public:
   // Some loads (from unsafe) should be pinned: they don't depend only
-  // on the dominating test.  The boolean field _depends_only_on_test
-  // below records whether that node depends only on the dominating
-  // test.
+  // on the dominating test.  The field _control_dependency below records
+  // whether that node depends only on the dominating test.
   // Methods used to build LoadNodes pass an argument of type enum
   // ControlDependency instead of a boolean because those methods
   // typically have multiple boolean parameters with default values:
@@ -153,7 +162,7 @@ public:
     DependsOnlyOnTest
   };
 private:
-  // LoadNode::hash() doesn't take the _depends_only_on_test field
+  // LoadNode::hash() doesn't take the _control_dependency field
   // into account: If the graph already has a non-pinned LoadNode and
   // we add a pinned LoadNode with the same inputs, it's safe for GVN
   // to replace the pinned LoadNode with the non-pinned LoadNode,
@@ -162,7 +171,7 @@ private:
   // pinned LoadNode and we add a non pinned LoadNode with the same
   // inputs, it's safe (but suboptimal) for GVN to replace the
   // non-pinned LoadNode by the pinned LoadNode.
-  bool _depends_only_on_test;
+  ControlDependency _control_dependency;
 
   // On platforms with weak memory ordering (e.g., PPC, Ia64) we distinguish
   // loads that can be reordered, and such requiring acquire semantics to
@@ -181,7 +190,7 @@ protected:
 public:
 
   LoadNode(Node *c, Node *mem, Node *adr, const TypePtr* at, const Type *rt, MemOrd mo, ControlDependency control_dependency)
-    : MemNode(c,mem,adr,at), _type(rt), _mo(mo), _depends_only_on_test(control_dependency == DependsOnlyOnTest) {
+    : MemNode(c,mem,adr,at), _type(rt), _mo(mo), _control_dependency(control_dependency) {
     init_class_id(Class_Load);
   }
   inline bool is_unordered() const { return !is_acquire(); }
@@ -189,17 +198,22 @@ public:
     assert(_mo == unordered || _mo == acquire, "unexpected");
     return _mo == acquire;
   }
+  inline bool is_unsigned() const {
+    int lop = Opcode();
+    return (lop == Op_LoadUB) || (lop == Op_LoadUS);
+  }
 
   // Polymorphic factory method:
-   static Node* make(PhaseGVN& gvn, Node *c, Node *mem, Node *adr,
-                     const TypePtr* at, const Type *rt, BasicType bt,
-                     MemOrd mo, ControlDependency control_dependency = DependsOnlyOnTest);
+  static Node* make(PhaseGVN& gvn, Node *c, Node *mem, Node *adr,
+                    const TypePtr* at, const Type *rt, BasicType bt,
+                    MemOrd mo, ControlDependency control_dependency = DependsOnlyOnTest,
+                    bool unaligned = false, bool mismatched = false);
 
   virtual uint hash()   const;  // Check the type
 
   // Handle algebraic identities here.  If we have an identity, return the Node
   // we are equivalent to.  We look for Load of a Store.
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual Node* Identity(PhaseGVN* phase);
 
   // If the load is from Field memory and the pointer is non-null, it might be possible to
   // zero out the control input.
@@ -215,11 +229,11 @@ public:
 
   // Compute a new Type for this node.  Basically we just do the pre-check,
   // then call the virtual add() to set the type.
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
 
   // Common methods for LoadKlass and LoadNKlass nodes.
-  const Type *klass_value_common( PhaseTransform *phase ) const;
-  Node *klass_identity_common( PhaseTransform *phase );
+  const Type* klass_value_common(PhaseGVN* phase) const;
+  Node* klass_identity_common(PhaseGVN* phase);
 
   virtual uint ideal_reg() const;
   virtual const Type *bottom_type() const;
@@ -242,6 +256,9 @@ public:
   // Check if the load's memory input is a Phi node with the same control.
   bool is_instance_field_load_with_local_phi(Node* ctrl);
 
+  Node* convert_to_unsigned_load(PhaseGVN& gvn);
+  Node* convert_to_signed_load(PhaseGVN& gvn);
+
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const;
 #endif
@@ -252,6 +269,9 @@ public:
 protected:
   const Type* load_array_final_field(const TypeKlassPtr *tkls,
                                      ciKlass* klass) const;
+
+  Node* can_see_arraycopy_value(Node* st, PhaseGVN* phase) const;
+
   // depends_only_on_test is almost always true, and needs to be almost always
   // true to enable key hoisting & commoning optimizations.  However, for the
   // special case of RawPtr loads from TLS top & end, and other loads performed by
@@ -261,7 +281,9 @@ protected:
   // which produce results (new raw memory state) inside of loops preventing all
   // manner of other optimizations).  Basically, it's ugly but so is the alternative.
   // See comment in macro.cpp, around line 125 expand_allocate_common().
-  virtual bool depends_only_on_test() const { return adr_type() != TypeRawPtr::BOTTOM && _depends_only_on_test; }
+  virtual bool depends_only_on_test() const {
+    return adr_type() != TypeRawPtr::BOTTOM && _control_dependency == DependsOnlyOnTest;
+  }
 };
 
 //------------------------------LoadBNode--------------------------------------
@@ -273,7 +295,7 @@ public:
   virtual int Opcode() const;
   virtual uint ideal_reg() const { return Op_RegI; }
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual const Type *Value(PhaseTransform *phase) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual int store_Opcode() const { return Op_StoreB; }
   virtual BasicType memory_type() const { return T_BYTE; }
 };
@@ -287,7 +309,7 @@ public:
   virtual int Opcode() const;
   virtual uint ideal_reg() const { return Op_RegI; }
   virtual Node* Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual const Type *Value(PhaseTransform *phase) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual int store_Opcode() const { return Op_StoreB; }
   virtual BasicType memory_type() const { return T_BYTE; }
 };
@@ -301,7 +323,7 @@ public:
   virtual int Opcode() const;
   virtual uint ideal_reg() const { return Op_RegI; }
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual const Type *Value(PhaseTransform *phase) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual int store_Opcode() const { return Op_StoreC; }
   virtual BasicType memory_type() const { return T_CHAR; }
 };
@@ -315,7 +337,7 @@ public:
   virtual int Opcode() const;
   virtual uint ideal_reg() const { return Op_RegI; }
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual const Type *Value(PhaseTransform *phase) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual int store_Opcode() const { return Op_StoreC; }
   virtual BasicType memory_type() const { return T_SHORT; }
 };
@@ -339,8 +361,8 @@ public:
   LoadRangeNode(Node *c, Node *mem, Node *adr, const TypeInt *ti = TypeInt::POS)
     : LoadINode(c, mem, adr, TypeAryPtr::RANGE, ti, MemNode::unordered) {}
   virtual int Opcode() const;
-  virtual const Type *Value( PhaseTransform *phase ) const;
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual const Type* Value(PhaseGVN* phase) const;
+  virtual Node* Identity(PhaseGVN* phase);
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
 };
 
@@ -365,7 +387,8 @@ public:
   virtual BasicType memory_type() const { return T_LONG; }
   bool require_atomic_access() const { return _require_atomic_access; }
   static LoadLNode* make_atomic(Node* ctl, Node* mem, Node* adr, const TypePtr* adr_type,
-                                const Type* rt, MemOrd mo, ControlDependency control_dependency = DependsOnlyOnTest);
+                                const Type* rt, MemOrd mo, ControlDependency control_dependency = DependsOnlyOnTest,
+                                bool unaligned = false, bool mismatched = false);
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const {
     LoadNode::dump_spec(st);
@@ -416,7 +439,8 @@ public:
   virtual BasicType memory_type() const { return T_DOUBLE; }
   bool require_atomic_access() const { return _require_atomic_access; }
   static LoadDNode* make_atomic(Node* ctl, Node* mem, Node* adr, const TypePtr* adr_type,
-                                const Type* rt, MemOrd mo, ControlDependency control_dependency = DependsOnlyOnTest);
+                                const Type* rt, MemOrd mo, ControlDependency control_dependency = DependsOnlyOnTest,
+                                bool unaligned = false, bool mismatched = false);
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const {
     LoadNode::dump_spec(st);
@@ -470,8 +494,8 @@ public:
   LoadKlassNode(Node *c, Node *mem, Node *adr, const TypePtr *at, const TypeKlassPtr *tk, MemOrd mo)
     : LoadPNode(c, mem, adr, at, tk, mo) {}
   virtual int Opcode() const;
-  virtual const Type *Value( PhaseTransform *phase ) const;
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual const Type* Value(PhaseGVN* phase) const;
+  virtual Node* Identity(PhaseGVN* phase);
   virtual bool depends_only_on_test() const { return true; }
 
   // Polymorphic factory method:
@@ -490,8 +514,8 @@ public:
   virtual int store_Opcode() const { return Op_StoreNKlass; }
   virtual BasicType memory_type() const { return T_NARROWKLASS; }
 
-  virtual const Type *Value( PhaseTransform *phase ) const;
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual const Type* Value(PhaseGVN* phase) const;
+  virtual Node* Identity(PhaseGVN* phase);
   virtual bool depends_only_on_test() const { return true; }
 };
 
@@ -568,10 +592,10 @@ public:
 
   // Compute a new Type for this node.  Basically we just do the pre-check,
   // then call the virtual add() to set the type.
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
 
   // Check for identity function on memory (Load then Store at same address)
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual Node* Identity(PhaseGVN* phase);
 
   // Do not match memory edge
   virtual uint match_edge(uint idx) const;
@@ -733,9 +757,9 @@ public:
            "bad oop alias idx");
   }
   virtual int Opcode() const;
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual Node* Identity(PhaseGVN* phase);
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual BasicType memory_type() const { return T_VOID; } // unspecific
   int oop_alias_idx() const { return _oop_alias_idx; }
 };
@@ -769,7 +793,7 @@ public:
     return ctrl->in(MemNode::Memory)->adr_type();
   }
   virtual uint ideal_reg() const { return 0;} // memory projections don't have a register
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
 #ifndef PRODUCT
   virtual void dump_spec(outputStream *st) const {};
 #endif
@@ -835,34 +859,173 @@ public:
   virtual uint ideal_reg() const { return Op_RegFlags; }
 };
 
-
-//------------------------------CompareAndSwapLNode---------------------------
-class CompareAndSwapLNode : public LoadStoreConditionalNode {
+class CompareAndSwapNode : public LoadStoreConditionalNode {
+private:
+  const MemNode::MemOrd _mem_ord;
 public:
-  CompareAndSwapLNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex) : LoadStoreConditionalNode(c, mem, adr, val, ex) { }
+  CompareAndSwapNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : LoadStoreConditionalNode(c, mem, adr, val, ex), _mem_ord(mem_ord) {}
+  MemNode::MemOrd order() const {
+    return _mem_ord;
+  }
+};
+
+class CompareAndExchangeNode : public LoadStoreNode {
+private:
+  const MemNode::MemOrd _mem_ord;
+public:
+  enum {
+    ExpectedIn = MemNode::ValueIn+1 // One more input than MemNode
+  };
+  CompareAndExchangeNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord, const TypePtr* at, const Type* t) :
+    LoadStoreNode(c, mem, adr, val, at, t, 5), _mem_ord(mem_ord) {
+     init_req(ExpectedIn, ex );
+  }
+
+  MemNode::MemOrd order() const {
+    return _mem_ord;
+  }
+};
+
+//------------------------------CompareAndSwapBNode---------------------------
+class CompareAndSwapBNode : public CompareAndSwapNode {
+public:
+  CompareAndSwapBNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : CompareAndSwapNode(c, mem, adr, val, ex, mem_ord) { }
   virtual int Opcode() const;
 };
 
+//------------------------------CompareAndSwapSNode---------------------------
+class CompareAndSwapSNode : public CompareAndSwapNode {
+public:
+  CompareAndSwapSNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : CompareAndSwapNode(c, mem, adr, val, ex, mem_ord) { }
+  virtual int Opcode() const;
+};
 
 //------------------------------CompareAndSwapINode---------------------------
-class CompareAndSwapINode : public LoadStoreConditionalNode {
+class CompareAndSwapINode : public CompareAndSwapNode {
 public:
-  CompareAndSwapINode( Node *c, Node *mem, Node *adr, Node *val, Node *ex) : LoadStoreConditionalNode(c, mem, adr, val, ex) { }
+  CompareAndSwapINode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : CompareAndSwapNode(c, mem, adr, val, ex, mem_ord) { }
   virtual int Opcode() const;
 };
 
+//------------------------------CompareAndSwapLNode---------------------------
+class CompareAndSwapLNode : public CompareAndSwapNode {
+public:
+  CompareAndSwapLNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : CompareAndSwapNode(c, mem, adr, val, ex, mem_ord) { }
+  virtual int Opcode() const;
+};
 
 //------------------------------CompareAndSwapPNode---------------------------
-class CompareAndSwapPNode : public LoadStoreConditionalNode {
+class CompareAndSwapPNode : public CompareAndSwapNode {
 public:
-  CompareAndSwapPNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex) : LoadStoreConditionalNode(c, mem, adr, val, ex) { }
+  CompareAndSwapPNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : CompareAndSwapNode(c, mem, adr, val, ex, mem_ord) { }
   virtual int Opcode() const;
 };
 
 //------------------------------CompareAndSwapNNode---------------------------
-class CompareAndSwapNNode : public LoadStoreConditionalNode {
+class CompareAndSwapNNode : public CompareAndSwapNode {
 public:
-  CompareAndSwapNNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex) : LoadStoreConditionalNode(c, mem, adr, val, ex) { }
+  CompareAndSwapNNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : CompareAndSwapNode(c, mem, adr, val, ex, mem_ord) { }
+  virtual int Opcode() const;
+};
+
+//------------------------------WeakCompareAndSwapBNode---------------------------
+class WeakCompareAndSwapBNode : public CompareAndSwapNode {
+public:
+  WeakCompareAndSwapBNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : CompareAndSwapNode(c, mem, adr, val, ex, mem_ord) { }
+  virtual int Opcode() const;
+};
+
+//------------------------------WeakCompareAndSwapSNode---------------------------
+class WeakCompareAndSwapSNode : public CompareAndSwapNode {
+public:
+  WeakCompareAndSwapSNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : CompareAndSwapNode(c, mem, adr, val, ex, mem_ord) { }
+  virtual int Opcode() const;
+};
+
+//------------------------------WeakCompareAndSwapINode---------------------------
+class WeakCompareAndSwapINode : public CompareAndSwapNode {
+public:
+  WeakCompareAndSwapINode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : CompareAndSwapNode(c, mem, adr, val, ex, mem_ord) { }
+  virtual int Opcode() const;
+};
+
+//------------------------------WeakCompareAndSwapLNode---------------------------
+class WeakCompareAndSwapLNode : public CompareAndSwapNode {
+public:
+  WeakCompareAndSwapLNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : CompareAndSwapNode(c, mem, adr, val, ex, mem_ord) { }
+  virtual int Opcode() const;
+};
+
+//------------------------------WeakCompareAndSwapPNode---------------------------
+class WeakCompareAndSwapPNode : public CompareAndSwapNode {
+public:
+  WeakCompareAndSwapPNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : CompareAndSwapNode(c, mem, adr, val, ex, mem_ord) { }
+  virtual int Opcode() const;
+};
+
+//------------------------------WeakCompareAndSwapNNode---------------------------
+class WeakCompareAndSwapNNode : public CompareAndSwapNode {
+public:
+  WeakCompareAndSwapNNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, MemNode::MemOrd mem_ord) : CompareAndSwapNode(c, mem, adr, val, ex, mem_ord) { }
+  virtual int Opcode() const;
+};
+
+//------------------------------CompareAndExchangeBNode---------------------------
+class CompareAndExchangeBNode : public CompareAndExchangeNode {
+public:
+  CompareAndExchangeBNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, const TypePtr* at, MemNode::MemOrd mem_ord) : CompareAndExchangeNode(c, mem, adr, val, ex, mem_ord, at, TypeInt::BYTE) { }
+  virtual int Opcode() const;
+};
+
+
+//------------------------------CompareAndExchangeSNode---------------------------
+class CompareAndExchangeSNode : public CompareAndExchangeNode {
+public:
+  CompareAndExchangeSNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, const TypePtr* at, MemNode::MemOrd mem_ord) : CompareAndExchangeNode(c, mem, adr, val, ex, mem_ord, at, TypeInt::SHORT) { }
+  virtual int Opcode() const;
+};
+
+//------------------------------CompareAndExchangeLNode---------------------------
+class CompareAndExchangeLNode : public CompareAndExchangeNode {
+public:
+  CompareAndExchangeLNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, const TypePtr* at, MemNode::MemOrd mem_ord) : CompareAndExchangeNode(c, mem, adr, val, ex, mem_ord, at, TypeLong::LONG) { }
+  virtual int Opcode() const;
+};
+
+
+//------------------------------CompareAndExchangeINode---------------------------
+class CompareAndExchangeINode : public CompareAndExchangeNode {
+public:
+  CompareAndExchangeINode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, const TypePtr* at, MemNode::MemOrd mem_ord) : CompareAndExchangeNode(c, mem, adr, val, ex, mem_ord, at, TypeInt::INT) { }
+  virtual int Opcode() const;
+};
+
+
+//------------------------------CompareAndExchangePNode---------------------------
+class CompareAndExchangePNode : public CompareAndExchangeNode {
+public:
+  CompareAndExchangePNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, const TypePtr* at, const Type* t, MemNode::MemOrd mem_ord) : CompareAndExchangeNode(c, mem, adr, val, ex, mem_ord, at, t) { }
+  virtual int Opcode() const;
+};
+
+//------------------------------CompareAndExchangeNNode---------------------------
+class CompareAndExchangeNNode : public CompareAndExchangeNode {
+public:
+  CompareAndExchangeNNode( Node *c, Node *mem, Node *adr, Node *val, Node *ex, const TypePtr* at, const Type* t, MemNode::MemOrd mem_ord) : CompareAndExchangeNode(c, mem, adr, val, ex, mem_ord, at, t) { }
+  virtual int Opcode() const;
+};
+
+//------------------------------GetAndAddBNode---------------------------
+class GetAndAddBNode : public LoadStoreNode {
+public:
+  GetAndAddBNode( Node *c, Node *mem, Node *adr, Node *val, const TypePtr* at ) : LoadStoreNode(c, mem, adr, val, at, TypeInt::BYTE, 4) { }
+  virtual int Opcode() const;
+};
+
+//------------------------------GetAndAddSNode---------------------------
+class GetAndAddSNode : public LoadStoreNode {
+public:
+  GetAndAddSNode( Node *c, Node *mem, Node *adr, Node *val, const TypePtr* at ) : LoadStoreNode(c, mem, adr, val, at, TypeInt::SHORT, 4) { }
   virtual int Opcode() const;
 };
 
@@ -880,6 +1043,19 @@ public:
   virtual int Opcode() const;
 };
 
+//------------------------------GetAndSetBNode---------------------------
+class GetAndSetBNode : public LoadStoreNode {
+public:
+  GetAndSetBNode( Node *c, Node *mem, Node *adr, Node *val, const TypePtr* at ) : LoadStoreNode(c, mem, adr, val, at, TypeInt::BYTE, 4) { }
+  virtual int Opcode() const;
+};
+
+//------------------------------GetAndSetSNode---------------------------
+class GetAndSetSNode : public LoadStoreNode {
+public:
+  GetAndSetSNode( Node *c, Node *mem, Node *adr, Node *val, const TypePtr* at ) : LoadStoreNode(c, mem, adr, val, at, TypeInt::SHORT, 4) { }
+  virtual int Opcode() const;
+};
 
 //------------------------------GetAndSetINode---------------------------
 class GetAndSetINode : public LoadStoreNode {
@@ -888,7 +1064,7 @@ public:
   virtual int Opcode() const;
 };
 
-//------------------------------GetAndSetINode---------------------------
+//------------------------------GetAndSetLNode---------------------------
 class GetAndSetLNode : public LoadStoreNode {
 public:
   GetAndSetLNode( Node *c, Node *mem, Node *adr, Node *val, const TypePtr* at ) : LoadStoreNode(c, mem, adr, val, at, TypeLong::LONG, 4) { }
@@ -911,9 +1087,11 @@ public:
 
 //------------------------------ClearArray-------------------------------------
 class ClearArrayNode: public Node {
+private:
+  bool _is_large;
 public:
-  ClearArrayNode( Node *ctrl, Node *arymem, Node *word_cnt, Node *base )
-    : Node(ctrl,arymem,word_cnt,base) {
+  ClearArrayNode( Node *ctrl, Node *arymem, Node *word_cnt, Node *base, bool is_large)
+    : Node(ctrl,arymem,word_cnt,base), _is_large(is_large) {
     init_class_id(Class_ClearArray);
   }
   virtual int         Opcode() const;
@@ -921,9 +1099,10 @@ public:
   // ClearArray modifies array elements, and so affects only the
   // array memory addressed by the bottom_type of its base address.
   virtual const class TypePtr *adr_type() const;
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual Node* Identity(PhaseGVN* phase);
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
   virtual uint match_edge(uint idx) const;
+  bool is_large() const { return _is_large; }
 
   // Clear the given area of an object or array.
   // The start offset must always be aligned mod BytesPerInt.
@@ -970,7 +1149,7 @@ public:
   MemBarNode(Compile* C, int alias_idx, Node* precedent);
   virtual int Opcode() const = 0;
   virtual const class TypePtr *adr_type() const { return _adr_type; }
-  virtual const Type *Value( PhaseTransform *phase ) const;
+  virtual const Type* Value(PhaseGVN* phase) const;
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
   virtual uint match_edge(uint idx) const { return 0; }
   virtual const Type *bottom_type() const { return TypeTuple::MEMBAR; }
@@ -995,7 +1174,7 @@ public:
 // "Acquire" - no following ref can move before (but earlier refs can
 // follow, like an early Load stalled in cache).  Requires multi-cpu
 // visibility.  Inserted independ of any load, as required
-// for intrinsic sun.misc.Unsafe.loadFence().
+// for intrinsic Unsafe.loadFence().
 class LoadFenceNode: public MemBarNode {
 public:
   LoadFenceNode(Compile* C, int alias_idx, Node* precedent)
@@ -1016,7 +1195,7 @@ public:
 // "Release" - no earlier ref can move after (but later refs can move
 // up, like a speculative pipelined cache-hitting Load).  Requires
 // multi-cpu visibility.  Inserted independent of any store, as required
-// for intrinsic sun.misc.Unsafe.storeFence().
+// for intrinsic Unsafe.storeFence().
 class StoreFenceNode: public MemBarNode {
 public:
   StoreFenceNode(Compile* C, int alias_idx, Node* precedent)
@@ -1071,6 +1250,13 @@ public:
     : MemBarNode(C, alias_idx, precedent) {}
   virtual int Opcode() const;
   virtual uint ideal_reg() const { return 0; } // not matched in the AD file
+};
+
+class OnSpinWaitNode: public MemBarNode {
+public:
+  OnSpinWaitNode(Compile* C, int alias_idx, Node* precedent)
+    : MemBarNode(C, alias_idx, precedent) {}
+  virtual int Opcode() const;
 };
 
 // Isolation of object setup after an AllocateNode and before next safepoint.
@@ -1186,7 +1372,7 @@ public:
   static MergeMemNode* make(Node* base_memory);
 
   virtual int Opcode() const;
-  virtual Node *Identity( PhaseTransform *phase );
+  virtual Node* Identity(PhaseGVN* phase);
   virtual Node *Ideal(PhaseGVN *phase, bool can_reshape);
   virtual uint ideal_reg() const { return NotAMachineReg; }
   virtual uint match_edge(uint idx) const { return 0; }

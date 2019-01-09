@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -71,6 +71,7 @@
 
 #define SPLASH_FILE_ENV_ENTRY "_JAVA_SPLASH_FILE"
 #define SPLASH_JAR_ENV_ENTRY "_JAVA_SPLASH_JAR"
+#define JDK_JAVA_OPTIONS "JDK_JAVA_OPTIONS"
 
 /*
  * Pointers to the needed JNI invocation API, initialized by LoadJavaVM.
@@ -112,6 +113,9 @@ GetXUsagePath(char *buf, jint bufsize);
 jboolean
 GetApplicationHome(char *buf, jint bufsize);
 
+jboolean
+GetApplicationHomeFromDll(char *buf, jint bufsize);
+
 #define GetArch() GetArchPath(CURRENT_DATA_MODEL)
 
 /*
@@ -137,6 +141,9 @@ void JLI_ReportErrorMessageSys(const char * message, ...);
 /* Reports an error message only to stderr. */
 void JLI_ReportMessage(const char * message, ...);
 
+/* Reports a message only to stdout. */
+void JLI_ShowMessage(const char * message, ...);
+
 /*
  * Reports an exception which terminates the vm to stderr or a window
  * as appropriate.
@@ -161,21 +168,15 @@ void SetJavaLauncherProp(void);
 jint ReadKnownVMs(const char *jvmcfg, jboolean speculative);
 char *CheckJvmType(int *argc, char ***argv, jboolean speculative);
 void AddOption(char *str, void *info);
+jboolean IsWhiteSpaceOption(const char* name);
 
-enum ergo_policy {
-   DEFAULT_POLICY = 0,
-   NEVER_SERVER_CLASS,
-   ALWAYS_SERVER_CLASS
-};
+// Utility function defined in args.c
+int isTerminalOpt(char *arg);
 
 const char* GetProgramName();
-const char* GetDotVersion();
 const char* GetFullVersion();
 jboolean IsJavaArgs();
 jboolean IsJavaw();
-jint GetErgoPolicy();
-
-jboolean ServerClassMachine();
 
 int ContinueInNewThread(InvocationFunctions* ifn, jlong threadStackSize,
                    int argc, char** argv,
@@ -224,11 +225,12 @@ int JNICALL JavaMain(void * args); /* entry point                  */
 enum LaunchMode {               // cf. sun.launcher.LauncherHelper
     LM_UNKNOWN = 0,
     LM_CLASS,
-    LM_JAR
+    LM_JAR,
+    LM_MODULE
 };
 
 static const char *launchModeNames[]
-    = { "Unknown", "Main class", "JAR file" };
+    = { "Unknown", "Main class", "JAR file", "Module" };
 
 typedef struct {
     int    argc;
@@ -251,6 +253,13 @@ typedef struct {
 
 #define NULL_CHECK(NC_check_pointer) \
     NULL_CHECK_RETURN_VALUE(NC_check_pointer, )
+
+#define CHECK_EXCEPTION_RETURN_VALUE(CER_value) \
+    do { \
+        if ((*env)->ExceptionOccurred(env)) { \
+            return CER_value; \
+        } \
+    } while (JNI_FALSE)
 
 #define CHECK_EXCEPTION_RETURN() \
     do { \

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -75,6 +75,13 @@ static void freeCEN(jzfile *);
 #endif
 
 static jint INITIAL_META_COUNT = 2;   /* initial number of entries in meta name array */
+
+/*
+ * Declare library specific JNI_Onload entry if static build
+ */
+#ifdef STATIC_BUILD
+DEF_STATIC_JNI_OnLoad
+#endif
 
 /*
  * The ZFILE_* functions exist to provide some platform-independence with
@@ -575,16 +582,17 @@ readCEN(jzfile *zip, jint knownTotal)
         }
     }
 
-    if (cenlen > endpos)
+    if (cenlen > endpos) {
         ZIP_FORMAT_ERROR("invalid END header (bad central directory size)");
+    }
     cenpos = endpos - cenlen;
 
     /* Get position of first local file (LOC) header, taking into
      * account that there may be a stub prefixed to the zip file. */
     zip->locpos = cenpos - cenoff;
-    if (zip->locpos < 0)
+    if (zip->locpos < 0) {
         ZIP_FORMAT_ERROR("invalid END header (bad central directory offset)");
-
+    }
 #ifdef USE_MMAP
     if (zip->usemmap) {
       /* On Solaris & Linux prior to JDK 6, we used to mmap the whole jar file to
@@ -674,15 +682,18 @@ readCEN(jzfile *zip, jint knownTotal)
         method = CENHOW(cp);
         nlen   = CENNAM(cp);
 
-        if (!CENSIG_AT(cp))
+        if (!CENSIG_AT(cp)) {
             ZIP_FORMAT_ERROR("invalid CEN header (bad signature)");
-        if (CENFLG(cp) & 1)
+        }
+        if (CENFLG(cp) & 1) {
             ZIP_FORMAT_ERROR("invalid CEN header (encrypted entry)");
-        if (method != STORED && method != DEFLATED)
+        }
+        if (method != STORED && method != DEFLATED) {
             ZIP_FORMAT_ERROR("invalid CEN header (bad compression method)");
-        if (cp + CENHDR + nlen > cenend)
+        }
+        if (cp + CENHDR + nlen > cenend) {
             ZIP_FORMAT_ERROR("invalid CEN header (bad header size)");
-
+        }
         /* if the entry is metadata add it to our metadata names */
         if (isMetaName((char *)cp+CENHDR, nlen))
             if (addMetaName(zip, (char *)cp+CENHDR, nlen) != 0)
@@ -697,9 +708,9 @@ readCEN(jzfile *zip, jint knownTotal)
         entries[i].next = table[hsh];
         table[hsh] = i;
     }
-    if (cp != cenend)
+    if (cp != cenend) {
         ZIP_FORMAT_ERROR("invalid CEN header (bad header size)");
-
+    }
     zip->total = i;
     goto Finally;
 
@@ -1083,7 +1094,7 @@ newEntry(jzfile *zip, jzcell *zc, AccessHint accessHint)
  * jzentry for each zip.  This optimizes a common access pattern.
  */
 
-void
+void JNICALL
 ZIP_FreeEntry(jzfile *jz, jzentry *ze)
 {
     jzentry *last;
@@ -1108,7 +1119,7 @@ jzentry *
 ZIP_GetEntry(jzfile *zip, char *name, jint ulen)
 {
     if (ulen == 0) {
-        return ZIP_GetEntry2(zip, name, strlen(name), JNI_FALSE);
+        return ZIP_GetEntry2(zip, name, (jint)strlen(name), JNI_FALSE);
     }
     return ZIP_GetEntry2(zip, name, ulen, JNI_TRUE);
 }
@@ -1302,11 +1313,22 @@ ZIP_GetEntryDataOffset(jzfile *zip, jzentry *entry)
 jint
 ZIP_Read(jzfile *zip, jzentry *entry, jlong pos, void *buf, jint len)
 {
-    jlong entry_size = (entry->csize != 0) ? entry->csize : entry->size;
+    jlong entry_size;
     jlong start;
+
+    if (zip == 0) {
+        return -1;
+    }
 
     /* Clear previous zip error */
     zip->msg = NULL;
+
+    if (entry == 0) {
+        zip->msg = "ZIP_Read: jzentry is NULL";
+        return -1;
+    }
+
+    entry_size = (entry->csize != 0) ? entry->csize : entry->size;
 
     /* Check specified position */
     if (pos < 0 || pos > entry_size - 1) {
@@ -1397,7 +1419,7 @@ InflateFully(jzfile *zip, jzentry *entry, void *buf, char **msg)
             case Z_OK:
                 break;
             case Z_STREAM_END:
-                if (count != 0 || strm.total_out != entry->size) {
+                if (count != 0 || strm.total_out != (uInt)entry->size) {
                     *msg = "inflateFully: Unexpected end of stream";
                     inflateEnd(&strm);
                     return JNI_FALSE;
@@ -1423,7 +1445,7 @@ ZIP_FindEntry(jzfile *zip, char *name, jint *sizeP, jint *nameLenP)
     jzentry *entry = ZIP_GetEntry(zip, name, 0);
     if (entry) {
         *sizeP = (jint)entry->size;
-        *nameLenP = strlen(entry->name);
+        *nameLenP = (jint)strlen(entry->name);
     }
     return entry;
 }
@@ -1438,6 +1460,12 @@ jboolean JNICALL
 ZIP_ReadEntry(jzfile *zip, jzentry *entry, unsigned char *buf, char *entryname)
 {
     char *msg;
+    char tmpbuf[1024];
+
+    if (entry == 0) {
+        jio_fprintf(stderr, "jzentry was invalid");
+        return JNI_FALSE;
+    }
 
     strcpy(entryname, entry->name);
     if (entry->csize == 0) {
@@ -1456,8 +1484,11 @@ ZIP_ReadEntry(jzfile *zip, jzentry *entry, unsigned char *buf, char *entryname)
             msg = zip->msg;
             ZIP_Unlock(zip);
             if (n == -1) {
-                jio_fprintf(stderr, "%s: %s\n", zip->name,
-                            msg != 0 ? msg : strerror(errno));
+                if (msg == 0) {
+                    getErrorString(errno, tmpbuf, sizeof(tmpbuf));
+                    msg = tmpbuf;
+                }
+                jio_fprintf(stderr, "%s: %s\n", zip->name, msg);
                 return JNI_FALSE;
             }
             buf += n;
@@ -1470,8 +1501,11 @@ ZIP_ReadEntry(jzfile *zip, jzentry *entry, unsigned char *buf, char *entryname)
             if ((msg == NULL) || (*msg == 0)) {
                 msg = zip->msg;
             }
-            jio_fprintf(stderr, "%s: %s\n", zip->name,
-                        msg != 0 ? msg : strerror(errno));
+            if (msg == 0) {
+                getErrorString(errno, tmpbuf, sizeof(tmpbuf));
+                msg = tmpbuf;
+            }
+            jio_fprintf(stderr, "%s: %s\n", zip->name, msg);
             return JNI_FALSE;
         }
     }
@@ -1505,7 +1539,7 @@ ZIP_InflateFully(void *inBuf, jlong inLen, void *outBuf, jlong outLen, char **pm
             case Z_OK:
                 break;
             case Z_STREAM_END:
-                if (strm.total_out != outLen) {
+                if (strm.total_out != (uInt)outLen) {
                     *pmsg = "INFLATER_inflateFully: Unexpected end of stream";
                     inflateEnd(&strm);
                     return JNI_FALSE;

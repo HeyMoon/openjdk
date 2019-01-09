@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2006, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,12 +24,11 @@
  */
 
 /**
- * Provides classes and interfaces for obtaining reflective
- * information about classes and objects.  Reflection allows
- * programmatic access to information about the fields, methods and
- * constructors of loaded classes, and the use of reflected fields,
- * methods, and constructors to operate on their underlying
- * counterparts, within security restrictions.
+ * Provides classes and interfaces for obtaining reflective information about
+ * classes and objects.  Reflection allows programmatic access to information
+ * about the fields, methods and constructors of loaded classes, and the use
+ * of reflected fields, methods, and constructors to operate on their underlying
+ * counterparts, within encapsulation and security restrictions.
  *
  * <p>{@code AccessibleObject} allows suppression of access checks if
  * the necessary {@code ReflectPermission} is available.
@@ -45,5 +44,7 @@
  * members declared by a given class.
  *
  * @since 1.1
+ * @revised 9
+ * @spec JPMS
  */
 package java.lang.reflect;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2002, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,6 @@
 package com.sun.java.swing.plaf.gtk;
 
 import java.awt.*;
-import java.awt.event.*;
 import java.beans.*;
 import java.io.File;
 import java.lang.ref.*;
@@ -41,11 +40,14 @@ import javax.swing.text.DefaultEditorKit;
 
 import com.sun.java.swing.plaf.gtk.GTKConstants.PositionType;
 import com.sun.java.swing.plaf.gtk.GTKConstants.StateType;
+import java.util.HashMap;
+import java.util.Map;
 import sun.awt.SunToolkit;
 import sun.awt.UNIXToolkit;
 import sun.awt.OSInfo;
 import sun.security.action.GetPropertyAction;
 import sun.swing.DefaultLayoutStyle;
+import sun.swing.SwingAccessor;
 import sun.swing.SwingUtilities2;
 
 /**
@@ -53,7 +55,8 @@ import sun.swing.SwingUtilities2;
  */
 @SuppressWarnings("serial") // Superclass not serializable
 public class GTKLookAndFeel extends SynthLookAndFeel {
-    private static final boolean IS_22;
+    private static boolean IS_22;
+    private static boolean IS_3;
 
     /**
      * Whether or not text is drawn antialiased.  This keys off the
@@ -61,13 +64,7 @@ public class GTKLookAndFeel extends SynthLookAndFeel {
      * We should assume ON - or some variation of ON as no GTK desktop
      * ships with it OFF.
      */
-    static Object aaTextInfo;
-
-    /**
-     * Solaris, or Linux with Sun JDS in a CJK Locale.
-     * Used to determine if Sun's high quality CJK fonts are present.
-     */
-    private static boolean isSunCJK;
+    static Map<Object, Object> aaTextInfo;
 
     /*
      * Used to override if system (desktop) text anti-aliasing settings should
@@ -105,47 +102,6 @@ public class GTKLookAndFeel extends SynthLookAndFeel {
      */
     private static String gtkThemeName = "Default";
 
-    static {
-        // Backup for specifying the version, this isn't currently documented.
-        // If you pass in anything but 2.2 you got the 2.0 colors/look.
-        String version = AccessController.doPrivileged(
-               new GetPropertyAction("swing.gtk.version"));
-        if (version != null) {
-            IS_22 = version.equals("2.2");
-        }
-        else {
-            IS_22 = true;
-        }
-
-        String language = Locale.getDefault().getLanguage();
-        boolean cjkLocale =
-            (Locale.CHINESE.getLanguage().equals(language) ||
-             Locale.JAPANESE.getLanguage().equals(language) ||
-             Locale.KOREAN.getLanguage().equals(language));
-
-        if (cjkLocale) {
-            boolean isSunDesktop = false;
-            switch (OSInfo.getOSType()) {
-                case SOLARIS:
-                    isSunDesktop = true;
-                    break;
-
-                case LINUX:
-                    Boolean val = AccessController.doPrivileged(
-                                    new PrivilegedAction<Boolean>() {
-                                        public Boolean run() {
-                                            File f = new File("/etc/sun-release");
-                                            return Boolean.valueOf(f.exists());
-                                        }
-                                    });
-                    isSunDesktop = val.booleanValue();
-            }
-            if (isSunDesktop && !sun.java2d.SunGraphicsEnvironment.isOpenSolaris) {
-                isSunCJK = true;
-            }
-        }
-    }
-
     /**
      * Returns true if running on system containing at least 2.2.
      */
@@ -155,6 +111,10 @@ public class GTKLookAndFeel extends SynthLookAndFeel {
         // need to get the major/minor/micro version from the .so.
         // Refer to bug 4912613 for details.
         return IS_22;
+    }
+
+    static boolean is3() {
+        return IS_3;
     }
 
     /**
@@ -329,7 +289,9 @@ public class GTKLookAndFeel extends SynthLookAndFeel {
     }
 
     private void initResourceBundle(UIDefaults table) {
-        table.addResourceBundle("com.sun.java.swing.plaf.gtk.resources.gtk");
+        SwingAccessor.getUIDefaultsAccessor()
+                     .addInternalBundle(table,
+                             "com.sun.java.swing.plaf.gtk.resources.gtk");
     }
 
     protected void initComponentDefaults(UIDefaults table) {
@@ -384,7 +346,7 @@ public class GTKLookAndFeel extends SynthLookAndFeel {
         }
         Insets zeroInsets = new InsetsUIResource(0, 0, 0, 0);
 
-        Double defaultCaretAspectRatio = new Double(0.025);
+        Double defaultCaretAspectRatio = Double.valueOf(0.025);
         Color caretColor = table.getColor("caretColor");
         Color controlText = table.getColor("controlText");
 
@@ -545,7 +507,7 @@ public class GTKLookAndFeel extends SynthLookAndFeel {
             public Object createValue(UIDefaults table) {
                 GTKStyleFactory factory = (GTKStyleFactory)getStyleFactory();
                 GTKStyle style = (GTKStyle)factory.getStyle(null, region);
-                return style.getFontForState(null);
+                return style.getDefaultFont();
             }
         }
 
@@ -1337,7 +1299,9 @@ public class GTKLookAndFeel extends SynthLookAndFeel {
         if (fallbackFont != null) {
             table.put("TitledBorder.font", fallbackFont);
         }
-        table.put(SwingUtilities2.AA_TEXT_PROPERTY_KEY, aaTextInfo);
+        if (aaTextInfo != null) {
+            table.putAll(aaTextInfo);
+        }
     }
 
     protected void initSystemColorDefaults(UIDefaults table) {
@@ -1457,6 +1421,19 @@ public class GTKLookAndFeel extends SynthLookAndFeel {
             throw new InternalError("Unable to load native GTK libraries");
         }
 
+        if (UNIXToolkit.getGtkVersion() == UNIXToolkit.GtkVersions.GTK2) {
+            String version = AccessController.doPrivileged(
+                    new GetPropertyAction("jdk.gtk.version"));
+            if (version != null) {
+                IS_22 = version.equals("2.2");
+            } else {
+                IS_22 = true;
+            }
+        } else if (UNIXToolkit.getGtkVersion() ==
+                                UNIXToolkit.GtkVersions.GTK3) {
+            IS_3 = true;
+        }
+
         super.initialize();
         inInitialize = true;
         loadStyles();
@@ -1464,20 +1441,12 @@ public class GTKLookAndFeel extends SynthLookAndFeel {
 
         /*
          * Check if system AA font settings should be used.
-         * Sun's JDS (for Linux and Solaris) ships with high quality CJK
-         * fonts and specifies via fontconfig that these be rendered in
-         * B&W to take advantage of the embedded bitmaps.
-         * If is a Sun CJK locale or remote display, indicate by the condition
-         * variable that in this case the L&F recommends ignoring desktop
-         * settings. On other Unixes (eg Linux) this doesn't apply.
-         * REMIND 1: The isSunCJK test is really just a place holder
-         * until we can properly query fontconfig and use the properties
-         * set for specific fonts.
-         * REMIND 2: See comment on isLocalDisplay() definition regarding
+         * REMIND: See comment on isLocalDisplay() definition regarding
          * XRender.
          */
-        gtkAAFontSettingsCond = !isSunCJK && SwingUtilities2.isLocalDisplay();
-        aaTextInfo = SwingUtilities2.AATextInfo.getAATextInfo(gtkAAFontSettingsCond);
+        gtkAAFontSettingsCond = SwingUtilities2.isLocalDisplay();
+        aaTextInfo = new HashMap<>(2);
+        SwingUtilities2.putAATextInfo(gtkAAFontSettingsCond, aaTextInfo);
     }
 
     static ReferenceQueue<GTKLookAndFeel> queue = new ReferenceQueue<GTKLookAndFeel>();

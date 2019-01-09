@@ -30,6 +30,8 @@
 
 // This file specializes the assember with interpreter-specific macros
 
+typedef ByteSize (*OffsetFunction)(uint);
+
 REGISTER_DECLARATION(     Register, Otos_i , O0); // tos for ints, etc
 REGISTER_DECLARATION(     Register, Otos_l , O0); // for longs
 REGISTER_DECLARATION(     Register, Otos_l1, O0); // for 1st part of longs
@@ -52,7 +54,6 @@ REGISTER_DECLARATION(FloatRegister, Ftos_d2, F1); // for 2nd part of double
 
 class InterpreterMacroAssembler: public MacroAssembler {
  protected:
-#ifndef CC_INTERP
   // Interpreter specific version of call_VM_base
     virtual void call_VM_leaf_base(
     Register java_thread,
@@ -74,26 +75,23 @@ class InterpreterMacroAssembler: public MacroAssembler {
 
   // base routine for all dispatches
   void dispatch_base(TosState state, address* table);
-#endif /* CC_INTERP */
 
  public:
   InterpreterMacroAssembler(CodeBuffer* c)
     : MacroAssembler(c) {}
 
-#ifndef CC_INTERP
+  void jump_to_entry(address entry);
+
   virtual void load_earlyret_value(TosState state);
 
   static const Address l_tmp ;
   static const Address d_tmp ;
-#endif /* CC_INTERP */
 
   // helper routine for frame allocation/deallocation
   // compute the delta by which the caller's SP has to
   // be adjusted to accomodate for the non-argument
   // locals
   void compute_extra_locals_size_in_bytes(Register args_size, Register locals_size, Register delta);
-
-#ifndef CC_INTERP
 
   // dispatch routines
   void dispatch_prolog(TosState state, int step = 0);
@@ -105,6 +103,8 @@ class InterpreterMacroAssembler: public MacroAssembler {
   void dispatch_via (TosState state, address* table);
 
 
+  void narrow(Register result);
+
   // Removes the current activation (incl. unlocking of monitors).
   // Additionally this code is used for earlyReturn in which case we
   // want to skip throwing an exception and installing an exception.
@@ -114,7 +114,6 @@ class InterpreterMacroAssembler: public MacroAssembler {
 
  protected:
   void dispatch_Lbyte_code(TosState state, address* table, int bcp_incr = 0, bool verify = true);
-#endif /* CC_INTERP */
 
  public:
   // Super call_VM calls - correspond to MacroAssembler::call_VM(_leaf) calls
@@ -126,7 +125,6 @@ class InterpreterMacroAssembler: public MacroAssembler {
                      Register arg_2,
                      bool check_exception = true);
 
-#ifndef CC_INTERP
   void super_call_VM_leaf(Register thread_cache, address entry_point, Register arg_1, Register arg_2);
 
   // Generate a subtype check: branch to ok_is_subtype if sub_klass is
@@ -261,19 +259,15 @@ class InterpreterMacroAssembler: public MacroAssembler {
   Address top_most_monitor();
   void compute_stack_base( Register Rdest );
 
-#endif /* CC_INTERP */
   void get_method_counters(Register method, Register Rcounters, Label& skip);
   void increment_invocation_counter( Register Rcounters, Register Rtmp, Register Rtmp2 );
   void increment_backedge_counter( Register Rcounters, Register Rtmp, Register Rtmp2 );
-#ifndef CC_INTERP
   void test_backedge_count_for_osr(Register backedge_count, Register method_counters, Register branch_bcp, Register Rtmp );
 
-#endif /* CC_INTERP */
   // Object locking
   void lock_object  (Register lock_reg, Register obj_reg);
   void unlock_object(Register lock_reg);
 
-#ifndef CC_INTERP
   // Interpreter profiling operations
   void set_method_data_pointer();
   void set_method_data_pointer_for_bcp();
@@ -299,7 +293,11 @@ class InterpreterMacroAssembler: public MacroAssembler {
 
   void record_klass_in_profile(Register receiver, Register scratch, bool is_virtual_call);
   void record_klass_in_profile_helper(Register receiver, Register scratch,
-                                      int start_row, Label& done, bool is_virtual_call);
+                                      Label& done, bool is_virtual_call);
+  void record_item_in_profile_helper(Register item,
+                                     Register scratch, int start_row, Label& done, int total_rows,
+                                     OffsetFunction item_offset_fn, OffsetFunction item_count_offset_fn,
+                                     int non_profiled_offset);
 
   void update_mdp_by_offset(int offset_of_disp, Register scratch);
   void update_mdp_by_offset(Register reg, int offset_of_disp,
@@ -312,6 +310,7 @@ class InterpreterMacroAssembler: public MacroAssembler {
   void profile_call(Register scratch);
   void profile_final_call(Register scratch);
   void profile_virtual_call(Register receiver, Register scratch, bool receiver_can_be_null = false);
+  void profile_called_method(Register method, Register scratch) NOT_JVMCI_RETURN;
   void profile_ret(TosState state, Register return_bci, Register scratch);
   void profile_null_seen(Register scratch);
   void profile_typecheck(Register klass, Register scratch);
@@ -332,7 +331,6 @@ class InterpreterMacroAssembler: public MacroAssembler {
   void verify_oop_or_return_address(Register reg, Register rtmp); // for astore
   void verify_FPU(int stack_depth, TosState state = ftos); // only if +VerifyFPU  && (state == ftos || state == dtos)
 
-#endif /* CC_INTERP */
   // support for JVMTI/Dtrace
   typedef enum { NotifyJVMTI, SkipNotifyJVMTI } NotifyMethodExitMode;
   void notify_method_entry();

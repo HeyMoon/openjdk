@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2017, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,7 +21,6 @@
  * questions.
  */
 
-
 /**
  * Utility and test program to check javac's internal TreeScanner class.
  * The program can be run standalone, or as a jtreg test.  For info on
@@ -42,7 +41,7 @@
  *          jdk.compiler/com.sun.tools.javac.tree
  *          jdk.compiler/com.sun.tools.javac.util
  * @build AbstractTreeScannerTest SourceTreeScannerTest
- * @run main SourceTreeScannerTest -q -r .
+ * @run main/othervm SourceTreeScannerTest -q -r .
  */
 
 import java.io.*;
@@ -54,6 +53,7 @@ import com.sun.source.tree.Tree;
 import com.sun.source.util.TreeScanner;
 import com.sun.tools.javac.tree.JCTree;
 import com.sun.tools.javac.tree.JCTree.JCCompilationUnit;
+import com.sun.tools.javac.tree.JCTree.JCModuleDecl;
 import com.sun.tools.javac.tree.JCTree.TypeBoundKind;
 import com.sun.tools.javac.util.List;
 
@@ -146,7 +146,13 @@ public class SourceTreeScannerTest extends AbstractTreeScannerTest {
                     }
                     try {
                         //System.err.println("FIELD: " + f.getName());
-                        reflectiveScan(f.get(tree));
+                        if (tree instanceof JCModuleDecl && f.getName().equals("mods")) {
+                            // The modifiers will not found by TreeScanner,
+                            // but the embedded annotations will be.
+                            reflectiveScan(((JCModuleDecl) tree).mods.annotations);
+                        } else {
+                            reflectiveScan(f.get(tree));
+                        }
                     } catch (IllegalAccessException e) {
                         error(e.toString());
                     }

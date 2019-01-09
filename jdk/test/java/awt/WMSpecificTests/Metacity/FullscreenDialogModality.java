@@ -25,6 +25,8 @@
  * @test
  * @bug 8012586
  * @summary verify that modal dialog will appeared above fullscreen window under Metacity WM.
+ * @requires (os.family == "linux" | os.family == "solaris")
+ * @modules java.desktop/sun.awt.X11
  * @library ../../regtesthelpers
  * @build Util
  * @run main FullscreenDialogModality

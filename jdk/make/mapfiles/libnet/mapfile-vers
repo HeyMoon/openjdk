@@ -1,5 +1,5 @@
 #
-# Copyright (c) 1997, 2013, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -28,8 +28,7 @@
 SUNWprivate_1.1 {
 	global:
 		JNI_OnLoad;
-		Java_java_net_AbstractPlainDatagramSocketImpl_init;
-		Java_java_net_AbstractPlainDatagramSocketImpl_dataAvailable;
+		Java_java_net_PlainDatagramSocketImpl_dataAvailable;
 		Java_java_net_PlainSocketImpl_socketListen;
 		Java_java_net_PlainDatagramSocketImpl_getTTL;
 		Java_java_net_PlainDatagramSocketImpl_init;
@@ -88,6 +87,9 @@ SUNWprivate_1.1 {
 		Java_java_net_PlainSocketImpl_socketConnect;
 		Java_java_net_PlainDatagramSocketImpl_getTimeToLive;
 		Java_java_net_PlainDatagramSocketImpl_setTimeToLive;
+                Java_java_net_AbstractPlainSocketImpl_isReusePortAvailable0;
+                Java_java_net_AbstractPlainDatagramSocketImpl_isReusePortAvailable0;
+                Java_jdk_net_Sockets_isReusePortAvailable0;
 		Java_sun_net_PortConfig_getUpper0;
 		Java_sun_net_PortConfig_getLower0;
 		Java_sun_net_dns_ResolverConfigurationImpl_localDomain0;
@@ -95,12 +97,7 @@ SUNWprivate_1.1 {
 		Java_sun_net_sdp_SdpSupport_convert0;
 		Java_sun_net_sdp_SdpSupport_create0;
 		Java_sun_net_spi_DefaultProxySelector_init;
-		Java_sun_net_spi_DefaultProxySelector_getSystemProxy;
-		Java_sun_net_ExtendedOptionsImpl_init;
-		Java_sun_net_ExtendedOptionsImpl_setFlowOption;
-		Java_sun_net_ExtendedOptionsImpl_getFlowOption;
-		Java_sun_net_ExtendedOptionsImpl_flowSupported;
-		NET_AllocSockaddr;
+		Java_sun_net_spi_DefaultProxySelector_getSystemProxies;
 		NET_SockaddrToInetAddress;
                 NET_SockaddrEqualsInetAddress;
 		NET_InetAddressToSockaddr;
@@ -113,6 +110,7 @@ SUNWprivate_1.1 {
 		NET_EnableFastTcpLoopback;
 		NET_ThrowNew;
                 ipv6_available;
+                reuseport_available;
                 initInetAddressIDs;
 
 	local:

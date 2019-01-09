@@ -34,7 +34,7 @@ import jdk.nashorn.internal.runtime.UnwarrantedOptimismException;
  * This filter handles the presence of undefined array elements.
  */
 final class UndefinedArrayFilter extends ArrayFilter {
-    /** Bit vector tracking undefines. */
+    /** Bit vector tracking undefined slots. */
     private final BitVector undefined;
 
     UndefinedArrayFilter(final ArrayData underlying) {
@@ -77,9 +77,10 @@ final class UndefinedArrayFilter extends ArrayFilter {
     }
 
     @Override
-    public void shiftLeft(final int by) {
+    public ArrayData shiftLeft(final int by) {
         super.shiftLeft(by);
         undefined.shiftLeft(by, length());
+        return this;
     }
 
     @Override
@@ -128,13 +129,6 @@ final class UndefinedArrayFilter extends ArrayFilter {
     }
 
     @Override
-    public ArrayData set(final int index, final long value, final boolean strict) {
-        undefined.clear(index);
-
-        return super.set(index, value, strict);
-    }
-
-    @Override
     public ArrayData set(final int index, final double value, final boolean strict) {
         undefined.clear(index);
 
@@ -157,24 +151,6 @@ final class UndefinedArrayFilter extends ArrayFilter {
         }
 
         return super.getIntOptimistic(index, programPoint);
-    }
-
-    @Override
-    public long getLong(final int index) {
-        if (undefined.isSet(index)) {
-            return 0L;
-        }
-
-        return super.getLong(index);
-    }
-
-    @Override
-    public long getLongOptimistic(final int index, final int programPoint) {
-        if (undefined.isSet(index)) {
-            throw new UnwarrantedOptimismException(UNDEFINED, programPoint);
-        }
-
-        return super.getLongOptimistic(index, programPoint);
     }
 
     @Override

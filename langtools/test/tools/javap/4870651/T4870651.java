@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,7 @@
  * @bug 4870651 6715757
  * @summary javap should recognize generics, varargs, enum;
  *          javap prints "extends java.lang.Object"
- * @modules jdk.jdeps
+ * @modules jdk.jdeps/com.sun.tools.javap
  * @build T4870651 Test
  * @run main T4870651
  */
@@ -46,8 +46,8 @@ public class T4870651 {
                "v1(java.lang.String...)");
 
         verify("Test$Enum",
-               "flags: ACC_FINAL, ACC_SUPER, ACC_ENUM",
-               "flags: ACC_PUBLIC, ACC_STATIC, ACC_FINAL, ACC_ENUM");
+               "flags: (0x4030) ACC_FINAL, ACC_SUPER, ACC_ENUM",
+               "flags: (0x4019) ACC_PUBLIC, ACC_STATIC, ACC_FINAL, ACC_ENUM");
 
         if (errors > 0)
             throw new Error(errors + " found.");
